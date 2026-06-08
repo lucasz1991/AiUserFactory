@@ -2,6 +2,7 @@
 
 namespace App\Livewire\Admin\Persons;
 
+use App\Jobs\GeneratePersonImages;
 use App\Models\File;
 use App\Models\Person;
 use App\Services\Ai\AiConnectionService;
@@ -30,9 +31,13 @@ class AiCompletePersonProfileModal extends Component
 
     public string $imagePrompt = '';
 
+    public string $imagePromptBrief = '';
+
     public string $imagePreset = 'profile_portrait';
 
     public string $imageAspectRatio = '1:1';
+
+    public int $imageCount = 1;
 
     public bool $setGeneratedImageAsAvatar = true;
 
@@ -84,7 +89,9 @@ class AiCompletePersonProfileModal extends Component
         $this->preview = $this->buildEditablePreview();
         $this->imagePreset = 'profile_portrait';
         $this->imagePrompt = $this->defaultImagePrompt($this->imagePreset);
+        $this->imagePromptBrief = '';
         $this->imageAspectRatio = '1:1';
+        $this->imageCount = 1;
         $this->setGeneratedImageAsAvatar = true;
         $this->referenceImages = $this->buildReferenceImagePreview();
         $this->generatedImages = [];
@@ -101,8 +108,10 @@ class AiCompletePersonProfileModal extends Component
             'isGeneratingImage',
             'preview',
             'imagePrompt',
+            'imagePromptBrief',
             'imagePreset',
             'imageAspectRatio',
+            'imageCount',
             'setGeneratedImageAsAvatar',
             'referenceImages',
             'generatedImages',
@@ -142,7 +151,7 @@ class AiCompletePersonProfileModal extends Component
         }
     }
 
-    public function generateImage(AiConnectionService $ai): void
+    public function generateImage(): void
     {
         if (! $this->person) {
             return;
@@ -152,47 +161,72 @@ class AiCompletePersonProfileModal extends Component
             'imagePrompt' => ['required', 'string', 'max:5000'],
             'imagePreset' => ['required', 'string', 'in:profile_portrait,hobby_lifestyle,work_context,creative_character'],
             'imageAspectRatio' => ['required', 'string', 'in:1:1,2:3,3:2,3:4,4:3,4:5,5:4,9:16,16:9,21:9'],
+            'imageCount' => ['required', 'integer', 'min:1', 'max:8'],
             'setGeneratedImageAsAvatar' => ['boolean'],
         ]);
 
-        $this->isGeneratingImage = true;
+        GeneratePersonImages::dispatch(
+            personId: (int) $this->person->id,
+            prompt: $validated['imagePrompt'],
+            preset: $validated['imagePreset'],
+            aspectRatio: $validated['imageAspectRatio'],
+            imageCount: (int) $validated['imageCount'],
+            setFirstImageAsAvatar: (bool) $validated['setGeneratedImageAsAvatar'],
+            preview: $this->preview,
+            userId: auth()->id(),
+        );
+
+        $this->generatedImages = [];
+
+        session()->flash('success', 'Bildauftrag wurde gestartet. Die Bilder werden im Hintergrund erzeugt und automatisch im FilePool gespeichert.');
+    }
+
+    public function improveImagePrompt(AiConnectionService $ai): void
+    {
+        if (! $this->person) {
+            return;
+        }
+
+        $validated = $this->validate([
+            'imagePromptBrief' => ['nullable', 'string', 'max:2500'],
+            'imagePrompt' => ['nullable', 'string', 'max:5000'],
+            'imagePreset' => ['required', 'string', 'in:profile_portrait,hobby_lifestyle,work_context,creative_character'],
+            'imageAspectRatio' => ['required', 'string', 'in:1:1,2:3,3:2,3:4,4:3,4:5,5:4,9:16,16:9,21:9'],
+        ]);
+
+        $brief = trim($validated['imagePromptBrief'] ?: $validated['imagePrompt'] ?: '');
+
+        if ($brief === '') {
+            $this->addError('imagePromptBrief', 'Bitte beschreibe kurz, wie das Bild werden soll.');
+
+            return;
+        }
 
         try {
-            $referenceImageUrls = $this->buildReferenceImageDataUrls();
-            $response = $ai->imageGeneration(
-                prompt: $this->buildImagePrompt($validated['imagePrompt'], $validated['imagePreset'], count($referenceImageUrls)),
+            $prompt = $ai->text(
+                prompt: json_encode([
+                    'user_image_description' => $brief,
+                    'image_type' => $this->imagePresetOptions()[$validated['imagePreset']] ?? 'Profilportrait',
+                    'aspect_ratio' => $validated['imageAspectRatio'],
+                    'person_context' => $this->buildImagePrompt('', $validated['imagePreset'], count($this->referenceImages)),
+                ], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT),
+                system: $this->imagePromptSystemPrompt(),
                 options: [
-                    'temperature' => 0.35,
-                    'max_completion_tokens' => 1200,
-                ],
+                    'temperature' => 0.45,
+                    'max_completion_tokens' => 900,
+                ]
             );
 
-            $generatedImageUrls = $ai->generatedImageUrls($response);
+            $this->imagePrompt = trim($prompt) ?: $this->imagePrompt;
 
-            if ($generatedImageUrls === []) {
-                throw new \RuntimeException('OpenRouter hat kein Bild im erwarteten Antwortformat zurueckgegeben.');
-            }
-
-            $this->generatedImages = $this->storeGeneratedImages(
-                $generatedImageUrls,
-                $validated['imagePreset'],
-                (bool) $validated['setGeneratedImageAsAvatar']
-            );
-            $this->referenceImages = $this->buildReferenceImagePreview();
-
-            $this->dispatch('refreshPersonDetail');
-            $this->dispatch('refreshFilePool');
-
-            session()->flash('success', 'Bild wurde generiert und im FilePool gespeichert.');
+            session()->flash('success', 'Bildprompt wurde mit AI vorbereitet.');
         } catch (Throwable $exception) {
-            Log::error('AI person image generation failed', [
+            Log::error('AI image prompt generation failed', [
                 'person_id' => $this->personId,
                 'message' => $exception->getMessage(),
             ]);
 
             session()->flash('error', $exception->getMessage());
-        } finally {
-            $this->isGeneratingImage = false;
         }
     }
 
@@ -204,6 +238,7 @@ class AiCompletePersonProfileModal extends Component
 
         $this->imagePreset = $preset;
         $this->imagePrompt = $this->defaultImagePrompt($preset);
+        $this->imagePromptBrief = '';
         $this->imageAspectRatio = $preset === 'profile_portrait' ? '1:1' : '4:5';
         $this->setGeneratedImageAsAvatar = $preset === 'profile_portrait';
     }
@@ -443,6 +478,22 @@ class AiCompletePersonProfileModal extends Component
             'Person-Kontext:'.PHP_EOL.$contextLines.PHP_EOL.PHP_EOL.
             'Bildtyp-Regel: '.$presetRules.PHP_EOL.
             'Regeln: Erzeuge nur ein Bild der beschriebenen Person. Bestehende Referenzbilder haben Vorrang vor allgemeinen Textannahmen. Erhalte die Identitaet und optischen Merkmale aus den Referenzbildern. Keine Datei- oder Login-Daten, keine Bildpfade, keine Textelemente im Bild.';
+    }
+
+    protected function imagePromptSystemPrompt(): string
+    {
+        return <<<'PROMPT'
+Du bist ein Bildprompt-Designer fuer realistische fiktive Persona-Bilder.
+
+Erstelle aus der kurzen Nutzerbeschreibung einen praezisen deutschen Bildprompt.
+Der Prompt soll:
+- die gewuenschte Szene, Stimmung, Kleidung, Umgebung und Kameraperspektive konkretisieren,
+- die vorhandene Persona und optische Beschreibung respektieren,
+- vorhandene Referenzbilder als wichtigste Quelle fuer Gesicht und Aussehen behandeln,
+- keine echten Personen, Marken, Logos, Wasserzeichen, Schrift im Bild, Datei- oder Login-Daten verlangen.
+
+Antworte nur mit dem fertigen Prompttext, ohne Markdown und ohne Erklaerung.
+PROMPT;
     }
 
     protected function buildReferenceImagePreview(): array

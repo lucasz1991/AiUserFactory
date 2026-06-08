@@ -220,8 +220,8 @@
                                     wire:target="generateImage"
                                     class="rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-50"
                                 >
-                                    <span wire:loading.remove wire:target="generateImage">Bildtyp erstellen</span>
-                                    <span wire:loading wire:target="generateImage">Erstelle Bild...</span>
+                                    <span wire:loading.remove wire:target="generateImage">Bildauftrag starten</span>
+                                    <span wire:loading wire:target="generateImage">Starte Auftrag...</span>
                                 </button>
                             </div>
 
@@ -239,13 +239,35 @@
 
                             <div class="mt-4 grid gap-4 lg:grid-cols-3">
                                 <div class="lg:col-span-2">
-                                    <label class="block text-sm font-medium text-gray-700">Bildprompt</label>
+                                    <label class="block text-sm font-medium text-gray-700">Bildbeschreibung fuer AI-Prompt</label>
+                                    <textarea
+                                        rows="3"
+                                        wire:model.defer="imagePromptBrief"
+                                        class="mt-1 w-full rounded-md border-gray-300 text-sm shadow-sm"
+                                        placeholder="z. B. Portrait im Abendlicht am Fenster, natuerliches Lachen, urbaner Hintergrund, hochwertiger Instagram-Look"
+                                    ></textarea>
+                                    @error('imagePromptBrief') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+
+                                    <div class="mt-2 flex justify-end">
+                                        <button
+                                            type="button"
+                                            wire:click="improveImagePrompt"
+                                            wire:loading.attr="disabled"
+                                            wire:target="improveImagePrompt"
+                                            class="rounded-md border border-indigo-200 bg-white px-3 py-1.5 text-xs font-semibold text-indigo-700 shadow-sm hover:bg-indigo-50 disabled:opacity-50"
+                                        >
+                                            <span wire:loading.remove wire:target="improveImagePrompt">Prompt mit AI vorbereiten</span>
+                                            <span wire:loading wire:target="improveImagePrompt">Bereite Prompt vor...</span>
+                                        </button>
+                                    </div>
+
+                                    <label class="mt-4 block text-sm font-medium text-gray-700">Bildprompt</label>
                                     <textarea rows="5" wire:model.defer="imagePrompt" class="mt-1 w-full rounded-md border-gray-300 text-sm shadow-sm"></textarea>
                                     @error('imagePrompt') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
                                     @error('imagePreset') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
                                 </div>
 
-                                <div>
+                                <div class="space-y-4">
                                     <label class="block text-sm font-medium text-gray-700">Format</label>
                                     <select wire:model.defer="imageAspectRatio" class="mt-1 w-full rounded-md border-gray-300 text-sm shadow-sm">
                                         <option value="1:1">1:1 Quadrat</option>
@@ -261,14 +283,30 @@
                                     </select>
                                     @error('imageAspectRatio') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
 
-                                    <div class="mt-4 rounded-md border border-gray-200 bg-gray-50 p-3 text-sm text-gray-600">
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700">Anzahl Bilder</label>
+                                        <input
+                                            type="number"
+                                            min="1"
+                                            max="8"
+                                            wire:model.defer="imageCount"
+                                            class="mt-1 w-full rounded-md border-gray-300 text-sm shadow-sm"
+                                        >
+                                        @error('imageCount') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                                    </div>
+
+                                    <div class="rounded-md border border-gray-200 bg-gray-50 p-3 text-sm text-gray-600">
                                         Referenzbilder: {{ count($referenceImages) }}
                                     </div>
 
-                                    <label class="mt-4 flex items-center gap-3 rounded-md border border-gray-200 bg-gray-50 p-3 text-sm font-medium text-gray-700">
+                                    <label class="flex items-center gap-3 rounded-md border border-gray-200 bg-gray-50 p-3 text-sm font-medium text-gray-700">
                                         <input type="checkbox" wire:model.defer="setGeneratedImageAsAvatar" class="rounded border-gray-300 text-slate-900 shadow-sm focus:ring-slate-900">
                                         Profilportrait direkt als Profilbild setzen
                                     </label>
+
+                                    <div class="rounded-md border border-indigo-100 bg-indigo-50 p-3 text-xs text-indigo-900">
+                                        Der Auftrag laeuft im Hintergrund. Fertige Bilder erscheinen automatisch im FilePool der Person.
+                                    </div>
                                 </div>
                             </div>
 
@@ -301,7 +339,7 @@
 
                                     @if($generatedImages === [])
                                         <p class="mt-2 rounded-md border border-gray-200 bg-gray-50 p-3 text-sm text-gray-600">
-                                            Noch kein Bild in dieser Sitzung generiert.
+                                            Die Bilder werden nach dem Start im Hintergrund erzeugt und im FilePool gespeichert.
                                         </p>
                                     @else
                                         <div class="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">

@@ -1,4 +1,4 @@
-<div class="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
+<div class="rounded-lg border border-gray-200 bg-white p-5 shadow-sm" wire:poll.10s="refreshFilePool">
     <div class="flex flex-wrap items-center justify-between gap-3">
         <div>
             <h3 class="text-lg font-semibold text-gray-900">FilePool</h3>
