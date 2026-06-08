@@ -1,0 +1,107 @@
+input[switch] {
+    display: none
+}
+input[switch]+label {
+    font-size: 1em;
+    line-height: 1;
+    width: 56px;
+    height: 24px;
+    background-color: #e9eaeb;
+    background-image: none;
+    border-radius: 2rem;
+    padding: .16667rem;
+    cursor: pointer;
+    display: inline-block;
+    text-align: center;
+    position: relative;
+    font-weight: 500;
+    -webkit-transition: all .1s ease-in-out;
+    transition: all .1s ease-in-out
+}
+input[switch]+label:before {
+    color: #343a40;
+    content: attr(data-off-label);
+    display: block;
+    font-family: inherit;
+    font-weight: 500;
+    font-size: 12px;
+    line-height: 21px;
+    position: absolute;
+    right: 1px;
+    margin: 3px;
+    top: -2px;
+    text-align: center;
+    min-width: 1.66667rem;
+    overflow: hidden;
+    -webkit-transition: all .1s ease-in-out;
+    transition: all .1s ease-in-out
+}
+input[switch]+label:after {
+    content: "";
+    position: absolute;
+    left: 3px;
+    background-color: #e9e9ef;
+    -webkit-box-shadow: none;
+    box-shadow: none;
+    border-radius: 2rem;
+    height: 20px;
+    width: 20px;
+    top: 2px;
+    -webkit-transition: all .1s ease-in-out;
+    transition: all .1s ease-in-out
+}
+input[switch]:checked+label {
+    background-color: #5156be
+}
+input[switch]:checked+label {
+    background-color: #5156be
+}
+input[switch]:checked+label:before {
+    color: #fff;
+    content: attr(data-on-label);
+    right: auto;
+    left: 3px
+}
+input[switch]:checked+label:after {
+    left: 33px;
+    @apply bg-white;
+}
+input[switch=bool]+label {
+    background-color: theme('colors.red.500');
+}
+input[switch=bool]+label:before, input[switch=bool]:checked+label:before, input[switch=default]:checked+label:before {
+    color: #fff
+}
+input[switch=bool]:checked+label {
+    background-color: theme('colors.green.500');
+}
+input[switch=default]:checked+label {
+    background-color: theme('colors.gray.300');
+}
+input[switch=primary]:checked+label {
+    background-color: theme('colors.violet.500');
+}
+input[switch=success]:checked+label {
+    background-color: theme('colors.green.500');
+}
+input[switch=info]:checked+label {
+    background-color: theme('colors.sky.500');
+}
+input[switch=warning]:checked+label {
+    background-color: theme('colors.yellow.500');
+}
+input[switch=danger]:checked+label {
+    background-color: theme('colors.red.500');
+}
+input[switch=dark]:checked+label {
+    background-color: theme('colors.zinc.800');
+}
+input[switch=dark]:checked+label:before {
+    color: #e9e9ef
+}
+.square-switch {
+    margin-right: 7px
+}
+.square-switch input[switch]+label, .square-switch input[switch]+label:after {
+    border-radius: 4px
+}

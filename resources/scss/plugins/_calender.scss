@@ -1,0 +1,101 @@
+
+
+
+.fc-toolbar-title{
+    @apply dark:text-gray-50 font-medium uppercase text-gray-800;
+    font-size: 16px !important;
+}
+
+.fc-daygrid-day-top{
+    @apply text-gray-700 dark:text-gray-100;
+}
+
+.fc-theme-standard th {
+    @apply border border-gray-500/20 dark:border-zinc-600;
+}
+
+.fc-theme-standard .fc-scrollgrid{
+    @apply border border-gray-500/20 dark:border-zinc-600;
+}
+
+.fc-theme-standard td{
+    @apply border border-gray-500/20 dark:border-zinc-600;
+}
+
+.fc-col-header-cell .fc-scrollgrid-sync-inner a{
+    @apply dark:text-gray-100;
+}
+
+.fc-direction-ltr .fc-daygrid-event.fc-event-end{
+    @apply p-2 text-white border-transparent;
+}
+
+.fc-direction-ltr .fc-daygrid-event.fc-event-start{
+    @apply p-2 text-white border-transparent;
+}
+
+.fc-timegrid-event-harness-inset .fc-timegrid-event, .fc-timegrid-event.fc-event-mirror, .fc-timegrid-more-link {
+    box-shadow: none !important;
+}
+
+.fc .fc-timegrid-axis-cushion, .fc .fc-timegrid-slot-label-cushion{
+    @apply dark:text-gray-100;
+}
+
+.fc .fc-timegrid-slot{
+    border-bottom: 0 !important;
+}
+
+.fc-theme-standard .fc-list {
+    @apply border dark:border-zinc-700 #{!important};
+}
+
+.fc-v-event{
+    border: none !important;
+}
+
+.fc .fc-list-sticky .fc-list-day>*{
+    @apply dark:bg-transparent dark:text-white;
+}
+
+.fc-theme-standard .fc-list-day-cushion {
+    @apply dark:bg-transparent;
+}
+
+.fc .fc-button-primary{
+    @apply bg-violet-500 border-transparent hover:bg-violet-600 hover:border-transparent;
+}
+
+.fc .fc-button-primary:disabled{
+    @apply bg-violet-300 border-transparent;
+}
+
+.fc .fc-button-primary:not(:disabled).fc-button-active{
+    @apply bg-violet-600 border-transparent hover:bg-violet-600 hover:border-transparent;
+    box-shadow: rgb(81 86 190 / 27%) 0px 0px 0px 0.2rem;
+}
+
+.fc .fc-button-primary:not(:disabled).fc-button-active:focus{
+    box-shadow: rgb(81 86 190 / 27%) 0px 0px 0px 0.2rem;
+}
+
+.fc .fc-button-primary:not(:disabled):active{
+    @apply bg-violet-600 border-transparent hover:bg-violet-700 hover:border-transparent;
+}
+
+.fc-event{
+    line-height: 15px !important;
+}
+
+.fc-button-group{
+    @apply shadow-md shadow-violet-200 dark:shadow-none;
+}
+@media (max-width:375px) {
+    .fc .fc-toolbar.fc-header-toolbar {
+        display: block;
+        text-align: center;
+    }
+    .fc-toolbar-title{
+        padding: 10px 0;
+    }
+}

@@ -1,0 +1,59 @@
+.dropdown-btn-group {
+    position: relative;
+    display: inline-flex;
+    vertical-align: middle;
+}
+
+.btn-toolbar {
+    display: flex !important;
+}
+
+.pull-right {
+    margin-left: auto;
+}
+
+.table-rep-plugin .table-wrapper .dropdown-menu {
+    position: absolute;
+    inset: 0px auto auto 0px;
+    margin: 0px;
+}
+
+.table-rep-plugin .table-wrapper .dropdown-menu .show {
+    transform: translate(41px, 40px);
+}
+
+.btn-toolbar .dropdown-btn-group button:first-child {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+}
+
+.btn-toolbar .dropdown-btn-group .dropdown-toggle {
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+}
+
+.table-edits input, .table-edits select {
+    height: calc(1.5em + 0.5rem + 2px);
+    padding: 0.25rem 0.5rem;
+    border: 1px solid #d9dae0;
+    background-color: #fff;
+    color: #3f4143;
+    border-radius: 0.25rem;
+    font-size: 14px;
+}
+
+.table-edits .btn-sm {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.765625rem;
+    border-radius: 0.2rem;
+    border-color: #818181;
+}
+
+.table-edits .btn-sm i {
+    color: #74788d;
+}
+
+[dir="rtl"] select{
+    background-position: left 0.5rem center;
+    padding-left: 2rem;
+}

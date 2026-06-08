@@ -1,0 +1,10 @@
+@layer components {
+
+  .nav-border .nav-item .active {
+    @apply border border-b-white rounded border-gray-300 rounded-b-none;
+  }
+
+  .bg-color-gradient {
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.15), rgba(255, 255, 255, 0));
+  }
+}

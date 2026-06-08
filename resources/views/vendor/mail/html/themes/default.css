@@ -1,0 +1,185 @@
+/* Base */
+
+body,
+body *:not(html):not(style):not(br):not(tr):not(code) {
+    box-sizing: border-box;
+    font-family: Arial, Helvetica, sans-serif, 'Segoe UI Emoji', 'Segoe UI Symbol';
+    position: relative;
+}
+
+body {
+    -webkit-text-size-adjust: none;
+    background-color: #f3eadd;  /* Hellgrauer Hintergrund */
+    color: #65765f;  /* Dunkelgrauer Text */
+    height: 100%;
+    line-height: 1.4;
+    margin: 0;
+    padding: 0;
+    width: 100% !important;
+}
+
+p,
+ul,
+ol,
+blockquote {
+    line-height: 1.6;
+    text-align: left;
+}
+
+a {
+    color: #b2d6a4;  /* Primärfarbe */
+    text-decoration: none;
+}
+
+a img {
+    border: none;
+}
+
+/* Typography */
+
+h1 {
+    color: #65765f;  /* Primärfarbe */
+    font-size: 24px;
+    font-weight: bold;
+    margin-top: 0;
+    text-align: center;
+}
+
+h2 {
+    font-size: 20px;
+    font-weight: bold;
+    margin-top: 0;
+    text-align: center;
+}
+
+h3 {
+    font-size: 18px;
+    font-weight: bold;
+    margin-top: 0;
+    text-align: left;
+}
+
+p {
+    font-size: 16px;
+    line-height: 1.5em;
+    margin-top: 0;
+    text-align: left;
+}
+
+p.sub {
+    font-size: 12px;
+}
+
+img {
+    max-width: 100%;
+}
+
+/* Layout */
+
+.wrapper {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+}
+
+.content {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+}
+
+/* Header */
+
+.header {
+    padding: 20px 0;
+    text-align: center;
+    background-color: #ffffff;  /* Primärfarbe */
+    color: #ffffff; /* Weißer Text */
+}
+
+.header a {
+    color: #ffffff; /* Weißer Text */
+    font-size: 20px;
+    font-weight: bold;
+    text-decoration: none;
+}
+
+/* Body */
+
+.body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+}
+
+.inner-body {
+    border-radius: 8px;
+    margin: 0 auto;
+    padding: 20px;
+    width: 570px;
+}
+
+/* Footer */
+
+.footer {
+    margin: 20px auto;
+    padding: 10px;
+    text-align: center;
+    font-size: 12px;
+    color: #666666;
+    width: 570px;
+}
+
+.footer a {
+    text-decoration: underline;
+}
+
+/* Buttons */
+
+.button {
+    border-radius: 8px;
+    background-color: #65765f;  /* Primärfarbe */
+    margin-bottom: 50px;
+    margin-top: 30px;
+    color: #ffffff;
+    display: inline-block;
+    font-size: 16px;
+    padding: 10px 20px;
+    text-decoration: none;
+}
+
+.button-green { /* Primärfarbe */
+    border: none;
+}
+
+.button-green:hover {
+    background-color: #323b2f; /* Dunkleres Grün */
+}
+
+/* Panels */
+
+.panel {
+    border-left: 4px solid #65765f;
+    background-color: #f8f8f8;
+    margin: 20px 0;
+    padding: 15px;
+}
+
+.panel-content p {
+    color: #333333; /* Dunkelgrau */
+}
+
+
+@keyframes scale-bounce {
+    0%, 100% {
+        transform: scale(1);
+    }
+    50% {
+        transform: scale(1.2);
+    }
+}
+
+
+.button {
+    animation: scale-bounce 1s ease-out infinite;
+}

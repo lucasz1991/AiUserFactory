@@ -1,0 +1,56 @@
+// tabs
+
+.nav-tabs {
+    ul li a {
+        @apply dark:text-gray-100;
+    }
+
+    &.border-tab {
+        ul li .active {
+            @apply border border-b-0 rounded-md border-blue-300 rounded-b-none text-blue-300 dark:text-blue-300;
+        }
+    }
+
+    &.border-b-tabs {
+        ul li .active {
+            @apply border-blue-300 border-b text-blue-300;
+        }
+    }
+
+    &.tab-pill {
+        ul li .active {
+            @apply bg-blue-300 text-white;
+        }
+    }
+
+    &.chart-tabpill {
+        ul li .active {
+            @apply bg-white text-blue-500 rounded dark:bg-zinc-800;
+        }
+    }
+
+    &.bar-tabs {
+        ul li .active {
+            @apply bg-blue-300 text-white;
+        }
+    }
+}
+
+// accordion
+
+.accordion-item {
+    .accordion-header {
+        @apply text-gray-200;
+
+        &.active {
+            @apply text-blue-500;
+        }
+    }
+}
+//vartical tab
+.vertical-tab ul li a{
+    background-color: white !important;
+}
+.vertical-tab ul li .active{
+   border-color:  #5173be !important;
+}

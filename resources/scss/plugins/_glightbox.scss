@@ -1,0 +1,7 @@
+.glightbox-clean .gslide-description {
+    @apply bg-white dark:bg-zinc-800;
+}
+
+.glightbox-clean .gslide-title, .glightbox-clean .gslide-desc {
+    @apply text-gray-900 dark:text-gray-200;
+}

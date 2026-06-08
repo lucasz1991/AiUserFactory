@@ -1,0 +1,92 @@
+/* coming soon */
+
+.mySwiper .swiper-pagination-bullet {
+    height: 25px;
+    width: 25px;
+    outline: 3px solid rgba(255, 255, 255, 0.300);
+    opacity: 1;
+    margin: 0 6px !important;
+}
+
+.mySwiper .swiper-pagination {
+    text-align: center !important;
+    bottom: 20px;
+}
+
+.mySwiper [aria-label="Go to slide 1"] {
+    background-image: url('/resources/images/bg-1.jpg') !important;
+    background-size: cover;
+}
+
+.mySwiper [aria-label="Go to slide 2"] {
+    background-image: url('/resources/images/bg-2.jpg') !important;
+    background-size: cover;
+}
+
+.mySwiper [aria-label="Go to slide 3"] {
+    background-image: url('/resources/images/bg-3.jpg') !important;
+    background-size: cover;
+}
+
+.mySwiper .swiper-pagination-bullet-active {
+    background-color: transparent !important;
+    outline: 3px solid white;
+}
+
+
+// auth
+
+.bg-bubbles li {
+    animation: square ease 20s infinite;
+    bottom: -50px;
+
+}
+
+.bg-bubbles li:nth-child(2) {
+    animation: square ease 17s infinite;
+    animation-delay: 2s;
+}
+
+.bg-bubbles li:nth-child(3) {
+    animation: square ease 20s infinite;
+    animation-delay: 4s;
+}
+
+.bg-bubbles li:nth-child(4) {
+    animation: square ease 22s infinite;
+}
+
+.bg-bubbles li:nth-child(6) {
+    animation: square ease 20s infinite;
+    animation-delay: 3s;
+}
+
+.bg-bubbles li:nth-child(7) {
+    animation: square ease 20s infinite;
+    animation-delay: 7s;
+}
+
+.bg-bubbles li:nth-child(8) {
+    animation: square ease 40s infinite;
+    animation-delay: 15s;
+}
+
+.bg-bubbles li:nth-child(9) {
+    animation: square ease 40s infinite;
+    animation-delay: 2s;
+}
+
+.bg-bubbles li:nth-child(10) {
+    animation: square ease 20s infinite;
+    animation-delay: 11s;
+}
+
+@keyframes square {
+    0% {
+        transform: translateY(0);
+    }
+
+    100% {
+        transform: translateY(-1000px) rotate(600deg);
+    }
+}

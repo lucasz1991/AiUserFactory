@@ -1,0 +1,145 @@
+/* Custom Css */
+@use  "custom/general";
+@use  "custom/components";
+@use  "custom/form";
+@use  "custom/login";
+@use  "custom/auth";
+
+@use  'structure/sidebar';
+
+@use  'pages/tabs';
+@use  'pages/all-pages';
+
+@use  "plugins/custom-scrollbar";
+@use  "plugins/range-slider";
+@use  "plugins/glightbox";
+@use  "plugins/sweetalert2";
+@use  "plugins/alertify";
+@use  "plugins/flatpickr";
+@use  "plugins/switch";
+@use  "plugins/choices";
+@use  "plugins/ckeditor";
+@use  "plugins/dropzon";
+@use  "plugins/datatables";
+@use  "plugins/table-responsive";
+@use  "plugins/apexchart";
+@use  "plugins/materialdesign";
+@use  "plugins/map";
+@use  "plugins/calender";
+@use  "plugins/datapicker";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+
+:root {
+   --tw-sidebar-width: 250px;
+   --tw-sidebar-bg: #fafcff;
+   --tw-email-leftbar: 236px;
+}
+
+.progress-bar-striped {
+   background-image: linear-gradient(45deg, rgba(255, 255, 255, .15) 25%, transparent 25%, transparent 50%, rgba(255, 255, 255, .15) 50%, rgba(255, 255, 255, .15) 75%, transparent 75%, transparent);
+   background-size: 0.625rem;
+}
+
+/* dropdown show */
+// .dropdown-menu {
+//    animation: DropDownSlide;
+//    animation-duration: .3s;
+//    animation-fill-mode: both;
+//    inset: auto auto auto 0px !important;
+// }
+.dropdown-animation {
+   left: -14px !important;
+   @media (max-width:1024px) {
+      position: absolute !important;
+      animation: DropDownSlide;
+      animation-duration: .3s;
+      animation-fill-mode: both;
+      inset: auto 0 auto 0 !important;
+      left: -100px !important;
+   }
+}
+.dropdown-view {
+   margin: -50px 14px 0 0 !important;
+}
+.dropdown-grid {
+   margin-top: -20px !important;
+   left: 0 !important;
+   transform: translate(200px, 28px) !important;
+   @media (max-width:1024px) {
+      transform: translate(162px, 28px) !important;
+   }
+   @media (max-width:376px) {
+      transform: translate(138px, 28px) !important;
+   }
+}
+
+[dir="rtl"] {
+   .dropdown-animation {
+      right: -14px !important;
+      @media (max-width:1024px) {
+         right: -100px !important;
+      }
+   }
+}
+
+@keyframes DropDownSlide {
+   100% {
+      transform: translateY(0);
+   }
+
+   0% {
+      transform: translateY(10px);
+   }
+}
+
+.animate-strip {
+   animation: strip 2s infinite;
+}
+
+@keyframes strip {
+   from {
+      background-position: 50px 0;
+   }
+
+   to {
+      background-position: 0 0;
+   }
+}
+
+.placeholder-wave {
+   mask-image: linear-gradient(130deg, #000 55%, rgba(0, 0, 0, 0.801) 75%, #000 95%);
+   mask-size: 200% 100%;
+   animation: placeholder-wave 2s linear infinite;
+}
+
+@keyframes placeholder-wave {
+   100% {
+      mask-position: -200% 0%;
+   }
+}
+
+.animate-translate {
+   animation: animate-translate !important;
+   animation-duration: 0.8s !important;
+   animation-fill-mode: both !important;
+}
+
+@keyframes animate-translate {
+   100% {
+      transform: translateY(40px);
+      opacity: 100%;
+   }
+
+   0% {
+      transform: translateY(0);
+      opacity: 0%;
+   }
+}
+
+.card-h-100 {
+   height: calc(100% - 1.5rem) !important;
+}

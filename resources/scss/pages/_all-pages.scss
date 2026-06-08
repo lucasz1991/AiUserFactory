@@ -1,0 +1,19 @@
+.form-range {
+    @apply bg-slate-50
+}
+
+.swal2-title {
+    @apply text-22
+}
+
+.progress-bar-striped {
+    background-image: linear-gradient(45deg, rgba(255, 255, 255, .15) 25%, transparent 25%, transparent 50%, rgba(255, 255, 255, .15) 50%, rgba(255, 255, 255, .15) 75%, transparent 75%, transparent);
+}
+
+select {
+    font-size: 14px !important;
+}
+
+.email-leftbar {
+    min-width: var(--tw-email-leftbar);
+}

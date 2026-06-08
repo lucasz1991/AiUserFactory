@@ -1,0 +1,90 @@
+/* choices__input */
+
+.choices__inner {
+    @apply bg-white border border-gray-100 align-middle rounded-md dark:bg-zinc-700 dark:border-zinc-700 dark:text-gray-300;
+    padding: .25rem 2.5rem .25rem .5rem;
+    min-height: 38px;
+}
+.choices__heading {
+    @apply border-b border-gray-300 dark:border-zinc-600;
+}
+.is-focused .choices__inner, .is-open .choices__inner {
+    @apply border-gray-50 dark:border-zinc-700;
+}
+
+.choices[data-type*=select-one] .choices__input {
+    @apply bg-white border border-gray-100 align-middle rounded-md dark:bg-zinc-700 dark:border-zinc-700 dark:text-gray-300;
+}
+.choices[data-type*=select-one] .choices__button {
+    right: 0;
+    left: auto;
+    margin-right: 25px;
+    margin-left: 0
+}
+.choices[data-type*=select-one]:after {
+    border-top-color: #7d8084;
+    right: 11.5px;
+    left: auto
+}
+.choices[data-type*=select-one].is-open:after {
+    border-bottom-color: #7d8084;
+}
+
+.choices__list:focus .choices__input {
+    border: none !important;
+}
+.choices__list--multiple {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 8px
+}
+.choices__list--multiple {
+    @apply text-gray-700 dark:text-gray-200;
+}
+
+.choices__item{
+    @apply text-gray-700 dark:text-gray-200;
+}
+
+.choices__list--dropdown .choices__item--selectable.is-highlighted {
+    @apply bg-gray-50 dark:bg-zinc-600 dark:text-gray-50;
+}
+
+.choices[data-type*=select-multiple] .choices__button, .choices[data-type*=text] .choices__button {
+    border-left: 1px solid rgba(255, 255, 255, .5);
+    margin: 0 -4px 0 8px;
+    border-right: 0
+}
+[dir="rtl"] .choices[data-type*=select-multiple] .choices__button, .choices[data-type*=text] .choices__button {
+    border-right: 1px solid rgba(255, 255, 255, .5);
+    margin: 0 8px 0 -4px;
+    border-left: none;
+}
+
+.choices__list--dropdown {
+    @apply bg-white border border-gray-50 dark:bg-zinc-700 dark:border-gray-700;
+}
+
+.choices__input--cloned{
+    @apply dark:bg-zinc-700 border-transparent;
+}
+
+.choices__list--multiple .choices__item{
+    @apply bg-violet-500 border-violet-500 text-white;
+}
+
+.choices.is-disabled .choices__inner{
+    @apply bg-gray-100 dark:bg-zinc-700;
+}
+
+.is-disabled .choices__list--multiple .choices__item {
+    @apply bg-gray-500 border-gray-500;
+}
+
+.choices.is-disabled .choices__inner, .choices.is-disabled .choices__input{
+    @apply bg-gray-50/10 dark:bg-zinc-700;
+}
+
+[type='text']:focus{
+    @apply ring-0 ring-offset-0 shadow-none;
+}

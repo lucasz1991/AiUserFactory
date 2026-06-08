@@ -1,0 +1,25 @@
+
+
+.alertify .ajs-dialog {
+    @apply bg-white dark:bg-zinc-900;
+}
+
+.alertify .ajs-body {
+    @apply text-gray-900 dark:text-gray-200;
+}
+
+.alertify .ajs-header {
+    @apply bg-gray-50/20 border-gray-50 text-gray-900 dark:bg-zinc-800 dark:border-zinc-700 dark:text-gray-200; 
+}
+
+.alertify .ajs-footer{
+    @apply bg-white dark:border-t-zinc-700 dark:bg-zinc-800;
+}
+
+.alertify .ajs-footer .ajs-buttons .ajs-cancel{
+    @apply dark:text-gray-50;
+}
+
+.alertify .ajs-body .ajs-content .ajs-input{
+    @apply bg-gray-50/20 border-gray-50 text-gray-900 dark:bg-zinc-800 dark:border-zinc-700 dark:text-gray-200;
+}

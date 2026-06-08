@@ -1,0 +1,38 @@
+/* Materialdesign icon */
+
+.icon-demo-content {
+    @apply text-gray-300 flex;
+}
+.icon-demo-content i {
+    @apply inline-flex items-center justify-center text-xl border border-gray-50 align-middle rounded-full dark:border dark:border-zinc-600;
+    width: 40px;
+    height: 40px;
+    transition: all .4s;
+    margin-right: 16px;
+}
+.icon-demo-content .col-lg-4 {
+    margin-top: 24px
+}
+.icon-demo-content .col-lg-4:hover i {
+    background-color: rgba(81, 86, 190, .2);
+    color: #5156be
+}
+
+.icon-demo-content {
+    @apply flex flex-wrap;
+}
+
+
+.icon-demo-content .col-lg-4 {
+    flex: 0 0 auto;
+    width: 33.33333333%;
+}
+@media (max-width:767px) {
+    .icon-demo-content .col-lg-4 {
+        width: 50%;
+    }
+}
+
+[dir="rtl"] .icon-demo-content i{
+    margin-left: 16px !important;
+}

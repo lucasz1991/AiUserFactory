@@ -1,0 +1,39 @@
+/* Form Editor - ckeditor-classic */
+
+
+.ck-editor__editable {
+    min-height: 250px;
+}
+.ck.ck-reset_all{
+    @apply text-gray-900 dark:text-gray-100 dark:bg-zinc-800;
+}
+.ck.ck-reset_all *{
+    @apply dark:text-gray-200 dark:bg-zinc-800;
+}
+.ck.ck-editor__main>.ck-editor__editable:not(.ck-focused) {
+    min-height: 250px;
+    @apply border-gray-50 dark:border-zinc-600 dark:focus:border-violet-500;
+}
+.ck.ck-toolbar {
+    @apply border-gray-100 dark:border-zinc-600 bg-gray-100;
+}
+.ck.ck-toolbar .ck.ck-toolbar__separator {
+    background-color: #d9dae0;
+}
+.ck.ck-tooltip .ck-tooltip__text {
+    @apply dark:text-gray-100 dark:bg-zinc-700
+}
+.ck.ck-editor__main>.ck-editor__editable{
+    @apply text-gray-900 dark:text-gray-100 dark:bg-zinc-700;
+}
+.ck.ck-dropdown__panel {
+    @apply border-gray-100;
+}
+
+.ck.ck-button.ck-on, .ck.ck-button:not(.ck-disabled):hover, a.ck.ck-button.ck-on, a.ck.ck-button:not(.ck-disabled):hover {
+    @apply dark:bg-gray-800;
+}
+
+.ck.ck-editor__editable_inline[dir=ltr]{
+    text-align: right !important;
+}

@@ -1,0 +1,190 @@
+
+.noUi-connect {
+  background: theme('colors.sky.500');
+}
+.noUi-handle {
+  @apply border-gray-200 dark:border-zinc-600;
+  background: theme('colors.sky.500');
+  box-shadow: none;
+}
+.noUi-horizontal {
+  height: 8px
+}
+.noUi-horizontal .noUi-handle {
+  height: 20px;
+  width: 20px;
+  border-radius: 50%;
+  right: -10px;
+  top: -7px
+}
+.noUi-horizontal .noUi-handle::after, .noUi-horizontal .noUi-handle::before {
+  display: none
+}
+.noUi-horizontal .noUi-handle:focus {
+  outline: 0
+}
+
+.noUi-touch-area{
+  border-radius: 100%;
+}
+
+.noUi-tooltip {
+  @apply border-gray-100 bg-white text-gray-700 dark:border-zinc-600 dark:bg-zinc-700 dark:text-gray-200; 
+}
+
+.noUi-connects, .noUi-touch-area {
+  cursor: pointer;
+  box-shadow: none !important;
+  @apply bg-white dark:bg-zinc-700;
+}
+.noUi-pips-horizontal {
+  height: 50px
+}
+.noUi-vertical {
+  width: 8px
+}
+.noUi-vertical .noUi-handle {
+  height: 20px;
+  width: 20px;
+  right: -7px;
+  top: -12px;
+  border-radius: 50%
+}
+.noUi-vertical .noUi-handle::after, .noUi-vertical .noUi-handle::before {
+  display: none
+}
+.noUi-vertical .noUi-handle:focus {
+  outline: 0
+}
+.noUi-value {
+  font-size: 12px
+}
+.noUi-marker-horizontal.noUi-marker-large {
+  height: 6px
+}
+.noUi-marker-horizontal.noUi-marker {
+  display: none
+}
+.noUi-target {
+  box-shadow: none;
+
+  @apply bg-white border-gray-50 dark:bg-zinc-700 dark:border-zinc-600;
+}
+.noUi-touch-area:focus {
+  outline: 0
+}
+#blue, #green, #red {
+  margin: 10px;
+  display: inline-block;
+  height: 200px
+}
+
+.noUi-vertical .noUi-origin {
+  top: 0%;
+}
+
+#red .noUi-connect{
+  border: none;
+}
+
+#blue .noUi-connect {
+  border: none;
+}
+
+#green .noUi-connect {
+  border: none;
+}
+
+#colorpicker {
+  height: 240px;
+  width: 310px;
+  margin: 0 auto;
+  padding: 10px;
+
+  @apply border border-gray-400 dark:border-gray-800;
+}
+#result {
+  margin: 60px 26px;
+  height: 100px;
+  width: 100px;
+  display: inline-block;
+  vertical-align: top;
+  border: 1px solid;
+  @apply border-gray-50 dark:border-zinc-600;
+  -webkit-box-shadow: 0 0 3px;
+  box-shadow: 0 0 3px;
+  border-radius: 7px
+}
+#red .noUi-connect {
+  background: theme('colors.red.500');
+}
+#green .noUi-connect {
+  background: theme('colors.green.500');
+}
+#blue .noUi-connect {
+  background: theme('colors.violet.500');
+}
+.form-control.keyboard {
+  max-width: 340px !important
+}
+#input-number, #input-select {
+  padding: 7px;
+  margin: 15px 5px 5px;
+  width: 70px
+}
+[dir="rtl"]#input-number, #input-select{
+  padding-right: 10px !important;
+}
+
+.example-val {
+  @apply text-gray-700 block text-xs dark:text-gray-200;
+  margin: 15px 0
+}
+.example-val:before {
+  content: "Value: ";
+  font-size: 12px;
+  font-weight: 600
+}
+.noUi-tooltip {
+  display: none
+}
+.noUi-active .noUi-tooltip {
+  display: block
+}
+.c-1-color {
+  background: theme('colors.red.500');
+  border: none;
+}
+.c-2-color {
+  background: theme('colors.yellow.500');
+  border: none;
+}
+.c-3-color {
+  background: theme('colors.green.500');
+  border: none;
+}
+.c-4-color {
+  background: theme('colors.violet.500');
+  border: none;
+}
+.c-5-color {
+  background: theme('colors.purple.500');
+  border: none;
+}
+#slider-toggle {
+  height: 50px
+}
+#slider-toggle.off .noUi-handle {
+  @apply border-red-500;
+}
+
+[type='number']{
+    font-size: .875rem;
+    @apply text-gray-600;
+}
+
+.select-number{
+  font-size: .875rem;
+  @apply text-gray-600;
+}
+
