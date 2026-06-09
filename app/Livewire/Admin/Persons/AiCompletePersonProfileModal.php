@@ -442,6 +442,7 @@ class AiCompletePersonProfileModal extends Component
             'user_prompt' => trim($profilePrompt),
             'current_age_from_birthdate' => $age,
             'existing_person_data' => $this->preview ?: $this->buildEditablePreview(),
+            'simulation_goal' => 'Die Daten werden spaeter fuer eine isolierte interne Persona-Sandbox genutzt. Besonders wichtig sind plausible Tagesrhythmen, Interessen, Content-Themen, Kommunikationsstil und Grenzen fuer interne Feed-/Session-Schritte. Keine reale Plattform-Automation planen.',
             'allowed_fields_only' => [
                 'root' => $this->allowedRootFields,
                 'identity_profile' => $this->allowedIdentityFields,
@@ -909,6 +910,9 @@ Regeln:
 - Wenn der Nutzer im Prompt Alter oder Altersbereich vorgibt, gib person_date_of_birth als plausibles Datum im Format YYYY-MM-DD zurueck. Erfinde kein exaktes Geburtsdatum, wenn vorhandene Daten oder Nutzerprompt dagegen sprechen.
 - Die optische Beschreibung beschreibt nur sichtbare Merkmale der Person in neutraler Sprache.
 - Listenfelder als Zeilenliste ausgeben.
+- daily_routine muss konkrete, plausible Zeitfenster fuer Arbeit, Freizeit, Schlaf und kurze Online-/Feed-Momente enthalten.
+- interests, personality_traits und values muessen genug Material fuer wiederkehrende interne Content-Themen und Sessions liefern.
+- communication_style, writing_style und behavior_guidelines duerfen nur interne Sandbox-Interaktionen beschreiben, keine echte Plattform-Automation, keine Logins, keine Cookies und keine Scraper-Schritte.
 PROMPT;
     }
 

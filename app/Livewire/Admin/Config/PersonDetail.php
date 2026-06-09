@@ -4,6 +4,7 @@ namespace App\Livewire\Admin\Config;
 
 use App\Models\File;
 use App\Models\Person;
+use App\Services\Simulation\PersonaActivityPlanner;
 use Illuminate\Support\Facades\Storage;
 use Livewire\Attributes\On;
 use Livewire\WithFileUploads;
@@ -49,6 +50,14 @@ class PersonDetail extends PersonList
     public string $aiBackgroundStory = '';
 
     public string $aiBehaviorGuidelines = '';
+
+    public int $activitySimulationDays = 7;
+
+    public string $activitySimulationIntensity = 'balanced';
+
+    public string $activitySimulationSeed = '';
+
+    public array $activitySimulation = [];
 
     public function mount(?string $profileId = null): void
     {
@@ -153,6 +162,55 @@ class PersonDetail extends PersonList
 
         $this->refreshProfileDetail();
         session()->flash('success', 'AI-Persona-Daten wurden gespeichert.');
+    }
+
+    public function generateActivitySimulation(PersonaActivityPlanner $planner): void
+    {
+        if (! $this->personRecord) {
+            return;
+        }
+
+        $validated = $this->validate([
+            'activitySimulationDays' => ['required', 'integer', 'min:1', 'max:14'],
+            'activitySimulationIntensity' => ['required', 'string', 'in:quiet,balanced,active,creator'],
+            'activitySimulationSeed' => ['nullable', 'string', 'max:120'],
+        ]);
+
+        $plan = $planner->build(
+            person: $this->personRecord,
+            days: (int) $validated['activitySimulationDays'],
+            intensity: $validated['activitySimulationIntensity'],
+            seed: $this->nullableString($validated['activitySimulationSeed'] ?? null),
+        );
+
+        $metadata = is_array($this->personRecord->metadata) ? $this->personRecord->metadata : [];
+        $metadata['internal_activity_simulation'] = $plan;
+
+        $this->personRecord->forceFill([
+            'metadata' => $metadata,
+        ])->save();
+
+        $this->refreshProfileDetail();
+
+        session()->flash('success', 'Interne Aktivitaets-Simulation wurde erstellt.');
+    }
+
+    public function clearActivitySimulation(): void
+    {
+        if (! $this->personRecord) {
+            return;
+        }
+
+        $metadata = is_array($this->personRecord->metadata) ? $this->personRecord->metadata : [];
+        unset($metadata['internal_activity_simulation']);
+
+        $this->personRecord->forceFill([
+            'metadata' => $metadata,
+        ])->save();
+
+        $this->refreshProfileDetail();
+
+        session()->flash('success', 'Interne Aktivitaets-Simulation wurde entfernt.');
     }
 
     public function uploadAvatar(): void
@@ -301,6 +359,7 @@ class PersonDetail extends PersonList
         $this->hydrateAvatar();
         $this->loadImageFiles();
         $this->hydrateAiProfile();
+        $this->hydrateActivitySimulation();
 
         if ($profile) {
             $this->fillFormFromProfile($profile);
@@ -486,6 +545,28 @@ class PersonDetail extends PersonList
         $this->aiDailyRoutine = (string) ($identityProfile['daily_routine'] ?? '');
         $this->aiBackgroundStory = (string) ($identityProfile['background_story'] ?? '');
         $this->aiBehaviorGuidelines = (string) ($botProfile['behavior_guidelines'] ?? '');
+    }
+
+    protected function hydrateActivitySimulation(): void
+    {
+        $this->activitySimulation = [];
+        $this->activitySimulationDays = 7;
+        $this->activitySimulationIntensity = 'balanced';
+        $this->activitySimulationSeed = '';
+
+        $metadata = is_array($this->personRecord?->metadata) ? $this->personRecord->metadata : [];
+        $simulation = $metadata['internal_activity_simulation'] ?? [];
+
+        if (! is_array($simulation) || $simulation === []) {
+            return;
+        }
+
+        $this->activitySimulation = $simulation;
+        $this->activitySimulationDays = max(1, min(14, (int) ($simulation['days'] ?? 7)));
+        $this->activitySimulationIntensity = in_array(($simulation['intensity'] ?? ''), ['quiet', 'balanced', 'active', 'creator'], true)
+            ? (string) $simulation['intensity']
+            : 'balanced';
+        $this->activitySimulationSeed = trim((string) ($simulation['seed'] ?? ''));
     }
 
     protected function splitMultilineValues(string $value): array
