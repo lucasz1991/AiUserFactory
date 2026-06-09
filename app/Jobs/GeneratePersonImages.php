@@ -181,7 +181,7 @@ class GeneratePersonImages implements ShouldQueue
 
         return $files
             ->filter(fn (File $file): bool => $this->isUsableReferenceImage($file))
-            ->unique('id')
+            ->unique(fn (File $file): string => $this->fileReferenceKey($file))
             ->sortByDesc(fn (File $file): int => $this->referencePriority($file))
             ->take(4)
             ->values();
@@ -321,6 +321,11 @@ class GeneratePersonImages implements ShouldQueue
         $timestamp = $file->created_at?->timestamp ?? 0;
 
         return ($file->type === 'avatar' ? 10_000_000_000 : 0) + $timestamp;
+    }
+
+    protected function fileReferenceKey(File $file): string
+    {
+        return ($file->disk ?: 'private').':'.trim((string) $file->path);
     }
 
     protected function imagePresetOptions(): array

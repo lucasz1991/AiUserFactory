@@ -7,6 +7,7 @@ use App\Models\File;
 use App\Models\Person;
 use App\Services\Ai\AiConnectionService;
 use Illuminate\Support\Arr;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
@@ -19,6 +20,8 @@ class AiCompletePersonProfileModal extends Component
 {
     public bool $showModal = false;
 
+    public bool $showImageModal = false;
+
     public ?int $personId = null;
 
     public ?Person $person = null;
@@ -27,7 +30,13 @@ class AiCompletePersonProfileModal extends Component
 
     public bool $isGeneratingImage = false;
 
+    public int $imageJobPlaceholderCount = 0;
+
+    public string $imageJobStartedAt = '';
+
     public array $preview = [];
+
+    public string $profilePrompt = '';
 
     public string $imagePrompt = '';
 
@@ -49,6 +58,7 @@ class AiCompletePersonProfileModal extends Component
         'person_first_name',
         'person_last_name',
         'person_alias',
+        'person_date_of_birth',
         'person_gender',
         'person_email',
         'person_phone',
@@ -87,6 +97,7 @@ class AiCompletePersonProfileModal extends Component
         $this->personId = $personId;
         $this->person = Person::query()->findOrFail($personId);
         $this->preview = $this->buildEditablePreview();
+        $this->profilePrompt = '';
         $this->imagePreset = 'profile_portrait';
         $this->imagePrompt = $this->defaultImagePrompt($this->imagePreset);
         $this->imagePromptBrief = '';
@@ -95,6 +106,8 @@ class AiCompletePersonProfileModal extends Component
         $this->setGeneratedImageAsAvatar = true;
         $this->referenceImages = $this->buildReferenceImagePreview();
         $this->generatedImages = [];
+        $this->imageJobPlaceholderCount = 0;
+        $this->imageJobStartedAt = '';
         $this->showModal = true;
     }
 
@@ -102,11 +115,15 @@ class AiCompletePersonProfileModal extends Component
     {
         $this->reset([
             'showModal',
+            'showImageModal',
             'personId',
             'person',
             'isGenerating',
             'isGeneratingImage',
+            'imageJobPlaceholderCount',
+            'imageJobStartedAt',
             'preview',
+            'profilePrompt',
             'imagePrompt',
             'imagePromptBrief',
             'imagePreset',
@@ -118,17 +135,43 @@ class AiCompletePersonProfileModal extends Component
         ]);
     }
 
+    public function openImageModal(): void
+    {
+        if (! $this->person) {
+            return;
+        }
+
+        $this->referenceImages = $this->buildReferenceImagePreview();
+        $this->generatedImages = $this->buildGeneratedImagePreview();
+        $this->imagePreset = $this->imagePreset ?: 'profile_portrait';
+        $this->imagePrompt = $this->imagePrompt ?: $this->defaultImagePrompt($this->imagePreset);
+        $this->imagePromptBrief = '';
+        $this->imageAspectRatio = $this->imageAspectRatio ?: '1:1';
+        $this->imageCount = max(1, min(8, (int) $this->imageCount));
+        $this->setGeneratedImageAsAvatar = $this->imagePreset === 'profile_portrait';
+        $this->showImageModal = true;
+    }
+
+    public function closeImageModal(): void
+    {
+        $this->showImageModal = false;
+    }
+
     public function generate(AiConnectionService $ai): void
     {
         if (! $this->person) {
             return;
         }
 
+        $validated = $this->validate([
+            'profilePrompt' => ['nullable', 'string', 'max:4000'],
+        ]);
+
         $this->isGenerating = true;
 
         try {
             $result = $ai->json(
-                prompt: json_encode($this->buildAiContext(), JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT),
+                prompt: json_encode($this->buildAiContext($validated['profilePrompt'] ?? ''), JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT),
                 system: $this->systemPrompt(),
                 options: [
                     'temperature' => 0.7,
@@ -176,9 +219,31 @@ class AiCompletePersonProfileModal extends Component
             userId: auth()->id(),
         );
 
+        $this->isGeneratingImage = true;
+        $this->imageJobPlaceholderCount = (int) $validated['imageCount'];
+        $this->imageJobStartedAt = now()->toIso8601String();
         $this->generatedImages = [];
 
         session()->flash('success', 'Bildauftrag wurde gestartet. Die Bilder werden im Hintergrund erzeugt und automatisch im FilePool gespeichert.');
+    }
+
+    public function refreshImageStatus(): void
+    {
+        if (! $this->person) {
+            return;
+        }
+
+        $this->referenceImages = $this->buildReferenceImagePreview();
+        $this->generatedImages = $this->buildGeneratedImagePreview(
+            $this->imageJobStartedAt !== '' ? Carbon::parse($this->imageJobStartedAt) : null
+        );
+
+        if ($this->isGeneratingImage && count($this->generatedImages) >= $this->imageJobPlaceholderCount) {
+            $this->isGeneratingImage = false;
+            $this->imageJobPlaceholderCount = 0;
+            $this->imageJobStartedAt = '';
+            $this->dispatch('refreshPersonDetail');
+        }
     }
 
     public function improveImagePrompt(AiConnectionService $ai): void
@@ -253,6 +318,7 @@ class AiCompletePersonProfileModal extends Component
             'preview.root.person_first_name' => ['nullable', 'string', 'max:120'],
             'preview.root.person_last_name' => ['nullable', 'string', 'max:120'],
             'preview.root.person_alias' => ['nullable', 'string', 'max:120'],
+            'preview.root.person_date_of_birth' => ['nullable', 'date', 'before:today'],
             'preview.root.person_gender' => ['nullable', 'string', 'max:60'],
             'preview.root.person_email' => ['nullable', 'email', 'max:255'],
             'preview.root.person_phone' => ['nullable', 'string', 'max:80'],
@@ -282,6 +348,7 @@ class AiCompletePersonProfileModal extends Component
         ]);
 
         $root = Arr::only($validated['preview']['root'] ?? [], $this->allowedRootFields);
+        $root['person_date_of_birth'] = $this->nullableString($root['person_date_of_birth'] ?? null);
 
         $identityProfile = is_array($this->person->identity_profile)
             ? $this->person->identity_profile
@@ -336,7 +403,9 @@ class AiCompletePersonProfileModal extends Component
         return [
             'root' => collect($this->allowedRootFields)
                 ->mapWithKeys(fn (string $field) => [
-                    $field => (string) ($this->person->{$field} ?? ''),
+                    $field => $field === 'person_date_of_birth'
+                        ? ($this->person->person_date_of_birth?->format('Y-m-d') ?? '')
+                        : (string) ($this->person->{$field} ?? ''),
                 ])
                 ->toArray(),
 
@@ -361,11 +430,18 @@ class AiCompletePersonProfileModal extends Component
         ];
     }
 
-    protected function buildAiContext(): array
+    protected function buildAiContext(string $profilePrompt = ''): array
     {
+        $dateOfBirth = (string) data_get($this->preview, 'root.person_date_of_birth', '');
+        $age = $dateOfBirth !== ''
+            ? $this->ageLabelFromDate($dateOfBirth)
+            : '';
+
         return [
-            'task' => 'Komplettiere fehlende Textfelder einer fiktiven Persona realistisch und konsistent.',
-            'existing_person_data' => $this->buildEditablePreview(),
+            'task' => 'Komplettiere und verbessere editierbare Textfelder einer fiktiven Persona realistisch und konsistent.',
+            'user_prompt' => trim($profilePrompt),
+            'current_age_from_birthdate' => $age,
+            'existing_person_data' => $this->preview ?: $this->buildEditablePreview(),
             'allowed_fields_only' => [
                 'root' => $this->allowedRootFields,
                 'identity_profile' => $this->allowedIdentityFields,
@@ -509,6 +585,19 @@ PROMPT;
             ->toArray();
     }
 
+    protected function buildGeneratedImagePreview(?Carbon $since = null): array
+    {
+        return $this->generatedImageFiles($since)
+            ->map(fn (File $file): array => [
+                'id' => $file->id,
+                'name' => $file->name_with_extension,
+                'type' => $file->type,
+                'url' => $file->getEphemeralPublicUrl(15),
+            ])
+            ->values()
+            ->toArray();
+    }
+
     protected function buildReferenceImageDataUrls(): array
     {
         $maxBytes = 10 * 1024 * 1024;
@@ -565,9 +654,45 @@ PROMPT;
 
         return $files
             ->filter(fn (File $file): bool => $this->isUsableReferenceImage($file))
-            ->unique('id')
+            ->unique(fn (File $file): string => $this->fileReferenceKey($file))
             ->sortByDesc(fn (File $file): int => $this->referencePriority($file))
             ->take(4)
+            ->values();
+    }
+
+    protected function generatedImageFiles(?Carbon $since = null): Collection
+    {
+        if (! $this->person) {
+            return collect();
+        }
+
+        $this->person->loadMissing('filePool');
+
+        $types = ['ai-profile-portrait', 'ai-hobby-image', 'ai-work-image', 'ai-creative-image'];
+        $files = collect($this->person->files()
+            ->where('mime_type', 'like', 'image/%')
+            ->whereIn('type', $types)
+            ->latest('id')
+            ->get());
+
+        if ($this->person->filePool) {
+            $files = $files->merge($this->person->filePool->files()
+                ->where('mime_type', 'like', 'image/%')
+                ->whereIn('type', $types)
+                ->latest('id')
+                ->get());
+        }
+
+        $files = $files->filter(fn (File $file): bool => $this->isUsableReferenceImage($file));
+
+        if ($since) {
+            $files = $files->filter(fn (File $file): bool => $file->created_at && $file->created_at->greaterThanOrEqualTo($since));
+        }
+
+        return $files
+            ->unique(fn (File $file): string => $this->fileReferenceKey($file))
+            ->sortByDesc(fn (File $file): int => $file->created_at?->timestamp ?? 0)
+            ->take(8)
             ->values();
     }
 
@@ -605,6 +730,11 @@ PROMPT;
         $timestamp = $file->created_at?->timestamp ?? 0;
 
         return ($file->type === 'avatar' ? 10_000_000_000 : 0) + $timestamp;
+    }
+
+    protected function fileReferenceKey(File $file): string
+    {
+        return ($file->disk ?: 'private').':'.trim((string) $file->path);
     }
 
     protected function storeGeneratedImages(array $imageUrls, string $preset, bool $setAsAvatar): array
@@ -736,6 +866,7 @@ Du darfst ausschliesslich diese JSON-Struktur zurueckgeben:
     "person_first_name": "",
     "person_last_name": "",
     "person_alias": "",
+    "person_date_of_birth": "",
     "person_gender": "",
     "person_email": "",
     "person_phone": "",
@@ -773,11 +904,32 @@ Regeln:
 - Keine Bilder, Dateien, Uploads oder Pfade.
 - Keine Instagram-Daten veraendern, erfinden oder ergaenzen.
 - Keine Login-, Cookie-, Session- oder Scraper-Daten.
-- Bestehende Werte respektieren.
+- Bestehende Werte respektieren, ausser der Nutzerprompt verlangt klar eine Anpassung.
 - Leere Textfelder sinnvoll ergaenzen.
+- Wenn der Nutzer im Prompt Alter oder Altersbereich vorgibt, gib person_date_of_birth als plausibles Datum im Format YYYY-MM-DD zurueck. Erfinde kein exaktes Geburtsdatum, wenn vorhandene Daten oder Nutzerprompt dagegen sprechen.
 - Die optische Beschreibung beschreibt nur sichtbare Merkmale der Person in neutraler Sprache.
 - Listenfelder als Zeilenliste ausgeben.
 PROMPT;
+    }
+
+    public function previewAgeLabel(): string
+    {
+        return $this->ageLabelFromDate((string) data_get($this->preview, 'root.person_date_of_birth', ''));
+    }
+
+    protected function ageLabelFromDate(string $date): string
+    {
+        $date = trim($date);
+
+        if ($date === '') {
+            return '';
+        }
+
+        try {
+            return Carbon::parse($date)->age.' Jahre';
+        } catch (Throwable) {
+            return '';
+        }
     }
 
     protected function sanitizeAiResult(array $result): array

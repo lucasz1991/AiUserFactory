@@ -1,12 +1,60 @@
 <div class="space-y-6" wire:loading.class="opacity-50 pointer-events-none cursor-wait">
-    <div class="rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
-        <p class="font-semibold">Instagram-Person</p>
-        <p class="mt-1">
-            Diese Einstellungen werden vom Tracking-System fuer den Instagram-Scraper verwendet. Das Browser-Profil bleibt bei aktivierter Persistenz erhalten, damit nach einem erfolgreichen Login spaetere Analysen dieselbe Session wiederverwenden koennen.
-        </p>
-        <p class="mt-2">
-            Normale Personen-Analysen laufen immer unsichtbar im Hintergrund. Ein sichtbares Browserfenster wird nur noch ueber den expliziten Session-Aufbau geoeffnet.
-        </p>
+    @php
+        $profiles = collect($profileOptions);
+        $primaryProfile = $profiles->firstWhere('is_primary', true);
+        $totalPersonsCount = $profiles->count();
+        $activePersonsCount = $profiles->where('is_active', true)->count();
+        $blockedPersonsCount = $profiles->where('is_scrape_blocked', true)->count();
+        $botReadyPersonsCount = $profiles->whereIn('bot_status', ['ready', 'training'])->count();
+        $baseSyncedPersonsCount = $profiles->where('base_sync_status', 'synced')->count();
+    @endphp
+
+    <div class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div class="border-b border-slate-200 bg-slate-50 px-5 py-4">
+            <div class="flex flex-wrap items-start justify-between gap-4">
+                <div class="min-w-0">
+                    <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Instagram-Scraper</p>
+                    <h2 class="mt-1 text-xl font-semibold text-slate-900">Personen verwalten</h2>
+                    <p class="mt-1 max-w-3xl text-sm text-slate-600">
+                        Sessions, Persona-Daten und Bot-Status an einem Ort. Sichtbare Browserfenster werden nur beim expliziten Session-Aufbau geoeffnet.
+                    </p>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                    <button type="button" wire:click="openRuntimeSettingsModal" class="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
+                        Timeouts
+                    </button>
+                    <button type="button" wire:click="buildInstagramSession" class="rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
+                        Session aufbauen
+                    </button>
+                    <button type="button" wire:click="openCreateProfileModal" class="rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">
+                        Person hinzufuegen
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="grid gap-px bg-slate-200 sm:grid-cols-2 xl:grid-cols-5">
+            <div class="bg-white p-4">
+                <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Personen</p>
+                <p class="mt-2 text-2xl font-semibold text-slate-900">{{ $totalPersonsCount }}</p>
+            </div>
+            <div class="bg-white p-4">
+                <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Analyse aktiv</p>
+                <p class="mt-2 text-2xl font-semibold text-emerald-700">{{ $activePersonsCount }}</p>
+            </div>
+            <div class="bg-white p-4">
+                <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Instagram-Sperren</p>
+                <p class="mt-2 text-2xl font-semibold text-amber-700">{{ $blockedPersonsCount }}</p>
+            </div>
+            <div class="bg-white p-4">
+                <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Bot-bereit</p>
+                <p class="mt-2 text-2xl font-semibold text-blue-700">{{ $botReadyPersonsCount }}</p>
+            </div>
+            <div class="bg-white p-4">
+                <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Base-Sync</p>
+                <p class="mt-2 text-2xl font-semibold text-slate-900">{{ $baseSyncedPersonsCount }}<span class="text-sm font-medium text-slate-500">/{{ $totalPersonsCount }}</span></p>
+            </div>
+        </div>
     </div>
 
     @if (session()->has('success'))
@@ -15,115 +63,181 @@
         </div>
     @endif
 
-    <div class="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
-        <div class="border-b border-gray-200 p-5">
-            <div class="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                    <h3 class="text-lg font-semibold text-gray-900">Personen</h3>
-                    <p class="mt-1 text-sm text-gray-500">Aktive Personen stehen der Analyse zur Auswahl; die Standard-Person wird fuer Session-Aufbau und Detail-Einstellungen genutzt.</p>
-                </div>
-                <button type="button" wire:click="openCreateProfileModal" class="inline-flex items-center rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">
-                    Person hinzufuegen
+    <div class="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <div class="flex flex-wrap items-start justify-between gap-4">
+            <div class="min-w-0">
+                <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Standard-Person</p>
+                <h3 class="mt-1 text-lg font-semibold text-slate-900">
+                    @if($primaryProfile)
+                        {{ $primaryProfile['display_name'] }}
+                    @else
+                        Keine Standard-Person ausgewaehlt
+                    @endif
+                </h3>
+                <p class="mt-1 text-sm text-slate-600">
+                    @if($primaryProfile)
+                        {{ $primaryProfile['label'] }}{{ $primaryProfile['login_username'] !== '' ? ' - @'.$primaryProfile['login_username'] : '' }} - {{ $activePersonsCount }} {{ $activePersonsCount === 1 ? 'Person ist' : 'Personen sind' }} aktiv.
+                    @else
+                        Lege eine Person an oder setze eine vorhandene Person als Standard.
+                    @endif
+                </p>
+            </div>
+            <div class="flex flex-wrap gap-2">
+                @if($primaryProfile)
+                    <a href="{{ route('persons.show', ['profileId' => $primaryProfile['id']]) }}" class="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
+                        Details
+                    </a>
+                    <button type="button" wire:click="selectAndEditProfile('{{ $primaryProfile['id'] }}')" class="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
+                        Bearbeiten
+                    </button>
+                @endif
+                <button type="button" wire:click="syncProfilesToBase" class="rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">
+                    An Base senden
                 </button>
             </div>
         </div>
+    </div>
 
-        <div class="hidden grid-cols-12 gap-4 border-b border-gray-200 bg-gray-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-gray-500 lg:grid">
-            <div class="col-span-4">Account</div>
-            <div class="col-span-4">Session</div>
-            <div class="col-span-2">Status</div>
+    <div class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div class="border-b border-slate-200 px-5 py-4">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                    <h3 class="text-lg font-semibold text-slate-900">Personenliste</h3>
+                    <p class="mt-1 text-sm text-slate-500">Schneller Ueberblick ueber Account, Session, Status und die wichtigsten Aktionen.</p>
+                </div>
+                <span class="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600 ring-1 ring-slate-200">
+                    {{ $totalPersonsCount }} {{ $totalPersonsCount === 1 ? 'Eintrag' : 'Eintraege' }}
+                </span>
+            </div>
+        </div>
+
+        <div class="hidden grid-cols-12 gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 lg:grid">
+            <div class="col-span-4">Person</div>
+            <div class="col-span-3">Session</div>
+            <div class="col-span-3">Status</div>
             <div class="col-span-2 text-right">Aktionen</div>
         </div>
 
-        <div class="divide-y divide-gray-200">
-            @foreach($profileOptions as $profile)
-                <div wire:key="scraper-profile-{{ $profile['id'] }}" class="grid gap-4 border-l-4 px-5 py-4 text-sm lg:grid-cols-12 {{ $profile['is_scrape_blocked'] ? 'border-l-amber-500 bg-amber-50/70' : ($profile['is_primary'] ? 'border-l-blue-500 bg-blue-50/70' : ($profile['is_active'] ? 'border-l-emerald-500 bg-emerald-50/40' : 'border-l-transparent bg-white hover:bg-gray-50')) }}">
-                    <div class="flex min-w-0 items-start gap-3 lg:col-span-4">
+        <div class="divide-y divide-slate-200">
+            @forelse($profileOptions as $profile)
+                @php
+                    $rowClass = $profile['is_scrape_blocked']
+                        ? 'border-l-amber-500 bg-amber-50/70'
+                        : ($profile['is_primary']
+                            ? 'border-l-blue-500 bg-blue-50/60'
+                            : ($profile['is_active'] ? 'border-l-emerald-500 bg-white hover:bg-emerald-50/30' : 'border-l-slate-200 bg-white hover:bg-slate-50'));
+                    $avatarClass = $profile['is_scrape_blocked']
+                        ? 'bg-amber-600 text-white'
+                        : ($profile['is_primary']
+                            ? 'bg-blue-600 text-white'
+                            : ($profile['is_active'] ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-700'));
+                    $botLabel = match($profile['bot_status'] ?? 'manual') {
+                        'ready' => 'bereit',
+                        'training' => 'Training',
+                        'disabled' => 'deaktiviert',
+                        default => 'manuell',
+                    };
+                    $baseLabel = match($profile['base_sync_status'] ?? 'pending') {
+                        'synced' => 'synchronisiert',
+                        'failed' => 'Fehler',
+                        default => 'offen',
+                    };
+                    $baseClass = match($profile['base_sync_status'] ?? 'pending') {
+                        'synced' => 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200',
+                        'failed' => 'bg-red-50 text-red-700 ring-1 ring-red-200',
+                        default => 'bg-slate-100 text-slate-700 ring-1 ring-slate-200',
+                    };
+                @endphp
+
+                <article wire:key="scraper-profile-{{ $profile['id'] }}" class="grid gap-5 border-l-4 px-5 py-5 text-sm lg:grid-cols-12 {{ $rowClass }}">
+                    <div class="flex min-w-0 items-start gap-4 lg:col-span-4">
                         @if(!empty($profile['avatar_url']))
                             <img
                                 src="{{ $profile['avatar_url'] }}"
                                 alt="Profilbild von {{ $profile['display_name'] }}"
-                                class="h-10 w-10 shrink-0 rounded-md object-cover ring-1 ring-gray-200"
+                                class="h-12 w-12 shrink-0 rounded-lg object-cover ring-1 ring-slate-200"
                             >
                         @else
-                            <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-md {{ $profile['is_scrape_blocked'] ? 'bg-amber-600 text-white' : ($profile['is_primary'] ? 'bg-blue-600 text-white' : ($profile['is_active'] ? 'bg-emerald-600 text-white' : 'bg-gray-100 text-gray-700')) }} text-sm font-semibold">
+                            <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg {{ $avatarClass }} text-base font-semibold">
                                 {{ strtoupper(substr($profile['label'], 0, 1)) }}
                             </div>
                         @endif
                         <div class="min-w-0">
-                            <p class="truncate font-semibold text-gray-900">{{ $profile['display_name'] }}</p>
-                            <p class="mt-1 truncate text-xs text-gray-500">
-                                {{ $profile['label'] }}{{ $profile['login_username'] !== '' ? ' - @'.$profile['login_username'] : ' - Kein Instagram-Benutzername' }}
+                            <div class="flex flex-wrap items-center gap-2">
+                                <p class="truncate font-semibold text-slate-900">{{ $profile['display_name'] }}</p>
+                                @if($profile['is_primary'])
+                                    <span class="rounded-full bg-blue-600 px-2 py-0.5 text-xs font-semibold text-white">Standard</span>
+                                @endif
+                            </div>
+                            <p class="mt-1 truncate text-xs text-slate-500">{{ $profile['label'] }}</p>
+                            <p class="mt-1 truncate text-xs font-medium {{ $profile['login_username'] !== '' ? 'text-pink-700' : 'text-slate-400' }}">
+                                {{ $profile['login_username'] !== '' ? '@'.$profile['login_username'] : 'Kein Instagram-Benutzername' }}
                             </p>
-                            <p class="mt-1 truncate text-xs text-gray-500">
+                            <p class="mt-2 truncate text-xs text-slate-500">
                                 {{ trim(($profile['person_city'] ?? '').' '.($profile['person_country'] ?? '')) ?: 'Keine Personendaten hinterlegt' }}
                             </p>
                         </div>
                     </div>
 
-                    <div class="min-w-0 space-y-1 text-xs text-gray-500 lg:col-span-4">
-                        <p class="break-all"><span class="font-semibold text-gray-700">Profil:</span> {{ $profile['browser_profile_path'] }}</p>
-                        <p class="break-all"><span class="font-semibold text-gray-700">Cookies:</span> {{ $profile['cookie_file_path'] }}</p>
+                    <div class="min-w-0 space-y-2 text-xs text-slate-500 lg:col-span-3">
+                        <div class="rounded-md bg-slate-50 p-3 ring-1 ring-slate-200">
+                            <p class="font-semibold text-slate-700">Browser-Profil</p>
+                            <p class="mt-1 break-all">{{ $profile['browser_profile_path'] }}</p>
+                        </div>
+                        <div class="rounded-md bg-slate-50 p-3 ring-1 ring-slate-200">
+                            <p class="font-semibold text-slate-700">Cookie-Datei</p>
+                            <p class="mt-1 break-all">{{ $profile['cookie_file_path'] }}</p>
+                        </div>
                     </div>
 
-                    <div class="flex flex-wrap items-center gap-2 lg:col-span-2">
-                        @if($profile['is_primary'])
-                            <span class="rounded-full bg-blue-600 px-2.5 py-1 text-xs font-semibold text-white">Standard</span>
-                        @endif
-
-                        <span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700 ring-1 ring-slate-200">
-                            Bot: {{ match($profile['bot_status'] ?? 'manual') {
-                                'ready' => 'bereit',
-                                'training' => 'Training',
-                                'disabled' => 'deaktiviert',
-                                default => 'manuell',
-                            } }}
-                        </span>
-
+                    <div class="flex flex-wrap content-start items-center gap-2 lg:col-span-3">
                         @if($profile['is_active'])
-                            <span class="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-200">Analyse aktiv</span>
+                            <span class="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-200">
+                                <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
+                                Analyse aktiv
+                            </span>
                         @else
-                            <span class="rounded-full bg-gray-100 px-2.5 py-1 text-xs font-semibold text-gray-600">Inaktiv</span>
-                        @endif
-
-                        @if($profile['is_scrape_blocked'])
-                            <span class="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800 ring-1 ring-amber-300">
-                                Instagram-Sperre bis {{ $profile['scrape_blocked_until_label'] ?? 'unbekannt' }}
+                            <span class="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600 ring-1 ring-slate-200">
+                                <span class="h-1.5 w-1.5 rounded-full bg-slate-400"></span>
+                                Inaktiv
                             </span>
                         @endif
 
-                        <span class="rounded-full {{ match($profile['base_sync_status'] ?? 'pending') {
-                            'synced' => 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200',
-                            'failed' => 'bg-red-50 text-red-700 ring-1 ring-red-200',
-                            default => 'bg-gray-100 text-gray-700 ring-1 ring-gray-200',
-                        } }} px-2.5 py-1 text-xs font-semibold">
-                            Base: {{ match($profile['base_sync_status'] ?? 'pending') {
-                                'synced' => 'synchronisiert',
-                                'failed' => 'Fehler',
-                                default => 'offen',
-                            } }}
-                        </span>
-
+                        <span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700 ring-1 ring-slate-200">Bot: {{ $botLabel }}</span>
+                        <span class="rounded-full {{ $baseClass }} px-2.5 py-1 text-xs font-semibold">Base: {{ $baseLabel }}</span>
                         <span class="rounded-full {{ $profile['has_stored_password'] ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200' : 'bg-amber-50 text-amber-700 ring-1 ring-amber-200' }} px-2.5 py-1 text-xs font-semibold">
                             {{ $profile['has_stored_password'] ? 'Passwort gespeichert' : 'Kein Passwort' }}
                         </span>
+
+                        @if($profile['is_scrape_blocked'])
+                            <span class="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800 ring-1 ring-amber-300">
+                                Gesperrt bis {{ $profile['scrape_blocked_until_label'] ?? 'unbekannt' }}
+                            </span>
+                        @endif
+
+                        @if(($profile['base_sync_status'] ?? 'pending') === 'synced' && !empty($profile['base_synced_at_label']))
+                            <p class="basis-full text-xs text-slate-500">Zuletzt synchronisiert: {{ $profile['base_synced_at_label'] }}</p>
+                        @endif
+                        @if(($profile['base_sync_status'] ?? 'pending') === 'failed' && !empty($profile['base_sync_error']))
+                            <p class="basis-full break-words text-xs text-red-700">{{ $profile['base_sync_error'] }}</p>
+                        @endif
                     </div>
 
-                    <div class="flex flex-wrap items-center justify-start gap-2 lg:col-span-2 lg:justify-end">
-                        <a href="{{ route('persons.show', ['profileId' => $profile['id']]) }}" class="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
+                    <div class="flex flex-wrap items-start justify-start gap-2 lg:col-span-2 lg:justify-end">
+                        <a href="{{ route('persons.show', ['profileId' => $profile['id']]) }}" class="rounded-md bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-slate-800">
                             Details
                         </a>
-                        <button type="button" wire:click="selectAndEditProfile('{{ $profile['id'] }}')" class="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 shadow-sm hover:bg-gray-50">
+                        <button type="button" wire:click="selectAndEditProfile('{{ $profile['id'] }}')" class="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
                             Bearbeiten
                         </button>
                         @if(! $profile['is_primary'])
                             <button type="button" wire:click="makePrimaryProfile('{{ $profile['id'] }}')" class="rounded-md border border-blue-200 bg-white px-3 py-1.5 text-xs font-semibold text-blue-700 shadow-sm hover:bg-blue-50">
-                                Als Standard
+                                Standard
                             </button>
                         @endif
                         @if($profile['is_scrape_blocked'])
                             <button type="button" wire:click="clearProfileScrapeBlock('{{ $profile['id'] }}')" class="rounded-md border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-800 shadow-sm hover:bg-amber-50">
-                                Sperre entfernen
+                                Entsperren
                             </button>
                         @endif
                         @if(! $profile['is_active'])
@@ -131,7 +245,7 @@
                                 Aktivieren
                             </button>
                         @else
-                            <button type="button" wire:click="toggleProfileActive('{{ $profile['id'] }}')" class="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 shadow-sm hover:bg-gray-50">
+                            <button type="button" wire:click="toggleProfileActive('{{ $profile['id'] }}')" class="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
                                 Deaktivieren
                             </button>
                         @endif
@@ -144,8 +258,16 @@
                             Loeschen
                         </button>
                     </div>
+                </article>
+            @empty
+                <div class="px-5 py-10 text-center">
+                    <p class="font-semibold text-slate-900">Noch keine Personen vorhanden</p>
+                    <p class="mt-1 text-sm text-slate-500">Lege eine Person an, um Instagram-Session und Persona-Daten zu verwalten.</p>
+                    <button type="button" wire:click="openCreateProfileModal" class="mt-4 rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">
+                        Erste Person hinzufuegen
+                    </button>
                 </div>
-            @endforeach
+            @endforelse
         </div>
     </div>
 
@@ -199,42 +321,6 @@
             </div>
         </x-slot>
     </x-dialog-modal>
-
-    @php
-        $primaryProfile = collect($profileOptions)->firstWhere('is_primary', true);
-        $activePersonsCount = collect($profileOptions)->where('is_active', true)->count();
-    @endphp
-
-    <div class="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
-        <div class="flex flex-wrap items-center justify-between gap-3">
-            <div>
-                <h3 class="text-lg font-semibold text-gray-900">Standard-Person</h3>
-                <p class="mt-1 text-sm text-gray-500">
-                    @if($primaryProfile)
-                        {{ $primaryProfile['label'] }}{{ $primaryProfile['login_username'] !== '' ? ' - @'.$primaryProfile['login_username'] : '' }} - {{ $activePersonsCount }} {{ $activePersonsCount === 1 ? 'Person ist' : 'Personen sind' }} fuer Analysen aktiv.
-                    @else
-                        Keine Standard-Person ausgewaehlt.
-                    @endif
-                </p>
-            </div>
-            <div class="flex flex-wrap gap-3">
-                @if($primaryProfile)
-                    <button type="button" wire:click="selectAndEditProfile('{{ $primaryProfile['id'] }}')" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">
-                        Person bearbeiten
-                    </button>
-                @endif
-                <button type="button" wire:click="openRuntimeSettingsModal" class="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50">
-                    Timeouts und Listen
-                </button>
-                <button type="button" wire:click="buildInstagramSession" class="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
-                    Instagram-Session aufbauen
-                </button>
-                <button type="button" wire:click="syncProfilesToBase" class="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">
-                    An Base senden
-                </button>
-            </div>
-        </div>
-    </div>
 
     @if($baseSyncResult)
         <div class="rounded-lg border p-4 text-sm {{ ($baseSyncResult['ok'] ?? false) ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-red-200 bg-red-50 text-red-900' }}">
