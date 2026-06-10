@@ -15,28 +15,29 @@
                 </li>
 
                 <li>
-                    <div class="block py-2.5 px-6 text-sm font-semibold text-gray-700">
+                    <a href="{{ route('admin.settings') }}" class="block py-2.5 px-6 text-sm font-medium transition-all duration-150 ease-linear {{ request()->routeIs('admin.settings') ? 'text-blue-600' : 'text-gray-600 hover:text-blue-500' }}">
+                        <i data-feather="settings" fill="#545a6d33"></i>
+                        <span>Einstellungen</span>
+                    </a>
+                </li>
+
+                <li>
+                    <a href="javascript: void(0);" aria-expanded="{{ request()->routeIs('persons.*') || request()->routeIs('network.*') ? 'true' : 'false' }}" class="block py-2.5 px-6 text-sm font-medium transition-all duration-150 ease-linear nav-menu {{ request()->routeIs('persons.*') || request()->routeIs('network.*') ? 'text-blue-600' : 'text-gray-600 hover:text-blue-500' }}">
                         <i data-feather="share-2" fill="#545a6d33"></i>
                         <span>Netzwerk</span>
-                    </div>
-                    <ul class="ml-7 border-l border-gray-200 py-1">
+                    </a>
+                    <ul>
                         <li>
-                            <a href="{{ route('persons.index') }}" class="block py-2 px-5 text-sm font-medium transition-all duration-150 ease-linear {{ request()->routeIs('persons.*') ? 'text-blue-600' : 'text-gray-600 hover:text-blue-500' }}">
+                            <a href="{{ route('persons.index') }}" class="pl-[52.8px] pr-6 py-[6.4px] block text-[13.5px] font-medium transition-all duration-150 ease-linear {{ request()->routeIs('persons.*') ? 'text-blue-600' : 'text-gray-600 hover:text-blue-500' }}">
                                 <span>Personen</span>
                             </a>
                         </li>
                         <li>
-                            <a href="{{ route('network.actions') }}" class="block py-2 px-5 text-sm font-medium transition-all duration-150 ease-linear {{ request()->routeIs('network.actions') ? 'text-blue-600' : 'text-gray-600 hover:text-blue-500' }}">
+                            <a href="{{ route('network.actions') }}" class="pl-[52.8px] pr-6 py-[6.4px] block text-[13.5px] font-medium transition-all duration-150 ease-linear {{ request()->routeIs('network.actions') ? 'text-blue-600' : 'text-gray-600 hover:text-blue-500' }}">
                                 <span>Aktionen</span>
                             </a>
                         </li>
                     </ul>
-                </li>
-                <li>
-                    <a href="{{ route('admin.settings') }}" class="block py-2.5 px-6 text-sm font-medium text-gray-600 transition-all duration-150 ease-linear hover:text-blue-500">
-                        <i data-feather="settings" fill="#545a6d33"></i>
-                        <span>Einstellungen</span>
-                    </a>
                 </li>
             </ul>
         </div>
