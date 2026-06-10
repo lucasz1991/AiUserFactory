@@ -7,6 +7,7 @@ use App\Livewire\AdminConfig;
 use App\Livewire\Admin\Config\PersonDetail;
 use App\Livewire\Admin\Config\ScraperProfileSyncSettings;
 use App\Livewire\Admin\Config\SettingsPage;
+use App\Livewire\Admin\Network\ActionsPage;
 
 /*
 |--------------------------------------------------------------------------
@@ -25,6 +26,7 @@ Route::middleware(['auth:sanctum', config('jetstream.auth_session')])->group(fun
         Route::get('/dashboard', AdminDashboard::class)->name('admin.dashboard');
         Route::get('/personen', AdminConfig::class)->name('persons.index');
         Route::get('/personen/{profileId}', PersonDetail::class)->name('persons.show');
+        Route::get('/netzwerk/aktionen', ActionsPage::class)->name('network.actions');
         Route::get('/einstellungen/{tab?}', SettingsPage::class)->name('admin.settings');
         Route::redirect('/scraper-profile-transfer', '/einstellungen/scraper-transfer')->name('scraper.profile.transfer');
         Route::redirect('/scraper-profile-factory', '/einstellungen/scraper-transfer')->name('scraper.factory');
