@@ -359,7 +359,7 @@ class PersonDetail extends PersonList
         $this->hydrateAvatar();
         $this->loadImageFiles();
         $this->hydrateAiProfile();
-        $this->hydrateActivitySimulation();
+        $this->loadActivitySimulationState();
 
         if ($profile) {
             $this->fillFormFromProfile($profile);
@@ -547,7 +547,7 @@ class PersonDetail extends PersonList
         $this->aiBehaviorGuidelines = (string) ($botProfile['behavior_guidelines'] ?? '');
     }
 
-    protected function hydrateActivitySimulation(): void
+    protected function loadActivitySimulationState(): void
     {
         $this->activitySimulation = [];
         $this->activitySimulationDays = 7;

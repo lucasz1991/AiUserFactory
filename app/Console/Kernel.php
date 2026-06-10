@@ -12,7 +12,12 @@ class Kernel extends ConsoleKernel
      */
     protected function schedule(Schedule $schedule): void
     {
-        // $schedule->command('inspire')->hourly();
+        foreach (['03:05', '11:05', '17:05', '21:05'] as $time) {
+            $schedule->command('network:plan-activities --days=7 --intensity=balanced --reason=scheduled')
+                ->dailyAt($time)
+                ->timezone(config('app.timezone', 'Europe/Berlin'))
+                ->withoutOverlapping(30);
+        }
     }
 
     /**

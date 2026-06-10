@@ -3,6 +3,7 @@
 namespace App\Livewire\Admin\Network;
 
 use App\Models\Person;
+use App\Services\Simulation\PersonaNetworkPlanningService;
 use Illuminate\Support\Collection;
 use Livewire\Component;
 
@@ -12,9 +13,13 @@ class ActionsPage extends Component
 
     public string $typeFilter = 'all';
 
+    public int $planningDays = 7;
+
+    public string $planningIntensity = 'balanced';
+
     public function render()
     {
-        $persons = $this->personsWithPlans();
+        $persons = $this->personsForActions();
         $actions = $this->buildActions($persons);
 
         return view('livewire.admin.network.actions-page', [
@@ -30,14 +35,34 @@ class ActionsPage extends Component
         $this->typeFilter = 'all';
     }
 
-    protected function personsWithPlans(): Collection
+    public function planNetworkNow(PersonaNetworkPlanningService $planning): void
+    {
+        $validated = $this->validate([
+            'planningDays' => ['required', 'integer', 'min:1', 'max:14'],
+            'planningIntensity' => ['required', 'string', 'in:quiet,balanced,active,creator'],
+        ]);
+
+        $summary = $planning->planActiveNetwork(
+            days: (int) $validated['planningDays'],
+            intensity: $validated['planningIntensity'],
+            reason: 'manual-admin-actions-page',
+        );
+
+        session()->flash('success', sprintf(
+            'Netzwerkplanung abgeschlossen: %d/%d Personen geplant, %d interne Eingangsevents beruecksichtigt.',
+            $summary['persons_planned'],
+            $summary['persons_total'],
+            $summary['incoming_events'],
+        ));
+    }
+
+    protected function personsForActions(): Collection
     {
         return Person::query()
             ->where('platform', 'instagram')
             ->orderBy('sort_order')
             ->orderBy('id')
             ->get()
-            ->filter(fn (Person $person): bool => is_array(data_get($person->metadata, 'internal_activity_simulation.days_plan')))
             ->values();
     }
 
@@ -158,8 +183,12 @@ class ActionsPage extends Component
 
     protected function summary(array $actions, Collection $persons): array
     {
+        $personsWithPlans = $persons
+            ->filter(fn (Person $person): bool => is_array(data_get($person->metadata, 'internal_activity_simulation.days_plan')))
+            ->count();
+
         return [
-            'persons_with_plans' => $persons->count(),
+            'persons_with_plans' => $personsWithPlans,
             'visible_actions' => count($actions),
             'content_actions' => count(array_filter($actions, static fn (array $action): bool => $action['type'] === 'content')),
             'step_actions' => count(array_filter($actions, static fn (array $action): bool => $action['type'] === 'step')),

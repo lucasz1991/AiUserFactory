@@ -6,10 +6,22 @@
                 Alle geplanten internen Sandbox-Aktionen aus den Persona-Aktivitaetsplaenen.
             </p>
         </div>
-        <a href="{{ route('persons.index') }}" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">
-            Personen
-        </a>
+        <div class="flex flex-wrap gap-3">
+            <button type="button" wire:click="planNetworkNow" wire:loading.attr="disabled" wire:target="planNetworkNow" class="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 disabled:opacity-60">
+                <span wire:loading.remove wire:target="planNetworkNow">Alle planen</span>
+                <span wire:loading wire:target="planNetworkNow">Plane...</span>
+            </button>
+            <a href="{{ route('persons.index') }}" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">
+                Personen
+            </a>
+        </div>
     </div>
+
+    @if (session()->has('success'))
+        <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
+            {{ session('success') }}
+        </div>
+    @endif
 
     <section class="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
         <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
@@ -35,7 +47,24 @@
             </div>
         </div>
 
-        <div class="mt-5 grid gap-4 md:grid-cols-3">
+        <div class="mt-5 grid gap-4 md:grid-cols-5">
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Plan-Tage</label>
+                <input type="number" min="1" max="14" wire:model.defer="planningDays" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm">
+                @error('planningDays') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+            </div>
+
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Plan-Intensitaet</label>
+                <select wire:model.defer="planningIntensity" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm">
+                    <option value="quiet">Ruhig</option>
+                    <option value="balanced">Ausgewogen</option>
+                    <option value="active">Aktiv</option>
+                    <option value="creator">Creator</option>
+                </select>
+                @error('planningIntensity') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+            </div>
+
             <div>
                 <label class="block text-sm font-medium text-gray-700">Person</label>
                 <select wire:model.live="personFilter" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm">
