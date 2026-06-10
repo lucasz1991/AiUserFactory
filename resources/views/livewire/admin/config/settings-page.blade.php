@@ -26,6 +26,10 @@
                 <button type="button" wire:click="switchTab('openrouter')" class="rounded-md px-4 py-2 text-sm font-semibold {{ $activeTab === 'openrouter' ? 'bg-slate-900 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200' }}">
                     OpenRouter / AI Connection
                 </button>
+
+                <button type="button" wire:click="switchTab('client-controller')" class="rounded-md px-4 py-2 text-sm font-semibold {{ $activeTab === 'client-controller' ? 'bg-slate-900 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200' }}">
+                    ClientController
+                </button>
             </div>
         </div>
 
@@ -191,6 +195,84 @@
 
                 <div class="flex justify-end">
                     <button type="button" wire:click="saveOpenRouter" class="inline-flex items-center justify-center rounded-md bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">
+                        Speichern
+                    </button>
+                </div>
+            </div>
+        @endif
+
+        @if($activeTab === 'client-controller')
+            <div class="space-y-8 px-6 py-6">
+                <div>
+                    <h2 class="text-lg font-semibold text-gray-900">ClientController: Server & Sicherheit</h2>
+                    <p class="mt-1 text-sm text-gray-500">
+                        Einstellungen fuer Node-Bindung, Heartbeats, Job-Sicherheit und initiale API-Key-Anmeldung.
+                    </p>
+                </div>
+
+                <div class="rounded-lg border border-gray-200 bg-white p-5">
+                    <h3 class="text-sm font-semibold text-gray-900">Server-Bindung</h3>
+                    <div class="mt-5 grid gap-6 md:grid-cols-2">
+                        <div>
+                            <label for="cc-server-domain" class="block text-sm font-medium text-gray-700">Primäre Server-Domain</label>
+                            <input id="cc-server-domain" type="url" wire:model.defer="ccServerDomain" placeholder="https://app.followflow.de" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500" />
+                            @error('ccServerDomain') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                        </div>
+
+                        <div>
+                            <label for="cc-fallback-domain" class="block text-sm font-medium text-gray-700">Fallback-Domain</label>
+                            <input id="cc-fallback-domain" type="url" wire:model.defer="ccFallbackServerDomain" placeholder="https://backup.followflow.de" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500" />
+                            @error('ccFallbackServerDomain') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                        </div>
+                    </div>
+                </div>
+
+                <div class="rounded-lg border border-gray-200 bg-white p-5">
+                    <h3 class="text-sm font-semibold text-gray-900">Sicherheit & Defaults</h3>
+
+                    <div class="mt-5 grid gap-6 md:grid-cols-2 xl:grid-cols-3">
+                        <div>
+                            <label for="cc-heartbeat-interval" class="block text-sm font-medium text-gray-700">Heartbeat-Intervall (Sek.)</label>
+                            <input id="cc-heartbeat-interval" type="number" min="5" max="3600" wire:model.defer="ccHeartbeatIntervalSeconds" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500" />
+                            @error('ccHeartbeatIntervalSeconds') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                        </div>
+
+                        <div>
+                            <label for="cc-job-timeout" class="block text-sm font-medium text-gray-700">Job-Timeout (Sek.)</label>
+                            <input id="cc-job-timeout" type="number" min="5" max="86400" wire:model.defer="ccJobTimeoutSeconds" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500" />
+                            @error('ccJobTimeoutSeconds') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                        </div>
+
+                        <div>
+                            <label for="cc-bootstrap-api-key" class="block text-sm font-medium text-gray-700">Bootstrap API-Key (ClientController)</label>
+                            <input id="cc-bootstrap-api-key" type="text" wire:model.defer="ccBootstrapApiKey" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500" />
+                            @error('ccBootstrapApiKey') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                            <p class="mt-1 text-xs text-gray-500">Dieser Key wird nur fuer die initiale Node-Registrierung verwendet (Bootstrap).</p>
+                        </div>
+                    </div>
+
+                    <div class="mt-6 grid gap-4 md:grid-cols-2">
+                        <label class="inline-flex items-center gap-2 text-sm text-gray-700">
+                            <input type="checkbox" wire:model.defer="ccRequireSignedJobs" class="rounded border-gray-300 text-slate-900 shadow-sm focus:ring-slate-900">
+                            Signierte Jobs erzwingen
+                        </label>
+                        <label class="inline-flex items-center gap-2 text-sm text-gray-700">
+                            <input type="checkbox" wire:model.defer="ccAllowServerRebind" class="rounded border-gray-300 text-slate-900 shadow-sm focus:ring-slate-900">
+                            Server-Rebind global erlauben
+                        </label>
+                    </div>
+                </div>
+
+                <div class="rounded-lg border border-slate-100 bg-slate-50 p-4 text-sm text-slate-600">
+                    <p class="font-semibold">Gespeicherte Setting-Keys</p>
+                    <p class="mt-1">
+                        Gruppe <code>client_controller</code> mit den Keys <code>server</code> und <code>security</code>.
+                        Der Bootstrap-Key liegt in <code>security.bootstrap_api_key</code>.
+                    </p>
+                </div>
+
+                <div class="flex justify-end">
+                    <button type="button" wire:click="saveClientControllerSettings" class="inline-flex items-center justify-center rounded-md bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">
                         Speichern
                     </button>
                 </div>

@@ -30,12 +30,22 @@ class SettingsPage extends Component
 
     public bool $openRouterStreamEnabled = true;
 
+    // ClientController settings tab
+    public string $ccServerDomain = '';
+    public string $ccFallbackServerDomain = '';
+    public bool $ccRequireSignedJobs = true;
+    public bool $ccAllowServerRebind = true;
+    public int $ccHeartbeatIntervalSeconds = 30;
+    public int $ccJobTimeoutSeconds = 180;
+    public string $ccBootstrapApiKey = 'followflow-default-node-key-change-me';
+
     public function mount(string $tab = 'scraper-transfer'): void
     {
         $this->activeTab = $this->normalizeTab($tab);
 
         $this->loadScraperSettings();
         $this->loadOpenRouterSettings();
+        $this->loadClientControllerSettings();
     }
 
     public function switchTab(string $tab): void
@@ -107,6 +117,35 @@ class SettingsPage extends Component
         $this->dispatch('showAlert', 'OpenRouter gespeichert.', 'success');
     }
 
+    public function saveClientControllerSettings(): void
+    {
+        $validated = $this->validate([
+            'ccServerDomain' => ['required', 'url', 'max:2048'],
+            'ccFallbackServerDomain' => ['nullable', 'url', 'max:2048'],
+            'ccRequireSignedJobs' => ['boolean'],
+            'ccAllowServerRebind' => ['boolean'],
+            'ccHeartbeatIntervalSeconds' => ['required', 'integer', 'min:5', 'max:3600'],
+            'ccJobTimeoutSeconds' => ['required', 'integer', 'min:5', 'max:86400'],
+            'ccBootstrapApiKey' => ['required', 'string', 'min:16', 'max:255'],
+        ]);
+
+        Setting::setValue('client_controller', 'server', [
+            'server_domain' => trim($validated['ccServerDomain']),
+            'fallback_server_domain' => trim((string) ($validated['ccFallbackServerDomain'] ?? '')),
+            'require_signed_jobs' => (bool) $validated['ccRequireSignedJobs'],
+            'allow_server_rebind' => (bool) $validated['ccAllowServerRebind'],
+            'default_heartbeat_interval_seconds' => (int) $validated['ccHeartbeatIntervalSeconds'],
+            'default_job_timeout_seconds' => (int) $validated['ccJobTimeoutSeconds'],
+        ]);
+
+        Setting::setValue('client_controller', 'security', [
+            'bootstrap_api_key' => trim($validated['ccBootstrapApiKey']),
+        ]);
+
+        session()->flash('success', 'ClientController-Einstellungen wurden gespeichert.');
+        $this->dispatch('showAlert', 'ClientController Einstellungen gespeichert.', 'success');
+    }
+
     public function render()
     {
         return view('livewire.admin.config.settings-page')->layout('layouts.master');
@@ -149,9 +188,26 @@ class SettingsPage extends Component
         $this->openRouterStreamEnabled = (bool) ($settings['stream_enabled'] ?? config('services.openrouter.stream_enabled', true));
     }
 
+    protected function loadClientControllerSettings(): void
+    {
+        $server = Setting::getValue('client_controller', 'server');
+        $server = is_array($server) ? $server : [];
+
+        $security = Setting::getValue('client_controller', 'security');
+        $security = is_array($security) ? $security : [];
+
+        $this->ccServerDomain = trim((string) ($server['server_domain'] ?? config('app.url')));
+        $this->ccFallbackServerDomain = trim((string) ($server['fallback_server_domain'] ?? ''));
+        $this->ccRequireSignedJobs = (bool) ($server['require_signed_jobs'] ?? true);
+        $this->ccAllowServerRebind = (bool) ($server['allow_server_rebind'] ?? true);
+        $this->ccHeartbeatIntervalSeconds = (int) ($server['default_heartbeat_interval_seconds'] ?? 30);
+        $this->ccJobTimeoutSeconds = (int) ($server['default_job_timeout_seconds'] ?? 180);
+        $this->ccBootstrapApiKey = trim((string) ($security['bootstrap_api_key'] ?? 'followflow-default-node-key-change-me'));
+    }
+
     protected function normalizeTab(string $tab): string
     {
-        return in_array($tab, ['scraper-transfer', 'openrouter'], true)
+        return in_array($tab, ['scraper-transfer', 'openrouter', 'client-controller'], true)
             ? $tab
             : 'scraper-transfer';
     }

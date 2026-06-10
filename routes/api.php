@@ -27,6 +27,7 @@ Route::prefix('ai')->group(function () {
 Route::prefix('client-controller')->group(function (): void {
     Route::post('/register-node', [ClientControllerApiController::class, 'registerNode']);
     Route::post('/heartbeat', [ClientControllerApiController::class, 'heartbeat']);
+    Route::post('/sync-devices', [ClientControllerApiController::class, 'syncDevices']);
     Route::post('/pull-jobs', [ClientControllerApiController::class, 'pullJobs']);
     Route::post('/job-result', [ClientControllerApiController::class, 'reportJobResult']);
     Route::post('/rebind', [ClientControllerApiController::class, 'rebind']);

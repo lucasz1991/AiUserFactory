@@ -3,11 +3,13 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\Device;
 use App\Models\NetworkJob;
 use App\Models\NetworkNode;
 use App\Models\NodeHeartbeat;
 use App\Models\NodeRebindLog;
 use App\Models\NodeServerBinding;
+use App\Models\Setting;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
@@ -16,6 +18,16 @@ class ClientControllerApiController extends Controller
 {
     public function registerNode(Request $request): JsonResponse
     {
+        $bootstrapFromRequest = trim((string) $request->header('X-BOOTSTRAP-API-KEY', $request->input('bootstrap_api_key', $request->input('api_key', ''))));
+        $expectedBootstrap = trim((string) data_get(Setting::getValue('client_controller', 'security'), 'bootstrap_api_key', 'followflow-default-node-key-change-me'));
+
+        if ($expectedBootstrap === '' || !hash_equals($expectedBootstrap, $bootstrapFromRequest)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Invalid bootstrap API key.',
+            ], 401);
+        }
+
         $validated = $request->validate([
             'name' => ['required', 'string', 'max:255'],
             'node_uuid' => ['required', 'string', 'max:120'],
@@ -129,6 +141,65 @@ class ClientControllerApiController extends Controller
         return response()->json([
             'success' => true,
             'server_time' => now()->toIso8601String(),
+        ]);
+    }
+
+    public function syncDevices(Request $request): JsonResponse
+    {
+        $node = $this->resolveNodeFromApiKey($request);
+
+        if (! $node) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized node.',
+            ], 401);
+        }
+
+        $validated = $request->validate([
+            'devices' => ['required', 'array'],
+            'devices.*.name' => ['required', 'string', 'max:255'],
+            'devices.*.platform' => ['required', 'string', 'max:50'],
+            'devices.*.device_uuid' => ['required', 'string', 'max:191'],
+            'devices.*.adb_serial' => ['nullable', 'string', 'max:191'],
+            'devices.*.status' => ['nullable', 'string', 'in:offline,online,busy,error'],
+            'devices.*.settings_json' => ['nullable', 'array'],
+        ]);
+
+        $synced = 0;
+        $deviceUuids = [];
+
+        foreach ($validated['devices'] as $devicePayload) {
+            $device = Device::query()->updateOrCreate(
+                [
+                    'device_uuid' => $devicePayload['device_uuid'],
+                ],
+                [
+                    'network_node_id' => $node->id,
+                    'name' => $devicePayload['name'],
+                    'platform' => $devicePayload['platform'],
+                    'adb_serial' => $devicePayload['adb_serial'] ?? null,
+                    'status' => $devicePayload['status'] ?? 'online',
+                    'last_seen_at' => now(),
+                    'settings_json' => $devicePayload['settings_json'] ?? [],
+                ]
+            );
+
+            $deviceUuids[] = $device->device_uuid;
+            $synced++;
+        }
+
+        if ($deviceUuids !== []) {
+            Device::query()
+                ->where('network_node_id', $node->id)
+                ->whereNotIn('device_uuid', $deviceUuids)
+                ->update([
+                    'status' => 'offline',
+                ]);
+        }
+
+        return response()->json([
+            'success' => true,
+            'synced_count' => $synced,
         ]);
     }
 
