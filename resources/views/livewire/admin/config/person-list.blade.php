@@ -23,9 +23,6 @@
                     <button type="button" wire:click="openRuntimeSettingsModal" class="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
                         Timeouts
                     </button>
-                    <button type="button" wire:click="buildInstagramSession" class="rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
-                        Session aufbauen
-                    </button>
                     <button type="button" wire:click="openCreateProfileModal" class="rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">
                         Person hinzufuegen
                     </button>
@@ -607,59 +604,4 @@
         </x-slot>
     </x-dialog-modal>
 
-    @if($sessionBuildResult)
-        @php
-            $sessionResultClass = ($sessionBuildResult['ok'] ?? false)
-                ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
-                : 'border-amber-200 bg-amber-50 text-amber-950';
-        @endphp
-
-        <div class="rounded-lg border p-4 text-sm {{ $sessionResultClass }}">
-            <p class="font-semibold">{{ $sessionBuildResult['statusMessage'] ?? 'Session-Aufbau abgeschlossen.' }}</p>
-
-            @if(!empty($sessionBuildResult['debugLogPath']))
-                <p class="mt-2 break-all text-xs">
-                    <span class="font-semibold">Debug-Log:</span>
-                    {{ $sessionBuildResult['debugLogPath'] }}
-                </p>
-            @endif
-
-            @if(!empty($sessionBuildResult['cookieDiagnostics']) || !empty($sessionBuildResult['loginDiagnostics']))
-                <div class="mt-3 grid gap-2 text-xs sm:grid-cols-2">
-                    <div class="rounded-md border border-current/20 bg-white/40 p-3">
-                        <p class="font-semibold">Cookie-Diagnose</p>
-                        <p class="mt-1">sessionid in Datei: {{ data_get($sessionBuildResult, 'cookieDiagnostics.sessionCookieProvided') ? 'Ja' : 'Nein' }}</p>
-                        <p>sessionid akzeptiert: {{ data_get($sessionBuildResult, 'cookieDiagnostics.sessionCookieAccepted') ? 'Ja' : 'Nein' }}</p>
-                        <p>sessionid nach Reload noch da: {{ data_get($sessionBuildResult, 'cookieDiagnostics.sessionCookieRetained') ? 'Ja' : 'Nein' }}</p>
-                    </div>
-                    <div class="rounded-md border border-current/20 bg-white/40 p-3">
-                        <p class="font-semibold">Login-Diagnose</p>
-                        <p class="mt-1">Auto-Login versucht: {{ data_get($sessionBuildResult, 'loginDiagnostics.attempted') ? 'Ja' : 'Nein' }}</p>
-                        <p>Formular gefunden: {{ data_get($sessionBuildResult, 'loginDiagnostics.formDetected') ? 'Ja' : 'Nein' }}</p>
-                        <p>Login erfolgreich: {{ data_get($sessionBuildResult, 'loginDiagnostics.success') ? 'Ja' : 'Nein' }}</p>
-                        <p>sessionid nach Login: {{ data_get($sessionBuildResult, 'loginDiagnostics.sessionCookiePresent') ? 'Ja' : 'Nein' }}</p>
-                    </div>
-                </div>
-            @endif
-
-            @if(!empty($sessionBuildResult['notes']))
-                <ul class="mt-3 list-disc space-y-1 pl-5">
-                    @foreach($sessionBuildResult['notes'] as $note)
-                        <li>{{ $note }}</li>
-                    @endforeach
-                </ul>
-            @endif
-
-            @if(!empty($sessionBuildResult['warnings']))
-                <div class="mt-3 rounded-md border border-current/20 bg-white/50 p-3">
-                    <p class="font-semibold">Hinweise</p>
-                    <ul class="mt-2 list-disc space-y-1 pl-5">
-                        @foreach($sessionBuildResult['warnings'] as $warning)
-                            <li>{{ $warning }}</li>
-                        @endforeach
-                    </ul>
-                </div>
-            @endif
-        </div>
-    @endif
 </div>

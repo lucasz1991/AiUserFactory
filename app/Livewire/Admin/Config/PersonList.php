@@ -631,7 +631,10 @@ class PersonList extends Component
     protected function activeProfileSettings(): array
     {
         $collection = $this->loadProfileCollection();
-        $profile = $this->findProfile($collection, $collection['active_profile_id']);
+        $profileId = $this->activeProfileId !== ''
+            ? $this->activeProfileId
+            : $collection['active_profile_id'];
+        $profile = $this->findProfile($collection, $profileId);
 
         if (! $profile) {
             throw new \RuntimeException('Aktive Person wurde nicht gefunden.');
