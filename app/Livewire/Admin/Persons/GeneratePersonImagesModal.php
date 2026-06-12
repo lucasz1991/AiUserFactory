@@ -260,10 +260,10 @@ class GeneratePersonImagesModal extends Component
                 ? $referenceImageCount.' vorhandene Bilddatei(en) sind angehaengt und muessen zur optischen Konsistenz genutzt werden.'
                 : 'Keine vorhandenen Bilddateien gefunden.',
             'Format' => $this->imageAspectRatio,
-        ], static fn (mixed $value): bool => trim((string) $value) !== '');
+        ], fn (mixed $value): bool => $this->formatContextValue($value) !== '');
 
         $contextLines = collect($context)
-            ->map(fn (mixed $value, string $key): string => '- '.$key.': '.trim((string) $value))
+            ->map(fn (mixed $value, string $key): string => '- '.$key.': '.$this->formatContextValue($value))
             ->implode(PHP_EOL);
 
         $presetRules = match ($preset) {
@@ -277,6 +277,35 @@ class GeneratePersonImagesModal extends Component
             'Person-Kontext:'.PHP_EOL.$contextLines.PHP_EOL.PHP_EOL.
             'Bildtyp-Regel: '.$presetRules.PHP_EOL.
             'Regeln: Erzeuge nur ein Bild der beschriebenen Person. Bestehende Referenzbilder haben Vorrang vor allgemeinen Textannahmen. Erhalte die Identitaet und optischen Merkmale aus den Referenzbildern. Keine Datei- oder Login-Daten, keine Bildpfade, keine Textelemente im Bild.';
+    }
+
+    protected function formatContextValue(mixed $value): string
+    {
+        if (is_array($value)) {
+            $parts = [];
+
+            foreach ($value as $key => $item) {
+                $formatted = $this->formatContextValue($item);
+
+                if ($formatted === '') {
+                    continue;
+                }
+
+                $parts[] = is_string($key) ? $key.': '.$formatted : $formatted;
+            }
+
+            return implode(', ', $parts);
+        }
+
+        if ($value === null || is_bool($value)) {
+            return $value === true ? 'Ja' : '';
+        }
+
+        if (is_scalar($value) || $value instanceof \Stringable) {
+            return trim((string) $value);
+        }
+
+        return '';
     }
 
     protected function imagePromptSystemPrompt(): string
