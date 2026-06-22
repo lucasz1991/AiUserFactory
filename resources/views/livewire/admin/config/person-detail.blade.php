@@ -113,6 +113,7 @@
                     <button type="button" @click="tab = 'overview'" :class="tab === 'overview' ? 'bg-slate-900 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'" class="rounded-md px-4 py-2 text-sm font-semibold">Uebersicht</button>
                     <button type="button" @click="tab = 'ai'" :class="tab === 'ai' ? 'bg-slate-900 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'" class="rounded-md px-4 py-2 text-sm font-semibold">AI-Profil</button>
                     <button type="button" @click="tab = 'activity'" :class="tab === 'activity' ? 'bg-slate-900 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'" class="rounded-md px-4 py-2 text-sm font-semibold">Aktivitaeten</button>
+                    <button type="button" @click="tab = 'email'" :class="tab === 'email' ? 'bg-slate-900 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'" class="rounded-md px-4 py-2 text-sm font-semibold">E-Mail</button>
                     <button type="button" @click="tab = 'media'" :class="tab === 'media' ? 'bg-slate-900 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'" class="rounded-md px-4 py-2 text-sm font-semibold">Dateien & Bilder</button>
                     <button type="button" @click="tab = 'social'" :class="tab === 'social' ? 'bg-slate-900 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'" class="rounded-md px-4 py-2 text-sm font-semibold">Social Media</button>
                     <button type="button" @click="tab = 'raw'" :class="tab === 'raw' ? 'bg-slate-900 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'" class="rounded-md px-4 py-2 text-sm font-semibold">Rohdaten</button>
@@ -338,6 +339,10 @@
                         </div>
                     @endif
                 </x-admin.panel>
+            </div>
+
+            <div x-show="tab === 'email'" class="space-y-6">
+                <livewire:admin.config.person-email-account-settings :person-id="$personRecord->id" :key="'person-email-account-'.$personRecord->id" />
             </div>
 
             <div x-show="tab === 'media'" class="space-y-6">
