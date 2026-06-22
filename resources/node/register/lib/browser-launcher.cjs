@@ -99,6 +99,24 @@ function isMissingPuppeteerBrowserError(error) {
   );
 }
 
+function isMissingDisplayError(error) {
+  return /missing x server|the platform failed to initialize|ozone_platform_x11|no \$display/i.test(
+    String(error?.message || error || ''),
+  );
+}
+
+function shouldRetryHeadless(error, launchOptions = {}) {
+  return launchOptions.headless === false && isMissingDisplayError(error);
+}
+
+async function launchHeadlessFallback(puppeteer, launchOptions, extraOptions = {}) {
+  return puppeteer.launch({
+    ...launchOptions,
+    ...extraOptions,
+    headless: 'new',
+  });
+}
+
 function puppeteerInstallHint(error) {
   const message = String(error?.message || error || '');
   const cachePath = message.match(/cache path is(?: incorrectly configured)? \(which is: ([^)]+)\)/i)?.[1]
@@ -125,6 +143,10 @@ async function launchChromeWithFallbacks(puppeteer, runtimeConfig, launchOptions
   try {
     return await puppeteer.launch(launchOptions);
   } catch (error) {
+    if (shouldRetryHeadless(error, launchOptions)) {
+      return launchHeadlessFallback(puppeteer, launchOptions);
+    }
+
     if (! isMissingPuppeteerBrowserError(error)) {
       throw error;
     }
@@ -142,6 +164,18 @@ async function launchChromeWithFallbacks(puppeteer, runtimeConfig, launchOptions
           executablePath,
         });
       } catch (fallbackError) {
+        if (shouldRetryHeadless(fallbackError, launchOptions)) {
+          try {
+            return await launchHeadlessFallback(puppeteer, launchOptions, {
+              executablePath,
+            });
+          } catch (headlessFallbackError) {
+            lastFallbackError = headlessFallbackError;
+
+            continue;
+          }
+        }
+
         lastFallbackError = fallbackError;
         // Continue with the next known system browser path.
       }
