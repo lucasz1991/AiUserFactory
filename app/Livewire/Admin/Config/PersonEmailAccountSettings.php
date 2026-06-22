@@ -151,7 +151,7 @@ class PersonEmailAccountSettings extends Component
         }
 
         try {
-            $run = app(MailAccountRegistrationRunner::class)->start($this->mailRegistrationSubject(), 'observed_manual');
+            $run = app(MailAccountRegistrationRunner::class)->start($this->mailRegistrationSubject());
 
             $this->mailRegistrationRunId = $run['runId'] ?? null;
             $this->mailRegistrationStatus = $run;
@@ -233,7 +233,7 @@ class PersonEmailAccountSettings extends Component
 
         $this->emailAddress = (string) ($emailAccount['email'] ?? $this->person->person_email ?? '');
         $this->provider = (string) ($emailAccount['provider'] ?? '');
-        $this->accountUsername = (string) ($emailAccount['username'] ?? $this->emailAddress);
+        $this->accountUsername = (string) ($emailAccount['username'] ?? $this->emailAddress ?: $this->suggestedUsername());
         $this->accountPassword = '';
         $this->hasStoredPassword = trim((string) ($emailAccount['password_encrypted'] ?? '')) !== '';
         $this->recoveryEmail = (string) ($emailAccount['recovery_email'] ?? '');
@@ -257,17 +257,38 @@ class PersonEmailAccountSettings extends Component
 
     protected function mailRegistrationSubject(): array
     {
+        $username = $this->accountUsername ?: $this->emailAddress ?: $this->suggestedUsername();
+
         return [
             'personId' => $this->person?->id,
             'displayName' => $this->person?->display_name ?? trim($this->person?->profile_label ?? ''),
             'firstName' => $this->person?->person_first_name,
             'lastName' => $this->person?->person_last_name,
             'desiredEmail' => $this->emailAddress ?: ($this->person?->person_email ?? ''),
-            'accountUsername' => $this->accountUsername ?: $this->emailAddress,
+            'accountUsername' => $username,
             'recoveryEmail' => $this->recoveryEmail,
             'city' => $this->person?->person_city,
             'country' => $this->person?->person_country,
             'timezone' => $this->person?->person_timezone,
         ];
+    }
+
+    protected function suggestedUsername(): string
+    {
+        $source = trim((string) (
+            $this->person?->profile_key
+            ?: $this->person?->person_alias
+            ?: $this->person?->display_name
+            ?: ''
+        ));
+
+        return str($source)
+            ->lower()
+            ->ascii()
+            ->replaceMatches('/[^a-z0-9._-]+/', '-')
+            ->replaceMatches('/^[._-]+|[._-]+$/', '')
+            ->replaceMatches('/[._-]{2,}/', '-')
+            ->limit(64, '')
+            ->toString();
     }
 }

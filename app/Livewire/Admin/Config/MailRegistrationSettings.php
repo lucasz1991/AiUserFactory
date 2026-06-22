@@ -15,6 +15,7 @@ class MailRegistrationSettings extends Component
     public int $observationTimeoutSeconds = 300;
 
     public bool $providerOneEnabled = true;
+    public string $providerOneMode = 'proton_username_check';
     public string $providerOneLabel = '';
     public string $providerOneRegistrationUrl = '';
     public string $providerOneCompletionUrlContains = '';
@@ -53,12 +54,13 @@ class MailRegistrationSettings extends Component
     {
         try {
             $this->saveSettings(false);
+            $testUsername = 'testlauf-'.now()->format('YmdHis');
 
             $run = app(MailAccountRegistrationRunner::class)->start([
                 'displayName' => 'Testlauf Mail-Registrierung',
-                'desiredEmail' => '',
-                'accountUsername' => '',
-            ], 'observed_manual');
+                'desiredEmail' => $testUsername.'@proton.me',
+                'accountUsername' => $testUsername,
+            ]);
 
             $this->registrationRunId = $run['runId'] ?? null;
             $this->registrationRunStatus = $run;
@@ -109,6 +111,7 @@ class MailRegistrationSettings extends Component
             'observationTimeoutSeconds' => ['required', 'integer', 'min:30', 'max:1800'],
 
             'providerOneEnabled' => ['boolean'],
+            'providerOneMode' => ['required', 'string', 'in:observed_manual,proton_username_check'],
             'providerOneLabel' => ['required', 'string', 'max:120'],
             'providerOneRegistrationUrl' => ['nullable', 'url', 'max:2048'],
             'providerOneCompletionUrlContains' => ['nullable', 'string', 'max:512'],
@@ -132,9 +135,9 @@ class MailRegistrationSettings extends Component
             'observation_timeout_seconds' => (int) $validated['observationTimeoutSeconds'],
             'providers' => [
                 [
-                    'key' => 'observed_manual',
+                    'key' => $validated['providerOneMode'] === 'proton_username_check' ? 'proton' : 'observed_manual',
                     'label' => trim($validated['providerOneLabel']),
-                    'mode' => 'observed_manual',
+                    'mode' => $validated['providerOneMode'],
                     'enabled' => (bool) $validated['providerOneEnabled'],
                     'phone_required' => false,
                     'registration_url' => trim((string) ($validated['providerOneRegistrationUrl'] ?? '')),
@@ -183,6 +186,9 @@ class MailRegistrationSettings extends Component
         $this->observationTimeoutSeconds = (int) ($settings['observation_timeout_seconds'] ?? 300);
 
         $this->providerOneEnabled = (bool) ($providerOne['enabled'] ?? true);
+        $this->providerOneMode = in_array(($providerOne['mode'] ?? ''), ['observed_manual', 'proton_username_check'], true)
+            ? (string) $providerOne['mode']
+            : 'proton_username_check';
         $this->providerOneLabel = (string) ($providerOne['label'] ?? 'Eigener Provider / beobachteter Browserflow');
         $this->providerOneRegistrationUrl = (string) ($providerOne['registration_url'] ?? '');
         $this->providerOneCompletionUrlContains = (string) ($providerOne['completion_url_contains'] ?? '');

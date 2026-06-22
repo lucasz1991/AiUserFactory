@@ -12,6 +12,8 @@ class MailAccountRegistrationRunner
 {
     public const SETTINGS_TYPE = 'mail';
     public const SETTINGS_KEY = 'account_registration';
+    public const PROVIDER_MODE_OBSERVED_MANUAL = 'observed_manual';
+    public const PROVIDER_MODE_PROTON_USERNAME_CHECK = 'proton_username_check';
 
     public function settings(): array
     {
@@ -38,15 +40,15 @@ class MailAccountRegistrationRunner
             'observation_timeout_seconds' => 300,
             'providers' => [
                 [
-                    'key' => 'observed_manual',
-                    'label' => 'Eigener Provider / beobachteter Browserflow',
-                    'mode' => 'observed_manual',
+                    'key' => 'proton',
+                    'label' => 'Proton',
+                    'mode' => self::PROVIDER_MODE_PROTON_USERNAME_CHECK,
                     'enabled' => true,
                     'phone_required' => false,
-                    'registration_url' => '',
+                    'registration_url' => 'https://account.proton.me/mail/signup',
                     'completion_url_contains' => '',
                     'completion_selector' => '',
-                    'webmail_url' => '',
+                    'webmail_url' => 'https://mail.proton.me',
                 ],
                 [
                     'key' => 'provider_2',
@@ -102,7 +104,7 @@ class MailAccountRegistrationRunner
         $settings = $this->settings();
         $provider = $this->resolveProvider($settings, $providerKey);
 
-        if (($provider['mode'] ?? '') !== 'observed_manual') {
+        if (! in_array(($provider['mode'] ?? ''), [self::PROVIDER_MODE_OBSERVED_MANUAL, self::PROVIDER_MODE_PROTON_USERNAME_CHECK], true)) {
             throw new \RuntimeException('Dieser Provider-Adapter ist noch nicht implementiert.');
         }
 
@@ -149,6 +151,7 @@ class MailAccountRegistrationRunner
                 'phoneRequired' => (bool) $provider['phone_required'],
             ],
             'subject' => $this->normalizeSubject($subject),
+            'protonUsernameCheckTimeoutMs' => 30000,
         ];
 
         $this->writeJsonFile($statusPath, [
@@ -265,6 +268,14 @@ class MailAccountRegistrationRunner
             $provider = is_array($providers[$index] ?? null) ? $providers[$index] : [];
             $key = trim((string) ($provider['key'] ?? $defaultProvider['key']));
             $mode = trim((string) ($provider['mode'] ?? $defaultProvider['mode']));
+
+            if ($mode === 'proton') {
+                $mode = self::PROVIDER_MODE_PROTON_USERNAME_CHECK;
+            }
+
+            if (! in_array($mode, [self::PROVIDER_MODE_OBSERVED_MANUAL, self::PROVIDER_MODE_PROTON_USERNAME_CHECK, 'planned'], true)) {
+                $mode = $defaultProvider['mode'];
+            }
 
             if ($key === '') {
                 $key = $defaultProvider['key'];

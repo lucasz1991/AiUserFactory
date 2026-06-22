@@ -66,6 +66,15 @@
 
         <div class="mt-5 grid gap-6 md:grid-cols-2">
             <div>
+                <label for="mail-provider-one-mode" class="block text-sm font-medium text-gray-700">Adapter</label>
+                <select id="mail-provider-one-mode" wire:model.defer="providerOneMode" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                    <option value="proton_username_check">Proton: Username pruefen</option>
+                    <option value="observed_manual">Beobachteter Browserflow</option>
+                </select>
+                @error('providerOneMode') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+            </div>
+
+            <div>
                 <label for="mail-provider-one-label" class="block text-sm font-medium text-gray-700">Name</label>
                 <input id="mail-provider-one-label" type="text" wire:model.defer="providerOneLabel" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
                 @error('providerOneLabel') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
