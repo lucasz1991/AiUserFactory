@@ -763,11 +763,81 @@ async function clickExactVisibleTextIncludingFrames(page, labels, selectors) {
   return false;
 }
 
+async function clickVisibleTextTarget(pageOrFrame, labels, selectors = '*') {
+  const clicked = await pageOrFrame.evaluate((payload) => {
+    const normalizedLabels = payload.labels.map((label) => String(label).trim().toLowerCase());
+    const visibleElements = Array.from(document.querySelectorAll(payload.selectors)).filter((candidate) => {
+      const rect = candidate.getBoundingClientRect();
+      const style = window.getComputedStyle(candidate);
+
+      return rect.width > 0
+        && rect.height > 0
+        && style.visibility !== 'hidden'
+        && style.display !== 'none'
+        && !candidate.disabled;
+    });
+
+    const element = visibleElements.find((candidate) => {
+      const ownText = [
+        candidate.innerText,
+        candidate.textContent,
+        candidate.value,
+        candidate.getAttribute('aria-label'),
+        candidate.getAttribute('title'),
+      ].join(' ').replace(/\s+/g, ' ').trim().toLowerCase();
+
+      return normalizedLabels.includes(ownText);
+    });
+
+    if (!element) {
+      return false;
+    }
+
+    const clickable = element.closest('button, [role="button"], [role="tab"], a, label') || element;
+    clickable.scrollIntoView({ block: 'center', inline: 'center' });
+    clickable.click();
+
+    return true;
+  }, {
+    labels,
+    selectors,
+  }).catch(() => false);
+
+  if (clicked) {
+    await pauseStep();
+  }
+
+  return clicked;
+}
+
 async function selectProtonEmailVerificationTab(page) {
-  return clickExactVisibleTextIncludingFrames(page, [
+  const labels = [
     'email',
     'e-mail',
-  ], 'button, [role="button"], [role="tab"], a');
+  ];
+  const selectors = 'button, [role="button"], [role="tab"], a, label, span, div';
+
+  if (await clickExactVisibleTextIncludingFrames(page, labels, selectors)) {
+    return true;
+  }
+
+  if (await clickVisibleTextTarget(page, labels, selectors)) {
+    return true;
+  }
+
+  for (const frame of page.frames()) {
+    const frameUrl = normalizeText(frame.url());
+
+    if (frame === page.mainFrame() || !/proton|challenge|account-api|verify/i.test(frameUrl)) {
+      continue;
+    }
+
+    if (await clickVisibleTextTarget(frame, labels, selectors)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function verificationMailboxFromConfig(runtimeConfig) {
