@@ -3,6 +3,7 @@
 namespace App\Livewire\Admin\Config;
 
 use App\Services\Mail\MailAccountRegistrationRunner;
+use Illuminate\Support\Facades\Crypt;
 use Livewire\Component;
 
 class MailRegistrationSettings extends Component
@@ -15,6 +16,18 @@ class MailRegistrationSettings extends Component
     public bool $domDebugEnabled = true;
     public int $navigationTimeoutSeconds = 120;
     public int $observationTimeoutSeconds = 300;
+
+    public bool $verificationMailboxEnabled = false;
+    public string $verificationMailboxEmail = '';
+    public string $verificationMailboxProvider = '';
+    public string $verificationMailboxUsername = '';
+    public string $verificationMailboxPassword = '';
+    public bool $hasStoredVerificationMailboxPassword = false;
+    public string $verificationMailboxWebmailUrl = '';
+    public string $verificationMailboxImapHost = '';
+    public ?int $verificationMailboxImapPort = 993;
+    public string $verificationMailboxImapEncryption = 'ssl';
+    public string $verificationMailboxImapFolder = 'INBOX';
 
     public bool $providerOneEnabled = true;
     public string $providerOneMode = 'proton_username_check';
@@ -97,6 +110,20 @@ class MailRegistrationSettings extends Component
         $this->showRegistrationRunModal = false;
     }
 
+    public function clearVerificationMailboxPassword(): void
+    {
+        $settings = app(MailAccountRegistrationRunner::class)->settings();
+        $mailbox = is_array($settings['verification_mailbox'] ?? null) ? $settings['verification_mailbox'] : [];
+        $mailbox['password_encrypted'] = null;
+        $settings['verification_mailbox'] = $mailbox;
+
+        $settings = app(MailAccountRegistrationRunner::class)->saveSettings($settings);
+        $this->fillFromSettings($settings);
+
+        session()->flash('success', 'Passwort des Verifikations-Postfachs wurde geloescht.');
+        $this->dispatch('showAlert', 'Verifikations-Passwort geloescht.', 'success');
+    }
+
     public function render()
     {
         return view('livewire.admin.config.mail-registration-settings');
@@ -114,6 +141,17 @@ class MailRegistrationSettings extends Component
             'navigationTimeoutSeconds' => ['required', 'integer', 'min:30', 'max:300'],
             'observationTimeoutSeconds' => ['required', 'integer', 'min:30', 'max:1800'],
 
+            'verificationMailboxEnabled' => ['boolean'],
+            'verificationMailboxEmail' => ['nullable', 'email', 'max:255'],
+            'verificationMailboxProvider' => ['nullable', 'string', 'max:120'],
+            'verificationMailboxUsername' => ['nullable', 'string', 'max:255'],
+            'verificationMailboxPassword' => ['nullable', 'string', 'max:512'],
+            'verificationMailboxWebmailUrl' => ['nullable', 'url', 'max:2048'],
+            'verificationMailboxImapHost' => ['nullable', 'string', 'max:255'],
+            'verificationMailboxImapPort' => ['nullable', 'integer', 'min:1', 'max:65535'],
+            'verificationMailboxImapEncryption' => ['nullable', 'string', 'in:,none,ssl,tls,starttls'],
+            'verificationMailboxImapFolder' => ['nullable', 'string', 'max:120'],
+
             'providerOneEnabled' => ['boolean'],
             'providerOneMode' => ['required', 'string', 'in:observed_manual,proton_username_check'],
             'providerOneLabel' => ['required', 'string', 'max:120'],
@@ -129,6 +167,13 @@ class MailRegistrationSettings extends Component
             'providerThreeLabel' => ['nullable', 'string', 'max:120'],
             'providerThreeRegistrationUrl' => ['nullable', 'url', 'max:2048'],
         ]);
+        $existingSettings = app(MailAccountRegistrationRunner::class)->settings();
+        $existingMailbox = is_array($existingSettings['verification_mailbox'] ?? null) ? $existingSettings['verification_mailbox'] : [];
+        $encryptedVerificationPassword = $existingMailbox['password_encrypted'] ?? null;
+
+        if (trim((string) ($validated['verificationMailboxPassword'] ?? '')) !== '') {
+            $encryptedVerificationPassword = Crypt::encryptString((string) $validated['verificationMailboxPassword']);
+        }
 
         return [
             'browser_engine' => $validated['browserEngine'],
@@ -139,6 +184,20 @@ class MailRegistrationSettings extends Component
             'dom_debug_enabled' => (bool) $validated['domDebugEnabled'],
             'navigation_timeout_seconds' => (int) $validated['navigationTimeoutSeconds'],
             'observation_timeout_seconds' => (int) $validated['observationTimeoutSeconds'],
+            'verification_mailbox' => [
+                'enabled' => (bool) $validated['verificationMailboxEnabled'],
+                'email' => trim((string) ($validated['verificationMailboxEmail'] ?? '')),
+                'provider' => trim((string) ($validated['verificationMailboxProvider'] ?? '')),
+                'username' => trim((string) ($validated['verificationMailboxUsername'] ?? '')),
+                'password_encrypted' => $this->nullableString($encryptedVerificationPassword),
+                'webmail_url' => trim((string) ($validated['verificationMailboxWebmailUrl'] ?? '')),
+                'imap' => [
+                    'host' => trim((string) ($validated['verificationMailboxImapHost'] ?? '')),
+                    'port' => ($validated['verificationMailboxImapPort'] ?? null) !== null ? (int) $validated['verificationMailboxImapPort'] : null,
+                    'encryption' => trim((string) ($validated['verificationMailboxImapEncryption'] ?? '')),
+                    'folder' => trim((string) ($validated['verificationMailboxImapFolder'] ?? 'INBOX')),
+                ],
+            ],
             'providers' => [
                 [
                     'key' => $validated['providerOneMode'] === 'proton_username_check' ? 'proton' : 'observed_manual',
@@ -192,6 +251,19 @@ class MailRegistrationSettings extends Component
         $this->domDebugEnabled = (bool) ($settings['dom_debug_enabled'] ?? true);
         $this->navigationTimeoutSeconds = (int) ($settings['navigation_timeout_seconds'] ?? 120);
         $this->observationTimeoutSeconds = (int) ($settings['observation_timeout_seconds'] ?? 300);
+        $verificationMailbox = is_array($settings['verification_mailbox'] ?? null) ? $settings['verification_mailbox'] : [];
+        $verificationImap = is_array($verificationMailbox['imap'] ?? null) ? $verificationMailbox['imap'] : [];
+        $this->verificationMailboxEnabled = (bool) ($verificationMailbox['enabled'] ?? false);
+        $this->verificationMailboxEmail = (string) ($verificationMailbox['email'] ?? '');
+        $this->verificationMailboxProvider = (string) ($verificationMailbox['provider'] ?? '');
+        $this->verificationMailboxUsername = (string) ($verificationMailbox['username'] ?? '');
+        $this->verificationMailboxPassword = '';
+        $this->hasStoredVerificationMailboxPassword = trim((string) ($verificationMailbox['password_encrypted'] ?? '')) !== '';
+        $this->verificationMailboxWebmailUrl = (string) ($verificationMailbox['webmail_url'] ?? '');
+        $this->verificationMailboxImapHost = (string) ($verificationImap['host'] ?? '');
+        $this->verificationMailboxImapPort = ($verificationImap['port'] ?? null) !== null ? (int) $verificationImap['port'] : null;
+        $this->verificationMailboxImapEncryption = (string) ($verificationImap['encryption'] ?? 'ssl');
+        $this->verificationMailboxImapFolder = (string) ($verificationImap['folder'] ?? 'INBOX');
 
         $this->providerOneEnabled = (bool) ($providerOne['enabled'] ?? true);
         $this->providerOneMode = in_array(($providerOne['mode'] ?? ''), ['observed_manual', 'proton_username_check'], true)
@@ -210,5 +282,12 @@ class MailRegistrationSettings extends Component
         $this->providerThreeEnabled = (bool) ($providerThree['enabled'] ?? false);
         $this->providerThreeLabel = (string) ($providerThree['label'] ?? 'Provider 3');
         $this->providerThreeRegistrationUrl = (string) ($providerThree['registration_url'] ?? '');
+    }
+
+    protected function nullableString(mixed $value): ?string
+    {
+        $value = trim((string) $value);
+
+        return $value === '' ? null : $value;
     }
 }

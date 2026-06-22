@@ -65,6 +65,97 @@
     <div class="rounded-lg border border-gray-200 bg-white p-5">
         <div class="flex flex-wrap items-start justify-between gap-3">
             <div>
+                <h3 class="text-sm font-semibold text-gray-900">Register Email Account</h3>
+                <p class="mt-1 text-sm text-gray-500">Postfach fuer Registrierungs- und Verifikationsmails.</p>
+            </div>
+            <label class="inline-flex items-center gap-2 text-sm font-medium text-gray-700">
+                <input type="checkbox" wire:model.defer="verificationMailboxEnabled" class="rounded border-gray-300 text-slate-900 shadow-sm focus:ring-slate-900">
+                Als Verifikations-Postfach nutzen
+            </label>
+        </div>
+
+        <div class="mt-5 grid gap-6 md:grid-cols-2 xl:grid-cols-3">
+            <div>
+                <label for="verification-mailbox-email" class="block text-sm font-medium text-gray-700">E-Mail-Adresse</label>
+                <input id="verification-mailbox-email" type="email" wire:model.defer="verificationMailboxEmail" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                @error('verificationMailboxEmail') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+            </div>
+
+            <div>
+                <label for="verification-mailbox-provider" class="block text-sm font-medium text-gray-700">Provider</label>
+                <input id="verification-mailbox-provider" type="text" wire:model.defer="verificationMailboxProvider" placeholder="z.B. Gmail, Outlook, IONOS" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                @error('verificationMailboxProvider') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+            </div>
+
+            <div>
+                <label for="verification-mailbox-username" class="block text-sm font-medium text-gray-700">Login / Benutzername</label>
+                <input id="verification-mailbox-username" type="text" wire:model.defer="verificationMailboxUsername" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                @error('verificationMailboxUsername') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+            </div>
+
+            <div>
+                <label for="verification-mailbox-password" class="block text-sm font-medium text-gray-700">Passwort</label>
+                <input id="verification-mailbox-password" type="password" wire:model.defer="verificationMailboxPassword" autocomplete="new-password" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                <div class="mt-2 flex items-center justify-between gap-3 text-xs text-gray-500">
+                    <span>
+                        @if($hasStoredVerificationMailboxPassword)
+                            Passwort ist gespeichert. Leeres Feld behaelt das vorhandene Passwort.
+                        @else
+                            Noch kein Passwort gespeichert.
+                        @endif
+                    </span>
+                    @if($hasStoredVerificationMailboxPassword)
+                        <button type="button" wire:click="clearVerificationMailboxPassword" wire:confirm="Gespeichertes Passwort des Verifikations-Postfachs wirklich loeschen?" class="font-semibold text-red-600 hover:text-red-700">
+                            Passwort loeschen
+                        </button>
+                    @endif
+                </div>
+                @error('verificationMailboxPassword') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+            </div>
+
+            <div>
+                <label for="verification-mailbox-webmail-url" class="block text-sm font-medium text-gray-700">Webmail URL</label>
+                <input id="verification-mailbox-webmail-url" type="url" wire:model.defer="verificationMailboxWebmailUrl" placeholder="https://mail.example.com" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                @error('verificationMailboxWebmailUrl') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+            </div>
+        </div>
+
+        <div class="mt-6 grid gap-6 md:grid-cols-4">
+            <div class="md:col-span-2">
+                <label for="verification-mailbox-imap-host" class="block text-sm font-medium text-gray-700">IMAP Host</label>
+                <input id="verification-mailbox-imap-host" type="text" wire:model.defer="verificationMailboxImapHost" placeholder="imap.example.com" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                @error('verificationMailboxImapHost') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+            </div>
+
+            <div>
+                <label for="verification-mailbox-imap-port" class="block text-sm font-medium text-gray-700">IMAP Port</label>
+                <input id="verification-mailbox-imap-port" type="number" min="1" max="65535" wire:model.defer="verificationMailboxImapPort" placeholder="993" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                @error('verificationMailboxImapPort') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+            </div>
+
+            <div>
+                <label for="verification-mailbox-imap-encryption" class="block text-sm font-medium text-gray-700">Verschluesselung</label>
+                <select id="verification-mailbox-imap-encryption" wire:model.defer="verificationMailboxImapEncryption" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                    <option value="">Nicht angegeben</option>
+                    <option value="ssl">SSL</option>
+                    <option value="tls">TLS</option>
+                    <option value="starttls">STARTTLS</option>
+                    <option value="none">Keine</option>
+                </select>
+                @error('verificationMailboxImapEncryption') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+            </div>
+
+            <div class="md:col-span-2">
+                <label for="verification-mailbox-imap-folder" class="block text-sm font-medium text-gray-700">IMAP Ordner</label>
+                <input id="verification-mailbox-imap-folder" type="text" wire:model.defer="verificationMailboxImapFolder" placeholder="INBOX" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                @error('verificationMailboxImapFolder') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+            </div>
+        </div>
+    </div>
+
+    <div class="rounded-lg border border-gray-200 bg-white p-5">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+            <div>
                 <h3 class="text-sm font-semibold text-gray-900">Provider 1</h3>
                 <p class="mt-1 text-sm text-gray-500">Aktiver Adapter: beobachteter Browserflow ohne Telefonpflicht im lokalen Setting.</p>
             </div>

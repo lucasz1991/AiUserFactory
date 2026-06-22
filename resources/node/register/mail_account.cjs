@@ -351,6 +351,54 @@ function usernameFromSubject(runtimeConfig) {
     .slice(0, 64);
 }
 
+function uniqueValues(values) {
+  return Array.from(new Set(values.filter((value) => normalizeText(value) !== '')));
+}
+
+function trimUsernameCandidate(value) {
+  return normalizeText(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^[._-]+|[._-]+$/g, '')
+    .replace(/[._-]{2,}/g, '-')
+    .slice(0, 64);
+}
+
+function generateUsernameCandidates(baseUsername, maxAttempts = 12) {
+  const base = trimUsernameCandidate(baseUsername);
+  const requestedAttempts = Number(maxAttempts);
+  const targetAttempts = Number.isFinite(requestedAttempts)
+    ? Math.max(1, Math.min(50, Math.floor(requestedAttempts)))
+    : 12;
+
+  if (!base) {
+    return [];
+  }
+
+  const candidates = [base];
+  const trailingNumber = base.match(/^(.*?)(\d{1,6})$/);
+
+  if (trailingNumber) {
+    const prefix = trailingNumber[1] || base;
+    const currentNumber = Number(trailingNumber[2]);
+    const width = trailingNumber[2].length;
+
+    for (let offset = 1; candidates.length < targetAttempts && offset <= targetAttempts * 2; offset += 1) {
+      candidates.push(trimUsernameCandidate(`${prefix}${String(currentNumber + offset).padStart(width, '0')}`));
+    }
+  }
+
+  for (let suffix = 1; candidates.length < targetAttempts && suffix <= targetAttempts * 2; suffix += 1) {
+    candidates.push(trimUsernameCandidate(`${base}${suffix}`));
+  }
+
+  while (candidates.length < targetAttempts) {
+    candidates.push(trimUsernameCandidate(`${base}${crypto.randomInt(10, 99999)}`));
+  }
+
+  return uniqueValues(candidates).slice(0, targetAttempts);
+}
+
 function randomCharacter(characters) {
   return characters[crypto.randomInt(0, characters.length)];
 }
@@ -631,6 +679,69 @@ async function clickFirstMatchingButton(page, labels) {
   return false;
 }
 
+async function clickFirstExactVisibleText(pageOrFrame, labels, selectors = 'button, [role="button"], [role="tab"], a') {
+  return pageOrFrame.evaluate((payload) => {
+    const normalizedLabels = payload.labels.map((label) => String(label).trim().toLowerCase());
+    const candidates = Array.from(document.querySelectorAll(payload.selectors));
+    const element = candidates.find((candidate) => {
+      const rect = candidate.getBoundingClientRect();
+      const style = window.getComputedStyle(candidate);
+      const text = [
+        candidate.innerText,
+        candidate.textContent,
+        candidate.value,
+        candidate.getAttribute('aria-label'),
+        candidate.getAttribute('title'),
+      ].join(' ').replace(/\s+/g, ' ').trim().toLowerCase();
+
+      return rect.width > 0
+        && rect.height > 0
+        && style.visibility !== 'hidden'
+        && style.display !== 'none'
+        && !candidate.disabled
+        && normalizedLabels.includes(text);
+    });
+
+    if (!element) {
+      return false;
+    }
+
+    element.click();
+
+    return true;
+  }, {
+    labels,
+    selectors,
+  }).catch(() => false);
+}
+
+async function clickExactVisibleTextIncludingFrames(page, labels, selectors) {
+  if (await clickFirstExactVisibleText(page, labels, selectors)) {
+    return true;
+  }
+
+  for (const frame of page.frames()) {
+    const frameUrl = normalizeText(frame.url());
+
+    if (frame === page.mainFrame() || !/proton|challenge|account-api/i.test(frameUrl)) {
+      continue;
+    }
+
+    if (await clickFirstExactVisibleText(frame, labels, selectors)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+async function selectProtonEmailVerificationTab(page) {
+  return clickExactVisibleTextIncludingFrames(page, [
+    'email',
+    'e-mail',
+  ], 'button, [role="button"], [role="tab"], a');
+}
+
 async function protonPasswordSubmitStatus(page) {
   return page.evaluate(() => {
     const text = document.body?.innerText || '';
@@ -783,11 +894,19 @@ async function protonManualVerificationStatus(page) {
 async function waitForProtonManualVerification(page, runtimeConfig, timeoutMs = 300000) {
   const stopAt = Date.now() + timeoutMs;
   let status = await protonManualVerificationStatus(page);
+  const emailTabSelected = await selectProtonEmailVerificationTab(page);
+
+  if (emailTabSelected) {
+    await sleep(1000);
+    status = await protonManualVerificationStatus(page);
+  }
 
   progress(
     runtimeConfig,
-    'proton-manual-verification-required',
-    'Proton verlangt eine manuelle Human Verification. Bitte im geoeffneten Browser loesen.',
+    emailTabSelected ? 'proton-email-verification-selected' : 'proton-manual-verification-required',
+    emailTabSelected
+      ? 'Proton-Tab Email wurde fuer die Human Verification ausgewaehlt. Bitte manuelle E-Mail-Verifikation abschliessen.'
+      : 'Proton verlangt eine manuelle Human Verification. Bitte im geoeffneten Browser loesen.',
     await pageSnapshot(page, runtimeConfig, true, false),
   );
 
@@ -811,7 +930,10 @@ async function waitForProtonManualVerification(page, runtimeConfig, timeoutMs = 
       await pageSnapshot(page, runtimeConfig, true, false),
     );
 
-    return status;
+    return {
+      ...status,
+      emailTabSelected,
+    };
   }
 
   return {
@@ -819,6 +941,7 @@ async function waitForProtonManualVerification(page, runtimeConfig, timeoutMs = 
     reason: 'manual-verification-timeout',
     message: status.message || '',
     url: status.url || page.url(),
+    emailTabSelected,
   };
 }
 
@@ -892,6 +1015,7 @@ async function completeProtonPasswordStep(page, runtimeConfig) {
       passwordStepReason: manualVerification.reason,
       manualVerificationRequired: true,
       manualVerificationCompleted: manualVerification.completed === true,
+      emailVerificationSelected: manualVerification.emailTabSelected === true,
     };
   }
 
@@ -915,6 +1039,7 @@ async function completeProtonPasswordStep(page, runtimeConfig) {
     passwordStepReason: submitStatus.reason,
     manualVerificationRequired: false,
     manualVerificationCompleted: false,
+    emailVerificationSelected: false,
   };
 }
 
@@ -929,12 +1054,15 @@ async function protonUsernameStatus(page) {
       'username is not available',
       'not available',
       'unavailable',
+      'already used',
+      'username already used',
       'already exists',
       'invalid username',
       'choose another',
       'please try another',
       'ist nicht verf',
       'bereits vergeben',
+      'bereits verwendet',
       'nicht verfügbar',
     ];
 
@@ -968,10 +1096,71 @@ async function protonUsernameStatus(page) {
   });
 }
 
-async function runProtonUsernameCheckProvider(page, runtimeConfig, provider) {
-  const username = usernameFromSubject(runtimeConfig);
+async function waitForProtonUsernameStatus(page, runtimeConfig) {
+  const stopAt = Date.now() + Math.max(10000, Number(runtimeConfig.protonUsernameCheckTimeoutMs || 30000));
+  let status = await protonUsernameStatus(page);
 
-  if (!username) {
+  while (status.available === null && Date.now() < stopAt) {
+    await sleep(1000);
+    status = await protonUsernameStatus(page);
+
+    progress(
+      runtimeConfig,
+      'proton-checking-username',
+      'Proton prueft den Username.',
+      await pageSnapshot(page, runtimeConfig, false, true),
+    );
+  }
+
+    return status;
+  }
+
+async function submitProtonUsernameCandidate(page, runtimeConfig, username, usernameInputSelectors) {
+  const usernameInput = await waitForVisibleInputIncludingFrames(page, usernameInputSelectors, 20000);
+
+  if (!usernameInput) {
+    progress(
+      runtimeConfig,
+      'proton-username-input-not-found',
+      'Proton-Username-Feld wurde nicht gefunden.',
+      await pageSnapshot(page, runtimeConfig, true, true),
+      'failed',
+    );
+
+    throw new Error('Proton-Username-Feld wurde nicht gefunden.');
+  }
+
+  const enteredUsername = await fillInputValue(usernameInput, username);
+
+  progress(
+    runtimeConfig,
+    'proton-username-entered',
+    `Username "${username}" wurde eingetragen. Feldwert: "${enteredUsername}".`,
+    await pageSnapshot(page, runtimeConfig, true, true),
+  );
+
+  await clickFirstMatchingButton(page, [
+    'create free account',
+    'create account',
+    'create free account now',
+    'kostenloses konto',
+    'konto jetzt erstellen',
+    'kostenloses konto jetzt erstellen',
+    'continue',
+    'weiter',
+    'next',
+    'free account',
+  ]);
+
+  await sleep(1000);
+
+  return waitForProtonUsernameStatus(page, runtimeConfig);
+}
+
+async function runProtonUsernameCheckProvider(page, runtimeConfig, provider) {
+  const requestedUsername = usernameFromSubject(runtimeConfig);
+
+  if (!requestedUsername) {
     throw new Error('Fuer Proton wird ein Username oder eine gewuenschte E-Mail-Adresse benoetigt.');
   }
 
@@ -1000,53 +1189,41 @@ async function runProtonUsernameCheckProvider(page, runtimeConfig, provider) {
     'input[type="email"]',
     'input[type="text"]',
   ];
-  const usernameInput = await waitForVisibleInputIncludingFrames(page, usernameInputSelectors, 20000);
-
-  if (!usernameInput) {
-    progress(
-      runtimeConfig,
-      'proton-username-input-not-found',
-      'Proton-Username-Feld wurde nicht gefunden.',
-      await pageSnapshot(page, runtimeConfig, true, true),
-      'failed',
-    );
-
-    throw new Error('Proton-Username-Feld wurde nicht gefunden.');
-  }
-
-  const enteredUsername = await fillInputValue(usernameInput, username);
-
-  progress(
-    runtimeConfig,
-    'proton-username-entered',
-    `Username "${username}" wurde eingetragen. Feldwert: "${enteredUsername}".`,
-    await pageSnapshot(page, runtimeConfig, true, true),
+  const usernameCandidates = generateUsernameCandidates(
+    requestedUsername,
+    runtimeConfig.protonUsernameMaxAttempts || runtimeConfig.usernameMaxAttempts || 12,
   );
+  let username = requestedUsername;
+  let status = {
+    available: null,
+    reason: 'pending',
+    message: '',
+    url: page.url(),
+  };
 
-  await clickFirstMatchingButton(page, [
-    'create free account',
-    'create account',
-    'kostenloses konto',
-    'konto jetzt erstellen',
-    'kostenloses konto jetzt erstellen',
-    'continue',
-    'weiter',
-    'next',
-    'free account',
-  ]);
+  for (let attemptIndex = 0; attemptIndex < usernameCandidates.length; attemptIndex += 1) {
+    username = usernameCandidates[attemptIndex];
 
-  const stopAt = Date.now() + Math.max(10000, Number(runtimeConfig.protonUsernameCheckTimeoutMs || 30000));
-  let status = await protonUsernameStatus(page);
+    if (attemptIndex > 0) {
+      progress(
+        runtimeConfig,
+        'proton-username-retrying',
+        `Username ist belegt; versuche Variante "${username}" (${attemptIndex + 1}/${usernameCandidates.length}).`,
+        await pageSnapshot(page, runtimeConfig, true, true),
+      );
+    }
 
-  while (status.available === null && Date.now() < stopAt) {
-    await sleep(1000);
-    status = await protonUsernameStatus(page);
+    status = await submitProtonUsernameCandidate(page, runtimeConfig, username, usernameInputSelectors);
+
+    if (status.available !== false) {
+      break;
+    }
 
     progress(
       runtimeConfig,
-      'proton-checking-username',
-      'Proton prueft den Username.',
-      await pageSnapshot(page, runtimeConfig, false, true),
+      'proton-username-unavailable',
+      `Username "${username}" ist bei Proton belegt.`,
+      await pageSnapshot(page, runtimeConfig, true, true),
     );
   }
 
@@ -1079,6 +1256,7 @@ async function runProtonUsernameCheckProvider(page, runtimeConfig, provider) {
     passwordStepAdvanced: passwordStep?.passwordStepAdvanced || false,
     manualVerificationRequired: passwordStep?.manualVerificationRequired || false,
     manualVerificationCompleted: passwordStep?.manualVerificationCompleted || false,
+    emailVerificationSelected: passwordStep?.emailVerificationSelected || false,
     finalUrl: finalSnapshot.finalUrl,
     title: finalSnapshot.title,
     liveScreenshotPath: finalSnapshot.liveScreenshotPath || null,
@@ -1150,7 +1328,7 @@ function buildAccountPayload(runtimeConfig, provider, providerResult) {
   }
 
   if (providerMode === PROVIDER_MODE_PROTON_USERNAME_CHECK) {
-    const protonUsername = usernameFromSubject(runtimeConfig);
+    const protonUsername = trimUsernameCandidate(providerResult?.username || usernameFromSubject(runtimeConfig));
 
     if (!completed || !protonUsername) {
       return null;

@@ -3,6 +3,7 @@
 namespace App\Services\Mail;
 
 use App\Models\Setting;
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Facades\Storage;
@@ -40,6 +41,20 @@ class MailAccountRegistrationRunner
             'dom_debug_enabled' => true,
             'navigation_timeout_seconds' => 120,
             'observation_timeout_seconds' => 300,
+            'verification_mailbox' => [
+                'enabled' => false,
+                'email' => '',
+                'provider' => '',
+                'username' => '',
+                'password_encrypted' => null,
+                'webmail_url' => '',
+                'imap' => [
+                    'host' => '',
+                    'port' => 993,
+                    'encryption' => 'ssl',
+                    'folder' => 'INBOX',
+                ],
+            ],
             'providers' => [
                 [
                     'key' => 'proton',
@@ -89,6 +104,7 @@ class MailAccountRegistrationRunner
         }
 
         $providers = $this->normalizeProviders($settings['providers'] ?? []);
+        $verificationMailbox = $this->normalizeVerificationMailbox($settings['verification_mailbox'] ?? []);
 
         return [
             'browser_engine' => $browserEngine,
@@ -99,6 +115,7 @@ class MailAccountRegistrationRunner
             'dom_debug_enabled' => (bool) ($settings['dom_debug_enabled'] ?? $defaults['dom_debug_enabled']),
             'navigation_timeout_seconds' => max(30, min(300, (int) ($settings['navigation_timeout_seconds'] ?? 120))),
             'observation_timeout_seconds' => max(30, min(1800, (int) ($settings['observation_timeout_seconds'] ?? 300))),
+            'verification_mailbox' => $verificationMailbox,
             'providers' => $providers,
         ];
     }
@@ -129,6 +146,16 @@ class MailAccountRegistrationRunner
         $stdoutPath = $runDirectory.DIRECTORY_SEPARATOR.'stdout.log';
         $stderrPath = $runDirectory.DIRECTORY_SEPARATOR.'stderr.log';
         $livePreviewPath = $publicRunDirectory.DIRECTORY_SEPARATOR.'live.png';
+        $normalizedSubject = $this->normalizeSubject($subject);
+        $verificationMailbox = is_array($settings['verification_mailbox'] ?? null) ? $settings['verification_mailbox'] : [];
+
+        if (
+            ($verificationMailbox['enabled'] ?? false)
+            && trim((string) ($normalizedSubject['recoveryEmail'] ?? '')) === ''
+            && trim((string) ($verificationMailbox['email'] ?? '')) !== ''
+        ) {
+            $normalizedSubject['recoveryEmail'] = trim((string) $verificationMailbox['email']);
+        }
 
         $runtimeConfig = [
             'runId' => $runId,
@@ -141,6 +168,7 @@ class MailAccountRegistrationRunner
             'browserProfilePath' => $runDirectory.DIRECTORY_SEPARATOR.'browser-profile',
             'livePreviewEnabled' => (bool) $settings['live_preview_enabled'],
             'domDebugEnabled' => (bool) $settings['dom_debug_enabled'],
+            'verificationMailbox' => $this->runtimeVerificationMailbox($settings['verification_mailbox'] ?? []),
             'livePreviewPath' => $livePreviewPath,
             'livePreviewRelativePath' => $this->publicScreenshotRelativePath($runId),
             'statusPath' => $statusPath,
@@ -155,7 +183,7 @@ class MailAccountRegistrationRunner
                 'webmailUrl' => $provider['webmail_url'],
                 'phoneRequired' => (bool) $provider['phone_required'],
             ],
-            'subject' => $this->normalizeSubject($subject),
+            'subject' => $normalizedSubject,
             'protonUsernameCheckTimeoutMs' => 30000,
         ];
 
@@ -311,6 +339,76 @@ class MailAccountRegistrationRunner
         }
 
         return $normalized;
+    }
+
+    protected function normalizeVerificationMailbox(mixed $mailbox): array
+    {
+        $mailbox = is_array($mailbox) ? $mailbox : [];
+        $imap = is_array($mailbox['imap'] ?? null) ? $mailbox['imap'] : [];
+        $port = $imap['port'] ?? 993;
+        $port = is_numeric($port) ? max(1, min(65535, (int) $port)) : 993;
+        $encryption = trim((string) ($imap['encryption'] ?? 'ssl'));
+
+        if (! in_array($encryption, ['', 'none', 'ssl', 'tls', 'starttls'], true)) {
+            $encryption = 'ssl';
+        }
+
+        return [
+            'enabled' => (bool) ($mailbox['enabled'] ?? false),
+            'email' => trim((string) ($mailbox['email'] ?? '')),
+            'provider' => trim((string) ($mailbox['provider'] ?? '')),
+            'username' => trim((string) ($mailbox['username'] ?? '')),
+            'password_encrypted' => $this->nullableString($mailbox['password_encrypted'] ?? null),
+            'webmail_url' => trim((string) ($mailbox['webmail_url'] ?? '')),
+            'imap' => [
+                'host' => trim((string) ($imap['host'] ?? '')),
+                'port' => $port,
+                'encryption' => $encryption,
+                'folder' => trim((string) ($imap['folder'] ?? 'INBOX')) ?: 'INBOX',
+            ],
+        ];
+    }
+
+    protected function runtimeVerificationMailbox(array $mailbox): array
+    {
+        $mailbox = $this->normalizeVerificationMailbox($mailbox);
+        $enabled = (bool) ($mailbox['enabled'] ?? false);
+        $password = $enabled ? $this->decryptString($mailbox['password_encrypted'] ?? null) : null;
+
+        return [
+            'enabled' => $enabled,
+            'email' => $mailbox['email'] ?? '',
+            'provider' => $mailbox['provider'] ?? '',
+            'username' => $mailbox['username'] ?: ($mailbox['email'] ?? ''),
+            'password' => $password,
+            'webmailUrl' => $mailbox['webmail_url'] ?? '',
+            'imap' => [
+                'host' => $mailbox['imap']['host'] ?? '',
+                'port' => $mailbox['imap']['port'] ?? 993,
+                'encryption' => $mailbox['imap']['encryption'] ?? 'ssl',
+                'folder' => $mailbox['imap']['folder'] ?? 'INBOX',
+            ],
+        ];
+    }
+
+    protected function nullableString(mixed $value): ?string
+    {
+        $value = trim((string) $value);
+
+        return $value === '' ? null : $value;
+    }
+
+    protected function decryptString(mixed $encrypted): ?string
+    {
+        if (! is_string($encrypted) || trim($encrypted) === '') {
+            return null;
+        }
+
+        try {
+            return Crypt::decryptString($encrypted);
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     protected function resolveProvider(array $settings, ?string $providerKey = null): array
