@@ -636,6 +636,7 @@ async function protonPasswordSubmitStatus(page) {
     const text = document.body?.innerText || '';
     const normalized = text.toLowerCase();
     const url = window.location.href;
+    const manualVerificationPattern = /human verification|captcha|recaptcha|hcaptcha|verify you.?re human|to fight spam and abuse|please verify you are human/;
     const visiblePasswordInputs = Array.from(document.querySelectorAll('input')).filter((input) => {
       const rect = input.getBoundingClientRect();
       const style = window.getComputedStyle(input);
@@ -676,8 +677,18 @@ async function protonPasswordSubmitStatus(page) {
       };
     }
 
+    if (manualVerificationPattern.test(normalized)) {
+      return {
+        advanced: null,
+        manualRequired: true,
+        reason: 'manual-verification-required',
+        message: text.slice(0, 1200),
+        url,
+      };
+    }
+
     if (
-      /human verification|captcha|verify you.?re human|phone verification|verify your email|email verification|confirm you|recovery email/.test(normalized)
+      /phone verification|verify your email|email verification|confirm you|recovery email/.test(normalized)
       || (visiblePasswordInputs.length < 2 && !normalized.includes('set your password'))
     ) {
       return {
@@ -701,7 +712,7 @@ async function waitForProtonPasswordSubmit(page, runtimeConfig, timeoutMs = 2000
   const stopAt = Date.now() + timeoutMs;
   let status = await protonPasswordSubmitStatus(page);
 
-  while (status.advanced === null && Date.now() < stopAt) {
+  while (status.advanced === null && !status.manualRequired && Date.now() < stopAt) {
     await sleep(1000);
     status = await protonPasswordSubmitStatus(page);
 
@@ -714,6 +725,101 @@ async function waitForProtonPasswordSubmit(page, runtimeConfig, timeoutMs = 2000
   }
 
   return status;
+}
+
+async function protonManualVerificationStatus(page) {
+  return page.evaluate(() => {
+    const text = document.body?.innerText || '';
+    const normalized = text.toLowerCase();
+    const url = window.location.href;
+    const manualVerificationPattern = /human verification|captcha|recaptcha|hcaptcha|verify you.?re human|to fight spam and abuse|please verify you are human/;
+    const visiblePasswordInputs = Array.from(document.querySelectorAll('input')).filter((input) => {
+      const rect = input.getBoundingClientRect();
+      const style = window.getComputedStyle(input);
+      const haystack = [
+        input.name,
+        input.id,
+        input.autocomplete,
+        input.placeholder,
+        input.getAttribute('aria-label'),
+        input.type,
+      ].join(' ').toLowerCase();
+
+      return rect.width > 0
+        && rect.height > 0
+        && style.visibility !== 'hidden'
+        && style.display !== 'none'
+        && !input.disabled
+        && (input.type === 'password' || haystack.includes('password'));
+    });
+
+    if (manualVerificationPattern.test(normalized)) {
+      return {
+        completed: null,
+        reason: 'manual-verification-required',
+        message: text.slice(0, 1200),
+        url,
+      };
+    }
+
+    if (visiblePasswordInputs.length >= 2 && normalized.includes('set your password')) {
+      return {
+        completed: null,
+        reason: 'password-form-visible',
+        message: text.slice(0, 1200),
+        url,
+      };
+    }
+
+    return {
+      completed: true,
+      reason: 'manual-verification-completed',
+      message: text.slice(0, 1200),
+      url,
+    };
+  });
+}
+
+async function waitForProtonManualVerification(page, runtimeConfig, timeoutMs = 300000) {
+  const stopAt = Date.now() + timeoutMs;
+  let status = await protonManualVerificationStatus(page);
+
+  progress(
+    runtimeConfig,
+    'proton-manual-verification-required',
+    'Proton verlangt eine manuelle Human Verification. Bitte im geoeffneten Browser loesen.',
+    await pageSnapshot(page, runtimeConfig, true, false),
+  );
+
+  while (status.completed === null && Date.now() < stopAt) {
+    await sleep(2500);
+    status = await protonManualVerificationStatus(page);
+
+    progress(
+      runtimeConfig,
+      'proton-manual-verification-required',
+      'Warte auf manuelle Human Verification im geoeffneten Browser.',
+      await pageSnapshot(page, runtimeConfig, false, false),
+    );
+  }
+
+  if (status.completed === true) {
+    progress(
+      runtimeConfig,
+      'proton-manual-verification-completed',
+      'Manuelle Human Verification wurde abgeschlossen; Registrierung wird fortgesetzt.',
+      await pageSnapshot(page, runtimeConfig, true, false),
+    );
+
+    return status;
+  }
+
+  return {
+    completed: false,
+    reason: 'manual-verification-timeout',
+    message: status.message || '',
+    url: status.url || page.url(),
+  };
 }
 
 async function completeProtonPasswordStep(page, runtimeConfig) {
@@ -771,6 +877,24 @@ async function completeProtonPasswordStep(page, runtimeConfig) {
     Math.max(5000, Number(runtimeConfig.protonPasswordSubmitTimeoutMs || 20000)),
   );
 
+  if (submitStatus.manualRequired) {
+    const manualVerification = await waitForProtonManualVerification(
+      page,
+      runtimeConfig,
+      Math.max(60000, Number(runtimeConfig.manualVerificationTimeoutMs || runtimeConfig.observationTimeoutMs || 300000)),
+    );
+
+    return {
+      password,
+      passwordEntered: true,
+      passwordSubmitted: clicked,
+      passwordStepAdvanced: manualVerification.completed === true,
+      passwordStepReason: manualVerification.reason,
+      manualVerificationRequired: true,
+      manualVerificationCompleted: manualVerification.completed === true,
+    };
+  }
+
   if (submitStatus.advanced === false) {
     progress(
       runtimeConfig,
@@ -789,6 +913,8 @@ async function completeProtonPasswordStep(page, runtimeConfig) {
     passwordSubmitted: clicked,
     passwordStepAdvanced: submitStatus.advanced === true,
     passwordStepReason: submitStatus.reason,
+    manualVerificationRequired: false,
+    manualVerificationCompleted: false,
   };
 }
 
@@ -935,8 +1061,14 @@ async function runProtonUsernameCheckProvider(page, runtimeConfig, provider) {
     ? await pageSnapshot(page, runtimeConfig, true, false)
     : snapshot;
 
+  const completed = status.available === true
+    && (!passwordStep || (
+      passwordStep.passwordEntered
+      && (!passwordStep.manualVerificationRequired || passwordStep.manualVerificationCompleted)
+    ));
+
   return {
-    completed: status.available === true && (!passwordStep || passwordStep.passwordEntered),
+    completed,
     completionReason: passwordStep?.passwordStepReason || status.reason,
     username,
     email: `${username}@proton.me`,
@@ -945,12 +1077,16 @@ async function runProtonUsernameCheckProvider(page, runtimeConfig, provider) {
     passwordEntered: passwordStep?.passwordEntered || false,
     passwordSubmitted: passwordStep?.passwordSubmitted || false,
     passwordStepAdvanced: passwordStep?.passwordStepAdvanced || false,
+    manualVerificationRequired: passwordStep?.manualVerificationRequired || false,
+    manualVerificationCompleted: passwordStep?.manualVerificationCompleted || false,
     finalUrl: finalSnapshot.finalUrl,
     title: finalSnapshot.title,
     liveScreenshotPath: finalSnapshot.liveScreenshotPath || null,
     liveScreenshotAt: finalSnapshot.liveScreenshotAt || null,
     statusMessage: status.available === true
-      ? (passwordStep?.passwordStepAdvanced
+      ? (passwordStep?.manualVerificationRequired && !passwordStep?.manualVerificationCompleted
+        ? 'Proton verlangt eine manuelle Human Verification; der Lauf wurde ohne Abschluss beendet.'
+        : passwordStep?.passwordStepAdvanced
         ? 'Proton-Passwort wurde gesetzt; naechster Registrierungsschritt wurde erreicht.'
         : 'Proton-Passwort wurde generiert, eingetragen und abgesendet.')
       : 'Proton-Username ist nicht verfuegbar oder konnte nicht bestaetigt werden.',
