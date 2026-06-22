@@ -41,6 +41,7 @@
         "apexcharts": "^4.4.0",
         "chart.js": "^4.4.7",
         "choices.js": "^11.0.2",
+        "cloakbrowser": "^0.4.0",
         "datatables.net": "^1.10.22",
         "datatables.net-autofill": "^2.6.0",
         "datatables.net-autofill-bs4": "^2.6.0",

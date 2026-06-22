@@ -12,9 +12,17 @@
     @else
         <x-admin.panel title="E-Mail-Account" description="Zugangsdaten und technische Verbindungsdaten fuer die Persona-Mailbox.">
             <x-slot name="actions">
-                <button type="button" wire:click="saveSettings" class="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
-                    Speichern
-                </button>
+                <div class="flex flex-wrap gap-2">
+                    <a href="{{ route('admin.settings', ['tab' => 'mail-registration']) }}" wire:navigate class="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50">
+                        Mail-Registrierung
+                    </a>
+                    <button type="button" wire:click="startMailRegistration" wire:loading.attr="disabled" class="rounded-md border border-blue-200 bg-white px-4 py-2 text-sm font-semibold text-blue-700 shadow-sm hover:bg-blue-50 disabled:cursor-wait disabled:opacity-60">
+                        Account registrieren
+                    </button>
+                    <button type="button" wire:click="saveSettings" class="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
+                        Speichern
+                    </button>
+                </div>
             </x-slot>
 
             <div class="grid gap-4 md:grid-cols-2">
@@ -140,5 +148,71 @@
                 </button>
             </div>
         </x-admin.panel>
+
+        <x-dialog-modal wire:model="showMailRegistrationModal" maxWidth="6xl">
+            <x-slot name="title">
+                Mail-Registrierung beobachten
+            </x-slot>
+
+            <x-slot name="content">
+                <div
+                    @if(data_get($mailRegistrationStatus, 'isRunning')) wire:poll.2500ms="refreshMailRegistration" @endif
+                    class="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]"
+                >
+                    <div class="overflow-hidden rounded-lg border border-slate-200 bg-slate-950">
+                        @if(data_get($mailRegistrationStatus, 'screenshotUrl'))
+                            <img src="{{ data_get($mailRegistrationStatus, 'screenshotUrl') }}" alt="Live Screenshot" class="aspect-video w-full object-contain">
+                        @else
+                            <div class="flex aspect-video items-center justify-center text-sm font-semibold text-slate-300">
+                                Noch kein Screenshot verfuegbar.
+                            </div>
+                        @endif
+                    </div>
+
+                    <div class="space-y-4">
+                        <div class="rounded-lg border border-slate-200 bg-white p-4">
+                            <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Status</div>
+                            <div class="mt-2 text-sm font-semibold text-slate-900">{{ data_get($mailRegistrationStatus, 'message', 'Noch kein Lauf gestartet.') }}</div>
+                            <div class="mt-2 text-xs text-slate-500">
+                                {{ data_get($mailRegistrationStatus, 'providerLabel', '-') }} · {{ data_get($mailRegistrationStatus, 'activeBrowserEngine', data_get($mailRegistrationStatus, 'requestedBrowserEngine', '-')) }}
+                            </div>
+                        </div>
+
+                        @if(data_get($mailRegistrationStatus, 'result.account'))
+                            <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
+                                <div class="font-semibold">Accountdaten erkannt</div>
+                                <div class="mt-1 break-all">{{ data_get($mailRegistrationStatus, 'result.account.email') }}</div>
+                            </div>
+                        @endif
+
+                        <div class="max-h-[360px] overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-4">
+                            <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Ablauf</div>
+                            <div class="mt-3 space-y-3">
+                                @forelse(array_reverse(data_get($mailRegistrationStatus, 'events', [])) as $event)
+                                    <div class="rounded-md bg-white p-3 text-xs shadow-sm">
+                                        <div class="font-semibold text-slate-900">{{ data_get($event, 'stage', '-') }}</div>
+                                        <div class="mt-1 text-slate-600">{{ data_get($event, 'message', '-') }}</div>
+                                        <div class="mt-1 text-slate-400">{{ data_get($event, 'at', '') }}</div>
+                                    </div>
+                                @empty
+                                    <div class="text-sm text-slate-500">Noch keine Ablaufdaten.</div>
+                                @endforelse
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </x-slot>
+
+            <x-slot name="footer">
+                <div class="flex justify-end gap-3">
+                    <button type="button" wire:click="closeMailRegistrationModal" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">
+                        Schliessen
+                    </button>
+                    <button type="button" wire:click="applyMailRegistrationResult" class="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">
+                        Ergebnis uebernehmen
+                    </button>
+                </div>
+            </x-slot>
+        </x-dialog-modal>
     @endif
 </div>

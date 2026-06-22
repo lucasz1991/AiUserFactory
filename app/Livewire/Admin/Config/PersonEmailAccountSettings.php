@@ -3,6 +3,7 @@
 namespace App\Livewire\Admin\Config;
 
 use App\Models\Person;
+use App\Services\Mail\MailAccountRegistrationRunner;
 use Illuminate\Support\Facades\Crypt;
 use Livewire\Component;
 
@@ -41,6 +42,12 @@ class PersonEmailAccountSettings extends Component
     public string $smtpEncryption = '';
 
     public string $notes = '';
+
+    public bool $showMailRegistrationModal = false;
+
+    public ?string $mailRegistrationRunId = null;
+
+    public array $mailRegistrationStatus = [];
 
     public function mount(int $personId): void
     {
@@ -137,6 +144,77 @@ class PersonEmailAccountSettings extends Component
         session()->flash('success', 'Gespeichertes E-Mail-Passwort wurde geloescht.');
     }
 
+    public function startMailRegistration(): void
+    {
+        if (! $this->person) {
+            return;
+        }
+
+        try {
+            $run = app(MailAccountRegistrationRunner::class)->start($this->mailRegistrationSubject(), 'observed_manual');
+
+            $this->mailRegistrationRunId = $run['runId'] ?? null;
+            $this->mailRegistrationStatus = $run;
+            $this->showMailRegistrationModal = true;
+        } catch (\Throwable $exception) {
+            $this->mailRegistrationStatus = [
+                'state' => 'failed',
+                'stage' => 'start-failed',
+                'message' => $exception->getMessage(),
+                'events' => [],
+            ];
+            $this->showMailRegistrationModal = true;
+            $this->dispatch('showAlert', 'Mail-Registrierung konnte nicht gestartet werden.', 'error');
+        }
+    }
+
+    public function refreshMailRegistration(): void
+    {
+        if (! $this->mailRegistrationRunId) {
+            return;
+        }
+
+        $run = app(MailAccountRegistrationRunner::class)->readRun($this->mailRegistrationRunId);
+
+        if (is_array($run)) {
+            $this->mailRegistrationStatus = $run;
+        }
+    }
+
+    public function applyMailRegistrationResult(): void
+    {
+        if (! $this->person || ! $this->mailRegistrationRunId) {
+            return;
+        }
+
+        $result = app(MailAccountRegistrationRunner::class)->readResult($this->mailRegistrationRunId);
+        $account = is_array($result) && is_array($result['account'] ?? null) ? $result['account'] : null;
+
+        if (! $account) {
+            $this->dispatch('showAlert', 'Der Lauf enthaelt noch keine uebernehmbaren Accountdaten.', 'warning');
+
+            return;
+        }
+
+        $this->emailAddress = (string) ($account['email'] ?? $this->emailAddress);
+        $this->provider = (string) ($account['provider'] ?? $this->provider);
+        $this->accountUsername = (string) ($account['username'] ?? $this->accountUsername);
+        $this->webmailUrl = (string) ($account['webmailUrl'] ?? $this->webmailUrl);
+        $this->recoveryEmail = (string) ($account['recoveryEmail'] ?? $this->recoveryEmail);
+
+        if (trim((string) ($account['password'] ?? '')) !== '') {
+            $this->accountPassword = (string) $account['password'];
+        }
+
+        $this->saveSettings();
+        $this->showMailRegistrationModal = false;
+    }
+
+    public function closeMailRegistrationModal(): void
+    {
+        $this->showMailRegistrationModal = false;
+    }
+
     public function render()
     {
         return view('livewire.admin.config.person-email-account-settings');
@@ -175,5 +253,21 @@ class PersonEmailAccountSettings extends Component
         $value = trim((string) $value);
 
         return $value === '' ? null : $value;
+    }
+
+    protected function mailRegistrationSubject(): array
+    {
+        return [
+            'personId' => $this->person?->id,
+            'displayName' => $this->person?->display_name ?? trim($this->person?->profile_label ?? ''),
+            'firstName' => $this->person?->person_first_name,
+            'lastName' => $this->person?->person_last_name,
+            'desiredEmail' => $this->emailAddress ?: ($this->person?->person_email ?? ''),
+            'accountUsername' => $this->accountUsername ?: $this->emailAddress,
+            'recoveryEmail' => $this->recoveryEmail,
+            'city' => $this->person?->person_city,
+            'country' => $this->person?->person_country,
+            'timezone' => $this->person?->person_timezone,
+        ];
     }
 }
