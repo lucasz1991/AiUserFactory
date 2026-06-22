@@ -999,6 +999,7 @@ async function protonPasswordSubmitStatus(page) {
     const text = document.body?.innerText || '';
     const normalized = text.toLowerCase();
     const url = window.location.href;
+    const providerBlockPattern = /potentially abusive traffic|blocked any further signups|appeal-abuse|support\/appeal-abuse|abusive traffic/;
     const manualVerificationPattern = /human verification|captcha|recaptcha|hcaptcha|verify you.?re human|to fight spam and abuse|please verify you are human/;
     const visiblePasswordInputs = Array.from(document.querySelectorAll('input')).filter((input) => {
       const rect = input.getBoundingClientRect();
@@ -1030,6 +1031,16 @@ async function protonPasswordSubmitStatus(page) {
       'passwoerter stimmen nicht',
       'passwort ist zu kurz',
     ];
+
+    if (providerBlockPattern.test(normalized)) {
+      return {
+        advanced: false,
+        providerBlocked: true,
+        reason: 'provider-abuse-block',
+        message: text.slice(0, 1200),
+        url,
+      };
+    }
 
     if (validationPatterns.some((pattern) => normalized.includes(pattern))) {
       return {
@@ -1095,6 +1106,7 @@ async function protonManualVerificationStatus(page) {
     const text = document.body?.innerText || '';
     const normalized = text.toLowerCase();
     const url = window.location.href;
+    const providerBlockPattern = /potentially abusive traffic|blocked any further signups|appeal-abuse|support\/appeal-abuse|abusive traffic/;
     const manualVerificationPattern = /human verification|captcha|recaptcha|hcaptcha|verify you.?re human|to fight spam and abuse|please verify you are human/;
     const visiblePasswordInputs = Array.from(document.querySelectorAll('input')).filter((input) => {
       const rect = input.getBoundingClientRect();
@@ -1115,6 +1127,16 @@ async function protonManualVerificationStatus(page) {
         && !input.disabled
         && (input.type === 'password' || haystack.includes('password'));
     });
+
+    if (providerBlockPattern.test(normalized)) {
+      return {
+        completed: false,
+        providerBlocked: true,
+        reason: 'provider-abuse-block',
+        message: text.slice(0, 1200),
+        url,
+      };
+    }
 
     if (manualVerificationPattern.test(normalized)) {
       return {
@@ -1202,7 +1224,8 @@ async function waitForProtonManualVerification(page, browser, runtimeConfig, tim
 
   return {
     completed: false,
-    reason: 'manual-verification-timeout',
+    providerBlocked: status.providerBlocked === true,
+    reason: status.reason || 'manual-verification-timeout',
     message: status.message || '',
     url: status.url || page.url(),
     emailTabSelected,
@@ -1280,11 +1303,36 @@ async function completeProtonPasswordStep(page, browser, runtimeConfig) {
       passwordSubmitted: clicked,
       passwordStepAdvanced: manualVerification.completed === true,
       passwordStepReason: manualVerification.reason,
+      providerBlocked: manualVerification.providerBlocked === true,
       manualVerificationRequired: true,
       manualVerificationCompleted: manualVerification.completed === true,
       emailVerificationSelected: manualVerification.emailTabSelected === true,
       verificationEmailEntered: manualVerification.verificationEmail?.filled === true,
       verificationWebmailOpened: manualVerification.webmailOpened === true,
+    };
+  }
+
+  if (submitStatus.providerBlocked) {
+    progress(
+      runtimeConfig,
+      'proton-provider-blocked',
+      'Proton blockiert weitere Registrierungen von diesem Netzwerk; der Lauf wird gestoppt.',
+      await pageSnapshot(page, runtimeConfig, true, false),
+      'failed',
+    );
+
+    return {
+      password,
+      passwordEntered: true,
+      passwordSubmitted: clicked,
+      passwordStepAdvanced: false,
+      passwordStepReason: submitStatus.reason,
+      providerBlocked: true,
+      manualVerificationRequired: false,
+      manualVerificationCompleted: false,
+      emailVerificationSelected: false,
+      verificationEmailEntered: false,
+      verificationWebmailOpened: false,
     };
   }
 
@@ -1306,6 +1354,7 @@ async function completeProtonPasswordStep(page, browser, runtimeConfig) {
     passwordSubmitted: clicked,
     passwordStepAdvanced: submitStatus.advanced === true,
     passwordStepReason: submitStatus.reason,
+    providerBlocked: false,
     manualVerificationRequired: false,
     manualVerificationCompleted: false,
     emailVerificationSelected: false,
@@ -1319,6 +1368,7 @@ async function protonUsernameStatus(page) {
     const text = document.body?.innerText || '';
     const normalized = text.toLowerCase();
     const url = window.location.href;
+    const providerBlockPattern = /potentially abusive traffic|blocked any further signups|appeal-abuse|support\/appeal-abuse|abusive traffic/;
     const passwordInput = document.querySelector('input[type="password"], input[name*="password" i], input[id*="password" i]');
     const invalidPatterns = [
       'already taken',
@@ -1336,6 +1386,16 @@ async function protonUsernameStatus(page) {
       'bereits verwendet',
       'nicht verfügbar',
     ];
+
+    if (providerBlockPattern.test(normalized)) {
+      return {
+        available: false,
+        providerBlocked: true,
+        reason: 'provider-abuse-block',
+        message: text.slice(0, 1200),
+        url,
+      };
+    }
 
     if (invalidPatterns.some((pattern) => normalized.includes(pattern))) {
       return {
@@ -1486,6 +1546,17 @@ async function runProtonUsernameCheckProvider(page, browser, runtimeConfig, prov
 
     status = await submitProtonUsernameCandidate(page, runtimeConfig, username, usernameInputSelectors);
 
+    if (status.providerBlocked) {
+      progress(
+        runtimeConfig,
+        'proton-provider-blocked',
+        'Proton blockiert weitere Registrierungen von diesem Netzwerk; es werden keine weiteren Username-Varianten versucht.',
+        await pageSnapshot(page, runtimeConfig, true, true),
+        'failed',
+      );
+      break;
+    }
+
     if (status.available !== false) {
       break;
     }
@@ -1512,6 +1583,7 @@ async function runProtonUsernameCheckProvider(page, browser, runtimeConfig, prov
   const completed = status.available === true
     && (!passwordStep || (
       passwordStep.passwordEntered
+      && passwordStep.providerBlocked !== true
       && (!passwordStep.manualVerificationRequired || passwordStep.manualVerificationCompleted)
     ));
 
@@ -1521,6 +1593,7 @@ async function runProtonUsernameCheckProvider(page, browser, runtimeConfig, prov
     username,
     email: `${username}@proton.me`,
     usernameAvailable: status.available === true,
+    providerBlocked: status.providerBlocked === true || passwordStep?.providerBlocked === true,
     password: passwordStep?.password || null,
     passwordEntered: passwordStep?.passwordEntered || false,
     passwordSubmitted: passwordStep?.passwordSubmitted || false,
@@ -1534,7 +1607,9 @@ async function runProtonUsernameCheckProvider(page, browser, runtimeConfig, prov
     title: finalSnapshot.title,
     liveScreenshotPath: finalSnapshot.liveScreenshotPath || null,
     liveScreenshotAt: finalSnapshot.liveScreenshotAt || null,
-    statusMessage: status.available === true
+    statusMessage: (status.providerBlocked === true || passwordStep?.providerBlocked === true)
+      ? 'Proton blockiert weitere Registrierungen von diesem Netzwerk. Der Lauf wurde gestoppt.'
+      : status.available === true
       ? (passwordStep?.manualVerificationRequired && !passwordStep?.manualVerificationCompleted
         ? 'Proton verlangt eine manuelle Human Verification; der Lauf wurde ohne Abschluss beendet.'
         : passwordStep?.passwordStepAdvanced
@@ -1704,9 +1779,10 @@ async function main() {
       : await runObservedManualProvider(page, runtimeConfig, provider);
     const account = buildAccountPayload(runtimeConfig, provider, providerResult);
     const ok = providerResult.completed;
+    const providerBlocked = providerResult.providerBlocked === true;
     const result = {
       ok,
-      statusLevel: ok ? 'success' : 'partial',
+      statusLevel: ok ? 'success' : (providerBlocked ? 'error' : 'partial'),
       statusMessage: ok
         ? (providerResult.statusMessage || 'Mail-Registrierung wurde als abgeschlossen erkannt.')
         : (providerResult.statusMessage || 'Beobachtung beendet. Eine automatische Registrierung wurde nicht bestaetigt.'),
@@ -1717,6 +1793,7 @@ async function main() {
       registrationCompleted: ok,
       completionReason: providerResult.completionReason,
       usernameAvailable: providerResult.usernameAvailable ?? null,
+      providerBlocked,
       emailVerificationSelected: providerResult.emailVerificationSelected ?? null,
       verificationEmailEntered: providerResult.verificationEmailEntered ?? null,
       verificationWebmailOpened: providerResult.verificationWebmailOpened ?? null,
