@@ -399,6 +399,49 @@ async function findVisibleInputIncludingFrames(page, selectors) {
   return null;
 }
 
+async function waitForVisibleInputIncludingFrames(page, selectors, timeoutMs = 20000) {
+  const stopAt = Date.now() + timeoutMs;
+  let input = await findVisibleInputIncludingFrames(page, selectors);
+
+  while (!input && Date.now() < stopAt) {
+    await sleep(500);
+    input = await findVisibleInputIncludingFrames(page, selectors);
+  }
+
+  return input;
+}
+
+async function fillInputValue(inputHandle, value) {
+  await inputHandle.evaluate((element, nextValue) => {
+    element.focus();
+
+    const prototype = element instanceof HTMLTextAreaElement
+      ? HTMLTextAreaElement.prototype
+      : HTMLInputElement.prototype;
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, 'value');
+
+    if (descriptor?.set) {
+      descriptor.set.call(element, nextValue);
+    } else {
+      element.value = nextValue;
+    }
+
+    if (typeof InputEvent === 'function') {
+      element.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        inputType: 'insertText',
+        data: nextValue,
+      }));
+    } else {
+      element.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+
+    element.dispatchEvent(new Event('change', { bubbles: true }));
+  }, value);
+
+  return inputHandle.evaluate((element) => element.value || '');
+}
+
 async function clickFirstMatchingButton(page, labels) {
   const clicked = await page.evaluate((buttonLabels) => {
     const normalizedLabels = buttonLabels.map((label) => String(label).toLowerCase());
@@ -530,7 +573,7 @@ async function runProtonUsernameCheckProvider(page, runtimeConfig, provider) {
     await pageSnapshot(page, runtimeConfig, true, true),
   );
 
-  const usernameInput = await findVisibleInputIncludingFrames(page, [
+  const usernameInputSelectors = [
     'input[name="username"]',
     'input[id="username"]',
     'input[name*="username" i]',
@@ -540,19 +583,27 @@ async function runProtonUsernameCheckProvider(page, runtimeConfig, provider) {
     'input[autocomplete="off"]',
     'input[type="email"]',
     'input[type="text"]',
-  ]);
+  ];
+  const usernameInput = await waitForVisibleInputIncludingFrames(page, usernameInputSelectors, 20000);
 
   if (!usernameInput) {
+    progress(
+      runtimeConfig,
+      'proton-username-input-not-found',
+      'Proton-Username-Feld wurde nicht gefunden.',
+      await pageSnapshot(page, runtimeConfig, true, true),
+      'failed',
+    );
+
     throw new Error('Proton-Username-Feld wurde nicht gefunden.');
   }
 
-  await usernameInput.click({ clickCount: 3 });
-  await usernameInput.type(username, { delay: 40 });
+  const enteredUsername = await fillInputValue(usernameInput, username);
 
   progress(
     runtimeConfig,
     'proton-username-entered',
-    `Username "${username}" wurde eingetragen.`,
+    `Username "${username}" wurde eingetragen. Feldwert: "${enteredUsername}".`,
     await pageSnapshot(page, runtimeConfig, true, true),
   );
 

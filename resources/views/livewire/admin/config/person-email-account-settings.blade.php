@@ -157,7 +157,7 @@
             <x-slot name="content">
                 <div
                     @if(data_get($mailRegistrationStatus, 'isRunning')) wire:poll.2500ms="refreshMailRegistration" @endif
-                    class="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]"
+                    class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(420px,560px)]"
                 >
                     <div class="overflow-hidden rounded-lg border border-slate-200 bg-slate-950">
                         @if(data_get($mailRegistrationStatus, 'screenshotUrl'))
@@ -185,7 +185,7 @@
                             </div>
                         @endif
 
-                        <div class="max-h-[360px] overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-4">
+                        <div class="max-h-[560px] overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-4">
                             <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Ablauf</div>
                             <div class="mt-3 space-y-3">
                                 @forelse(array_reverse(data_get($mailRegistrationStatus, 'events', [])) as $event)
