@@ -2,7 +2,7 @@
     <div>
         <h2 class="text-lg font-semibold text-gray-900">Mail-Registrierung</h2>
         <p class="mt-1 text-sm text-gray-500">
-            Browser-gestuetzter Registrierungsflow mit Live-Screenshot. Der erste Provider ist als beobachteter eigener Provider aktiv; weitere Provider-Slots sind vorbereitet.
+            Browser-gestuetzter Registrierungsflow mit optionalem Live-Screenshot und DOM-Debug. Der erste Provider ist als beobachteter eigener Provider aktiv; weitere Provider-Slots sind vorbereitet.
         </p>
     </div>
 
@@ -42,6 +42,16 @@
             <label class="inline-flex items-center gap-3 rounded-md border border-gray-200 bg-gray-50 p-3 text-sm font-medium text-gray-700">
                 <input type="checkbox" wire:model.defer="headlessEnabled" class="rounded border-gray-300 text-slate-900 shadow-sm focus:ring-slate-900">
                 Headless ausfuehren
+            </label>
+
+            <label class="inline-flex items-center gap-3 rounded-md border border-gray-200 bg-gray-50 p-3 text-sm font-medium text-gray-700">
+                <input type="checkbox" wire:model.defer="livePreviewEnabled" class="rounded border-gray-300 text-slate-900 shadow-sm focus:ring-slate-900">
+                Live-Screenshots speichern
+            </label>
+
+            <label class="inline-flex items-center gap-3 rounded-md border border-gray-200 bg-gray-50 p-3 text-sm font-medium text-gray-700">
+                <input type="checkbox" wire:model.defer="domDebugEnabled" class="rounded border-gray-300 text-slate-900 shadow-sm focus:ring-slate-900">
+                DOM-Debug protokollieren
             </label>
 
             <div>
@@ -180,6 +190,10 @@
                 <div class="overflow-hidden rounded-lg border border-slate-200 bg-slate-950">
                     @if(data_get($registrationRunStatus, 'screenshotUrl'))
                         <img src="{{ data_get($registrationRunStatus, 'screenshotUrl') }}" alt="Live Screenshot" class="aspect-video w-full object-contain">
+                    @elseif(data_get($registrationRunStatus, 'livePreviewEnabled') === false)
+                        <div class="flex aspect-video items-center justify-center text-sm font-semibold text-slate-300">
+                            Live-Screenshots sind deaktiviert.
+                        </div>
                     @else
                         <div class="flex aspect-video items-center justify-center text-sm font-semibold text-slate-300">
                             Noch kein Screenshot verfuegbar.

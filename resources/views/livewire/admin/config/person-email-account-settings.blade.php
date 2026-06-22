@@ -162,6 +162,10 @@
                     <div class="overflow-hidden rounded-lg border border-slate-200 bg-slate-950">
                         @if(data_get($mailRegistrationStatus, 'screenshotUrl'))
                             <img src="{{ data_get($mailRegistrationStatus, 'screenshotUrl') }}" alt="Live Screenshot" class="aspect-video w-full object-contain">
+                        @elseif(data_get($mailRegistrationStatus, 'livePreviewEnabled') === false)
+                            <div class="flex aspect-video items-center justify-center text-sm font-semibold text-slate-300">
+                                Live-Screenshots sind deaktiviert.
+                            </div>
                         @else
                             <div class="flex aspect-video items-center justify-center text-sm font-semibold text-slate-300">
                                 Noch kein Screenshot verfuegbar.

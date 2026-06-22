@@ -11,6 +11,8 @@ class MailRegistrationSettings extends Component
     public bool $cloakHumanizeEnabled = false;
     public string $cloakHumanPreset = '';
     public bool $headlessEnabled = false;
+    public bool $livePreviewEnabled = true;
+    public bool $domDebugEnabled = true;
     public int $navigationTimeoutSeconds = 120;
     public int $observationTimeoutSeconds = 300;
 
@@ -107,6 +109,8 @@ class MailRegistrationSettings extends Component
             'cloakHumanizeEnabled' => ['boolean'],
             'cloakHumanPreset' => ['nullable', 'string', 'max:120'],
             'headlessEnabled' => ['boolean'],
+            'livePreviewEnabled' => ['boolean'],
+            'domDebugEnabled' => ['boolean'],
             'navigationTimeoutSeconds' => ['required', 'integer', 'min:30', 'max:300'],
             'observationTimeoutSeconds' => ['required', 'integer', 'min:30', 'max:1800'],
 
@@ -131,6 +135,8 @@ class MailRegistrationSettings extends Component
             'cloak_humanize_enabled' => (bool) $validated['cloakHumanizeEnabled'],
             'cloak_human_preset' => trim((string) ($validated['cloakHumanPreset'] ?? '')),
             'headless_enabled' => (bool) $validated['headlessEnabled'],
+            'live_preview_enabled' => (bool) $validated['livePreviewEnabled'],
+            'dom_debug_enabled' => (bool) $validated['domDebugEnabled'],
             'navigation_timeout_seconds' => (int) $validated['navigationTimeoutSeconds'],
             'observation_timeout_seconds' => (int) $validated['observationTimeoutSeconds'],
             'providers' => [
@@ -182,6 +188,8 @@ class MailRegistrationSettings extends Component
         $this->cloakHumanizeEnabled = (bool) ($settings['cloak_humanize_enabled'] ?? false);
         $this->cloakHumanPreset = (string) ($settings['cloak_human_preset'] ?? '');
         $this->headlessEnabled = (bool) ($settings['headless_enabled'] ?? false);
+        $this->livePreviewEnabled = (bool) ($settings['live_preview_enabled'] ?? true);
+        $this->domDebugEnabled = (bool) ($settings['dom_debug_enabled'] ?? true);
         $this->navigationTimeoutSeconds = (int) ($settings['navigation_timeout_seconds'] ?? 120);
         $this->observationTimeoutSeconds = (int) ($settings['observation_timeout_seconds'] ?? 300);
 

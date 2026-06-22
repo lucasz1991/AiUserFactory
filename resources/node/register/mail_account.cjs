@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { launchConfiguredBrowser, resolveBrowserEngine } = require('./lib/browser-launcher.cjs');
 
 let puppeteer = null;
@@ -69,6 +70,8 @@ function publicStatusPayload(runtimeConfig, state, stage, message, data = {}) {
     requestedBrowserEngine,
     activeBrowserEngine,
     browserFallbackReason,
+    livePreviewEnabled: runtimeConfig.livePreviewEnabled !== false,
+    domDebugEnabled: runtimeConfig.domDebugEnabled !== false,
     finalUrl: data.finalUrl || null,
     title: data.title || null,
     liveScreenshotPath: data.liveScreenshotPath || null,
@@ -168,10 +171,22 @@ async function frameDomDebug(frame) {
     const elementSummary = (element) => {
       const rect = element.getBoundingClientRect();
       const style = window.getComputedStyle(element);
+      const secretHaystack = [
+        element.getAttribute('type'),
+        element.getAttribute('name'),
+        element.getAttribute('id'),
+        element.getAttribute('autocomplete'),
+        element.getAttribute('placeholder'),
+        element.getAttribute('aria-label'),
+      ].join(' ').toLowerCase();
+      const isSecret = secretHaystack.includes('password');
+      const textValue = isSecret && element.value
+        ? '[redacted]'
+        : (element.innerText || element.textContent || element.value || '');
 
       return {
         tag: element.tagName.toLowerCase(),
-        text: compactText(element.innerText || element.textContent || element.value || '', 220),
+        text: compactText(textValue, 220),
         visible: rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none',
         disabled: Boolean(element.disabled),
         attrs: attributes(element, [
@@ -241,11 +256,12 @@ async function domDebugSnapshot(page) {
 }
 
 async function pageSnapshot(page, runtimeConfig, force = false, includeDom = false) {
+  const shouldIncludeDom = includeDom && runtimeConfig.domDebugEnabled !== false;
   const [title, finalUrl, screenshot, debugDom] = await Promise.all([
     page.title().catch(() => null),
     Promise.resolve(page.url()).catch(() => null),
     captureLivePreviewScreenshot(page, runtimeConfig, force),
-    includeDom ? domDebugSnapshot(page).catch((error) => ({
+    shouldIncludeDom ? domDebugSnapshot(page).catch((error) => ({
       error: truncateText(error?.message || String(error), 800),
     })) : Promise.resolve(null),
   ]);
@@ -335,6 +351,42 @@ function usernameFromSubject(runtimeConfig) {
     .slice(0, 64);
 }
 
+function randomCharacter(characters) {
+  return characters[crypto.randomInt(0, characters.length)];
+}
+
+function shuffleString(value) {
+  const characters = value.split('');
+
+  for (let index = characters.length - 1; index > 0; index -= 1) {
+    const swapIndex = crypto.randomInt(0, index + 1);
+    [characters[index], characters[swapIndex]] = [characters[swapIndex], characters[index]];
+  }
+
+  return characters.join('');
+}
+
+function generateAccountPassword(length = 24) {
+  const requestedLength = Number(length);
+  const targetLength = Number.isFinite(requestedLength)
+    ? Math.max(16, Math.floor(requestedLength))
+    : 24;
+  const categories = [
+    'abcdefghijkmnopqrstuvwxyz',
+    'ABCDEFGHJKLMNPQRSTUVWXYZ',
+    '23456789',
+    '!@#$%^&*_-+=?',
+  ];
+  const characters = categories.map(randomCharacter);
+  const allCharacters = categories.join('');
+
+  while (characters.length < targetLength) {
+    characters.push(randomCharacter(allCharacters));
+  }
+
+  return shuffleString(characters.join(''));
+}
+
 async function findVisibleInput(pageOrFrame, selectors) {
   for (const selector of selectors) {
     const handle = await pageOrFrame.$(selector).catch(() => null);
@@ -402,6 +454,78 @@ async function findVisibleInputIncludingFrames(page, selectors) {
   }
 
   return null;
+}
+
+async function findVisiblePasswordInputs(pageOrFrame) {
+  const inputs = await pageOrFrame.$$('input').catch(() => []);
+  const passwordInputs = [];
+
+  for (const input of inputs) {
+    const visiblePasswordInput = await input.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+      const haystack = [
+        element.name,
+        element.id,
+        element.autocomplete,
+        element.placeholder,
+        element.getAttribute('aria-label'),
+        element.type,
+      ].join(' ').toLowerCase();
+
+      return rect.width > 0
+        && rect.height > 0
+        && style.visibility !== 'hidden'
+        && style.display !== 'none'
+        && !element.disabled
+        && (element.type === 'password' || haystack.includes('password'));
+    }).catch(() => false);
+
+    if (visiblePasswordInput) {
+      passwordInputs.push(input);
+    }
+  }
+
+  return passwordInputs;
+}
+
+async function findVisiblePasswordInputPairIncludingFrames(page) {
+  const mainFrame = page.mainFrame();
+  const frames = [
+    mainFrame,
+    ...page.frames().filter((frame) => frame !== mainFrame),
+  ];
+
+  for (const frame of frames) {
+    const frameUrl = normalizeText(frame.url());
+
+    if (frame !== mainFrame && !/proton|challenge|account-api/i.test(frameUrl)) {
+      continue;
+    }
+
+    const passwordInputs = await findVisiblePasswordInputs(frame);
+
+    if (passwordInputs.length >= 2) {
+      return {
+        passwordInput: passwordInputs[0],
+        confirmationInput: passwordInputs[1],
+      };
+    }
+  }
+
+  return null;
+}
+
+async function waitForVisiblePasswordInputPairIncludingFrames(page, timeoutMs = 20000) {
+  const stopAt = Date.now() + timeoutMs;
+  let inputPair = await findVisiblePasswordInputPairIncludingFrames(page);
+
+  while (!inputPair && Date.now() < stopAt) {
+    await sleep(500);
+    inputPair = await findVisiblePasswordInputPairIncludingFrames(page);
+  }
+
+  return inputPair;
 }
 
 async function waitForVisibleInputIncludingFrames(page, selectors, timeoutMs = 20000) {
@@ -505,6 +629,167 @@ async function clickFirstMatchingButton(page, labels) {
   await page.keyboard.press('Enter').catch(() => {});
 
   return false;
+}
+
+async function protonPasswordSubmitStatus(page) {
+  return page.evaluate(() => {
+    const text = document.body?.innerText || '';
+    const normalized = text.toLowerCase();
+    const url = window.location.href;
+    const visiblePasswordInputs = Array.from(document.querySelectorAll('input')).filter((input) => {
+      const rect = input.getBoundingClientRect();
+      const style = window.getComputedStyle(input);
+      const haystack = [
+        input.name,
+        input.id,
+        input.autocomplete,
+        input.placeholder,
+        input.getAttribute('aria-label'),
+        input.type,
+      ].join(' ').toLowerCase();
+
+      return rect.width > 0
+        && rect.height > 0
+        && style.visibility !== 'hidden'
+        && style.display !== 'none'
+        && !input.disabled
+        && (input.type === 'password' || haystack.includes('password'));
+    });
+    const validationPatterns = [
+      'passwords do not match',
+      'password does not match',
+      'password is too short',
+      'password is required',
+      'enter a password',
+      'please enter a password',
+      'passwort stimmt nicht',
+      'passwoerter stimmen nicht',
+      'passwort ist zu kurz',
+    ];
+
+    if (validationPatterns.some((pattern) => normalized.includes(pattern))) {
+      return {
+        advanced: false,
+        reason: 'password-validation-error',
+        message: text.slice(0, 1200),
+        url,
+      };
+    }
+
+    if (
+      /human verification|captcha|verify you.?re human|phone verification|verify your email|email verification|confirm you|recovery email/.test(normalized)
+      || (visiblePasswordInputs.length < 2 && !normalized.includes('set your password'))
+    ) {
+      return {
+        advanced: true,
+        reason: 'advanced-after-password',
+        message: text.slice(0, 1200),
+        url,
+      };
+    }
+
+    return {
+      advanced: null,
+      reason: visiblePasswordInputs.length >= 2 ? 'password-form-still-visible' : 'pending',
+      message: text.slice(0, 1200),
+      url,
+    };
+  });
+}
+
+async function waitForProtonPasswordSubmit(page, runtimeConfig, timeoutMs = 20000) {
+  const stopAt = Date.now() + timeoutMs;
+  let status = await protonPasswordSubmitStatus(page);
+
+  while (status.advanced === null && Date.now() < stopAt) {
+    await sleep(1000);
+    status = await protonPasswordSubmitStatus(page);
+
+    progress(
+      runtimeConfig,
+      'proton-password-submitting',
+      'Proton verarbeitet das Passwort.',
+      await pageSnapshot(page, runtimeConfig, false, false),
+    );
+  }
+
+  return status;
+}
+
+async function completeProtonPasswordStep(page, runtimeConfig) {
+  const password = generateAccountPassword(runtimeConfig.accountPasswordLength || runtimeConfig.passwordLength || 24);
+  const passwordInputPair = await waitForVisiblePasswordInputPairIncludingFrames(page, 20000);
+
+  if (!passwordInputPair) {
+    progress(
+      runtimeConfig,
+      'proton-password-inputs-not-found',
+      'Proton-Passwortfelder wurden nicht gefunden.',
+      await pageSnapshot(page, runtimeConfig, true, true),
+      'failed',
+    );
+
+    throw new Error('Proton-Passwortfelder wurden nicht gefunden.');
+  }
+
+  const enteredPassword = await fillInputValue(passwordInputPair.passwordInput, password);
+  const enteredConfirmation = await fillInputValue(passwordInputPair.confirmationInput, password);
+
+  if (enteredPassword !== password || enteredConfirmation !== password) {
+    throw new Error('Proton-Passwort konnte nicht in beide Felder eingetragen werden.');
+  }
+
+  progress(
+    runtimeConfig,
+    'proton-password-entered',
+    'Generiertes Proton-Passwort wurde in beide Felder eingetragen.',
+    await pageSnapshot(page, runtimeConfig, true, false),
+  );
+
+  const clicked = await clickFirstMatchingButton(page, [
+    'get started',
+    'create account',
+    'konto erstellen',
+    'registrieren',
+    'continue',
+    'weiter',
+    'next',
+  ]);
+
+  progress(
+    runtimeConfig,
+    'proton-password-submitted',
+    clicked
+      ? 'Proton-Passwortformular wurde abgesendet.'
+      : 'Proton-Passwortformular wurde per Tastatur bestaetigt.',
+    await pageSnapshot(page, runtimeConfig, false, false),
+  );
+
+  const submitStatus = await waitForProtonPasswordSubmit(
+    page,
+    runtimeConfig,
+    Math.max(5000, Number(runtimeConfig.protonPasswordSubmitTimeoutMs || 20000)),
+  );
+
+  if (submitStatus.advanced === false) {
+    progress(
+      runtimeConfig,
+      'proton-password-validation-failed',
+      'Proton hat das generierte Passwort nicht akzeptiert.',
+      await pageSnapshot(page, runtimeConfig, true, false),
+      'failed',
+    );
+
+    throw new Error('Proton hat das generierte Passwort nicht akzeptiert.');
+  }
+
+  return {
+    password,
+    passwordEntered: true,
+    passwordSubmitted: clicked,
+    passwordStepAdvanced: submitStatus.advanced === true,
+    passwordStepReason: submitStatus.reason,
+  };
 }
 
 async function protonUsernameStatus(page) {
@@ -640,19 +925,34 @@ async function runProtonUsernameCheckProvider(page, runtimeConfig, provider) {
   }
 
   const snapshot = await pageSnapshot(page, runtimeConfig, true, true);
+  let passwordStep = null;
+
+  if (status.available === true) {
+    passwordStep = await completeProtonPasswordStep(page, runtimeConfig);
+  }
+
+  const finalSnapshot = passwordStep
+    ? await pageSnapshot(page, runtimeConfig, true, false)
+    : snapshot;
 
   return {
-    completed: status.available === true,
-    completionReason: status.reason,
+    completed: status.available === true && (!passwordStep || passwordStep.passwordEntered),
+    completionReason: passwordStep?.passwordStepReason || status.reason,
     username,
     email: `${username}@proton.me`,
     usernameAvailable: status.available === true,
-    finalUrl: snapshot.finalUrl,
-    title: snapshot.title,
-    liveScreenshotPath: snapshot.liveScreenshotPath || null,
-    liveScreenshotAt: snapshot.liveScreenshotAt || null,
+    password: passwordStep?.password || null,
+    passwordEntered: passwordStep?.passwordEntered || false,
+    passwordSubmitted: passwordStep?.passwordSubmitted || false,
+    passwordStepAdvanced: passwordStep?.passwordStepAdvanced || false,
+    finalUrl: finalSnapshot.finalUrl,
+    title: finalSnapshot.title,
+    liveScreenshotPath: finalSnapshot.liveScreenshotPath || null,
+    liveScreenshotAt: finalSnapshot.liveScreenshotAt || null,
     statusMessage: status.available === true
-      ? 'Proton-Username ist verfuegbar; naechster Registrierungsschritt wurde erreicht.'
+      ? (passwordStep?.passwordStepAdvanced
+        ? 'Proton-Passwort wurde gesetzt; naechster Registrierungsschritt wurde erreicht.'
+        : 'Proton-Passwort wurde generiert, eingetragen und abgesendet.')
       : 'Proton-Username ist nicht verfuegbar oder konnte nicht bestaetigt werden.',
   };
 }
@@ -700,11 +1000,14 @@ async function runObservedManualProvider(page, runtimeConfig, provider) {
   };
 }
 
-function buildAccountPayload(runtimeConfig, provider, completed) {
+function buildAccountPayload(runtimeConfig, provider, providerResult) {
   const subject = runtimeConfig.subject || {};
   const desiredEmail = normalizeText(subject.desiredEmail || subject.desired_email);
   const username = normalizeText(subject.accountUsername || subject.account_username || desiredEmail);
   const providerMode = normalizeText(provider.mode);
+  const completed = typeof providerResult === 'boolean'
+    ? providerResult
+    : Boolean(providerResult?.completed);
 
   if (!completed && providerMode !== PROVIDER_MODE_PROTON_USERNAME_CHECK) {
     return null;
@@ -717,12 +1020,15 @@ function buildAccountPayload(runtimeConfig, provider, completed) {
       return null;
     }
 
+    const password = normalizeText(providerResult?.password);
+
     return {
       email: `${protonUsername}@proton.me`,
       username: protonUsername,
       provider: provider.label || 'Proton',
       webmailUrl: normalizeText(provider.webmailUrl || provider.webmail_url || 'https://mail.proton.me'),
       recoveryEmail: normalizeText(subject.recoveryEmail || subject.recovery_email),
+      ...(password ? { password } : {}),
     };
   }
 
@@ -809,7 +1115,7 @@ async function main() {
     const providerResult = provider.mode === PROVIDER_MODE_PROTON_USERNAME_CHECK
       ? await runProtonUsernameCheckProvider(page, runtimeConfig, provider)
       : await runObservedManualProvider(page, runtimeConfig, provider);
-    const account = buildAccountPayload(runtimeConfig, provider, providerResult.completed);
+    const account = buildAccountPayload(runtimeConfig, provider, providerResult);
     const ok = providerResult.completed;
     const result = {
       ok,

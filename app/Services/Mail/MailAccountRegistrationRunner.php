@@ -36,6 +36,8 @@ class MailAccountRegistrationRunner
             'cloak_humanize_enabled' => false,
             'cloak_human_preset' => '',
             'headless_enabled' => false,
+            'live_preview_enabled' => true,
+            'dom_debug_enabled' => true,
             'navigation_timeout_seconds' => 120,
             'observation_timeout_seconds' => 300,
             'providers' => [
@@ -93,6 +95,8 @@ class MailAccountRegistrationRunner
             'cloak_humanize_enabled' => (bool) ($settings['cloak_humanize_enabled'] ?? false),
             'cloak_human_preset' => trim((string) ($settings['cloak_human_preset'] ?? '')),
             'headless_enabled' => (bool) ($settings['headless_enabled'] ?? false),
+            'live_preview_enabled' => (bool) ($settings['live_preview_enabled'] ?? $defaults['live_preview_enabled']),
+            'dom_debug_enabled' => (bool) ($settings['dom_debug_enabled'] ?? $defaults['dom_debug_enabled']),
             'navigation_timeout_seconds' => max(30, min(300, (int) ($settings['navigation_timeout_seconds'] ?? 120))),
             'observation_timeout_seconds' => max(30, min(1800, (int) ($settings['observation_timeout_seconds'] ?? 300))),
             'providers' => $providers,
@@ -135,7 +139,8 @@ class MailAccountRegistrationRunner
             'navigationTimeoutMs' => $settings['navigation_timeout_seconds'] * 1000,
             'observationTimeoutMs' => $settings['observation_timeout_seconds'] * 1000,
             'browserProfilePath' => $runDirectory.DIRECTORY_SEPARATOR.'browser-profile',
-            'livePreviewEnabled' => true,
+            'livePreviewEnabled' => (bool) $settings['live_preview_enabled'],
+            'domDebugEnabled' => (bool) $settings['dom_debug_enabled'],
             'livePreviewPath' => $livePreviewPath,
             'livePreviewRelativePath' => $this->publicScreenshotRelativePath($runId),
             'statusPath' => $statusPath,
@@ -161,6 +166,8 @@ class MailAccountRegistrationRunner
             'state' => 'queued',
             'stage' => 'queued',
             'message' => 'Mail-Registrierung ist eingeplant.',
+            'livePreviewEnabled' => (bool) $settings['live_preview_enabled'],
+            'domDebugEnabled' => (bool) $settings['dom_debug_enabled'],
             'at' => now()->toIso8601String(),
             'events' => [],
         ]);
@@ -183,6 +190,8 @@ class MailAccountRegistrationRunner
             $status['state'] = 'starting';
             $status['stage'] = 'process-started';
             $status['message'] = 'Node-Prozess wurde gestartet.';
+            $status['livePreviewEnabled'] = (bool) $settings['live_preview_enabled'];
+            $status['domDebugEnabled'] = (bool) $settings['dom_debug_enabled'];
             $status['at'] = now()->toIso8601String();
             $this->writeJsonFile($statusPath, $status);
         } catch (\Throwable $exception) {
@@ -193,6 +202,8 @@ class MailAccountRegistrationRunner
                 'state' => 'failed',
                 'stage' => 'process-start-failed',
                 'message' => $exception->getMessage(),
+                'livePreviewEnabled' => (bool) $settings['live_preview_enabled'],
+                'domDebugEnabled' => (bool) $settings['dom_debug_enabled'],
                 'at' => now()->toIso8601String(),
                 'events' => [],
             ]);
