@@ -2,6 +2,7 @@
 
 namespace App\Console;
 
+use App\Services\Simulation\NetworkActivityPlanningSettings;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Foundation\Console\Kernel as ConsoleKernel;
 
@@ -12,8 +13,21 @@ class Kernel extends ConsoleKernel
      */
     protected function schedule(Schedule $schedule): void
     {
-        foreach (['03:05', '11:05', '17:05', '21:05'] as $time) {
-            $schedule->command('network:plan-activities --days=7 --intensity=balanced --reason=scheduled')
+        $settings = app(NetworkActivityPlanningSettings::class)->get();
+
+        if (! $settings['enabled']) {
+            return;
+        }
+
+        $command = sprintf(
+            'network:plan-activities --days=%d --intensity=%s --reason=scheduled%s',
+            $settings['days'],
+            $settings['intensity'],
+            $settings['queue'] ? ' --queue' : '',
+        );
+
+        foreach ($settings['times'] as $time) {
+            $schedule->command($command)
                 ->dailyAt($time)
                 ->timezone(config('app.timezone', 'Europe/Berlin'))
                 ->withoutOverlapping(30);

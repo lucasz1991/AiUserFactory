@@ -207,7 +207,7 @@ class SettingsPage extends Component
 
     protected function normalizeTab(string $tab): string
     {
-        return in_array($tab, ['scraper-transfer', 'openrouter', 'client-controller'], true)
+        return in_array($tab, ['scraper-transfer', 'openrouter', 'client-controller', 'activity-planning'], true)
             ? $tab
             : 'scraper-transfer';
     }

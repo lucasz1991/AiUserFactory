@@ -56,6 +56,43 @@ class ActionsPage extends Component
         ));
     }
 
+    public function deleteAction(string $actionId): void
+    {
+        if ($this->removeActionFromPlan($actionId)) {
+            session()->flash('success', 'Geplante Aktion wurde geloescht.');
+
+            return;
+        }
+
+        session()->flash('success', 'Geplante Aktion konnte nicht gefunden werden.');
+    }
+
+    public function deleteAllPlans(): void
+    {
+        $deleted = 0;
+
+        foreach ($this->personsForActions() as $person) {
+            $metadata = is_array($person->metadata) ? $person->metadata : [];
+
+            if (! array_key_exists('internal_activity_simulation', $metadata) && ! array_key_exists('last_network_planning_run', $metadata)) {
+                continue;
+            }
+
+            unset($metadata['internal_activity_simulation'], $metadata['last_network_planning_run']);
+
+            $person->forceFill([
+                'metadata' => $metadata,
+            ])->save();
+
+            $deleted++;
+        }
+
+        session()->flash('success', sprintf(
+            '%d Aktivitaetsplanung(en) wurden geloescht.',
+            $deleted,
+        ));
+    }
+
     protected function personsForActions(): Collection
     {
         return Person::query()
@@ -199,6 +236,85 @@ class ActionsPage extends Component
     protected function allowsType(string $type): bool
     {
         return $this->typeFilter === 'all' || $this->typeFilter === $type;
+    }
+
+    protected function removeActionFromPlan(string $actionId): bool
+    {
+        $parts = explode('-', $actionId);
+
+        if (count($parts) < 4 || ! in_array($parts[0], ['content', 'step'], true)) {
+            return false;
+        }
+
+        $person = Person::query()->find((int) $parts[1]);
+
+        if (! $person) {
+            return false;
+        }
+
+        $metadata = is_array($person->metadata) ? $person->metadata : [];
+        $plan = data_get($metadata, 'internal_activity_simulation');
+
+        if (! is_array($plan) || ! is_array($plan['days_plan'] ?? null)) {
+            return false;
+        }
+
+        $removed = $parts[0] === 'content'
+            ? $this->removeContentAction($plan, $parts)
+            : $this->removeStepAction($plan, $parts);
+
+        if (! $removed) {
+            return false;
+        }
+
+        $metadata['internal_activity_simulation'] = $plan;
+
+        $person->forceFill([
+            'metadata' => $metadata,
+        ])->save();
+
+        return true;
+    }
+
+    protected function removeContentAction(array &$plan, array $parts): bool
+    {
+        if (count($parts) !== 4) {
+            return false;
+        }
+
+        $dayIndex = (int) $parts[2];
+        $contentIndex = (int) $parts[3];
+
+        if (! isset($plan['days_plan'][$dayIndex]['content_items'][$contentIndex])) {
+            return false;
+        }
+
+        array_splice($plan['days_plan'][$dayIndex]['content_items'], $contentIndex, 1);
+
+        return true;
+    }
+
+    protected function removeStepAction(array &$plan, array $parts): bool
+    {
+        if (count($parts) !== 5) {
+            return false;
+        }
+
+        $dayIndex = (int) $parts[2];
+        $sessionIndex = (int) $parts[3];
+        $stepIndex = (int) $parts[4];
+
+        if (! isset($plan['days_plan'][$dayIndex]['sessions'][$sessionIndex]['steps'][$stepIndex])) {
+            return false;
+        }
+
+        array_splice($plan['days_plan'][$dayIndex]['sessions'][$sessionIndex]['steps'], $stepIndex, 1);
+
+        if (($plan['days_plan'][$dayIndex]['sessions'][$sessionIndex]['steps'] ?? []) === []) {
+            array_splice($plan['days_plan'][$dayIndex]['sessions'], $sessionIndex, 1);
+        }
+
+        return true;
     }
 
     protected function stepTime(string $sessionStart, int $offsetMinutes): string

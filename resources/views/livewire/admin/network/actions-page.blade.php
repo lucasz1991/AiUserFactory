@@ -11,6 +11,9 @@
                 <span wire:loading.remove wire:target="planNetworkNow">Alle planen</span>
                 <span wire:loading wire:target="planNetworkNow">Plane...</span>
             </button>
+            <button type="button" wire:click="deleteAllPlans" wire:confirm="Alle gespeicherten Aktivitaetsplanungen wirklich loeschen?" wire:loading.attr="disabled" wire:target="deleteAllPlans" class="rounded-md border border-red-300 bg-white px-4 py-2 text-sm font-semibold text-red-700 shadow-sm hover:bg-red-50 disabled:opacity-60">
+                Alle loeschen
+            </button>
             <a href="{{ route('persons.index') }}" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">
                 Personen
             </a>
@@ -117,6 +120,7 @@
                             <th class="px-4 py-3 text-left font-semibold text-gray-600">Aktion</th>
                             <th class="px-4 py-3 text-left font-semibold text-gray-600">Kontext</th>
                             <th class="px-4 py-3 text-left font-semibold text-gray-600">Status</th>
+                            <th class="px-4 py-3 text-right font-semibold text-gray-600">Loeschen</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-gray-100 bg-white">
@@ -157,6 +161,11 @@
                                         Risiko {{ $action['risk_score'] }}
                                     </span>
                                     <p class="mt-2 text-xs text-gray-500">{{ $action['plan_status'] }}{{ $action['intensity_label'] !== '' ? ' / '.$action['intensity_label'] : '' }}</p>
+                                </td>
+                                <td class="whitespace-nowrap px-4 py-3 text-right align-top">
+                                    <button type="button" wire:click="deleteAction('{{ $action['id'] }}')" wire:confirm="Diese geplante Aktion wirklich loeschen?" class="rounded-md border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50">
+                                        Loeschen
+                                    </button>
                                 </td>
                             </tr>
                         @endforeach

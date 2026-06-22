@@ -30,6 +30,10 @@
                 <button type="button" wire:click="switchTab('client-controller')" class="rounded-md px-4 py-2 text-sm font-semibold {{ $activeTab === 'client-controller' ? 'bg-slate-900 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200' }}">
                     ClientController
                 </button>
+
+                <button type="button" wire:click="switchTab('activity-planning')" class="rounded-md px-4 py-2 text-sm font-semibold {{ $activeTab === 'activity-planning' ? 'bg-slate-900 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200' }}">
+                    Aktivitaetsplanung
+                </button>
             </div>
         </div>
 
@@ -276,6 +280,12 @@
                         Speichern
                     </button>
                 </div>
+            </div>
+        @endif
+
+        @if($activeTab === 'activity-planning')
+            <div class="px-6 py-6">
+                <livewire:admin.config.activity-planning-settings />
             </div>
         @endif
     </div>
