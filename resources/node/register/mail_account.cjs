@@ -19,6 +19,9 @@ const PROVIDER_MODE_OBSERVED_MANUAL = 'observed_manual';
 const PROVIDER_MODE_PROTON_USERNAME_CHECK = 'proton_username_check';
 const DOM_DEBUG_TEXT_LIMIT = 3000;
 const DOM_DEBUG_HTML_LIMIT = 6000;
+const STEP_DELAY_MS = 150;
+const TYPING_DELAY_MS = 150;
+const SUBMIT_DELAY_MS = 1500;
 
 const runtimeConfigPath = process.argv[2] || '';
 const statusEvents = [];
@@ -112,6 +115,10 @@ function progress(runtimeConfig, stage, message, data = {}, state = 'running') {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+}
+
+async function pauseStep() {
+  await sleep(STEP_DELAY_MS);
 }
 
 async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = false) {
@@ -589,7 +596,9 @@ async function waitForVisibleInputIncludingFrames(page, selectors, timeoutMs = 2
 }
 
 async function fillInputValue(inputHandle, value) {
-  await inputHandle.evaluate((element, nextValue) => {
+  const nextValue = String(value ?? '');
+
+  await inputHandle.evaluate((element) => {
     element.focus();
 
     const prototype = element instanceof HTMLTextAreaElement
@@ -598,28 +607,38 @@ async function fillInputValue(inputHandle, value) {
     const descriptor = Object.getOwnPropertyDescriptor(prototype, 'value');
 
     if (descriptor?.set) {
-      descriptor.set.call(element, nextValue);
+      descriptor.set.call(element, '');
     } else {
-      element.value = nextValue;
+      element.value = '';
     }
 
     if (typeof InputEvent === 'function') {
       element.dispatchEvent(new InputEvent('input', {
         bubbles: true,
         inputType: 'insertText',
-        data: nextValue,
+        data: '',
       }));
     } else {
       element.dispatchEvent(new Event('input', { bubbles: true }));
     }
 
     element.dispatchEvent(new Event('change', { bubbles: true }));
-  }, value);
+  });
+
+  await pauseStep();
+  await inputHandle.type(nextValue, { delay: TYPING_DELAY_MS });
+  await pauseStep();
+
+  await inputHandle.evaluate((element) => {
+    element.dispatchEvent(new Event('change', { bubbles: true }));
+  });
 
   return inputHandle.evaluate((element) => element.value || '');
 }
 
 async function clickFirstMatchingButton(page, labels) {
+  await sleep(SUBMIT_DELAY_MS);
+
   const clicked = await page.evaluate((buttonLabels) => {
     const normalizedLabels = buttonLabels.map((label) => String(label).toLowerCase());
     const candidates = Array.from(document.querySelectorAll('button, [role="button"], input[type="submit"]'));
@@ -651,6 +670,7 @@ async function clickFirstMatchingButton(page, labels) {
   }, labels);
 
   if (clicked) {
+    await pauseStep();
     return true;
   }
 
@@ -671,16 +691,18 @@ async function clickFirstMatchingButton(page, labels) {
   }).catch(() => false);
 
   if (submitted) {
+    await pauseStep();
     return true;
   }
 
   await page.keyboard.press('Enter').catch(() => {});
+  await pauseStep();
 
   return false;
 }
 
 async function clickFirstExactVisibleText(pageOrFrame, labels, selectors = 'button, [role="button"], [role="tab"], a') {
-  return pageOrFrame.evaluate((payload) => {
+  const clicked = await pageOrFrame.evaluate((payload) => {
     const normalizedLabels = payload.labels.map((label) => String(label).trim().toLowerCase());
     const candidates = Array.from(document.querySelectorAll(payload.selectors));
     const element = candidates.find((candidate) => {
@@ -713,6 +735,12 @@ async function clickFirstExactVisibleText(pageOrFrame, labels, selectors = 'butt
     labels,
     selectors,
   }).catch(() => false);
+
+  if (clicked) {
+    await pauseStep();
+  }
+
+  return clicked;
 }
 
 async function clickExactVisibleTextIncludingFrames(page, labels, selectors) {
@@ -870,7 +898,7 @@ async function fillProtonVerificationEmail(page, runtimeConfig) {
   ]);
 
   if (submitted) {
-    await sleep(1000);
+    await pauseStep();
   }
 
   return {
@@ -921,6 +949,7 @@ async function fillFirstVisibleInputByHints(page, hints, value, timeoutMs = 1200
   }
 
   await fillInputValue(input, value);
+  await pauseStep();
 
   return true;
 }
@@ -968,7 +997,7 @@ async function openVerificationWebmailPage(browser, runtimeConfig) {
       'login',
       'anmelden',
     ]).catch(() => false);
-    await sleep(1000);
+    await pauseStep();
   }
 
   if (mailbox.password) {
@@ -1179,7 +1208,7 @@ async function waitForProtonManualVerification(page, browser, runtimeConfig, tim
   };
 
   if (emailTabSelected) {
-    await sleep(1000);
+    await pauseStep();
     verificationEmail = await fillProtonVerificationEmail(page, runtimeConfig);
     webmail = await openVerificationWebmailPage(browser, runtimeConfig);
     status = await protonManualVerificationStatus(page);
@@ -1483,7 +1512,7 @@ async function submitProtonUsernameCandidate(page, runtimeConfig, username, user
     'free account',
   ]);
 
-  await sleep(1000);
+  await pauseStep();
 
   return waitForProtonUsernameStatus(page, runtimeConfig);
 }
