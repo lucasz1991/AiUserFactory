@@ -200,10 +200,22 @@
                         <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Ablauf</div>
                         <div class="mt-3 space-y-3">
                             @forelse(array_reverse(data_get($registrationRunStatus, 'events', [])) as $event)
+                                @php
+                                    $debugDom = data_get($event, 'debugDom');
+                                    $debugDomText = is_array($debugDom)
+                                        ? json_encode($debugDom, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
+                                        : (string) $debugDom;
+                                @endphp
                                 <div class="rounded-md bg-white p-3 text-xs shadow-sm">
                                     <div class="font-semibold text-slate-900">{{ data_get($event, 'stage', '-') }}</div>
                                     <div class="mt-1 text-slate-600">{{ data_get($event, 'message', '-') }}</div>
                                     <div class="mt-1 text-slate-400">{{ data_get($event, 'at', '') }}</div>
+                                    @if($debugDomText !== '')
+                                        <details class="mt-2 rounded border border-slate-200 bg-slate-950 text-slate-100">
+                                            <summary class="cursor-pointer px-2 py-1 font-semibold text-slate-200">DOM Debug</summary>
+                                            <pre class="max-h-72 overflow-auto whitespace-pre-wrap break-words p-2 text-[11px] leading-relaxed">{{ $debugDomText }}</pre>
+                                        </details>
+                                    @endif
                                 </div>
                             @empty
                                 <div class="text-sm text-slate-500">Noch keine Ablaufdaten.</div>

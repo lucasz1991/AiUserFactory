@@ -16,6 +16,8 @@ const LIVE_PREVIEW_MIN_INTERVAL_MS = 2500;
 const DEFAULT_VIEWPORT = { width: 1365, height: 900 };
 const PROVIDER_MODE_OBSERVED_MANUAL = 'observed_manual';
 const PROVIDER_MODE_PROTON_USERNAME_CHECK = 'proton_username_check';
+const DOM_DEBUG_TEXT_LIMIT = 3000;
+const DOM_DEBUG_HTML_LIMIT = 6000;
 
 const runtimeConfigPath = process.argv[2] || '';
 const statusEvents = [];
@@ -82,6 +84,7 @@ function progress(runtimeConfig, stage, message, data = {}, state = 'running') {
     message,
     finalUrl: data.finalUrl || null,
     title: data.title || null,
+    debugDom: data.debugDom || null,
   };
 
   statusEvents.push(event);
@@ -142,16 +145,115 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
   }
 }
 
-async function pageSnapshot(page, runtimeConfig, force = false) {
-  const [title, finalUrl, screenshot] = await Promise.all([
+function truncateText(value, limit) {
+  const text = normalizeText(value);
+
+  return text.length > limit ? `${text.slice(0, limit)}... [truncated ${text.length - limit} chars]` : text;
+}
+
+async function frameDomDebug(frame) {
+  return frame.evaluate((limits) => {
+    const compactText = (value = '', limit = 1000) => {
+      const text = String(value || '').replace(/\s+/g, ' ').trim();
+
+      return text.length > limit ? `${text.slice(0, limit)}... [truncated ${text.length - limit} chars]` : text;
+    };
+
+    const attributes = (element, names) => Object.fromEntries(
+      names
+        .map((name) => [name, element.getAttribute(name)])
+        .filter(([, value]) => value !== null && value !== ''),
+    );
+
+    const elementSummary = (element) => {
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+
+      return {
+        tag: element.tagName.toLowerCase(),
+        text: compactText(element.innerText || element.textContent || element.value || '', 220),
+        visible: rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none',
+        disabled: Boolean(element.disabled),
+        attrs: attributes(element, [
+          'id',
+          'name',
+          'type',
+          'class',
+          'autocomplete',
+          'placeholder',
+          'aria-label',
+          'data-testid',
+          'role',
+          'title',
+        ]),
+      };
+    };
+
+    const main = document.querySelector('main') || document.body;
+
+    return {
+      url: window.location.href,
+      title: document.title || '',
+      text: compactText(document.body?.innerText || '', limits.text),
+      forms: Array.from(document.querySelectorAll('form')).slice(0, 5).map((form) => ({
+        attrs: attributes(form, ['id', 'name', 'method', 'action', 'class']),
+        inputs: Array.from(form.querySelectorAll('input, textarea, select')).slice(0, 20).map(elementSummary),
+        buttons: Array.from(form.querySelectorAll('button, [role="button"], input[type="submit"]')).slice(0, 12).map(elementSummary),
+      })),
+      inputs: Array.from(document.querySelectorAll('input, textarea, select')).slice(0, 30).map(elementSummary),
+      buttons: Array.from(document.querySelectorAll('button, [role="button"], input[type="submit"]')).slice(0, 30).map(elementSummary),
+      iframes: Array.from(document.querySelectorAll('iframe')).slice(0, 12).map((iframe) => ({
+        src: iframe.src || '',
+        title: iframe.title || '',
+        class: iframe.className || '',
+      })),
+      html: compactText(main?.outerHTML || document.body?.innerHTML || '', limits.html),
+    };
+  }, {
+    text: DOM_DEBUG_TEXT_LIMIT,
+    html: DOM_DEBUG_HTML_LIMIT,
+  });
+}
+
+async function domDebugSnapshot(page) {
+  const frames = [];
+
+  for (const frame of page.frames()) {
+    try {
+      frames.push({
+        name: frame.name() || '',
+        ...await frameDomDebug(frame),
+      });
+    } catch (error) {
+      frames.push({
+        name: frame.name() || '',
+        url: frame.url(),
+        error: truncateText(error?.message || String(error), 500),
+      });
+    }
+  }
+
+  return {
+    capturedAt: new Date().toISOString(),
+    frameCount: frames.length,
+    frames: frames.slice(0, 8),
+  };
+}
+
+async function pageSnapshot(page, runtimeConfig, force = false, includeDom = false) {
+  const [title, finalUrl, screenshot, debugDom] = await Promise.all([
     page.title().catch(() => null),
     Promise.resolve(page.url()).catch(() => null),
     captureLivePreviewScreenshot(page, runtimeConfig, force),
+    includeDom ? domDebugSnapshot(page).catch((error) => ({
+      error: truncateText(error?.message || String(error), 800),
+    })) : Promise.resolve(null),
   ]);
 
   return {
     title,
     finalUrl,
+    debugDom,
     ...screenshot,
   };
 }
@@ -228,9 +330,9 @@ function usernameFromSubject(runtimeConfig) {
     .slice(0, 64);
 }
 
-async function findVisibleInput(page, selectors) {
+async function findVisibleInput(pageOrFrame, selectors) {
   for (const selector of selectors) {
-    const handle = await page.$(selector).catch(() => null);
+    const handle = await pageOrFrame.$(selector).catch(() => null);
 
     if (!handle) {
       continue;
@@ -248,7 +350,7 @@ async function findVisibleInput(page, selectors) {
     }
   }
 
-  return page.evaluateHandle(() => {
+  return pageOrFrame.evaluateHandle(() => {
     const inputs = Array.from(document.querySelectorAll('input'));
 
     return inputs.find((input) => {
@@ -271,6 +373,30 @@ async function findVisibleInput(page, selectors) {
         && /(username|email|mail|text)/i.test(haystack);
     }) || null;
   }).then((handle) => handle.asElement()).catch(() => null);
+}
+
+async function findVisibleInputIncludingFrames(page, selectors) {
+  const mainFrameInput = await findVisibleInput(page, selectors);
+
+  if (mainFrameInput) {
+    return mainFrameInput;
+  }
+
+  for (const frame of page.frames()) {
+    const frameUrl = normalizeText(frame.url());
+
+    if (frame === page.mainFrame() || !/proton|challenge|account-api/i.test(frameUrl)) {
+      continue;
+    }
+
+    const frameInput = await findVisibleInput(frame, selectors);
+
+    if (frameInput) {
+      return frameInput;
+    }
+  }
+
+  return null;
 }
 
 async function clickFirstMatchingButton(page, labels) {
@@ -305,6 +431,26 @@ async function clickFirstMatchingButton(page, labels) {
   }, labels);
 
   if (clicked) {
+    return true;
+  }
+
+  const submitted = await page.evaluate(() => {
+    const form = document.querySelector('form[name="accountForm"], form');
+
+    if (!form) {
+      return false;
+    }
+
+    if (typeof form.requestSubmit === 'function') {
+      form.requestSubmit();
+    } else {
+      form.submit();
+    }
+
+    return true;
+  }).catch(() => false);
+
+  if (submitted) {
     return true;
   }
 
@@ -381,15 +527,17 @@ async function runProtonUsernameCheckProvider(page, runtimeConfig, provider) {
     runtimeConfig,
     'proton-page-loaded',
     'Proton-Startseite ist geladen.',
-    await pageSnapshot(page, runtimeConfig, true),
+    await pageSnapshot(page, runtimeConfig, true, true),
   );
 
-  const usernameInput = await findVisibleInput(page, [
+  const usernameInput = await findVisibleInputIncludingFrames(page, [
     'input[name="username"]',
     'input[id="username"]',
     'input[name*="username" i]',
     'input[id*="username" i]',
+    'input[data-testid="input-input-element"]',
     'input[autocomplete="username"]',
+    'input[autocomplete="off"]',
     'input[type="email"]',
     'input[type="text"]',
   ]);
@@ -405,13 +553,17 @@ async function runProtonUsernameCheckProvider(page, runtimeConfig, provider) {
     runtimeConfig,
     'proton-username-entered',
     `Username "${username}" wurde eingetragen.`,
-    await pageSnapshot(page, runtimeConfig, true),
+    await pageSnapshot(page, runtimeConfig, true, true),
   );
 
   await clickFirstMatchingButton(page, [
     'create free account',
     'create account',
+    'kostenloses konto',
+    'konto jetzt erstellen',
+    'kostenloses konto jetzt erstellen',
     'continue',
+    'weiter',
     'next',
     'free account',
   ]);
@@ -427,11 +579,11 @@ async function runProtonUsernameCheckProvider(page, runtimeConfig, provider) {
       runtimeConfig,
       'proton-checking-username',
       'Proton prueft den Username.',
-      await pageSnapshot(page, runtimeConfig),
+      await pageSnapshot(page, runtimeConfig, false, true),
     );
   }
 
-  const snapshot = await pageSnapshot(page, runtimeConfig, true);
+  const snapshot = await pageSnapshot(page, runtimeConfig, true, true);
 
   return {
     completed: status.available === true,
