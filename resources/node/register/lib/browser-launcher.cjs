@@ -109,6 +109,28 @@ function shouldRetryHeadless(error, launchOptions = {}) {
   return launchOptions.headless === false && isMissingDisplayError(error);
 }
 
+function shouldForceHeadlessOnServer(launchOptions = {}) {
+  return process.platform === 'linux'
+    && !process.env.DISPLAY
+    && !process.env.WAYLAND_DISPLAY
+    && launchOptions.headless === false;
+}
+
+function browserLaunchOptions(runtimeConfig = {}, launchOptions = {}) {
+  if (runtimeConfig.forceVisibleBrowser === true || runtimeConfig.force_visible_browser === true) {
+    return launchOptions;
+  }
+
+  if (! shouldForceHeadlessOnServer(launchOptions)) {
+    return launchOptions;
+  }
+
+  return {
+    ...launchOptions,
+    headless: 'new',
+  };
+}
+
 async function launchHeadlessFallback(puppeteer, launchOptions, extraOptions = {}) {
   return puppeteer.launch({
     ...launchOptions,
@@ -137,6 +159,8 @@ async function launchChrome(puppeteer, launchOptions) {
 }
 
 async function launchChromeWithFallbacks(puppeteer, runtimeConfig, launchOptions) {
+  launchOptions = browserLaunchOptions(runtimeConfig, launchOptions);
+
   const triedExecutables = [];
   let lastFallbackError = null;
 
@@ -191,6 +215,8 @@ async function launchChromeWithFallbacks(puppeteer, runtimeConfig, launchOptions
 }
 
 async function launchCloak(runtimeConfig, launchOptions) {
+  launchOptions = browserLaunchOptions(runtimeConfig, launchOptions);
+
   const { launch } = await import('cloakbrowser/puppeteer');
   const {
     args = [],
