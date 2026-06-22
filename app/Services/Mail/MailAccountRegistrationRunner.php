@@ -48,12 +48,6 @@ class MailAccountRegistrationRunner
                 'username' => '',
                 'password_encrypted' => null,
                 'webmail_url' => '',
-                'imap' => [
-                    'host' => '',
-                    'port' => 993,
-                    'encryption' => 'ssl',
-                    'folder' => 'INBOX',
-                ],
             ],
             'providers' => [
                 [
@@ -344,14 +338,6 @@ class MailAccountRegistrationRunner
     protected function normalizeVerificationMailbox(mixed $mailbox): array
     {
         $mailbox = is_array($mailbox) ? $mailbox : [];
-        $imap = is_array($mailbox['imap'] ?? null) ? $mailbox['imap'] : [];
-        $port = $imap['port'] ?? 993;
-        $port = is_numeric($port) ? max(1, min(65535, (int) $port)) : 993;
-        $encryption = trim((string) ($imap['encryption'] ?? 'ssl'));
-
-        if (! in_array($encryption, ['', 'none', 'ssl', 'tls', 'starttls'], true)) {
-            $encryption = 'ssl';
-        }
 
         return [
             'enabled' => (bool) ($mailbox['enabled'] ?? false),
@@ -360,12 +346,6 @@ class MailAccountRegistrationRunner
             'username' => trim((string) ($mailbox['username'] ?? '')),
             'password_encrypted' => $this->nullableString($mailbox['password_encrypted'] ?? null),
             'webmail_url' => trim((string) ($mailbox['webmail_url'] ?? '')),
-            'imap' => [
-                'host' => trim((string) ($imap['host'] ?? '')),
-                'port' => $port,
-                'encryption' => $encryption,
-                'folder' => trim((string) ($imap['folder'] ?? 'INBOX')) ?: 'INBOX',
-            ],
         ];
     }
 
@@ -382,12 +362,6 @@ class MailAccountRegistrationRunner
             'username' => $mailbox['username'] ?: ($mailbox['email'] ?? ''),
             'password' => $password,
             'webmailUrl' => $mailbox['webmail_url'] ?? '',
-            'imap' => [
-                'host' => $mailbox['imap']['host'] ?? '',
-                'port' => $mailbox['imap']['port'] ?? 993,
-                'encryption' => $mailbox['imap']['encryption'] ?? 'ssl',
-                'folder' => $mailbox['imap']['folder'] ?? 'INBOX',
-            ],
         ];
     }
 

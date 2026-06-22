@@ -24,10 +24,6 @@ class MailRegistrationSettings extends Component
     public string $verificationMailboxPassword = '';
     public bool $hasStoredVerificationMailboxPassword = false;
     public string $verificationMailboxWebmailUrl = '';
-    public string $verificationMailboxImapHost = '';
-    public ?int $verificationMailboxImapPort = 993;
-    public string $verificationMailboxImapEncryption = 'ssl';
-    public string $verificationMailboxImapFolder = 'INBOX';
 
     public bool $providerOneEnabled = true;
     public string $providerOneMode = 'proton_username_check';
@@ -147,10 +143,6 @@ class MailRegistrationSettings extends Component
             'verificationMailboxUsername' => ['nullable', 'string', 'max:255'],
             'verificationMailboxPassword' => ['nullable', 'string', 'max:512'],
             'verificationMailboxWebmailUrl' => ['nullable', 'url', 'max:2048'],
-            'verificationMailboxImapHost' => ['nullable', 'string', 'max:255'],
-            'verificationMailboxImapPort' => ['nullable', 'integer', 'min:1', 'max:65535'],
-            'verificationMailboxImapEncryption' => ['nullable', 'string', 'in:,none,ssl,tls,starttls'],
-            'verificationMailboxImapFolder' => ['nullable', 'string', 'max:120'],
 
             'providerOneEnabled' => ['boolean'],
             'providerOneMode' => ['required', 'string', 'in:observed_manual,proton_username_check'],
@@ -191,12 +183,6 @@ class MailRegistrationSettings extends Component
                 'username' => trim((string) ($validated['verificationMailboxUsername'] ?? '')),
                 'password_encrypted' => $this->nullableString($encryptedVerificationPassword),
                 'webmail_url' => trim((string) ($validated['verificationMailboxWebmailUrl'] ?? '')),
-                'imap' => [
-                    'host' => trim((string) ($validated['verificationMailboxImapHost'] ?? '')),
-                    'port' => ($validated['verificationMailboxImapPort'] ?? null) !== null ? (int) $validated['verificationMailboxImapPort'] : null,
-                    'encryption' => trim((string) ($validated['verificationMailboxImapEncryption'] ?? '')),
-                    'folder' => trim((string) ($validated['verificationMailboxImapFolder'] ?? 'INBOX')),
-                ],
             ],
             'providers' => [
                 [
@@ -252,7 +238,6 @@ class MailRegistrationSettings extends Component
         $this->navigationTimeoutSeconds = (int) ($settings['navigation_timeout_seconds'] ?? 120);
         $this->observationTimeoutSeconds = (int) ($settings['observation_timeout_seconds'] ?? 300);
         $verificationMailbox = is_array($settings['verification_mailbox'] ?? null) ? $settings['verification_mailbox'] : [];
-        $verificationImap = is_array($verificationMailbox['imap'] ?? null) ? $verificationMailbox['imap'] : [];
         $this->verificationMailboxEnabled = (bool) ($verificationMailbox['enabled'] ?? false);
         $this->verificationMailboxEmail = (string) ($verificationMailbox['email'] ?? '');
         $this->verificationMailboxProvider = (string) ($verificationMailbox['provider'] ?? '');
@@ -260,10 +245,6 @@ class MailRegistrationSettings extends Component
         $this->verificationMailboxPassword = '';
         $this->hasStoredVerificationMailboxPassword = trim((string) ($verificationMailbox['password_encrypted'] ?? '')) !== '';
         $this->verificationMailboxWebmailUrl = (string) ($verificationMailbox['webmail_url'] ?? '');
-        $this->verificationMailboxImapHost = (string) ($verificationImap['host'] ?? '');
-        $this->verificationMailboxImapPort = ($verificationImap['port'] ?? null) !== null ? (int) $verificationImap['port'] : null;
-        $this->verificationMailboxImapEncryption = (string) ($verificationImap['encryption'] ?? 'ssl');
-        $this->verificationMailboxImapFolder = (string) ($verificationImap['folder'] ?? 'INBOX');
 
         $this->providerOneEnabled = (bool) ($providerOne['enabled'] ?? true);
         $this->providerOneMode = in_array(($providerOne['mode'] ?? ''), ['observed_manual', 'proton_username_check'], true)

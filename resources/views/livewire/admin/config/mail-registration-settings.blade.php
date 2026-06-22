@@ -66,7 +66,7 @@
         <div class="flex flex-wrap items-start justify-between gap-3">
             <div>
                 <h3 class="text-sm font-semibold text-gray-900">Register Email Account</h3>
-                <p class="mt-1 text-sm text-gray-500">Postfach fuer Registrierungs- und Verifikationsmails.</p>
+                <p class="mt-1 text-sm text-gray-500">Webmail-Postfach fuer Registrierungs- und Verifikationsmails.</p>
             </div>
             <label class="inline-flex items-center gap-2 text-sm font-medium text-gray-700">
                 <input type="checkbox" wire:model.defer="verificationMailboxEnabled" class="rounded border-gray-300 text-slate-900 shadow-sm focus:ring-slate-900">
@@ -117,38 +117,6 @@
                 <label for="verification-mailbox-webmail-url" class="block text-sm font-medium text-gray-700">Webmail URL</label>
                 <input id="verification-mailbox-webmail-url" type="url" wire:model.defer="verificationMailboxWebmailUrl" placeholder="https://mail.example.com" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
                 @error('verificationMailboxWebmailUrl') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
-            </div>
-        </div>
-
-        <div class="mt-6 grid gap-6 md:grid-cols-4">
-            <div class="md:col-span-2">
-                <label for="verification-mailbox-imap-host" class="block text-sm font-medium text-gray-700">IMAP Host</label>
-                <input id="verification-mailbox-imap-host" type="text" wire:model.defer="verificationMailboxImapHost" placeholder="imap.example.com" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
-                @error('verificationMailboxImapHost') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
-            </div>
-
-            <div>
-                <label for="verification-mailbox-imap-port" class="block text-sm font-medium text-gray-700">IMAP Port</label>
-                <input id="verification-mailbox-imap-port" type="number" min="1" max="65535" wire:model.defer="verificationMailboxImapPort" placeholder="993" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
-                @error('verificationMailboxImapPort') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
-            </div>
-
-            <div>
-                <label for="verification-mailbox-imap-encryption" class="block text-sm font-medium text-gray-700">Verschluesselung</label>
-                <select id="verification-mailbox-imap-encryption" wire:model.defer="verificationMailboxImapEncryption" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
-                    <option value="">Nicht angegeben</option>
-                    <option value="ssl">SSL</option>
-                    <option value="tls">TLS</option>
-                    <option value="starttls">STARTTLS</option>
-                    <option value="none">Keine</option>
-                </select>
-                @error('verificationMailboxImapEncryption') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
-            </div>
-
-            <div class="md:col-span-2">
-                <label for="verification-mailbox-imap-folder" class="block text-sm font-medium text-gray-700">IMAP Ordner</label>
-                <input id="verification-mailbox-imap-folder" type="text" wire:model.defer="verificationMailboxImapFolder" placeholder="INBOX" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
-                @error('verificationMailboxImapFolder') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
             </div>
         </div>
     </div>
