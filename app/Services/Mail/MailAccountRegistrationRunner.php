@@ -268,8 +268,13 @@ class MailAccountRegistrationRunner
             $provider = is_array($providers[$index] ?? null) ? $providers[$index] : [];
             $key = trim((string) ($provider['key'] ?? $defaultProvider['key']));
             $mode = trim((string) ($provider['mode'] ?? $defaultProvider['mode']));
+            $registrationUrl = trim((string) ($provider['registration_url'] ?? $defaultProvider['registration_url']));
 
             if ($mode === 'proton') {
+                $mode = self::PROVIDER_MODE_PROTON_USERNAME_CHECK;
+            }
+
+            if ($mode === self::PROVIDER_MODE_OBSERVED_MANUAL && str_contains(strtolower($registrationUrl), 'proton.me')) {
                 $mode = self::PROVIDER_MODE_PROTON_USERNAME_CHECK;
             }
 
@@ -287,7 +292,7 @@ class MailAccountRegistrationRunner
                 'mode' => $mode ?: $defaultProvider['mode'],
                 'enabled' => (bool) ($provider['enabled'] ?? $defaultProvider['enabled']),
                 'phone_required' => (bool) ($provider['phone_required'] ?? $defaultProvider['phone_required']),
-                'registration_url' => trim((string) ($provider['registration_url'] ?? $defaultProvider['registration_url'])),
+                'registration_url' => $registrationUrl,
                 'completion_url_contains' => trim((string) ($provider['completion_url_contains'] ?? $defaultProvider['completion_url_contains'])),
                 'completion_selector' => trim((string) ($provider['completion_selector'] ?? $defaultProvider['completion_selector'])),
                 'webmail_url' => trim((string) ($provider['webmail_url'] ?? $defaultProvider['webmail_url'])),

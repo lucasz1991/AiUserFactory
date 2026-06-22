@@ -261,8 +261,13 @@ async function pageSnapshot(page, runtimeConfig, force = false, includeDom = fal
 function validateProvider(runtimeConfig) {
   const provider = runtimeConfig.provider || {};
   let mode = normalizeText(provider.mode || PROVIDER_MODE_OBSERVED_MANUAL);
+  const rawRegistrationUrl = normalizeText(provider.registrationUrl || provider.registration_url);
 
   if (mode === 'proton') {
+    mode = PROVIDER_MODE_PROTON_USERNAME_CHECK;
+  }
+
+  if (mode === PROVIDER_MODE_OBSERVED_MANUAL && /(^|\/\/|\.)(proton\.me|account\.proton\.me|account-api\.proton\.me)/i.test(rawRegistrationUrl)) {
     mode = PROVIDER_MODE_PROTON_USERNAME_CHECK;
   }
 
@@ -270,7 +275,7 @@ function validateProvider(runtimeConfig) {
     throw new Error(`Provider-Adapter "${mode}" ist noch nicht implementiert.`);
   }
 
-  const registrationUrl = normalizeText(provider.registrationUrl || provider.registration_url)
+  const registrationUrl = rawRegistrationUrl
     || (mode === PROVIDER_MODE_PROTON_USERNAME_CHECK ? 'https://account.proton.me/mail/signup' : '');
 
   if (!/^https?:\/\//i.test(registrationUrl)) {
