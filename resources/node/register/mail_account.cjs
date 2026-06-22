@@ -742,6 +742,258 @@ async function selectProtonEmailVerificationTab(page) {
   ], 'button, [role="button"], [role="tab"], a');
 }
 
+function verificationMailboxFromConfig(runtimeConfig) {
+  const mailbox = runtimeConfig.verificationMailbox || {};
+  const enabled = mailbox.enabled === true;
+  const email = normalizeText(mailbox.email);
+  const username = normalizeText(mailbox.username || email);
+  const password = normalizeText(mailbox.password);
+  const webmailUrl = normalizeText(mailbox.webmailUrl || mailbox.webmail_url);
+
+  return {
+    enabled,
+    email,
+    username,
+    password,
+    webmailUrl,
+    usable: enabled && email !== '',
+  };
+}
+
+async function findVisibleEmailInput(pageOrFrame) {
+  const inputs = await pageOrFrame.$$('input').catch(() => []);
+
+  for (const input of inputs) {
+    const matches = await input.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+      const haystack = [
+        element.name,
+        element.id,
+        element.autocomplete,
+        element.placeholder,
+        element.getAttribute('aria-label'),
+        element.type,
+      ].join(' ').toLowerCase();
+
+      return rect.width > 0
+        && rect.height > 0
+        && style.visibility !== 'hidden'
+        && style.display !== 'none'
+        && !element.disabled
+        && element.type !== 'password'
+        && !haystack.includes('username')
+        && (element.type === 'email' || haystack.includes('email') || haystack.includes('mail'));
+    }).catch(() => false);
+
+    if (matches) {
+      return input;
+    }
+  }
+
+  return null;
+}
+
+async function findVisibleEmailInputIncludingFrames(page) {
+  const mainInput = await findVisibleEmailInput(page);
+
+  if (mainInput) {
+    return mainInput;
+  }
+
+  for (const frame of page.frames()) {
+    const frameUrl = normalizeText(frame.url());
+
+    if (frame === page.mainFrame() || !/proton|challenge|account-api/i.test(frameUrl)) {
+      continue;
+    }
+
+    const frameInput = await findVisibleEmailInput(frame);
+
+    if (frameInput) {
+      return frameInput;
+    }
+  }
+
+  return null;
+}
+
+async function waitForVisibleEmailInputIncludingFrames(page, timeoutMs = 15000) {
+  const stopAt = Date.now() + timeoutMs;
+  let input = await findVisibleEmailInputIncludingFrames(page);
+
+  while (!input && Date.now() < stopAt) {
+    await sleep(500);
+    input = await findVisibleEmailInputIncludingFrames(page);
+  }
+
+  return input;
+}
+
+async function fillProtonVerificationEmail(page, runtimeConfig) {
+  const mailbox = verificationMailboxFromConfig(runtimeConfig);
+
+  if (!mailbox.usable) {
+    return {
+      filled: false,
+      reason: 'verification-mailbox-not-configured',
+    };
+  }
+
+  const input = await waitForVisibleEmailInputIncludingFrames(page, 15000);
+
+  if (!input) {
+    return {
+      filled: false,
+      reason: 'verification-email-input-not-found',
+    };
+  }
+
+  const enteredEmail = await fillInputValue(input, mailbox.email);
+
+  progress(
+    runtimeConfig,
+    'proton-verification-email-entered',
+    `Verifikations-E-Mail "${mailbox.email}" wurde eingetragen. Feldwert: "${enteredEmail}".`,
+    await pageSnapshot(page, runtimeConfig, true, false),
+  );
+
+  const submitted = await clickFirstMatchingButton(page, [
+    'send verification code',
+    'send code',
+    'send email',
+    'send',
+    'continue',
+    'next',
+    'weiter',
+    'verify',
+  ]);
+
+  if (submitted) {
+    await sleep(1000);
+  }
+
+  return {
+    filled: enteredEmail === mailbox.email,
+    submitted,
+    email: mailbox.email,
+    reason: submitted ? 'verification-email-submitted' : 'verification-email-entered',
+  };
+}
+
+async function fillFirstVisibleInputByHints(page, hints, value, timeoutMs = 12000) {
+  const stopAt = Date.now() + timeoutMs;
+  let input = null;
+
+  while (!input && Date.now() < stopAt) {
+    input = await page.evaluateHandle((hintValues) => {
+      const normalizedHints = hintValues.map((hint) => String(hint).toLowerCase());
+      const inputs = Array.from(document.querySelectorAll('input'));
+
+      return inputs.find((candidate) => {
+        const rect = candidate.getBoundingClientRect();
+        const style = window.getComputedStyle(candidate);
+        const haystack = [
+          candidate.name,
+          candidate.id,
+          candidate.autocomplete,
+          candidate.placeholder,
+          candidate.getAttribute('aria-label'),
+          candidate.type,
+        ].join(' ').toLowerCase();
+
+        return rect.width > 0
+          && rect.height > 0
+          && style.visibility !== 'hidden'
+          && style.display !== 'none'
+          && !candidate.disabled
+          && normalizedHints.some((hint) => haystack.includes(hint));
+      }) || null;
+    }, hints).then((handle) => handle.asElement()).catch(() => null);
+
+    if (!input) {
+      await sleep(500);
+    }
+  }
+
+  if (!input) {
+    return false;
+  }
+
+  await fillInputValue(input, value);
+
+  return true;
+}
+
+async function openVerificationWebmailPage(browser, runtimeConfig) {
+  const mailbox = verificationMailboxFromConfig(runtimeConfig);
+
+  if (!mailbox.enabled || !mailbox.webmailUrl) {
+    return {
+      opened: false,
+      reason: 'verification-webmail-not-configured',
+    };
+  }
+
+  const page = await browser.newPage();
+  await page.setViewport(DEFAULT_VIEWPORT);
+  page.setDefaultNavigationTimeout(Math.max(15000, Number(runtimeConfig.navigationTimeoutMs || 120000)));
+
+  await page.goto(mailbox.webmailUrl, {
+    waitUntil: 'domcontentloaded',
+    timeout: Math.max(15000, Number(runtimeConfig.navigationTimeoutMs || 120000)),
+  });
+
+  progress(
+    runtimeConfig,
+    'verification-webmail-opened',
+    `Webmail-Portal fuer Verifikations-E-Mail wurde geoeffnet: ${mailbox.webmailUrl}`,
+    {
+      title: await page.title().catch(() => null),
+      finalUrl: page.url(),
+    },
+  );
+
+  if (mailbox.username) {
+    await fillFirstVisibleInputByHints(page, ['email', 'mail', 'user', 'login', 'username'], mailbox.username).catch(() => false);
+  }
+
+  if (mailbox.username) {
+    await clickFirstMatchingButton(page, [
+      'next',
+      'continue',
+      'weiter',
+      'sign in',
+      'log in',
+      'login',
+      'anmelden',
+    ]).catch(() => false);
+    await sleep(1000);
+  }
+
+  if (mailbox.password) {
+    await fillFirstVisibleInputByHints(page, ['password', 'passwort'], mailbox.password).catch(() => false);
+  }
+
+  if (mailbox.password) {
+    await clickFirstMatchingButton(page, [
+      'sign in',
+      'log in',
+      'login',
+      'anmelden',
+      'next',
+      'continue',
+      'weiter',
+    ]).catch(() => false);
+  }
+
+  return {
+    opened: true,
+    page,
+    url: page.url(),
+  };
+}
+
 async function protonPasswordSubmitStatus(page) {
   return page.evaluate(() => {
     const text = document.body?.innerText || '';
@@ -891,13 +1143,23 @@ async function protonManualVerificationStatus(page) {
   });
 }
 
-async function waitForProtonManualVerification(page, runtimeConfig, timeoutMs = 300000) {
+async function waitForProtonManualVerification(page, browser, runtimeConfig, timeoutMs = 300000) {
   const stopAt = Date.now() + timeoutMs;
   let status = await protonManualVerificationStatus(page);
   const emailTabSelected = await selectProtonEmailVerificationTab(page);
+  let verificationEmail = {
+    filled: false,
+    reason: 'email-tab-not-selected',
+  };
+  let webmail = {
+    opened: false,
+    reason: 'email-tab-not-selected',
+  };
 
   if (emailTabSelected) {
     await sleep(1000);
+    verificationEmail = await fillProtonVerificationEmail(page, runtimeConfig);
+    webmail = await openVerificationWebmailPage(browser, runtimeConfig);
     status = await protonManualVerificationStatus(page);
   }
 
@@ -905,7 +1167,7 @@ async function waitForProtonManualVerification(page, runtimeConfig, timeoutMs = 
     runtimeConfig,
     emailTabSelected ? 'proton-email-verification-selected' : 'proton-manual-verification-required',
     emailTabSelected
-      ? 'Proton-Tab Email wurde fuer die Human Verification ausgewaehlt. Bitte manuelle E-Mail-Verifikation abschliessen.'
+      ? 'Proton-Tab Email wurde fuer die Human Verification ausgewaehlt. Webmail-Portal wurde geoeffnet, sofern konfiguriert.'
       : 'Proton verlangt eine manuelle Human Verification. Bitte im geoeffneten Browser loesen.',
     await pageSnapshot(page, runtimeConfig, true, false),
   );
@@ -933,6 +1195,8 @@ async function waitForProtonManualVerification(page, runtimeConfig, timeoutMs = 
     return {
       ...status,
       emailTabSelected,
+      verificationEmail,
+      webmailOpened: webmail.opened === true,
     };
   }
 
@@ -942,10 +1206,12 @@ async function waitForProtonManualVerification(page, runtimeConfig, timeoutMs = 
     message: status.message || '',
     url: status.url || page.url(),
     emailTabSelected,
+    verificationEmail,
+    webmailOpened: webmail.opened === true,
   };
 }
 
-async function completeProtonPasswordStep(page, runtimeConfig) {
+async function completeProtonPasswordStep(page, browser, runtimeConfig) {
   const password = generateAccountPassword(runtimeConfig.accountPasswordLength || runtimeConfig.passwordLength || 24);
   const passwordInputPair = await waitForVisiblePasswordInputPairIncludingFrames(page, 20000);
 
@@ -1003,6 +1269,7 @@ async function completeProtonPasswordStep(page, runtimeConfig) {
   if (submitStatus.manualRequired) {
     const manualVerification = await waitForProtonManualVerification(
       page,
+      browser,
       runtimeConfig,
       Math.max(60000, Number(runtimeConfig.manualVerificationTimeoutMs || runtimeConfig.observationTimeoutMs || 300000)),
     );
@@ -1016,6 +1283,8 @@ async function completeProtonPasswordStep(page, runtimeConfig) {
       manualVerificationRequired: true,
       manualVerificationCompleted: manualVerification.completed === true,
       emailVerificationSelected: manualVerification.emailTabSelected === true,
+      verificationEmailEntered: manualVerification.verificationEmail?.filled === true,
+      verificationWebmailOpened: manualVerification.webmailOpened === true,
     };
   }
 
@@ -1040,6 +1309,8 @@ async function completeProtonPasswordStep(page, runtimeConfig) {
     manualVerificationRequired: false,
     manualVerificationCompleted: false,
     emailVerificationSelected: false,
+    verificationEmailEntered: false,
+    verificationWebmailOpened: false,
   };
 }
 
@@ -1112,8 +1383,8 @@ async function waitForProtonUsernameStatus(page, runtimeConfig) {
     );
   }
 
-    return status;
-  }
+  return status;
+}
 
 async function submitProtonUsernameCandidate(page, runtimeConfig, username, usernameInputSelectors) {
   const usernameInput = await waitForVisibleInputIncludingFrames(page, usernameInputSelectors, 20000);
@@ -1157,7 +1428,7 @@ async function submitProtonUsernameCandidate(page, runtimeConfig, username, user
   return waitForProtonUsernameStatus(page, runtimeConfig);
 }
 
-async function runProtonUsernameCheckProvider(page, runtimeConfig, provider) {
+async function runProtonUsernameCheckProvider(page, browser, runtimeConfig, provider) {
   const requestedUsername = usernameFromSubject(runtimeConfig);
 
   if (!requestedUsername) {
@@ -1231,7 +1502,7 @@ async function runProtonUsernameCheckProvider(page, runtimeConfig, provider) {
   let passwordStep = null;
 
   if (status.available === true) {
-    passwordStep = await completeProtonPasswordStep(page, runtimeConfig);
+    passwordStep = await completeProtonPasswordStep(page, browser, runtimeConfig);
   }
 
   const finalSnapshot = passwordStep
@@ -1257,6 +1528,8 @@ async function runProtonUsernameCheckProvider(page, runtimeConfig, provider) {
     manualVerificationRequired: passwordStep?.manualVerificationRequired || false,
     manualVerificationCompleted: passwordStep?.manualVerificationCompleted || false,
     emailVerificationSelected: passwordStep?.emailVerificationSelected || false,
+    verificationEmailEntered: passwordStep?.verificationEmailEntered || false,
+    verificationWebmailOpened: passwordStep?.verificationWebmailOpened || false,
     finalUrl: finalSnapshot.finalUrl,
     title: finalSnapshot.title,
     liveScreenshotPath: finalSnapshot.liveScreenshotPath || null,
@@ -1427,7 +1700,7 @@ async function main() {
     await page.setViewport(DEFAULT_VIEWPORT);
 
     const providerResult = provider.mode === PROVIDER_MODE_PROTON_USERNAME_CHECK
-      ? await runProtonUsernameCheckProvider(page, runtimeConfig, provider)
+      ? await runProtonUsernameCheckProvider(page, browser, runtimeConfig, provider)
       : await runObservedManualProvider(page, runtimeConfig, provider);
     const account = buildAccountPayload(runtimeConfig, provider, providerResult);
     const ok = providerResult.completed;
@@ -1444,6 +1717,9 @@ async function main() {
       registrationCompleted: ok,
       completionReason: providerResult.completionReason,
       usernameAvailable: providerResult.usernameAvailable ?? null,
+      emailVerificationSelected: providerResult.emailVerificationSelected ?? null,
+      verificationEmailEntered: providerResult.verificationEmailEntered ?? null,
+      verificationWebmailOpened: providerResult.verificationWebmailOpened ?? null,
       account,
       finalUrl: providerResult.finalUrl,
       title: providerResult.title,
