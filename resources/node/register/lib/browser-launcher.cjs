@@ -1,3 +1,6 @@
+const fs = require('fs');
+const childProcess = require('child_process');
+
 const BROWSER_ENGINE_CHROME = 'chrome';
 const BROWSER_ENGINE_CLOAK = 'cloak';
 const BROWSER_ENGINE_CLOAK_WITH_FALLBACK = 'cloak-with-chrome-fallback';
@@ -42,8 +45,115 @@ function buildCloakArgs(args = []) {
   ].includes(argument));
 }
 
+function normalizeText(value) {
+  return String(value || '').trim();
+}
+
+function fileExists(filePath) {
+  try {
+    return fs.existsSync(filePath);
+  } catch {
+    return false;
+  }
+}
+
+function resolveCommand(command) {
+  try {
+    return normalizeText(childProcess.execFileSync('/bin/sh', ['-lc', `command -v ${command}`], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }));
+  } catch {
+    return '';
+  }
+}
+
+function systemChromeCandidates(runtimeConfig = {}) {
+  return [
+    runtimeConfig.browserExecutablePath,
+    runtimeConfig.browser_executable_path,
+    runtimeConfig.chromeExecutablePath,
+    runtimeConfig.chrome_executable_path,
+    process.env.MAIL_REGISTRATION_BROWSER_EXECUTABLE_PATH,
+    process.env.PUPPETEER_EXECUTABLE_PATH,
+    process.env.CHROME_PATH,
+    '/usr/bin/google-chrome-stable',
+    '/usr/bin/google-chrome',
+    '/usr/bin/chromium-browser',
+    '/usr/bin/chromium',
+    '/snap/bin/chromium',
+    '/opt/google/chrome/chrome',
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    resolveCommand('google-chrome-stable'),
+    resolveCommand('google-chrome'),
+    resolveCommand('chromium-browser'),
+    resolveCommand('chromium'),
+  ]
+    .map(normalizeText)
+    .filter((candidate, index, candidates) => candidate !== '' && candidates.indexOf(candidate) === index);
+}
+
+function isMissingPuppeteerBrowserError(error) {
+  return /could not find chrome|could not find chromium|browser was not found|cache path is incorrectly configured/i.test(
+    String(error?.message || error || ''),
+  );
+}
+
+function puppeteerInstallHint(error) {
+  const message = String(error?.message || error || '');
+  const cachePath = message.match(/cache path is(?: incorrectly configured)? \(which is: ([^)]+)\)/i)?.[1]
+    || process.env.PUPPETEER_CACHE_DIR
+    || '~/.cache/puppeteer';
+
+  return [
+    message,
+    '',
+    'Chrome/Chromium wurde weder im Puppeteer-Cache noch als System-Browser gefunden.',
+    `Server-Fix: cd in das Projektverzeichnis und ausfuehren: PUPPETEER_CACHE_DIR="${cachePath}" npx puppeteer browsers install chrome`,
+    'Alternative: MAIL_REGISTRATION_BROWSER_EXECUTABLE_PATH oder PUPPETEER_EXECUTABLE_PATH auf einen vorhandenen Chrome/Chromium setzen.',
+  ].join('\n');
+}
+
 async function launchChrome(puppeteer, launchOptions) {
-  return puppeteer.launch(launchOptions);
+  return launchChromeWithFallbacks(puppeteer, {}, launchOptions);
+}
+
+async function launchChromeWithFallbacks(puppeteer, runtimeConfig, launchOptions) {
+  const triedExecutables = [];
+  let lastFallbackError = null;
+
+  try {
+    return await puppeteer.launch(launchOptions);
+  } catch (error) {
+    if (! isMissingPuppeteerBrowserError(error)) {
+      throw error;
+    }
+
+    for (const executablePath of systemChromeCandidates(runtimeConfig)) {
+      triedExecutables.push(executablePath);
+
+      if (! fileExists(executablePath)) {
+        continue;
+      }
+
+      try {
+        return await puppeteer.launch({
+          ...launchOptions,
+          executablePath,
+        });
+      } catch (fallbackError) {
+        lastFallbackError = fallbackError;
+        // Continue with the next known system browser path.
+      }
+    }
+
+    const fallbackDetails = lastFallbackError
+      ? `\nLetzter System-Chrome-Startfehler: ${String(lastFallbackError?.message || lastFallbackError)}`
+      : '';
+    const enriched = new Error(`${puppeteerInstallHint(error)}\nGepruefte Systempfade: ${triedExecutables.join(', ') || 'keine'}${fallbackDetails}`);
+    enriched.cause = error;
+    throw enriched;
+  }
 }
 
 async function launchCloak(runtimeConfig, launchOptions) {
@@ -76,7 +186,7 @@ async function launchConfiguredBrowser({
 
   if (requestedEngine === BROWSER_ENGINE_CHROME) {
     return {
-      browser: await launchChrome(puppeteer, launchOptions),
+      browser: await launchChromeWithFallbacks(puppeteer, runtimeConfig, launchOptions),
       requestedEngine,
       activeEngine: BROWSER_ENGINE_CHROME,
       fallbackReason: null,
@@ -99,7 +209,7 @@ async function launchConfiguredBrowser({
     }
 
     return {
-      browser: await launchChrome(puppeteer, launchOptions),
+      browser: await launchChromeWithFallbacks(puppeteer, runtimeConfig, launchOptions),
       requestedEngine,
       activeEngine: BROWSER_ENGINE_CHROME,
       fallbackReason: String(error?.message || error || 'CloakBrowser launch failed'),
