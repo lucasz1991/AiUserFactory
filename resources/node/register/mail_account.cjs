@@ -1053,7 +1053,44 @@ async function clickProtonEmailVerificationTabInContext(pageOrFrame) {
     ].join(' '));
     const humanDialog = Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"], dialog, .modal, section, div'))
       .filter(visible)
-      .find((element) => /human verification|captcha|to fight spam and abuse/i.test(element.innerText || element.textContent || ''));
+      .map((element, index) => {
+        const rect = element.getBoundingClientRect();
+        const text = element.innerText || element.textContent || '';
+        let score = 0;
+
+        if (!/human verification/i.test(text)) {
+          return null;
+        }
+
+        if (/(captcha|to fight spam and abuse|sorry, you did not pass|email)/i.test(text)) {
+          score += 50;
+        }
+
+        if (element.matches('[role="dialog"], [aria-modal="true"], dialog, .modal')) {
+          score += 100;
+        }
+
+        if (rect.width >= 400 && rect.width <= window.innerWidth * 0.85) {
+          score += 30;
+        }
+
+        if (rect.height >= 180 && rect.height <= window.innerHeight * 0.95) {
+          score += 30;
+        }
+
+        if (rect.width >= window.innerWidth * 0.95 || rect.height >= window.innerHeight * 0.98) {
+          score -= 120;
+        }
+
+        return {
+          element,
+          score,
+          area: rect.width * rect.height,
+          index,
+        };
+      })
+      .filter(Boolean)
+      .sort((left, right) => right.score - left.score || left.area - right.area || left.index - right.index)[0]?.element || null;
 
     if (!humanDialog) {
       return false;
@@ -1063,8 +1100,23 @@ async function clickProtonEmailVerificationTabInContext(pageOrFrame) {
     const candidates = Array.from(humanDialog.querySelectorAll('button, [role="button"], [role="tab"], a, label, span, div'))
       .filter(visible)
       .map((element, index) => {
-        const clickable = element.closest(clickableSelector) || element;
         const text = textFor(element);
+        const boundedAncestor = Array.from([
+          element,
+          ...Array.from(humanDialog.querySelectorAll('*')).filter((candidate) => candidate.contains(element)),
+        ])
+          .reverse()
+          .find((candidate) => {
+            const rect = candidate.getBoundingClientRect();
+            const candidateText = textFor(candidate);
+
+            return visible(candidate)
+              && rect.height <= 80
+              && rect.width >= 40
+              && rect.width <= humanDialog.getBoundingClientRect().width
+              && /^e-?mail$/.test(candidateText);
+          });
+        const clickable = element.closest(clickableSelector) || boundedAncestor || element;
         const clickableText = textFor(clickable);
         let score = 0;
 
@@ -1101,17 +1153,24 @@ async function clickProtonEmailVerificationTabInContext(pageOrFrame) {
     }
 
     target.scrollIntoView({ block: 'center', inline: 'center' });
+    const rect = target.getBoundingClientRect();
+    const pointTarget = document.elementFromPoint(
+      rect.left + rect.width / 2,
+      rect.top + rect.height / 2,
+    ) || target;
+
     if (typeof PointerEvent === 'function') {
-      target.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+      pointTarget.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
     }
 
-    target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    pointTarget.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
 
     if (typeof PointerEvent === 'function') {
-      target.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
+      pointTarget.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
     }
 
-    target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    pointTarget.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    pointTarget.click();
     target.click();
 
     return true;
@@ -1122,6 +1181,125 @@ async function clickProtonEmailVerificationTabInContext(pageOrFrame) {
   }
 
   return clicked;
+}
+
+async function waitForProtonVerificationEmailInput(page, timeoutMs = 4000) {
+  const stopAt = Date.now() + timeoutMs;
+  let input = await findVisibleEmailInputIncludingFrames(page);
+
+  while (!input && Date.now() < stopAt) {
+    await sleep(250);
+    input = await findVisibleEmailInputIncludingFrames(page);
+  }
+
+  return input;
+}
+
+async function clickProtonEmailVerificationTabByMouse(page) {
+  const point = await page.evaluate(() => {
+    const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const visible = (element) => {
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+
+      return rect.width > 0
+        && rect.height > 0
+        && style.visibility !== 'hidden'
+        && style.display !== 'none'
+        && !element.disabled;
+    };
+    const textFor = (element) => normalize([
+      element.innerText,
+      element.textContent,
+      element.value,
+      element.getAttribute('aria-label'),
+      element.getAttribute('title'),
+    ].join(' '));
+    const humanDialog = Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"], dialog, .modal, section, div'))
+      .filter(visible)
+      .map((element, index) => {
+        const rect = element.getBoundingClientRect();
+        const text = element.innerText || element.textContent || '';
+        let score = 0;
+
+        if (!/human verification/i.test(text)) {
+          return null;
+        }
+
+        if (/(captcha|to fight spam and abuse|sorry, you did not pass|email)/i.test(text)) {
+          score += 50;
+        }
+
+        if (element.matches('[role="dialog"], [aria-modal="true"], dialog, .modal')) {
+          score += 100;
+        }
+
+        if (rect.width >= 400 && rect.width <= window.innerWidth * 0.85) {
+          score += 30;
+        }
+
+        if (rect.height >= 180 && rect.height <= window.innerHeight * 0.95) {
+          score += 30;
+        }
+
+        if (rect.width >= window.innerWidth * 0.95 || rect.height >= window.innerHeight * 0.98) {
+          score -= 120;
+        }
+
+        return {
+          element,
+          score,
+          area: rect.width * rect.height,
+          index,
+        };
+      })
+      .filter(Boolean)
+      .sort((left, right) => right.score - left.score || left.area - right.area || left.index - right.index)[0]?.element || null;
+
+    if (!humanDialog) {
+      return null;
+    }
+
+    const candidate = Array.from(humanDialog.querySelectorAll('button, [role="button"], [role="tab"], a, label, span, div'))
+      .filter(visible)
+      .map((element, index) => {
+        const rect = element.getBoundingClientRect();
+        const text = textFor(element);
+        let score = 0;
+
+        if (text === 'email' || text === 'e-mail') {
+          score += 100;
+        }
+
+        if (element.getAttribute('role') === 'tab') {
+          score += 30;
+        }
+
+        if (rect.height <= 80 && rect.width >= 40 && rect.width <= humanDialog.getBoundingClientRect().width) {
+          score += 20;
+        }
+
+        return {
+          x: rect.left + rect.width / 2,
+          y: rect.top + rect.height / 2,
+          score,
+          index,
+        };
+      })
+      .filter((candidate) => candidate.score > 0)
+      .sort((left, right) => right.score - left.score || left.index - right.index)[0] || null;
+
+    return candidate ? { x: candidate.x, y: candidate.y } : null;
+  }).catch(() => null);
+
+  if (!point) {
+    return false;
+  }
+
+  await page.mouse.click(point.x, point.y).catch(() => {});
+  await pauseStep();
+
+  return true;
 }
 
 async function hasProtonHumanVerificationDialog(pageOrFrame) {
@@ -1138,7 +1316,15 @@ async function hasProtonHumanVerificationDialog(pageOrFrame) {
 
     return Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"], dialog, .modal, section, div'))
       .filter(visible)
-      .some((element) => /human verification|captcha|to fight spam and abuse/i.test(element.innerText || element.textContent || ''));
+      .some((element) => {
+        const rect = element.getBoundingClientRect();
+        const text = element.innerText || element.textContent || '';
+
+        return /human verification/i.test(text)
+          && /(captcha|to fight spam and abuse|sorry, you did not pass|email)/i.test(text)
+          && rect.width < window.innerWidth * 0.95
+          && rect.height < window.innerHeight * 0.98;
+      });
   }).catch(() => false);
 }
 
@@ -1158,7 +1344,13 @@ async function selectProtonEmailVerificationTab(page) {
   let humanDialogVisible = await hasProtonHumanVerificationDialog(page);
 
   if (await clickProtonEmailVerificationTabInContext(page)) {
-    return true;
+    if (await waitForProtonVerificationEmailInput(page)) {
+      return true;
+    }
+  }
+
+  if (humanDialogVisible && await clickProtonEmailVerificationTabByMouse(page)) {
+    return Boolean(await waitForProtonVerificationEmailInput(page));
   }
 
   for (const frame of page.frames()) {
@@ -1169,7 +1361,7 @@ async function selectProtonEmailVerificationTab(page) {
     humanDialogVisible = humanDialogVisible || await hasProtonHumanVerificationDialog(frame);
 
     if (await clickProtonEmailVerificationTabInContext(frame)) {
-      return true;
+      return Boolean(await waitForProtonVerificationEmailInput(page));
     }
   }
 
@@ -1229,7 +1421,44 @@ async function findVisibleEmailInput(pageOrFrame) {
     };
     const humanDialog = Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"], dialog, .modal, section, div'))
       .filter(visible)
-      .find((element) => /human verification|captcha|to fight spam and abuse/i.test(element.innerText || element.textContent || ''));
+      .map((element, index) => {
+        const rect = element.getBoundingClientRect();
+        const text = element.innerText || element.textContent || '';
+        let score = 0;
+
+        if (!/human verification/i.test(text)) {
+          return null;
+        }
+
+        if (/(captcha|to fight spam and abuse|sorry, you did not pass|email)/i.test(text)) {
+          score += 50;
+        }
+
+        if (element.matches('[role="dialog"], [aria-modal="true"], dialog, .modal')) {
+          score += 100;
+        }
+
+        if (rect.width >= 400 && rect.width <= window.innerWidth * 0.85) {
+          score += 30;
+        }
+
+        if (rect.height >= 180 && rect.height <= window.innerHeight * 0.95) {
+          score += 30;
+        }
+
+        if (rect.width >= window.innerWidth * 0.95 || rect.height >= window.innerHeight * 0.98) {
+          score -= 120;
+        }
+
+        return {
+          element,
+          score,
+          area: rect.width * rect.height,
+          index,
+        };
+      })
+      .filter(Boolean)
+      .sort((left, right) => right.score - left.score || left.area - right.area || left.index - right.index)[0]?.element || null;
     const searchRoot = humanDialog || document;
     const inputs = Array.from(searchRoot.querySelectorAll('input'));
     const candidates = inputs
