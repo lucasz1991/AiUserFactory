@@ -1031,6 +1031,26 @@ async function clickVisibleTextTarget(pageOrFrame, labels, selectors = '*', allo
 
 async function clickProtonEmailVerificationTabInContext(pageOrFrame) {
   const clicked = await pageOrFrame.evaluate(() => {
+    const allElementsDeep = (root = document) => {
+      const elements = [];
+      const visit = (node) => {
+        const children = Array.from(node?.children || []);
+
+        for (const child of children) {
+          elements.push(child);
+
+          if (child.shadowRoot) {
+            visit(child.shadowRoot);
+          }
+
+          visit(child);
+        }
+      };
+
+      visit(root);
+
+      return elements;
+    };
     const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
     const visible = (element) => {
       const rect = element.getBoundingClientRect();
@@ -1049,7 +1069,8 @@ async function clickProtonEmailVerificationTabInContext(pageOrFrame) {
       element.getAttribute('aria-label'),
       element.getAttribute('title'),
     ].join(' '));
-    const humanDialog = Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"], dialog, .modal, section, div'))
+    const humanDialog = allElementsDeep()
+      .filter((element) => element.matches('[role="dialog"], [aria-modal="true"], dialog, .modal, section, div'))
       .filter(visible)
       .map((element, index) => {
         const rect = element.getBoundingClientRect();
@@ -1095,13 +1116,15 @@ async function clickProtonEmailVerificationTabInContext(pageOrFrame) {
     }
 
     const clickableSelector = 'button, [role="button"], [role="tab"], a, label, input[type="button"], input[type="submit"]';
-    const candidates = Array.from(humanDialog.querySelectorAll('button, [role="button"], [role="tab"], a, label, span, div'))
+    const dialogElements = allElementsDeep(humanDialog);
+    const candidates = dialogElements
+      .filter((element) => element.matches('button, [role="button"], [role="tab"], a, label, span, div'))
       .filter(visible)
       .map((element, index) => {
         const text = textFor(element);
         const boundedAncestor = Array.from([
           element,
-          ...Array.from(humanDialog.querySelectorAll('*')).filter((candidate) => candidate.contains(element)),
+          ...dialogElements.filter((candidate) => candidate.contains(element)),
         ])
           .reverse()
           .find((candidate) => {
@@ -1195,6 +1218,26 @@ async function waitForProtonVerificationEmailInput(page, timeoutMs = 4000) {
 
 async function protonEmailVerificationTabPoint(pageOrFrame) {
   return pageOrFrame.evaluate(() => {
+    const allElementsDeep = (root = document) => {
+      const elements = [];
+      const visit = (node) => {
+        const children = Array.from(node?.children || []);
+
+        for (const child of children) {
+          elements.push(child);
+
+          if (child.shadowRoot) {
+            visit(child.shadowRoot);
+          }
+
+          visit(child);
+        }
+      };
+
+      visit(root);
+
+      return elements;
+    };
     const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
     const visible = (element) => {
       const rect = element.getBoundingClientRect();
@@ -1213,7 +1256,8 @@ async function protonEmailVerificationTabPoint(pageOrFrame) {
       element.getAttribute('aria-label'),
       element.getAttribute('title'),
     ].join(' '));
-    const humanDialog = Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"], dialog, .modal, section, div'))
+    const humanDialog = allElementsDeep()
+      .filter((element) => element.matches('[role="dialog"], [aria-modal="true"], dialog, .modal, section, div'))
       .filter(visible)
       .map((element, index) => {
         const rect = element.getBoundingClientRect();
@@ -1258,7 +1302,8 @@ async function protonEmailVerificationTabPoint(pageOrFrame) {
       return null;
     }
 
-    const candidate = Array.from(humanDialog.querySelectorAll('button, [role="button"], [role="tab"], a, label, span, div'))
+    const candidate = allElementsDeep(humanDialog)
+      .filter((element) => element.matches('button, [role="button"], [role="tab"], a, label, span, div'))
       .filter(visible)
       .map((element, index) => {
         const rect = element.getBoundingClientRect();
@@ -1324,6 +1369,26 @@ async function clickProtonEmailVerificationTabByMouse(page, pageOrFrame = page) 
 
 async function hasProtonHumanVerificationDialog(pageOrFrame) {
   return pageOrFrame.evaluate(() => {
+    const allElementsDeep = (root = document) => {
+      const elements = [];
+      const visit = (node) => {
+        const children = Array.from(node?.children || []);
+
+        for (const child of children) {
+          elements.push(child);
+
+          if (child.shadowRoot) {
+            visit(child.shadowRoot);
+          }
+
+          visit(child);
+        }
+      };
+
+      visit(root);
+
+      return elements;
+    };
     const visible = (element) => {
       const rect = element.getBoundingClientRect();
       const style = window.getComputedStyle(element);
@@ -1334,7 +1399,8 @@ async function hasProtonHumanVerificationDialog(pageOrFrame) {
         && style.display !== 'none';
     };
 
-    return Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"], dialog, .modal, section, div'))
+    return allElementsDeep()
+      .filter((element) => element.matches('[role="dialog"], [aria-modal="true"], dialog, .modal, section, div'))
       .filter(visible)
       .some((element) => {
         const rect = element.getBoundingClientRect();
@@ -1434,6 +1500,26 @@ function verificationMailboxFromConfig(runtimeConfig) {
 
 async function findVisibleEmailInput(pageOrFrame) {
   return pageOrFrame.evaluateHandle(() => {
+    const allElementsDeep = (root = document) => {
+      const elements = [];
+      const visit = (node) => {
+        const children = Array.from(node?.children || []);
+
+        for (const child of children) {
+          elements.push(child);
+
+          if (child.shadowRoot) {
+            visit(child.shadowRoot);
+          }
+
+          visit(child);
+        }
+      };
+
+      visit(root);
+
+      return elements;
+    };
     const visible = (element) => {
       const rect = element.getBoundingClientRect();
       const style = window.getComputedStyle(element);
@@ -1443,7 +1529,8 @@ async function findVisibleEmailInput(pageOrFrame) {
         && style.visibility !== 'hidden'
         && style.display !== 'none';
     };
-    const humanDialog = Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"], dialog, .modal, section, div'))
+    const humanDialog = allElementsDeep()
+      .filter((element) => element.matches('[role="dialog"], [aria-modal="true"], dialog, .modal, section, div'))
       .filter(visible)
       .map((element, index) => {
         const rect = element.getBoundingClientRect();
@@ -1484,13 +1571,16 @@ async function findVisibleEmailInput(pageOrFrame) {
       .filter(Boolean)
       .sort((left, right) => right.score - left.score || left.area - right.area || left.index - right.index)[0]?.element || null;
     const searchRoot = humanDialog || document;
-    const inputs = Array.from(searchRoot.querySelectorAll('input'));
+    const inputs = allElementsDeep(searchRoot).filter((element) => element.tagName?.toLowerCase() === 'input');
     const candidates = inputs
       .map((element, index) => {
         const rect = element.getBoundingClientRect();
         const style = window.getComputedStyle(element);
         const label = element.id && window.CSS?.escape
-          ? document.querySelector(`label[for="${window.CSS.escape(element.id)}"]`)
+          ? allElementsDeep(searchRoot).find((candidate) => (
+            candidate.tagName?.toLowerCase() === 'label'
+            && candidate.getAttribute('for') === element.id
+          ))
           : null;
         const wrapper = element.closest('label, [data-testid], .field, .input, form, div');
         const haystack = [
