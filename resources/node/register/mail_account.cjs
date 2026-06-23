@@ -1863,7 +1863,7 @@ async function protonPasswordSubmitStatus(page) {
       return {
         advanced: null,
         manualRequired: true,
-        reason: 'manual-verification-required',
+        reason: 'email-verification-required',
         message: text.slice(0, 1200),
         url,
       };
@@ -1949,7 +1949,7 @@ async function protonManualVerificationStatus(page) {
     if (manualVerificationPattern.test(normalized)) {
       return {
         completed: null,
-        reason: 'manual-verification-required',
+        reason: 'email-verification-required',
         message: text.slice(0, 1200),
         url,
       };
@@ -1966,7 +1966,7 @@ async function protonManualVerificationStatus(page) {
 
     return {
       completed: true,
-      reason: 'manual-verification-completed',
+      reason: 'email-verification-completed',
       message: text.slice(0, 1200),
       url,
     };
@@ -2021,12 +2021,12 @@ async function waitForProtonManualVerification(page, browser, runtimeConfig, tim
 
   progress(
     runtimeConfig,
-    emailTabSelected ? 'proton-email-verification-selected' : 'proton-manual-verification-required',
+    emailTabSelected ? 'proton-email-verification-selected' : 'proton-email-verification-tab-pending',
     emailTabSelected
       ? (verificationEmail.submitted === true
         ? 'Proton-Tab Email wurde ausgewaehlt, Verifikationscode wurde angefordert und Webmail wird beobachtet.'
         : 'Proton-Tab Email wurde ausgewaehlt; warte auf erfolgreichen Submit fuer den Verifikationscode.')
-      : 'Proton verlangt eine manuelle Human Verification. Bitte im geoeffneten Browser loesen.',
+      : 'Proton verlangt Email-Verifikation; der Email-Tab wird im Human-Verification-Dialog gesucht.',
     await pageSnapshot(page, runtimeConfig, true, false),
   );
 
@@ -2049,10 +2049,12 @@ async function waitForProtonManualVerification(page, browser, runtimeConfig, tim
 
     progress(
       runtimeConfig,
-      'proton-manual-verification-required',
-      emailTabSelected
-        ? 'Warte auf Email-Human-Verification im geoeffneten Browser.'
-        : 'Warte auf manuelle Human Verification im geoeffneten Browser.',
+      'proton-email-verification-required',
+      verificationEmail.submitted === true
+        ? 'Verifikationscode wurde angefordert; warte auf Abschluss der Email-Verifikation.'
+        : emailTabSelected
+        ? 'Email-Tab ist aktiv; warte auf erfolgreichen Submit fuer den Verifikationscode.'
+        : 'Warte auf Email-Tab im Human-Verification-Dialog; CAPTCHA wird nicht verwendet.',
       await pageSnapshot(page, runtimeConfig, false, false),
     );
   }
@@ -2060,8 +2062,8 @@ async function waitForProtonManualVerification(page, browser, runtimeConfig, tim
   if (status.completed === true) {
     progress(
       runtimeConfig,
-      'proton-manual-verification-completed',
-      'Manuelle Human Verification wurde abgeschlossen; Registrierung wird fortgesetzt.',
+      'proton-email-verification-completed',
+      'Email-Verifikation wurde abgeschlossen; Registrierung wird fortgesetzt.',
       await pageSnapshot(page, runtimeConfig, true, false),
     );
 
@@ -2078,7 +2080,7 @@ async function waitForProtonManualVerification(page, browser, runtimeConfig, tim
   return {
     completed: false,
     providerBlocked: status.providerBlocked === true,
-    reason: status.reason || 'manual-verification-timeout',
+    reason: status.reason || 'email-verification-timeout',
     message: status.message || '',
     url: status.url || page.url(),
     emailTabSelected,
@@ -2486,7 +2488,7 @@ async function runProtonUsernameCheckProvider(page, browser, runtimeConfig, prov
       ? 'Proton blockiert weitere Registrierungen von diesem Netzwerk. Der Lauf wurde gestoppt.'
       : status.available === true
       ? (passwordStep?.manualVerificationRequired && !passwordStep?.manualVerificationCompleted
-        ? 'Proton verlangt eine manuelle Human Verification; der Lauf wurde ohne Abschluss beendet.'
+        ? 'Proton Email-Verifikation konnte nicht abgeschlossen werden; der Lauf wurde ohne Abschluss beendet.'
         : passwordStep?.passwordStepAdvanced
         ? 'Proton-Passwort wurde gesetzt; naechster Registrierungsschritt wurde erreicht.'
         : 'Proton-Passwort wurde generiert, eingetragen und abgesendet.')
