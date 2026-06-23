@@ -1031,6 +1031,117 @@ async function clickVisibleTextTarget(pageOrFrame, labels, selectors = '*', allo
   return clicked;
 }
 
+async function clickProtonEmailVerificationTabInContext(pageOrFrame) {
+  const clicked = await pageOrFrame.evaluate(() => {
+    const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const visible = (element) => {
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+
+      return rect.width > 0
+        && rect.height > 0
+        && style.visibility !== 'hidden'
+        && style.display !== 'none'
+        && !element.disabled;
+    };
+    const textFor = (element) => normalize([
+      element.innerText,
+      element.textContent,
+      element.value,
+      element.getAttribute('aria-label'),
+      element.getAttribute('title'),
+    ].join(' '));
+    const humanDialog = Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"], dialog, .modal, section, div'))
+      .filter(visible)
+      .find((element) => /human verification|captcha|to fight spam and abuse/i.test(element.innerText || element.textContent || ''));
+
+    if (!humanDialog) {
+      return false;
+    }
+
+    const clickableSelector = 'button, [role="button"], [role="tab"], a, label, input[type="button"], input[type="submit"]';
+    const candidates = Array.from(humanDialog.querySelectorAll('button, [role="button"], [role="tab"], a, label, span, div'))
+      .filter(visible)
+      .map((element, index) => {
+        const clickable = element.closest(clickableSelector) || element;
+        const text = textFor(element);
+        const clickableText = textFor(clickable);
+        let score = 0;
+
+        if (text === 'email' || text === 'e-mail') {
+          score += 100;
+        }
+
+        if (clickableText === 'email' || clickableText === 'e-mail') {
+          score += 80;
+        }
+
+        if (element.getAttribute('role') === 'tab' || clickable.getAttribute('role') === 'tab') {
+          score += 30;
+        }
+
+        if (element.tagName.toLowerCase() === 'button' || clickable.tagName.toLowerCase() === 'button') {
+          score += 20;
+        }
+
+        return {
+          element,
+          clickable,
+          score,
+          index,
+        };
+      })
+      .filter((candidate) => candidate.score > 0)
+      .sort((left, right) => right.score - left.score || left.index - right.index);
+
+    const target = candidates[0]?.clickable || null;
+
+    if (!target) {
+      return false;
+    }
+
+    target.scrollIntoView({ block: 'center', inline: 'center' });
+    if (typeof PointerEvent === 'function') {
+      target.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    }
+
+    target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+
+    if (typeof PointerEvent === 'function') {
+      target.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
+    }
+
+    target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    target.click();
+
+    return true;
+  }).catch(() => false);
+
+  if (clicked) {
+    await pauseStep();
+  }
+
+  return clicked;
+}
+
+async function hasProtonHumanVerificationDialog(pageOrFrame) {
+  return pageOrFrame.evaluate(() => {
+    const visible = (element) => {
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+
+      return rect.width > 0
+        && rect.height > 0
+        && style.visibility !== 'hidden'
+        && style.display !== 'none';
+    };
+
+    return Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"], dialog, .modal, section, div'))
+      .filter(visible)
+      .some((element) => /human verification|captcha|to fight spam and abuse/i.test(element.innerText || element.textContent || ''));
+  }).catch(() => false);
+}
+
 async function selectProtonEmailVerificationTab(page) {
   const labels = [
     'email',
@@ -1044,6 +1155,27 @@ async function selectProtonEmailVerificationTab(page) {
     'verify via email',
   ];
   const selectors = 'button, [role="button"], [role="tab"], a, label, input[type="button"], input[type="submit"], span';
+  let humanDialogVisible = await hasProtonHumanVerificationDialog(page);
+
+  if (await clickProtonEmailVerificationTabInContext(page)) {
+    return true;
+  }
+
+  for (const frame of page.frames()) {
+    if (frame === page.mainFrame()) {
+      continue;
+    }
+
+    humanDialogVisible = humanDialogVisible || await hasProtonHumanVerificationDialog(frame);
+
+    if (await clickProtonEmailVerificationTabInContext(frame)) {
+      return true;
+    }
+  }
+
+  if (humanDialogVisible) {
+    return false;
+  }
 
   if (await clickExactVisibleTextIncludingFrames(page, labels, selectors)) {
     return true;
@@ -1086,12 +1218,24 @@ function verificationMailboxFromConfig(runtimeConfig) {
 
 async function findVisibleEmailInput(pageOrFrame) {
   return pageOrFrame.evaluateHandle(() => {
-    const inputs = Array.from(document.querySelectorAll('input'));
+    const visible = (element) => {
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+
+      return rect.width > 0
+        && rect.height > 0
+        && style.visibility !== 'hidden'
+        && style.display !== 'none';
+    };
+    const humanDialog = Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"], dialog, .modal, section, div'))
+      .filter(visible)
+      .find((element) => /human verification|captcha|to fight spam and abuse/i.test(element.innerText || element.textContent || ''));
+    const searchRoot = humanDialog || document;
+    const inputs = Array.from(searchRoot.querySelectorAll('input'));
     const candidates = inputs
       .map((element, index) => {
         const rect = element.getBoundingClientRect();
         const style = window.getComputedStyle(element);
-        const dialog = element.closest('[role="dialog"], [aria-modal="true"], dialog, .modal');
         const label = element.id && window.CSS?.escape
           ? document.querySelector(`label[for="${window.CSS.escape(element.id)}"]`)
           : null;
@@ -1122,7 +1266,7 @@ async function findVisibleEmailInput(pageOrFrame) {
           return null;
         }
 
-        if (dialog) {
+        if (humanDialog) {
           score += 100;
         }
 
