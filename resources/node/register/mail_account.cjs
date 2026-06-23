@@ -595,6 +595,136 @@ async function waitForVisibleInputIncludingFrames(page, selectors, timeoutMs = 2
   return input;
 }
 
+async function findVisibleProtonUsernameInput(pageOrFrame, selectors) {
+  for (const selector of selectors) {
+    const handle = await pageOrFrame.$(selector).catch(() => null);
+
+    if (!handle) {
+      continue;
+    }
+
+    const usable = await handle.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+      const blockedTypes = ['button', 'checkbox', 'file', 'hidden', 'password', 'radio', 'reset', 'submit'];
+
+      return rect.width > 0
+        && rect.height > 0
+        && style.visibility !== 'hidden'
+        && style.display !== 'none'
+        && !element.disabled
+        && !element.readOnly
+        && !blockedTypes.includes(String(element.type || '').toLowerCase());
+    }).catch(() => false);
+
+    if (usable) {
+      return handle;
+    }
+  }
+
+  return pageOrFrame.evaluateHandle(() => {
+    const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const textNear = (input) => {
+      const escapedId = input.id && window.CSS?.escape ? window.CSS.escape(input.id) : '';
+      const label = escapedId ? document.querySelector(`label[for="${escapedId}"]`) : null;
+      const wrapper = input.closest('label, [data-testid], .field, .input, form, div');
+
+      return normalize([
+        input.name,
+        input.id,
+        input.autocomplete,
+        input.placeholder,
+        input.getAttribute('aria-label'),
+        input.getAttribute('data-testid'),
+        input.type,
+        label?.innerText,
+        wrapper?.innerText,
+      ].join(' '));
+    };
+    const visibleTextInputs = Array.from(document.querySelectorAll('input')).filter((input) => {
+      const rect = input.getBoundingClientRect();
+      const style = window.getComputedStyle(input);
+      const type = normalize(input.type || 'text');
+      const blockedTypes = ['button', 'checkbox', 'file', 'hidden', 'password', 'radio', 'range', 'reset', 'submit'];
+      const haystack = textNear(input);
+
+      return rect.width > 0
+        && rect.height > 0
+        && style.visibility !== 'hidden'
+        && style.display !== 'none'
+        && !input.disabled
+        && !input.readOnly
+        && !blockedTypes.includes(type)
+        && !/(password|passwort|captcha|verification code|verify code|2fa|otp|phone)/.test(haystack);
+    });
+
+    if (visibleTextInputs.length === 0) {
+      return null;
+    }
+
+    const scored = visibleTextInputs
+      .map((input, index) => {
+        const haystack = textNear(input);
+        let score = 0;
+
+        if (/\buser(name)?\b|benutzer/.test(haystack)) {
+          score += 100;
+        }
+
+        if (/proton/.test(haystack)) {
+          score += 25;
+        }
+
+        if (/mail|email|e-mail/.test(haystack)) {
+          score += 10;
+        }
+
+        if (/data-testid|input-input-element/.test(haystack)) {
+          score += 5;
+        }
+
+        return { input, score, index };
+      })
+      .sort((left, right) => right.score - left.score || left.index - right.index);
+
+    return scored[0].input;
+  }).then((handle) => handle.asElement()).catch(() => null);
+}
+
+async function findVisibleProtonUsernameInputIncludingFrames(page, selectors) {
+  const mainFrameInput = await findVisibleProtonUsernameInput(page, selectors);
+
+  if (mainFrameInput) {
+    return mainFrameInput;
+  }
+
+  for (const frame of page.frames()) {
+    if (frame === page.mainFrame()) {
+      continue;
+    }
+
+    const frameInput = await findVisibleProtonUsernameInput(frame, selectors);
+
+    if (frameInput) {
+      return frameInput;
+    }
+  }
+
+  return null;
+}
+
+async function waitForVisibleProtonUsernameInputIncludingFrames(page, selectors, timeoutMs = 20000) {
+  const stopAt = Date.now() + timeoutMs;
+  let input = await findVisibleProtonUsernameInputIncludingFrames(page, selectors);
+
+  while (!input && Date.now() < stopAt) {
+    await sleep(500);
+    input = await findVisibleProtonUsernameInputIncludingFrames(page, selectors);
+  }
+
+  return input;
+}
+
 async function fillInputValue(inputHandle, value) {
   const nextValue = String(value ?? '');
 
@@ -636,10 +766,44 @@ async function fillInputValue(inputHandle, value) {
   return inputHandle.evaluate((element) => element.value || '');
 }
 
-async function clickFirstMatchingButton(page, labels) {
+async function forceInputValue(inputHandle, value) {
+  const nextValue = String(value ?? '');
+
+  return inputHandle.evaluate((element, forcedValue) => {
+    element.focus();
+
+    const prototype = element instanceof HTMLTextAreaElement
+      ? HTMLTextAreaElement.prototype
+      : HTMLInputElement.prototype;
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, 'value');
+
+    if (descriptor?.set) {
+      descriptor.set.call(element, forcedValue);
+    } else {
+      element.value = forcedValue;
+    }
+
+    if (typeof InputEvent === 'function') {
+      element.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        inputType: 'insertText',
+        data: forcedValue,
+      }));
+    } else {
+      element.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+
+    element.dispatchEvent(new Event('change', { bubbles: true }));
+    element.blur();
+
+    return element.value || '';
+  }, nextValue).catch(() => '');
+}
+
+async function clickFirstMatchingButtonInContext(pageOrFrame, labels, allowFormSubmit = true) {
   await sleep(SUBMIT_DELAY_MS);
 
-  const clicked = await page.evaluate((buttonLabels) => {
+  const clicked = await pageOrFrame.evaluate((buttonLabels) => {
     const normalizedLabels = buttonLabels.map((label) => String(label).toLowerCase());
     const candidates = Array.from(document.querySelectorAll('button, [role="button"], input[type="submit"]'));
     const button = candidates.find((candidate) => {
@@ -667,14 +831,18 @@ async function clickFirstMatchingButton(page, labels) {
     button.click();
 
     return true;
-  }, labels);
+  }, labels).catch(() => false);
 
   if (clicked) {
     await pauseStep();
     return true;
   }
 
-  const submitted = await page.evaluate(() => {
+  if (!allowFormSubmit) {
+    return false;
+  }
+
+  const submitted = await pageOrFrame.evaluate(() => {
     const form = document.querySelector('form[name="accountForm"], form');
 
     if (!form) {
@@ -692,6 +860,39 @@ async function clickFirstMatchingButton(page, labels) {
 
   if (submitted) {
     await pauseStep();
+    return true;
+  }
+
+  return false;
+}
+
+async function clickFirstMatchingButton(page, labels) {
+  if (await clickFirstMatchingButtonInContext(page, labels)) {
+    return true;
+  }
+
+  await page.keyboard.press('Enter').catch(() => {});
+  await pauseStep();
+
+  return false;
+}
+
+async function clickFirstMatchingButtonIncludingFrames(page, labels) {
+  if (await clickFirstMatchingButtonInContext(page, labels, false)) {
+    return true;
+  }
+
+  for (const frame of page.frames()) {
+    if (frame === page.mainFrame()) {
+      continue;
+    }
+
+    if (await clickFirstMatchingButtonInContext(frame, labels)) {
+      return true;
+    }
+  }
+
+  if (await clickFirstMatchingButtonInContext(page, labels)) {
     return true;
   }
 
@@ -763,10 +964,12 @@ async function clickExactVisibleTextIncludingFrames(page, labels, selectors) {
   return false;
 }
 
-async function clickVisibleTextTarget(pageOrFrame, labels, selectors = '*') {
+async function clickVisibleTextTarget(pageOrFrame, labels, selectors = '*', allowPartial = false) {
   const clicked = await pageOrFrame.evaluate((payload) => {
     const normalizedLabels = payload.labels.map((label) => String(label).trim().toLowerCase());
-    const visibleElements = Array.from(document.querySelectorAll(payload.selectors)).filter((candidate) => {
+    const clickableSelector = 'button, [role="button"], [role="tab"], a, label, input[type="button"], input[type="submit"]';
+    const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const visible = (candidate) => {
       const rect = candidate.getBoundingClientRect();
       const style = window.getComputedStyle(candidate);
 
@@ -775,25 +978,42 @@ async function clickVisibleTextTarget(pageOrFrame, labels, selectors = '*') {
         && style.visibility !== 'hidden'
         && style.display !== 'none'
         && !candidate.disabled;
+    };
+    const textFor = (candidate) => normalize([
+      candidate.innerText,
+      candidate.textContent,
+      candidate.value,
+      candidate.getAttribute('aria-label'),
+      candidate.getAttribute('title'),
+    ].join(' '));
+    const matches = (text) => {
+      if (normalizedLabels.includes(text)) {
+        return true;
+      }
+
+      return payload.allowPartial
+        && /(^|\b)e-?mail(\b|$)/i.test(text)
+        && normalizedLabels.some((label) => text.includes(label));
+    };
+    const visibleElements = Array.from(document.querySelectorAll(payload.selectors)).filter((candidate) => {
+      if (!visible(candidate)) {
+        return false;
+      }
+
+      return candidate.matches(clickableSelector) || Boolean(candidate.closest(clickableSelector));
     });
 
     const element = visibleElements.find((candidate) => {
-      const ownText = [
-        candidate.innerText,
-        candidate.textContent,
-        candidate.value,
-        candidate.getAttribute('aria-label'),
-        candidate.getAttribute('title'),
-      ].join(' ').replace(/\s+/g, ' ').trim().toLowerCase();
+      const clickable = candidate.closest(clickableSelector) || candidate;
 
-      return normalizedLabels.includes(ownText);
+      return matches(textFor(candidate)) || matches(textFor(clickable));
     });
 
     if (!element) {
       return false;
     }
 
-    const clickable = element.closest('button, [role="button"], [role="tab"], a, label') || element;
+    const clickable = element.closest(clickableSelector) || element;
     clickable.scrollIntoView({ block: 'center', inline: 'center' });
     clickable.click();
 
@@ -801,6 +1021,7 @@ async function clickVisibleTextTarget(pageOrFrame, labels, selectors = '*') {
   }, {
     labels,
     selectors,
+    allowPartial,
   }).catch(() => false);
 
   if (clicked) {
@@ -814,25 +1035,30 @@ async function selectProtonEmailVerificationTab(page) {
   const labels = [
     'email',
     'e-mail',
+    'email address',
+    'e-mail address',
+    'email verification',
+    'e-mail verification',
+    'verify by email',
+    'verify with email',
+    'verify via email',
   ];
-  const selectors = 'button, [role="button"], [role="tab"], a, label, span, div';
+  const selectors = 'button, [role="button"], [role="tab"], a, label, input[type="button"], input[type="submit"], span';
 
   if (await clickExactVisibleTextIncludingFrames(page, labels, selectors)) {
     return true;
   }
 
-  if (await clickVisibleTextTarget(page, labels, selectors)) {
+  if (await clickVisibleTextTarget(page, labels, selectors, true)) {
     return true;
   }
 
   for (const frame of page.frames()) {
-    const frameUrl = normalizeText(frame.url());
-
-    if (frame === page.mainFrame() || !/proton|challenge|account-api|verify/i.test(frameUrl)) {
+    if (frame === page.mainFrame()) {
       continue;
     }
 
-    if (await clickVisibleTextTarget(frame, labels, selectors)) {
+    if (await clickVisibleTextTarget(frame, labels, selectors, true)) {
       return true;
     }
   }
@@ -956,7 +1182,7 @@ async function fillProtonVerificationEmail(page, runtimeConfig) {
     await pageSnapshot(page, runtimeConfig, true, false),
   );
 
-  const submitted = await clickFirstMatchingButton(page, [
+  const submitted = await clickFirstMatchingButtonIncludingFrames(page, [
     'send verification code',
     'send code',
     'send email',
@@ -1267,7 +1493,7 @@ async function protonManualVerificationStatus(page) {
 async function waitForProtonManualVerification(page, browser, runtimeConfig, timeoutMs = 300000) {
   const stopAt = Date.now() + timeoutMs;
   let status = await protonManualVerificationStatus(page);
-  const emailTabSelected = await selectProtonEmailVerificationTab(page);
+  let emailTabSelected = false;
   let verificationEmail = {
     filled: false,
     reason: 'email-tab-not-selected',
@@ -1276,11 +1502,34 @@ async function waitForProtonManualVerification(page, browser, runtimeConfig, tim
     opened: false,
     reason: 'email-tab-not-selected',
   };
+  let webmailAttempted = false;
 
-  if (emailTabSelected) {
+  const tryEmailVerificationTab = async () => {
+    const selected = await selectProtonEmailVerificationTab(page);
+
+    if (!selected) {
+      return false;
+    }
+
+    emailTabSelected = true;
     await pauseStep();
-    verificationEmail = await fillProtonVerificationEmail(page, runtimeConfig);
-    webmail = await openVerificationWebmailPage(browser, runtimeConfig);
+
+    if (
+      verificationEmail.filled !== true
+      && verificationEmail.reason !== 'verification-mailbox-not-configured'
+    ) {
+      verificationEmail = await fillProtonVerificationEmail(page, runtimeConfig);
+    }
+
+    if (!webmailAttempted) {
+      webmailAttempted = true;
+      webmail = await openVerificationWebmailPage(browser, runtimeConfig);
+    }
+
+    return true;
+  };
+
+  if (await tryEmailVerificationTab()) {
     status = await protonManualVerificationStatus(page);
   }
 
@@ -1297,10 +1546,25 @@ async function waitForProtonManualVerification(page, browser, runtimeConfig, tim
     await sleep(2500);
     status = await protonManualVerificationStatus(page);
 
+    if (
+      status.completed === null
+      && status.providerBlocked !== true
+      && verificationEmail.filled !== true
+      && verificationEmail.reason !== 'verification-mailbox-not-configured'
+    ) {
+      const selected = await tryEmailVerificationTab();
+
+      if (selected) {
+        status = await protonManualVerificationStatus(page);
+      }
+    }
+
     progress(
       runtimeConfig,
       'proton-manual-verification-required',
-      'Warte auf manuelle Human Verification im geoeffneten Browser.',
+      emailTabSelected
+        ? 'Warte auf Email-Human-Verification im geoeffneten Browser.'
+        : 'Warte auf manuelle Human Verification im geoeffneten Browser.',
       await pageSnapshot(page, runtimeConfig, false, false),
     );
   }
@@ -1546,7 +1810,7 @@ async function waitForProtonUsernameStatus(page, runtimeConfig) {
 }
 
 async function submitProtonUsernameCandidate(page, runtimeConfig, username, usernameInputSelectors) {
-  const usernameInput = await waitForVisibleInputIncludingFrames(page, usernameInputSelectors, 20000);
+  const usernameInput = await waitForVisibleProtonUsernameInputIncludingFrames(page, usernameInputSelectors, 20000);
 
   if (!usernameInput) {
     progress(
@@ -1560,7 +1824,23 @@ async function submitProtonUsernameCandidate(page, runtimeConfig, username, user
     throw new Error('Proton-Username-Feld wurde nicht gefunden.');
   }
 
-  const enteredUsername = await fillInputValue(usernameInput, username);
+  let enteredUsername = await fillInputValue(usernameInput, username);
+
+  if (enteredUsername !== username) {
+    enteredUsername = await forceInputValue(usernameInput, username);
+  }
+
+  if (enteredUsername !== username) {
+    progress(
+      runtimeConfig,
+      'proton-username-fill-failed',
+      `Username-Feld wurde gefunden, aber nicht korrekt befuellt. Erwartet: "${username}", Feldwert: "${enteredUsername}".`,
+      await pageSnapshot(page, runtimeConfig, true, true),
+      'failed',
+    );
+
+    throw new Error('Proton-Username-Feld konnte nicht befuellt werden.');
+  }
 
   progress(
     runtimeConfig,
@@ -1613,11 +1893,7 @@ async function runProtonUsernameCheckProvider(page, browser, runtimeConfig, prov
     'input[id="username"]',
     'input[name*="username" i]',
     'input[id*="username" i]',
-    'input[data-testid="input-input-element"]',
     'input[autocomplete="username"]',
-    'input[autocomplete="off"]',
-    'input[type="email"]',
-    'input[type="text"]',
   ];
   const usernameCandidates = generateUsernameCandidates(
     requestedUsername,
