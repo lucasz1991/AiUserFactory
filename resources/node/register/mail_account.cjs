@@ -1085,37 +1085,66 @@ function verificationMailboxFromConfig(runtimeConfig) {
 }
 
 async function findVisibleEmailInput(pageOrFrame) {
-  const inputs = await pageOrFrame.$$('input').catch(() => []);
+  return pageOrFrame.evaluateHandle(() => {
+    const inputs = Array.from(document.querySelectorAll('input'));
+    const candidates = inputs
+      .map((element, index) => {
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+        const dialog = element.closest('[role="dialog"], [aria-modal="true"], dialog, .modal');
+        const label = element.id && window.CSS?.escape
+          ? document.querySelector(`label[for="${window.CSS.escape(element.id)}"]`)
+          : null;
+        const wrapper = element.closest('label, [data-testid], .field, .input, form, div');
+        const haystack = [
+          element.name,
+          element.id,
+          element.autocomplete,
+          element.placeholder,
+          element.getAttribute('aria-label'),
+          element.getAttribute('data-testid'),
+          element.type,
+          label?.innerText,
+          wrapper?.innerText,
+        ].join(' ').toLowerCase();
+        let score = 0;
 
-  for (const input of inputs) {
-    const matches = await input.evaluate((element) => {
-      const rect = element.getBoundingClientRect();
-      const style = window.getComputedStyle(element);
-      const haystack = [
-        element.name,
-        element.id,
-        element.autocomplete,
-        element.placeholder,
-        element.getAttribute('aria-label'),
-        element.type,
-      ].join(' ').toLowerCase();
+        const matches = rect.width > 0
+          && rect.height > 0
+          && style.visibility !== 'hidden'
+          && style.display !== 'none'
+          && !element.disabled
+          && element.type !== 'password'
+          && !haystack.includes('username')
+          && (element.type === 'email' || haystack.includes('email') || haystack.includes('mail'));
 
-      return rect.width > 0
-        && rect.height > 0
-        && style.visibility !== 'hidden'
-        && style.display !== 'none'
-        && !element.disabled
-        && element.type !== 'password'
-        && !haystack.includes('username')
-        && (element.type === 'email' || haystack.includes('email') || haystack.includes('mail'));
-    }).catch(() => false);
+        if (!matches) {
+          return null;
+        }
 
-    if (matches) {
-      return input;
-    }
-  }
+        if (dialog) {
+          score += 100;
+        }
 
-  return null;
+        if (/verification|verify|human verification|one-time|captcha/.test(haystack)) {
+          score += 40;
+        }
+
+        if (/email address|e-mail address/.test(haystack)) {
+          score += 20;
+        }
+
+        return {
+          element,
+          score,
+          index,
+        };
+      })
+      .filter(Boolean)
+      .sort((left, right) => right.score - left.score || left.index - right.index);
+
+    return candidates[0]?.element || null;
+  }).then((handle) => handle.asElement()).catch(() => null);
 }
 
 async function findVisibleEmailInputIncludingFrames(page) {
@@ -1173,7 +1202,11 @@ async function fillProtonVerificationEmail(page, runtimeConfig) {
     };
   }
 
-  const enteredEmail = await fillInputValue(input, mailbox.email);
+  let enteredEmail = await fillInputValue(input, mailbox.email);
+
+  if (enteredEmail !== mailbox.email) {
+    enteredEmail = await forceInputValue(input, mailbox.email);
+  }
 
   progress(
     runtimeConfig,
@@ -1183,6 +1216,7 @@ async function fillProtonVerificationEmail(page, runtimeConfig) {
   );
 
   const submitted = await clickFirstMatchingButtonIncludingFrames(page, [
+    'get verification code',
     'send verification code',
     'send code',
     'send email',
@@ -1250,6 +1284,72 @@ async function fillFirstVisibleInputByHints(page, hints, value, timeoutMs = 1200
   return true;
 }
 
+async function waitForVerificationEmailInWebmail(page, runtimeConfig, timeoutMs = 120000) {
+  const stopAt = Date.now() + Math.max(10000, Number(timeoutMs) || 120000);
+
+  while (Date.now() < stopAt) {
+    const result = await page.evaluate(() => {
+      const text = document.body?.innerText || '';
+      const normalized = text.replace(/\s+/g, ' ').trim();
+      const detected = /verification code|verify your email|email verification|one-time verification|confirm your email|bestätigungscode|bestaetigungscode|\b\d{6}\b/i.test(normalized);
+      const codeMatch = normalized.match(/\b\d{6}\b/);
+
+      return {
+        detected,
+        code: codeMatch ? codeMatch[0] : '',
+      };
+    }).catch(() => ({
+      detected: false,
+      code: '',
+    }));
+
+    if (result.detected) {
+      progress(
+        runtimeConfig,
+        'verification-webmail-message-detected',
+        result.code
+          ? `Verifikationsmail wurde im Webmail erkannt. Code: ${result.code}`
+          : 'Verifikationsmail wurde im Webmail erkannt.',
+        {
+          title: await page.title().catch(() => null),
+          finalUrl: page.url(),
+        },
+      );
+
+      return {
+        detected: true,
+        code: result.code,
+      };
+    }
+
+    await clickVisibleTextTarget(page, [
+      'refresh',
+      'aktualisieren',
+      'reload',
+      'inbox',
+      'posteingang',
+    ], 'button, [role="button"], a', true).catch(() => false);
+
+    await sleep(5000);
+  }
+
+  progress(
+    runtimeConfig,
+    'verification-webmail-message-timeout',
+    'Keine Verifikationsmail im Webmail erkannt; warte im Proton-Fenster weiter.',
+    {
+      title: await page.title().catch(() => null),
+      finalUrl: page.url(),
+    },
+  );
+
+  return {
+    detected: false,
+    code: '',
+    reason: 'verification-email-timeout',
+  };
+}
+
 async function openVerificationWebmailPage(browser, runtimeConfig) {
   const mailbox = verificationMailboxFromConfig(runtimeConfig);
 
@@ -1312,10 +1412,20 @@ async function openVerificationWebmailPage(browser, runtimeConfig) {
     ]).catch(() => false);
   }
 
+  await sleep(3000);
+
+  const waitResult = await waitForVerificationEmailInWebmail(
+    page,
+    runtimeConfig,
+    runtimeConfig.verificationEmailWaitTimeoutMs || runtimeConfig.manualVerificationEmailWaitTimeoutMs || 120000,
+  );
+
   return {
     opened: true,
     page,
     url: page.url(),
+    mailDetected: waitResult.detected === true,
+    verificationCode: waitResult.code || '',
   };
 }
 
@@ -1515,13 +1625,16 @@ async function waitForProtonManualVerification(page, browser, runtimeConfig, tim
     await pauseStep();
 
     if (
-      verificationEmail.filled !== true
+      verificationEmail.submitted !== true
       && verificationEmail.reason !== 'verification-mailbox-not-configured'
     ) {
       verificationEmail = await fillProtonVerificationEmail(page, runtimeConfig);
     }
 
-    if (!webmailAttempted) {
+    if (
+      verificationEmail.submitted === true
+      && !webmailAttempted
+    ) {
       webmailAttempted = true;
       webmail = await openVerificationWebmailPage(browser, runtimeConfig);
     }
@@ -1537,7 +1650,9 @@ async function waitForProtonManualVerification(page, browser, runtimeConfig, tim
     runtimeConfig,
     emailTabSelected ? 'proton-email-verification-selected' : 'proton-manual-verification-required',
     emailTabSelected
-      ? 'Proton-Tab Email wurde fuer die Human Verification ausgewaehlt. Webmail-Portal wurde geoeffnet, sofern konfiguriert.'
+      ? (verificationEmail.submitted === true
+        ? 'Proton-Tab Email wurde ausgewaehlt, Verifikationscode wurde angefordert und Webmail wird beobachtet.'
+        : 'Proton-Tab Email wurde ausgewaehlt; warte auf erfolgreichen Submit fuer den Verifikationscode.')
       : 'Proton verlangt eine manuelle Human Verification. Bitte im geoeffneten Browser loesen.',
     await pageSnapshot(page, runtimeConfig, true, false),
   );
@@ -1549,7 +1664,7 @@ async function waitForProtonManualVerification(page, browser, runtimeConfig, tim
     if (
       status.completed === null
       && status.providerBlocked !== true
-      && verificationEmail.filled !== true
+      && verificationEmail.submitted !== true
       && verificationEmail.reason !== 'verification-mailbox-not-configured'
     ) {
       const selected = await tryEmailVerificationTab();
@@ -1582,6 +1697,8 @@ async function waitForProtonManualVerification(page, browser, runtimeConfig, tim
       emailTabSelected,
       verificationEmail,
       webmailOpened: webmail.opened === true,
+      webmailMailDetected: webmail.mailDetected === true,
+      verificationCode: webmail.verificationCode || '',
     };
   }
 
@@ -1594,6 +1711,8 @@ async function waitForProtonManualVerification(page, browser, runtimeConfig, tim
     emailTabSelected,
     verificationEmail,
     webmailOpened: webmail.opened === true,
+    webmailMailDetected: webmail.mailDetected === true,
+    verificationCode: webmail.verificationCode || '',
   };
 }
 
@@ -1672,6 +1791,8 @@ async function completeProtonPasswordStep(page, browser, runtimeConfig) {
       emailVerificationSelected: manualVerification.emailTabSelected === true,
       verificationEmailEntered: manualVerification.verificationEmail?.filled === true,
       verificationWebmailOpened: manualVerification.webmailOpened === true,
+      verificationWebmailMailDetected: manualVerification.webmailMailDetected === true,
+      verificationCode: manualVerification.verificationCode || '',
     };
   }
 
@@ -1696,6 +1817,8 @@ async function completeProtonPasswordStep(page, browser, runtimeConfig) {
       emailVerificationSelected: false,
       verificationEmailEntered: false,
       verificationWebmailOpened: false,
+      verificationWebmailMailDetected: false,
+      verificationCode: '',
     };
   }
 
@@ -1723,6 +1846,8 @@ async function completeProtonPasswordStep(page, browser, runtimeConfig) {
     emailVerificationSelected: false,
     verificationEmailEntered: false,
     verificationWebmailOpened: false,
+    verificationWebmailMailDetected: false,
+    verificationCode: '',
   };
 }
 
@@ -1978,6 +2103,8 @@ async function runProtonUsernameCheckProvider(page, browser, runtimeConfig, prov
     emailVerificationSelected: passwordStep?.emailVerificationSelected || false,
     verificationEmailEntered: passwordStep?.verificationEmailEntered || false,
     verificationWebmailOpened: passwordStep?.verificationWebmailOpened || false,
+    verificationWebmailMailDetected: passwordStep?.verificationWebmailMailDetected || false,
+    verificationCode: passwordStep?.verificationCode || '',
     finalUrl: finalSnapshot.finalUrl,
     title: finalSnapshot.title,
     liveScreenshotPath: finalSnapshot.liveScreenshotPath || null,
@@ -2172,6 +2299,8 @@ async function main() {
       emailVerificationSelected: providerResult.emailVerificationSelected ?? null,
       verificationEmailEntered: providerResult.verificationEmailEntered ?? null,
       verificationWebmailOpened: providerResult.verificationWebmailOpened ?? null,
+      verificationWebmailMailDetected: providerResult.verificationWebmailMailDetected ?? null,
+      verificationCode: providerResult.verificationCode ?? null,
       account,
       finalUrl: providerResult.finalUrl,
       title: providerResult.title,
