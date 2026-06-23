@@ -950,9 +950,7 @@ async function clickExactVisibleTextIncludingFrames(page, labels, selectors) {
   }
 
   for (const frame of page.frames()) {
-    const frameUrl = normalizeText(frame.url());
-
-    if (frame === page.mainFrame() || !/proton|challenge|account-api/i.test(frameUrl)) {
+    if (frame === page.mainFrame()) {
       continue;
     }
 
@@ -1195,8 +1193,8 @@ async function waitForProtonVerificationEmailInput(page, timeoutMs = 4000) {
   return input;
 }
 
-async function clickProtonEmailVerificationTabByMouse(page) {
-  const point = await page.evaluate(() => {
+async function protonEmailVerificationTabPoint(pageOrFrame) {
+  return pageOrFrame.evaluate(() => {
     const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
     const visible = (element) => {
       const rect = element.getBoundingClientRect();
@@ -1291,12 +1289,34 @@ async function clickProtonEmailVerificationTabByMouse(page) {
 
     return candidate ? { x: candidate.x, y: candidate.y } : null;
   }).catch(() => null);
+}
+
+async function clickProtonEmailVerificationTabByMouse(page, pageOrFrame = page) {
+  const point = await protonEmailVerificationTabPoint(pageOrFrame);
 
   if (!point) {
     return false;
   }
 
-  await page.mouse.click(point.x, point.y).catch(() => {});
+  let x = point.x;
+  let y = point.y;
+
+  if (pageOrFrame !== page) {
+    const frameElement = await pageOrFrame.frameElement().catch(() => null);
+    const frameBox = frameElement ? await frameElement.boundingBox().catch(() => null) : null;
+
+    if (!frameBox) {
+      return false;
+    }
+
+    x += frameBox.x;
+    y += frameBox.y;
+  }
+
+  await page.mouse.move(x, y).catch(() => {});
+  await page.mouse.down().catch(() => {});
+  await sleep(80);
+  await page.mouse.up().catch(() => {});
   await pauseStep();
 
   return true;
@@ -1361,6 +1381,10 @@ async function selectProtonEmailVerificationTab(page) {
     humanDialogVisible = humanDialogVisible || await hasProtonHumanVerificationDialog(frame);
 
     if (await clickProtonEmailVerificationTabInContext(frame)) {
+      return Boolean(await waitForProtonVerificationEmailInput(page));
+    }
+
+    if (await hasProtonHumanVerificationDialog(frame) && await clickProtonEmailVerificationTabByMouse(page, frame)) {
       return Boolean(await waitForProtonVerificationEmailInput(page));
     }
   }
@@ -1528,9 +1552,7 @@ async function findVisibleEmailInputIncludingFrames(page) {
   }
 
   for (const frame of page.frames()) {
-    const frameUrl = normalizeText(frame.url());
-
-    if (frame === page.mainFrame() || !/proton|challenge|account-api/i.test(frameUrl)) {
+    if (frame === page.mainFrame()) {
       continue;
     }
 
