@@ -67,6 +67,10 @@ class ManagedProcessSupervisor
 
     protected function shouldRestart(ManagedProcess $process): bool
     {
+        if ($this->hasActiveSiblingForRun($process)) {
+            return false;
+        }
+
         $runtime = $this->readJsonFile((string) $process->runtime_config_path);
         $status = $this->readJsonFile((string) $process->status_path);
         $runState = trim((string) ($status['state'] ?? ''));
@@ -102,6 +106,20 @@ class ManagedProcessSupervisor
         }
 
         return false;
+    }
+
+    protected function hasActiveSiblingForRun(ManagedProcess $process): bool
+    {
+        if (! $process->run_id) {
+            return false;
+        }
+
+        return ManagedProcess::query()
+            ->where('id', '!=', $process->id)
+            ->where('run_id', $process->run_id)
+            ->where('is_root', true)
+            ->whereIn('status', ['running', 'terminate_requested', 'kill_requested'])
+            ->exists();
     }
 
     protected function restart(ManagedProcess $process): bool

@@ -5,11 +5,16 @@
     <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
             <h3 class="text-lg font-semibold text-slate-900">Prozesse dieser Person</h3>
-            <p class="mt-1 text-sm text-slate-500">Node-Laeufe, Browser-Kindprozesse, Heartbeats und letzte Statusmeldungen.</p>
+            <p class="mt-1 text-sm text-slate-500">Standardmaessig werden nur die eigentlichen Node-Root-Scripte angezeigt. Browser-Kindprozesse sind optional.</p>
         </div>
-        <button type="button" wire:click="syncProcesses" wire:loading.attr="disabled" class="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-wait disabled:opacity-60">
-            Aktualisieren
-        </button>
+        <div class="flex flex-wrap gap-2">
+            <button type="button" wire:click="toggleChildProcesses" class="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
+                {{ $showChildProcesses ? 'Browser-Kinder ausblenden' : 'Browser-Kinder anzeigen' }}
+            </button>
+            <button type="button" wire:click="syncProcesses" wire:loading.attr="disabled" class="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-wait disabled:opacity-60">
+                Aktualisieren
+            </button>
+        </div>
     </div>
 
     @if($notice)
@@ -25,7 +30,7 @@
     @else
         <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <div class="rounded-lg border border-slate-200 bg-white p-4">
-                <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Gesamt</p>
+                <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Node-Scripte</p>
                 <p class="mt-2 text-2xl font-semibold text-slate-900">{{ $stats['total'] }}</p>
             </div>
             <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-4">
@@ -37,8 +42,8 @@
                 <p class="mt-2 text-2xl font-semibold text-amber-900">{{ $stats['stale'] }}</p>
             </div>
             <div class="rounded-lg border border-slate-200 bg-slate-50 p-4">
-                <p class="text-xs font-semibold uppercase tracking-wide text-slate-600">Beendet</p>
-                <p class="mt-2 text-2xl font-semibold text-slate-900">{{ $stats['exited'] }}</p>
+                <p class="text-xs font-semibold uppercase tracking-wide text-slate-600">Browser-Kinder</p>
+                <p class="mt-2 text-2xl font-semibold text-slate-900">{{ $stats['children'] }}</p>
             </div>
         </div>
 
@@ -54,7 +59,7 @@
             </div>
 
             <div class="overflow-x-auto">
-                <table class="min-w-[1120px] divide-y divide-slate-200 text-sm">
+                <table class="min-w-[1240px] divide-y divide-slate-200 text-sm">
                     <thead class="bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
                         <tr>
                             <th class="px-4 py-3 text-left">Prozess</th>
@@ -63,6 +68,7 @@
                             <th class="px-4 py-3 text-left">Heartbeat</th>
                             <th class="px-4 py-3 text-left">Letzter Schritt</th>
                             <th class="px-4 py-3 text-left">Kommando</th>
+                            <th class="px-4 py-3 text-right">Aktion</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-slate-100">
@@ -75,7 +81,9 @@
                                 <td class="whitespace-nowrap px-4 py-3">
                                     <div class="font-semibold text-slate-900">PID {{ $process->pid }}</div>
                                     <div class="text-xs text-slate-500">PPID {{ $process->parent_pid ?: '-' }}</div>
-                                    <div class="mt-1 text-xs text-slate-500">{{ $process->process_type }}</div>
+                                    <div class="mt-1 text-xs {{ $process->is_root ? 'font-semibold text-blue-700' : 'text-slate-500' }}">
+                                        {{ $process->is_root ? 'Node-Root' : 'Browser-Kind' }} · {{ $process->process_type }}
+                                    </div>
                                 </td>
                                 <td class="px-4 py-3">
                                     <div class="break-all font-semibold text-slate-900">{{ $process->run_id ?: '-' }}</div>
@@ -108,10 +116,19 @@
                                     <div class="max-w-md break-all text-xs text-slate-700">{{ $process->short_command ?: $process->command ?: '-' }}</div>
                                     <div class="mt-1 text-xs text-slate-400">zuletzt gesehen: {{ optional($process->last_seen_at)->format('d.m.Y H:i:s') ?: '-' }}</div>
                                 </td>
+                                <td class="whitespace-nowrap px-4 py-3 text-right">
+                                    @if($process->is_root && $process->run_id && in_array($process->run_type, ['mail-registration', 'webmail-session'], true))
+                                        <button type="button" wire:click="openPreview('{{ $process->run_id }}', '{{ $process->run_type }}')" class="rounded border border-blue-200 bg-white px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-50">
+                                            Vorschau
+                                        </button>
+                                    @else
+                                        <span class="text-xs text-slate-400">-</span>
+                                    @endif
+                                </td>
                             </tr>
                         @empty
                             <tr>
-                                <td colspan="6" class="px-4 py-12 text-center text-sm text-slate-500">
+                                <td colspan="7" class="px-4 py-12 text-center text-sm text-slate-500">
                                     Keine Prozesse fuer diese Person gefunden.
                                 </td>
                             </tr>
@@ -121,4 +138,117 @@
             </div>
         </div>
     @endif
+
+    <x-dialog-modal wire:model="showPreviewModal" maxWidth="6xl">
+        <x-slot name="title">
+            Prozess-Vorschau
+        </x-slot>
+
+        <x-slot name="content">
+            @php
+                $previewPollSeconds = max(1, min(60, (int) data_get($previewStatus, 'livePreviewPollIntervalSeconds', data_get($previewStatus, 'livePreviewIntervalSeconds', 3))));
+            @endphp
+            <div
+                @if($showPreviewModal && data_get($previewStatus, 'isRunning')) wire:poll.{{ $previewPollSeconds }}s="refreshPreview" @endif
+                class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(360px,460px)]"
+            >
+                <div class="grid gap-3">
+                    <div class="overflow-hidden rounded-lg border border-slate-200 bg-slate-950">
+                        <div class="flex items-center justify-between gap-3 border-b border-slate-800 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-300">
+                            <div class="min-w-0">
+                                <div>{{ $previewRunType === 'webmail-session' ? 'Webmail' : 'Registrierung' }}</div>
+                                @include('livewire.admin.config.partials.browser-window-status', [
+                                    'windowStatus' => $previewRunType === 'webmail-session'
+                                        ? data_get($previewStatus, 'windowStatus')
+                                        : data_get($previewStatus, 'registrationWindowStatus'),
+                                ])
+                            </div>
+                            @if(data_get($previewStatus, 'registrationDebugDomUrl') || data_get($previewStatus, 'debugDomUrl'))
+                                <a href="{{ data_get($previewStatus, 'registrationDebugDomUrl', data_get($previewStatus, 'debugDomUrl')) }}" download="process-preview-dom.json" class="rounded border border-slate-700 px-2 py-1 text-[10px] text-slate-200 hover:bg-slate-800">
+                                    DOM
+                                </a>
+                            @endif
+                        </div>
+                        @if(data_get($previewStatus, 'screenshotUrl'))
+                            <img src="{{ data_get($previewStatus, 'screenshotUrl') }}" alt="Live Screenshot" class="aspect-video w-full object-contain">
+                        @elseif(data_get($previewStatus, 'livePreviewEnabled') === false)
+                            <div class="flex aspect-video items-center justify-center text-sm font-semibold text-slate-300">
+                                Live-Screenshots sind deaktiviert.
+                            </div>
+                        @else
+                            <div class="flex aspect-video items-center justify-center text-sm font-semibold text-slate-300">
+                                Noch kein Screenshot verfuegbar.
+                            </div>
+                        @endif
+                    </div>
+
+                    @if($previewRunType === 'mail-registration')
+                        <div class="overflow-hidden rounded-lg border border-slate-200 bg-slate-950">
+                            <div class="flex items-center justify-between gap-3 border-b border-slate-800 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-300">
+                                <div class="min-w-0">
+                                    <div>Webmail</div>
+                                    @include('livewire.admin.config.partials.browser-window-status', [
+                                        'windowStatus' => data_get($previewStatus, 'webmailWindowStatus'),
+                                    ])
+                                </div>
+                                @if(data_get($previewStatus, 'webmailDebugDomUrl'))
+                                    <a href="{{ data_get($previewStatus, 'webmailDebugDomUrl') }}" download="process-preview-webmail-dom.json" class="rounded border border-slate-700 px-2 py-1 text-[10px] text-slate-200 hover:bg-slate-800">
+                                        DOM
+                                    </a>
+                                @endif
+                            </div>
+                            @if(data_get($previewStatus, 'webmailScreenshotUrl'))
+                                <img src="{{ data_get($previewStatus, 'webmailScreenshotUrl') }}" alt="Webmail Live Screenshot" class="aspect-video w-full object-contain">
+                            @else
+                                <div class="flex aspect-video items-center justify-center text-sm font-semibold text-slate-300">
+                                    Webmail-Fenster noch nicht geoeffnet.
+                                </div>
+                            @endif
+                        </div>
+                    @endif
+                </div>
+
+                <div class="space-y-4">
+                    <div class="rounded-lg border border-slate-200 bg-white p-4">
+                        <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Status</div>
+                        <div class="mt-2 text-sm font-semibold text-slate-900">
+                            {{ data_get($previewStatus, 'statusMessage', data_get($previewStatus, 'message', 'Noch kein Status verfuegbar.')) }}
+                        </div>
+                        <div class="mt-2 break-all text-xs text-slate-500">
+                            Run: {{ $previewRunId ?: '-' }}
+                        </div>
+                        <div class="mt-1 text-xs text-slate-500">
+                            Script: {{ data_get($previewStatus, 'scriptVersionLabel', data_get($previewStatus, 'scriptName', '-')) }}
+                        </div>
+                        @if(data_get($previewStatus, 'processHeartbeatStatus.statusText'))
+                            <div class="mt-2 rounded-md {{ data_get($previewStatus, 'processHeartbeatStatus.stale') ? 'bg-amber-50 text-amber-800' : 'bg-emerald-50 text-emerald-800' }} px-3 py-2 text-xs font-semibold">
+                                {{ data_get($previewStatus, 'processHeartbeatStatus.statusText') }}
+                            </div>
+                        @endif
+                    </div>
+
+                    <div class="max-h-96 overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-4">
+                        <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Ablauf</div>
+                        <div class="mt-3 space-y-2">
+                            @forelse(array_reverse(data_get($previewStatus, 'events', [])) as $event)
+                                <div class="rounded-md bg-white p-3 text-xs shadow-sm">
+                                    <div class="font-semibold text-slate-900">{{ data_get($event, 'stage', '-') }}</div>
+                                    <div class="mt-1 text-slate-600">{{ data_get($event, 'message', '-') }}</div>
+                                    <div class="mt-1 text-slate-400">{{ data_get($event, 'at', '') }}</div>
+                                </div>
+                            @empty
+                                <div class="text-sm text-slate-500">Noch keine Ablaufdaten.</div>
+                            @endforelse
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </x-slot>
+
+        <x-slot name="footer">
+            <button type="button" wire:click="closePreview" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">
+                Schliessen
+            </button>
+        </x-slot>
+    </x-dialog-modal>
 </section>

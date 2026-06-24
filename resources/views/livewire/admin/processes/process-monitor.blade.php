@@ -78,6 +78,7 @@
                         @include('livewire.admin.processes.partials.process-tree-node', [
                             'process' => $process,
                             'depth' => 0,
+                            'defaultOpen' => ! $compact,
                         ])
                     @empty
                         <div class="px-4 py-12 text-center text-sm text-gray-500">

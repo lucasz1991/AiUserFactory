@@ -196,6 +196,7 @@ class ProcessMonitor extends Component
 
         return ManagedProcess::query()
             ->whereIn('process_type', self::FACTORY_NODE_PROCESS_TYPES)
+            ->where('is_root', true)
             ->when($canFilterByRunId, fn ($query) => $query->where('run_id', $this->runId))
             ->when(! $canFilterByRunId && $this->rootPid, fn ($query) => $query->where(function ($inner): void {
                 $inner->where('pid', $this->rootPid)

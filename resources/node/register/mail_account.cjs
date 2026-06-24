@@ -4111,6 +4111,10 @@ async function main() {
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
+      '--disable-features=IsolateOrigins,site-per-process,Translate,BackForwardCache',
+      '--disable-site-isolation-trials',
+      '--process-per-site',
+      '--renderer-process-limit=2',
       `--window-size=${DEFAULT_VIEWPORT.width},${DEFAULT_VIEWPORT.height}`,
     ],
   };
