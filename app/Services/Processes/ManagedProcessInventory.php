@@ -66,7 +66,7 @@ class ManagedProcessInventory
             $rootMetadata = $rootMetadataByPid[$rootPid] ?? [];
             $runtimeConfigPath = $commandMetadata['runtime_config_path'] ?: ($rootMetadata['runtime_config_path'] ?? null);
             $runtimeContext = $this->runtimeProcessContext($runtimeConfigPath, $pid === $rootPid ? 'main' : 'child');
-            $metadata = array_filter([
+            $metadata = [
                 ...$commandMetadata,
                 'runtime_config_path' => $runtimeConfigPath,
                 'root_runtime_config_path' => $rootMetadata['runtime_config_path'] ?? null,
@@ -75,7 +75,7 @@ class ManagedProcessInventory
                 'subject_person_id' => $runtimeContext['person_id'],
                 'status_state' => $runtimeContext['status_state'],
                 'status_stage' => $runtimeContext['last_stage'],
-            ], fn (mixed $value): bool => $value !== null && $value !== '');
+            ];
             $elapsedSeconds = max(0, (int) ($entry->elapsed_seconds ?? 0));
             $cpuPercent = is_numeric($entry->cpu_percent ?? null) ? (float) $entry->cpu_percent : null;
             $isIdle = $elapsedSeconds >= self::IDLE_MINUTES * 60
@@ -84,9 +84,9 @@ class ManagedProcessInventory
             $payload = [
                 'parent_pid' => $this->nullablePositiveInteger($entry->parent_pid ?? null),
                 'family_root_pid' => $rootPid,
-                'process_type' => $metadata['process_type'],
-                'executable' => $metadata['executable'],
-                'script_name' => $metadata['script_name'],
+                'process_type' => $metadata['process_type'] ?? 'app-process',
+                'executable' => $metadata['executable'] ?? null,
+                'script_name' => $metadata['script_name'] ?? null,
                 'command' => (string) ($entry->command ?? ''),
                 'short_command' => $this->shortenCommand((string) ($entry->command ?? '')),
                 'status' => 'running',
