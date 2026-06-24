@@ -111,6 +111,14 @@ class PersonDetail extends PersonList
         $this->refreshProfileDetail();
     }
 
+    public function registerInstagramAccount(): void
+    {
+        $this->activeProfileId = $this->profileId;
+
+        parent::registerInstagramAccount();
+        $this->refreshProfileDetail();
+    }
+
     #[On('refreshPersonDetail')]
     public function refreshFromChildComponent(): void
     {

@@ -4,6 +4,7 @@ namespace App\Livewire\Admin\Config;
 
 use App\Models\Person;
 use App\Services\Mail\MailAccountRegistrationRunner;
+use App\Services\Mail\WebmailSessionRunner;
 use Illuminate\Support\Facades\Crypt;
 use Livewire\Component;
 
@@ -48,6 +49,8 @@ class PersonEmailAccountSettings extends Component
     public ?string $mailRegistrationRunId = null;
 
     public array $mailRegistrationStatus = [];
+
+    public array $webmailSessionResult = [];
 
     public function mount(int $personId): void
     {
@@ -215,6 +218,51 @@ class PersonEmailAccountSettings extends Component
         $this->showMailRegistrationModal = false;
     }
 
+    public function buildWebmailSession(): void
+    {
+        if (! $this->person) {
+            return;
+        }
+
+        try {
+            $password = trim($this->accountPassword) !== ''
+                ? $this->accountPassword
+                : $this->storedEmailPassword();
+
+            $result = app(WebmailSessionRunner::class)->capture([
+                'provider' => $this->provider,
+                'email' => $this->emailAddress ?: $this->person->person_email,
+                'username' => $this->accountUsername ?: $this->emailAddress,
+                'password' => $password,
+                'webmailUrl' => $this->webmailUrl,
+            ], 'person-'.$this->person->id.'-webmail');
+
+            if (! empty($result['encryptedSessionPayload'])) {
+                $this->storeWebmailSessionResult($result);
+                $this->loadPerson();
+                $this->dispatch('refreshPersonDetail');
+            }
+
+            unset($result['encryptedSessionPayload']);
+            $this->webmailSessionResult = $result;
+
+            $this->dispatch(
+                'showAlert',
+                ($result['ok'] ?? false) ? 'Webmail-Session wurde gespeichert.' : 'Webmail-Session wurde mit Hinweisen gespeichert.',
+                ($result['ok'] ?? false) ? 'success' : 'warning'
+            );
+        } catch (\Throwable $exception) {
+            $this->webmailSessionResult = [
+                'ok' => false,
+                'statusMessage' => 'Webmail-Session konnte nicht gespeichert werden.',
+                'warnings' => [$exception->getMessage()],
+                'notes' => [],
+            ];
+
+            $this->dispatch('showAlert', 'Webmail-Session konnte nicht gespeichert werden.', 'error');
+        }
+    }
+
     public function render()
     {
         return view('livewire.admin.config.person-email-account-settings');
@@ -246,6 +294,54 @@ class PersonEmailAccountSettings extends Component
         $this->smtpPort = data_get($emailAccount, 'smtp.port') !== null ? (int) data_get($emailAccount, 'smtp.port') : null;
         $this->smtpEncryption = (string) data_get($emailAccount, 'smtp.encryption', '');
         $this->notes = (string) ($emailAccount['notes'] ?? '');
+    }
+
+    protected function storedEmailPassword(): string
+    {
+        if (! $this->person) {
+            return '';
+        }
+
+        $metadata = is_array($this->person->metadata) ? $this->person->metadata : [];
+        $encrypted = data_get($metadata, 'email_account.password_encrypted');
+
+        if (! is_string($encrypted) || trim($encrypted) === '') {
+            return '';
+        }
+
+        try {
+            return Crypt::decryptString($encrypted);
+        } catch (\Throwable) {
+            return '';
+        }
+    }
+
+    protected function storeWebmailSessionResult(array $result): void
+    {
+        if (! $this->person) {
+            return;
+        }
+
+        $metadata = is_array($this->person->metadata) ? $this->person->metadata : [];
+        $emailAccount = is_array($metadata['email_account'] ?? null) ? $metadata['email_account'] : [];
+        $summary = is_array($result['sessionSummary'] ?? null) ? $result['sessionSummary'] : [];
+
+        $emailAccount['webmail_session'] = [
+            'payload_encrypted' => (string) $result['encryptedSessionPayload'],
+            'payload_hash' => (string) ($result['sessionPayloadHash'] ?? ''),
+            'captured_at' => (string) ($summary['capturedAt'] ?? now()->toIso8601String()),
+            'final_url' => $summary['finalUrl'] ?? ($result['finalUrl'] ?? null),
+            'origin' => $summary['origin'] ?? null,
+            'cookie_count' => (int) ($summary['cookieCount'] ?? ($result['cookieCount'] ?? 0)),
+            'script_name' => (string) ($result['scriptName'] ?? 'webmail_session.cjs'),
+            'script_version' => (int) ($result['scriptVersion'] ?? 1),
+            'updated_at' => now()->toIso8601String(),
+        ];
+        $metadata['email_account'] = $emailAccount;
+
+        $this->person->forceFill([
+            'metadata' => $metadata,
+        ])->save();
     }
 
     protected function nullableString(mixed $value): ?string

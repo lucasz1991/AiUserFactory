@@ -400,23 +400,33 @@
                 </x-admin.panel>
             </div>
 
-            <div x-show="tab === 'social'" class="space-y-6">
-                <x-admin.panel title="Social Media Accounts" description="Vorerst wird hier nur der Instagram-Account dieser Person verwaltet.">
+            <div x-show="tab === 'social'" x-data="{ socialPortal: 'instagram' }" class="space-y-6">
+                <x-admin.panel title="Social Media Accounts" description="Portale werden getrennt verwaltet; aktiv ist aktuell Instagram.">
                     <x-slot name="actions">
                         <div class="flex flex-wrap gap-2">
                             <button type="button" wire:click="openEditProfile" class="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
-                                Instagram bearbeiten
+                                Zugangsdaten bearbeiten
                             </button>
                             <button type="button" wire:click="openRuntimeSettingsModal" class="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
                                 Timeouts
                             </button>
-                            <button type="button" wire:click="buildInstagramSession" class="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
-                                Session aufbauen
+                            <button type="button" wire:click="registerInstagramAccount" wire:loading.attr="disabled" class="rounded-md border border-pink-200 bg-white px-4 py-2 text-sm font-semibold text-pink-700 shadow-sm hover:bg-pink-50 disabled:cursor-wait disabled:opacity-60">
+                                Instagram registrieren
+                            </button>
+                            <button type="button" wire:click="buildInstagramSession" wire:loading.attr="disabled" class="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:cursor-wait disabled:opacity-60">
+                                Login-Session speichern
                             </button>
                         </div>
                     </x-slot>
 
-                    <article class="overflow-hidden rounded-lg border border-pink-100 bg-gradient-to-br from-pink-50 via-white to-orange-50">
+                    <div class="mb-4 flex flex-wrap gap-2 border-b border-slate-200 pb-3">
+                        <button type="button" @click="socialPortal = 'instagram'" :class="socialPortal === 'instagram' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'" class="rounded-md px-3 py-2 text-sm font-semibold">Instagram</button>
+                        <button type="button" @click="socialPortal = 'facebook'" :class="socialPortal === 'facebook' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'" class="rounded-md px-3 py-2 text-sm font-semibold">Facebook</button>
+                        <button type="button" @click="socialPortal = 'tiktok'" :class="socialPortal === 'tiktok' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'" class="rounded-md px-3 py-2 text-sm font-semibold">TikTok</button>
+                        <button type="button" @click="socialPortal = 'x'" :class="socialPortal === 'x' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'" class="rounded-md px-3 py-2 text-sm font-semibold">X</button>
+                    </div>
+
+                    <article x-show="socialPortal === 'instagram'" class="overflow-hidden rounded-lg border border-pink-100 bg-gradient-to-br from-pink-50 via-white to-orange-50">
                         <div class="flex flex-wrap items-start justify-between gap-4 border-b border-pink-100 bg-white/70 p-5">
                             <div class="min-w-0">
                                 <p class="text-xs font-semibold uppercase tracking-wide text-pink-600">Instagram</p>
@@ -468,6 +478,10 @@
                             </div>
                         </div>
                     </article>
+
+                    <div x-show="socialPortal !== 'instagram'" class="rounded-lg border border-slate-200 bg-slate-50 p-5 text-sm text-slate-600">
+                        Dieses Portal ist vorbereitet, aber noch nicht implementiert.
+                    </div>
                 </x-admin.panel>
 
                 @if($sessionBuildResult)

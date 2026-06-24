@@ -376,6 +376,7 @@ class MailAccountRegistrationRunner
             'username' => trim((string) ($mailbox['username'] ?? '')),
             'password_encrypted' => $this->nullableString($mailbox['password_encrypted'] ?? null),
             'webmail_url' => trim((string) ($mailbox['webmail_url'] ?? '')),
+            'webmail_session' => is_array($mailbox['webmail_session'] ?? null) ? $mailbox['webmail_session'] : null,
         ];
     }
 

@@ -72,6 +72,9 @@
                 <input type="checkbox" wire:model.defer="verificationMailboxEnabled" class="rounded border-gray-300 text-slate-900 shadow-sm focus:ring-slate-900">
                 Als Verifikations-Postfach nutzen
             </label>
+            <button type="button" wire:click="buildVerificationMailboxWebmailSession" wire:loading.attr="disabled" class="rounded-md border border-emerald-200 bg-white px-4 py-2 text-sm font-semibold text-emerald-700 shadow-sm hover:bg-emerald-50 disabled:cursor-wait disabled:opacity-60">
+                Webmail-Session speichern
+            </button>
         </div>
 
         <div class="mt-5 grid gap-6 md:grid-cols-2 xl:grid-cols-3">
@@ -119,6 +122,20 @@
                 @error('verificationMailboxWebmailUrl') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
             </div>
         </div>
+
+        @if($verificationMailboxSessionResult !== [])
+            <div class="mt-5 rounded-lg border p-4 text-sm {{ data_get($verificationMailboxSessionResult, 'ok') ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-amber-200 bg-amber-50 text-amber-950' }}">
+                <p class="font-semibold">{{ data_get($verificationMailboxSessionResult, 'statusMessage', 'Webmail-Sessionlauf abgeschlossen.') }}</p>
+                <p class="mt-1 text-xs">Cookies: {{ data_get($verificationMailboxSessionResult, 'cookieCount', data_get($verificationMailboxSessionResult, 'sessionSummary.cookieCount', 0)) }}</p>
+                @if(!empty($verificationMailboxSessionResult['warnings']))
+                    <ul class="mt-2 list-disc space-y-1 pl-5 text-xs">
+                        @foreach($verificationMailboxSessionResult['warnings'] as $warning)
+                            <li>{{ $warning }}</li>
+                        @endforeach
+                    </ul>
+                @endif
+            </div>
+        @endif
     </div>
 
     <div class="rounded-lg border border-gray-200 bg-white p-5">

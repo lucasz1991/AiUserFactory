@@ -3,6 +3,7 @@
 namespace App\Livewire\Admin\Config;
 
 use App\Services\Mail\MailAccountRegistrationRunner;
+use App\Services\Mail\WebmailSessionRunner;
 use Illuminate\Support\Facades\Crypt;
 use Livewire\Component;
 
@@ -44,6 +45,7 @@ class MailRegistrationSettings extends Component
     public bool $showRegistrationRunModal = false;
     public ?string $registrationRunId = null;
     public array $registrationRunStatus = [];
+    public array $verificationMailboxSessionResult = [];
 
     public function mount(MailAccountRegistrationRunner $runner): void
     {
@@ -120,6 +122,48 @@ class MailRegistrationSettings extends Component
         $this->dispatch('showAlert', 'Verifikations-Passwort geloescht.', 'success');
     }
 
+    public function buildVerificationMailboxWebmailSession(): void
+    {
+        try {
+            $this->saveSettings(false);
+            $settings = app(MailAccountRegistrationRunner::class)->settings();
+            $mailbox = is_array($settings['verification_mailbox'] ?? null) ? $settings['verification_mailbox'] : [];
+            $password = $this->decryptStoredPassword($mailbox['password_encrypted'] ?? null);
+
+            $result = app(WebmailSessionRunner::class)->capture([
+                'provider' => $mailbox['provider'] ?? '',
+                'email' => $mailbox['email'] ?? '',
+                'username' => ($mailbox['username'] ?? '') ?: ($mailbox['email'] ?? ''),
+                'password' => $password,
+                'webmailUrl' => $mailbox['webmail_url'] ?? '',
+            ], 'master-mailbox-webmail');
+
+            if (! empty($result['encryptedSessionPayload'])) {
+                $settings['verification_mailbox']['webmail_session'] = $this->webmailSessionPayload($result);
+                $settings = app(MailAccountRegistrationRunner::class)->saveSettings($settings);
+                $this->fillFromSettings($settings);
+            }
+
+            unset($result['encryptedSessionPayload']);
+            $this->verificationMailboxSessionResult = $result;
+
+            $this->dispatch(
+                'showAlert',
+                ($result['ok'] ?? false) ? 'Master-Webmail-Session wurde gespeichert.' : 'Master-Webmail-Session wurde mit Hinweisen gespeichert.',
+                ($result['ok'] ?? false) ? 'success' : 'warning'
+            );
+        } catch (\Throwable $exception) {
+            $this->verificationMailboxSessionResult = [
+                'ok' => false,
+                'statusMessage' => 'Master-Webmail-Session konnte nicht gespeichert werden.',
+                'warnings' => [$exception->getMessage()],
+                'notes' => [],
+            ];
+
+            $this->dispatch('showAlert', 'Master-Webmail-Session konnte nicht gespeichert werden.', 'error');
+        }
+    }
+
     public function render()
     {
         return view('livewire.admin.config.mail-registration-settings');
@@ -183,6 +227,7 @@ class MailRegistrationSettings extends Component
                 'username' => trim((string) ($validated['verificationMailboxUsername'] ?? '')),
                 'password_encrypted' => $this->nullableString($encryptedVerificationPassword),
                 'webmail_url' => trim((string) ($validated['verificationMailboxWebmailUrl'] ?? '')),
+                'webmail_session' => is_array($existingMailbox['webmail_session'] ?? null) ? $existingMailbox['webmail_session'] : null,
             ],
             'providers' => [
                 [
@@ -270,5 +315,35 @@ class MailRegistrationSettings extends Component
         $value = trim((string) $value);
 
         return $value === '' ? null : $value;
+    }
+
+    protected function decryptStoredPassword(mixed $encrypted): string
+    {
+        if (! is_string($encrypted) || trim($encrypted) === '') {
+            return '';
+        }
+
+        try {
+            return Crypt::decryptString($encrypted);
+        } catch (\Throwable) {
+            return '';
+        }
+    }
+
+    protected function webmailSessionPayload(array $result): array
+    {
+        $summary = is_array($result['sessionSummary'] ?? null) ? $result['sessionSummary'] : [];
+
+        return [
+            'payload_encrypted' => (string) $result['encryptedSessionPayload'],
+            'payload_hash' => (string) ($result['sessionPayloadHash'] ?? ''),
+            'captured_at' => (string) ($summary['capturedAt'] ?? now()->toIso8601String()),
+            'final_url' => $summary['finalUrl'] ?? ($result['finalUrl'] ?? null),
+            'origin' => $summary['origin'] ?? null,
+            'cookie_count' => (int) ($summary['cookieCount'] ?? ($result['cookieCount'] ?? 0)),
+            'script_name' => (string) ($result['scriptName'] ?? 'webmail_session.cjs'),
+            'script_version' => (int) ($result['scriptVersion'] ?? 1),
+            'updated_at' => now()->toIso8601String(),
+        ];
     }
 }

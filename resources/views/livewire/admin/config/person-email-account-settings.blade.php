@@ -19,6 +19,9 @@
                     <button type="button" wire:click="startMailRegistration" wire:loading.attr="disabled" class="rounded-md border border-blue-200 bg-white px-4 py-2 text-sm font-semibold text-blue-700 shadow-sm hover:bg-blue-50 disabled:cursor-wait disabled:opacity-60">
                         Account registrieren
                     </button>
+                    <button type="button" wire:click="buildWebmailSession" wire:loading.attr="disabled" class="rounded-md border border-emerald-200 bg-white px-4 py-2 text-sm font-semibold text-emerald-700 shadow-sm hover:bg-emerald-50 disabled:cursor-wait disabled:opacity-60">
+                        Webmail-Session speichern
+                    </button>
                     <button type="button" wire:click="saveSettings" class="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
                         Speichern
                     </button>
@@ -83,6 +86,20 @@
                 </div>
             </div>
         </x-admin.panel>
+
+        @if($webmailSessionResult !== [])
+            <div class="rounded-lg border p-4 text-sm {{ data_get($webmailSessionResult, 'ok') ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-amber-200 bg-amber-50 text-amber-950' }}">
+                <p class="font-semibold">{{ data_get($webmailSessionResult, 'statusMessage', 'Webmail-Sessionlauf abgeschlossen.') }}</p>
+                <p class="mt-1 text-xs">Cookies: {{ data_get($webmailSessionResult, 'cookieCount', data_get($webmailSessionResult, 'sessionSummary.cookieCount', 0)) }}</p>
+                @if(!empty($webmailSessionResult['warnings']))
+                    <ul class="mt-2 list-disc space-y-1 pl-5 text-xs">
+                        @foreach($webmailSessionResult['warnings'] as $warning)
+                            <li>{{ $warning }}</li>
+                        @endforeach
+                    </ul>
+                @endif
+            </div>
+        @endif
 
         <div class="grid gap-6 xl:grid-cols-2">
             <x-admin.panel title="IMAP">

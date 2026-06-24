@@ -463,6 +463,16 @@ class PersonList extends Component
 
     public function buildInstagramSession(): void
     {
+        $this->runInstagramSessionScript('login-session');
+    }
+
+    public function registerInstagramAccount(): void
+    {
+        $this->runInstagramSessionScript('register-account');
+    }
+
+    protected function runInstagramSessionScript(string $mode): void
+    {
         try {
             $storedSettings = $this->activeProfileSettings();
         } catch (\RuntimeException) {
@@ -471,28 +481,42 @@ class PersonList extends Component
 
         try {
             $runtimeConfig = $this->buildRuntimeConfig($storedSettings);
+            $runtimeConfig['observationTimeoutMs'] = max(60000, min(300000, ((int) ($storedSettings['navigation_timeout_seconds'] ?? 120)) * 1000));
+
+            if ($mode === 'register-account') {
+                $runtimeConfig['autoLoginEnabled'] = false;
+            }
+
             $runtimeConfigPath = $this->writeRuntimeConfigFile($runtimeConfig);
             $nodeScript = $this->resolveNodeScriptPath();
 
             $result = Process::path(base_path())
-                ->timeout(max(60, min(90, ((int) ($storedSettings['navigation_timeout_seconds'] ?? 120)) + 30)))
+                ->timeout(max(90, min(330, ((int) ($storedSettings['navigation_timeout_seconds'] ?? 120)) + 90)))
                 ->run([
                     $this->resolveNodeBinary(),
                     $nodeScript,
                     '',
                     $runtimeConfigPath,
-                    'login-session',
+                    $mode,
                 ]);
             app(ScraperProfileDatabaseStore::class)->syncCookiePayloadsFromRuntimeConfig($runtimeConfig);
         } catch (\Throwable $exception) {
             $this->sessionBuildResult = [
                 'ok' => false,
-                'statusMessage' => 'Der Session-Aufbau konnte nicht gestartet werden.',
+                'statusMessage' => $mode === 'register-account'
+                    ? 'Die Instagram-Registrierung konnte nicht gestartet werden.'
+                    : 'Der Session-Aufbau konnte nicht gestartet werden.',
                 'warnings' => [$exception->getMessage()],
                 'notes' => [],
             ];
 
-            $this->dispatch('showAlert', 'Der Session-Aufbau konnte nicht gestartet werden.', 'error');
+            $this->dispatch(
+                'showAlert',
+                $mode === 'register-account'
+                    ? 'Instagram-Registrierung konnte nicht gestartet werden.'
+                    : 'Der Session-Aufbau konnte nicht gestartet werden.',
+                'error'
+            );
 
             return;
         } finally {
@@ -510,7 +534,9 @@ class PersonList extends Component
 
             $this->dispatch(
                 'showAlert',
-                $payload['ok'] ? 'Instagram-Session wurde aufgebaut.' : 'Instagram-Session konnte nicht aufgebaut werden.',
+                $payload['ok']
+                    ? ($mode === 'register-account' ? 'Instagram-Registrierung/Session wurde gespeichert.' : 'Instagram-Session wurde aufgebaut.')
+                    : ($mode === 'register-account' ? 'Instagram-Registrierung wurde nicht als eingeloggte Session erkannt.' : 'Instagram-Session konnte nicht aufgebaut werden.'),
                 $payload['ok'] ? 'success' : 'warning'
             );
 
@@ -525,24 +551,28 @@ class PersonList extends Component
 
             $this->sessionBuildResult = [
                 'ok' => false,
-                'statusMessage' => 'Der Session-Aufbau ist beim Start des Node-Skripts fehlgeschlagen.',
+                'statusMessage' => $mode === 'register-account'
+                    ? 'Die Instagram-Registrierung ist beim Start des Node-Skripts fehlgeschlagen.'
+                    : 'Der Session-Aufbau ist beim Start des Node-Skripts fehlgeschlagen.',
                 'warnings' => $warnings !== [] ? $warnings : ['Der Node-Prozess wurde mit einem Fehler beendet.'],
                 'notes' => [],
             ];
 
-            $this->dispatch('showAlert', 'Der Session-Aufbau ist fehlgeschlagen.', 'error');
+            $this->dispatch('showAlert', $mode === 'register-account' ? 'Instagram-Registrierung ist fehlgeschlagen.' : 'Der Session-Aufbau ist fehlgeschlagen.', 'error');
 
             return;
         }
 
         $this->sessionBuildResult = [
             'ok' => false,
-            'statusMessage' => 'Der Session-Aufbau hat kein gueltiges JSON-Ergebnis geliefert.',
+            'statusMessage' => $mode === 'register-account'
+                ? 'Die Instagram-Registrierung hat kein gueltiges JSON-Ergebnis geliefert.'
+                : 'Der Session-Aufbau hat kein gueltiges JSON-Ergebnis geliefert.',
             'warnings' => [trim($result->errorOutput())],
             'notes' => [],
         ];
 
-        $this->dispatch('showAlert', 'Der Session-Aufbau ist fehlgeschlagen.', 'error');
+        $this->dispatch('showAlert', $mode === 'register-account' ? 'Instagram-Registrierung ist fehlgeschlagen.' : 'Der Session-Aufbau ist fehlgeschlagen.', 'error');
     }
 
     public function clearStoredPassword(): void
