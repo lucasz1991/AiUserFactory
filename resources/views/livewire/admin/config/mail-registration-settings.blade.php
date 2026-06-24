@@ -313,6 +313,30 @@
                         </div>
                     @endif
 
+                    @php
+                        $webmailDebugDom = data_get($verificationMailboxSessionResult, 'debugDom');
+                        $webmailDebugDomText = is_array($webmailDebugDom)
+                            ? json_encode($webmailDebugDom, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
+                            : (string) $webmailDebugDom;
+                    @endphp
+                    @if($webmailDebugDomText !== '')
+                        <div x-data="{ open: false }" class="rounded-lg border border-slate-200 bg-white text-xs">
+                            <div class="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+                                <button type="button" x-on:click="open = !open" class="font-semibold uppercase tracking-wide text-slate-600">
+                                    Aktueller DOM
+                                </button>
+                                @if(data_get($verificationMailboxSessionResult, 'debugDomUrl'))
+                                    <a href="{{ data_get($verificationMailboxSessionResult, 'debugDomUrl') }}" download="webmail-session-dom.json" class="rounded-md border border-slate-300 bg-white px-3 py-1.5 font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
+                                        DOM herunterladen
+                                    </a>
+                                @endif
+                            </div>
+                            <div x-show="open" x-cloak x-collapse.duration.300ms>
+                                <pre class="max-h-96 overflow-auto whitespace-pre-wrap break-words bg-slate-950 p-3 text-[11px] leading-relaxed text-slate-100">{{ $webmailDebugDomText }}</pre>
+                            </div>
+                        </div>
+                    @endif
+
                     @if(!empty($verificationMailboxSessionResult['notes']))
                         <div class="rounded-lg border border-slate-200 bg-slate-50 p-4 text-xs text-slate-700">
                             <div class="font-semibold uppercase tracking-wide text-slate-500">Notizen</div>

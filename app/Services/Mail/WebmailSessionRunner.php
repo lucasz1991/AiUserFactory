@@ -111,6 +111,8 @@ class WebmailSessionRunner
         $status['runId'] = $runId;
         $status['isRunning'] = in_array((string) ($status['state'] ?? ''), ['queued', 'starting', 'running'], true);
         $status['screenshotUrl'] = $this->runScreenshotUrl($runId);
+        $status['debugDomUrl'] = $this->debugDomUrl($runId, $status);
+        $status['debugDom'] = $this->latestDebugDom($status);
         $status['result'] = $result;
 
         return $status;
@@ -326,9 +328,43 @@ class WebmailSessionRunner
         return 'webmail-session/runs/'.$runId.'/live.png';
     }
 
+    protected function publicDebugDomRelativePath(string $runId): string
+    {
+        return 'webmail-session/runs/'.$runId.'/debug-dom.json';
+    }
+
     protected function runScreenshotUrl(string $runId): ?string
     {
         return $this->screenshotUrl($this->publicScreenshotRelativePath($runId));
+    }
+
+    protected function debugDomUrl(string $runId, array $status): ?string
+    {
+        $debugDom = $this->latestDebugDom($status);
+
+        if ($debugDom === null) {
+            return null;
+        }
+
+        $relativePath = $this->publicDebugDomRelativePath($runId);
+        $absolutePath = storage_path('app/public/'.$relativePath);
+        File::ensureDirectoryExists(dirname($absolutePath));
+        File::put($absolutePath, json_encode($debugDom, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+
+        return Storage::disk('public')->url($relativePath).'?v='.File::lastModified($absolutePath);
+    }
+
+    protected function latestDebugDom(array $status): mixed
+    {
+        $events = is_array($status['events'] ?? null) ? array_reverse($status['events']) : [];
+
+        foreach ($events as $event) {
+            if (is_array($event) && array_key_exists('debugDom', $event) && $event['debugDom'] !== null && $event['debugDom'] !== '') {
+                return $event['debugDom'];
+            }
+        }
+
+        return null;
     }
 
     protected function writeJsonFile(string $path, array $payload): void

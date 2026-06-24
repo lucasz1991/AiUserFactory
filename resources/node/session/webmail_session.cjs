@@ -20,6 +20,8 @@ const SCRIPT_NAME = process.env.WEBMAIL_SESSION_SCRIPT_NAME || 'webmail_session.
 const SCRIPT_VERSION = 1;
 const DEFAULT_VIEWPORT = { width: 1365, height: 900 };
 const LIVE_PREVIEW_MIN_INTERVAL_MS = 2500;
+const DOM_DEBUG_TEXT_LIMIT = 3000;
+const DOM_DEBUG_HTML_LIMIT = 6000;
 const statusEvents = [];
 let lastLivePreviewAt = 0;
 
@@ -66,6 +68,7 @@ function publicStatusPayload(runtimeConfig, state, stage, message, data = {}) {
     browserFallbackReason: data.browserFallbackReason || null,
     finalUrl: data.finalUrl || null,
     title: data.title || null,
+    debugDom: data.debugDom || null,
     liveScreenshotPath: data.liveScreenshotPath || null,
     liveScreenshotAt: data.liveScreenshotAt || null,
     events: statusEvents.slice(-40),
@@ -79,6 +82,7 @@ function progress(runtimeConfig, stage, message, data = {}, state = 'running') {
     message,
     finalUrl: data.finalUrl || null,
     title: data.title || null,
+    debugDom: data.debugDom || null,
     liveScreenshotAt: data.liveScreenshotAt || null,
   };
 
@@ -132,6 +136,117 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
       liveScreenshotError: normalizeText(error?.message || String(error)),
     };
   }
+}
+
+async function frameDomDebug(frame) {
+  return frame.evaluate((limits) => {
+    const compactText = (value = '', limit = 1000) => {
+      const text = String(value || '').replace(/\s+/g, ' ').trim();
+
+      return text.length > limit ? `${text.slice(0, limit)}... [truncated ${text.length - limit} chars]` : text;
+    };
+
+    const attrs = (element, names) => Object.fromEntries(
+      names
+        .map((name) => [name, element.getAttribute(name)])
+        .filter(([, value]) => value !== null && value !== ''),
+    );
+
+    const summary = (element) => {
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+      const haystack = [
+        element.getAttribute('type'),
+        element.getAttribute('name'),
+        element.getAttribute('id'),
+        element.getAttribute('autocomplete'),
+        element.getAttribute('placeholder'),
+        element.getAttribute('aria-label'),
+      ].join(' ').toLowerCase();
+      const secret = haystack.includes('password');
+      const text = secret && element.value
+        ? '[redacted]'
+        : (element.innerText || element.textContent || element.value || '');
+
+      return {
+        tag: element.tagName.toLowerCase(),
+        text: compactText(text, 220),
+        visible: rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none',
+        disabled: Boolean(element.disabled),
+        attrs: attrs(element, [
+          'id',
+          'name',
+          'type',
+          'class',
+          'autocomplete',
+          'placeholder',
+          'aria-label',
+          'data-testid',
+          'data-id',
+          'role',
+          'title',
+        ]),
+      };
+    };
+    const main = document.querySelector('main') || document.body;
+
+    return {
+      url: window.location.href,
+      title: document.title || '',
+      text: compactText(document.body?.innerText || '', limits.text),
+      inputs: Array.from(document.querySelectorAll('input, textarea, select')).slice(0, 35).map(summary),
+      buttons: Array.from(document.querySelectorAll('button, [role="button"], input[type="submit"], a')).slice(0, 45).map(summary),
+      iframes: Array.from(document.querySelectorAll('iframe')).slice(0, 12).map((iframe) => ({
+        src: iframe.src || '',
+        title: iframe.title || '',
+        id: iframe.id || '',
+        class: iframe.className || '',
+      })),
+      html: compactText(main?.outerHTML || document.body?.innerHTML || '', limits.html),
+    };
+  }, {
+    text: DOM_DEBUG_TEXT_LIMIT,
+    html: DOM_DEBUG_HTML_LIMIT,
+  });
+}
+
+async function domDebugSnapshot(page) {
+  if (!page) {
+    return null;
+  }
+
+  const frames = [];
+
+  for (const frame of page.frames()) {
+    try {
+      frames.push({
+        name: frame.name() || '',
+        url: frame.url(),
+        dom: await frameDomDebug(frame),
+      });
+    } catch (error) {
+      frames.push({
+        name: frame.name() || '',
+        url: frame.url(),
+        error: normalizeText(error?.message || String(error)),
+      });
+    }
+  }
+
+  return {
+    capturedAt: new Date().toISOString(),
+    frames,
+  };
+}
+
+async function pageProgressData(page, runtimeConfig, livePreview = {}, browserData = {}) {
+  return {
+    ...livePreview,
+    ...browserData,
+    finalUrl: page?.url?.() || null,
+    title: page ? await page.title().catch(() => '') : null,
+    debugDom: runtimeConfig.domDebugEnabled === false ? null : await domDebugSnapshot(page),
+  };
 }
 
 function sleep(ms) {
@@ -270,26 +385,88 @@ async function clickByText(page, patterns, selector = 'button, [role="button"], 
   }, patterns, selector).catch(() => false);
 }
 
-async function prepareGmxLogin(page) {
-  await clickByText(page, [
-    'accept',
-    'akzeptieren',
-    'zustimmen',
-    'alle akzeptieren',
-    'einverstanden',
-  ]).catch(() => false);
-  await sleep(800);
+async function clickSelectorInPageOrFrames(page, selector, timeoutMs = 5000) {
+  const stopAt = Date.now() + Math.max(500, Number(timeoutMs) || 5000);
 
-  await clickByText(page, [
-    'login',
-    'log in',
-    'einloggen',
-    'anmelden',
-    'e-mail',
-    'email',
-    'mail',
-  ], 'button, [role="button"], a').catch(() => false);
+  while (Date.now() < stopAt) {
+    const frames = page.frames();
+
+    for (const frame of frames) {
+      const clicked = await frame.evaluate((targetSelector) => {
+        const element = document.querySelector(targetSelector);
+
+        if (!element) {
+          return false;
+        }
+
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+
+        if (rect.width <= 0 || rect.height <= 0 || style.visibility === 'hidden' || style.display === 'none' || element.disabled) {
+          return false;
+        }
+
+        element.scrollIntoView({ block: 'center', inline: 'center' });
+        element.focus?.({ preventScroll: true });
+        element.click();
+
+        return true;
+      }, selector).catch(() => false);
+
+      if (clicked) {
+        await sleep(700);
+
+        return true;
+      }
+    }
+
+    await sleep(250);
+  }
+
+  return false;
+}
+
+async function prepareGmxLogin(page) {
+  const diagnostics = {
+    cookieAccepted: false,
+    avatarClicked: false,
+    dropdownLoginClicked: false,
+  };
+
+  diagnostics.cookieAccepted = await clickSelectorInPageOrFrames(page, '#save-all-pur', 10000);
+
+  if (!diagnostics.cookieAccepted) {
+    diagnostics.cookieAccepted = await clickByText(page, [
+      'akzeptieren und weiter',
+      'accept',
+      'akzeptieren',
+      'zustimmen',
+      'alle akzeptieren',
+      'einverstanden',
+    ], '#save-all-pur, button, [role="button"], a').catch(() => false);
+  }
+
   await sleep(1000);
+  diagnostics.avatarClicked = await clickSelectorInPageOrFrames(page, 'account-avatar[role="button"], account-avatar, a[aria-label="Login"]', 8000);
+  await sleep(1000);
+  diagnostics.dropdownLoginClicked = await clickSelectorInPageOrFrames(
+    page,
+    'button.account-avatar__button, .account-avatar__button, button[data-component="button"][data-importance="primary"][data-size="l"][data-type="text"]',
+    8000,
+  );
+
+  if (!diagnostics.dropdownLoginClicked) {
+    diagnostics.dropdownLoginClicked = await clickByText(page, [
+      '^login$',
+      'log in',
+      'einloggen',
+      'anmelden',
+    ], 'button.account-avatar__button, button[data-component="button"], button, [role="button"], a').catch(() => false);
+  }
+
+  await sleep(1000);
+
+  return diagnostics;
 }
 
 async function attemptWebmailLogin(page, runtimeConfig) {
@@ -312,7 +489,7 @@ async function attemptWebmailLogin(page, runtimeConfig) {
   diagnostics.attempted = true;
 
   if (providerKey === 'gmx') {
-    await prepareGmxLogin(page);
+    diagnostics.gmxStart = await prepareGmxLogin(page);
   }
 
   diagnostics.usernameFilled = await fillFirstMatchingInput(page, [
@@ -468,25 +645,19 @@ async function main() {
       timeout: Math.max(30000, Number(runtimeConfig.navigationTimeoutMs || 120000)),
     });
     let livePreview = await captureLivePreviewScreenshot(page, runtimeConfig, true);
-    progress(runtimeConfig, 'webmail-opened', `Webmail-Portal wurde geoeffnet: ${webmailUrl}`, {
-      ...livePreview,
-      finalUrl: page.url(),
-      title: await page.title().catch(() => ''),
+    progress(runtimeConfig, 'webmail-opened', `Webmail-Portal wurde geoeffnet: ${webmailUrl}`, await pageProgressData(page, runtimeConfig, livePreview, {
       requestedBrowserEngine,
       activeBrowserEngine,
       browserFallbackReason,
-    });
+    }));
 
     const loginDiagnostics = await attemptWebmailLogin(page, runtimeConfig);
     livePreview = await captureLivePreviewScreenshot(page, runtimeConfig, true);
-    progress(runtimeConfig, 'webmail-login-attempted', 'Webmail-Login wurde versucht.', {
-      ...livePreview,
-      finalUrl: page.url(),
-      title: await page.title().catch(() => ''),
+    progress(runtimeConfig, 'webmail-login-attempted', 'Webmail-Login wurde versucht.', await pageProgressData(page, runtimeConfig, livePreview, {
       requestedBrowserEngine,
       activeBrowserEngine,
       browserFallbackReason,
-    });
+    }));
     notes.push(loginDiagnostics.attempted
       ? 'Webmail-Login wurde mit hinterlegten Zugangsdaten versucht. Falls ein zweiter Faktor oder Provider-Zwischenschritt erscheint, bitte manuell abschliessen.'
       : 'Keine vollstaendigen Webmail-Zugangsdaten vorhanden. Bitte Login im sichtbaren Browser manuell abschliessen.');
@@ -496,14 +667,11 @@ async function main() {
 
     while (Date.now() < stopAt) {
       livePreview = await captureLivePreviewScreenshot(page, runtimeConfig);
-      progress(runtimeConfig, 'webmail-observing', 'Webmail-Session wird beobachtet.', {
-        ...livePreview,
-        finalUrl: page.url(),
-        title: await page.title().catch(() => ''),
+      progress(runtimeConfig, 'webmail-observing', 'Webmail-Session wird beobachtet.', await pageProgressData(page, runtimeConfig, livePreview, {
         requestedBrowserEngine,
         activeBrowserEngine,
         browserFallbackReason,
-      });
+      }));
       await sleep(1000);
     }
 
@@ -556,14 +724,11 @@ async function main() {
       finishedAt: new Date().toISOString(),
     };
 
-    progress(runtimeConfig, result.ok ? 'completed' : 'completed-with-warnings', result.statusMessage, {
-      ...livePreview,
-      finalUrl: page.url(),
-      title: await page.title().catch(() => ''),
+    progress(runtimeConfig, result.ok ? 'completed' : 'completed-with-warnings', result.statusMessage, await pageProgressData(page, runtimeConfig, livePreview, {
       requestedBrowserEngine,
       activeBrowserEngine,
       browserFallbackReason,
-    }, 'completed');
+    }), 'completed');
 
     writeResult(runtimeConfig, result);
   } finally {
