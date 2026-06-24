@@ -262,7 +262,10 @@
         </x-slot>
 
         <x-slot name="content">
-            <div class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(360px,460px)]">
+            <div
+                @if(data_get($verificationMailboxSessionResult, 'isRunning')) wire:poll.2500ms="refreshVerificationMailboxSessionRun" @endif
+                class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(360px,460px)]"
+            >
                 <div class="overflow-hidden rounded-lg border border-slate-200 bg-slate-950">
                     @if(data_get($verificationMailboxSessionResult, 'screenshotUrl'))
                         <img src="{{ data_get($verificationMailboxSessionResult, 'screenshotUrl') }}" alt="Webmail Live Screenshot" class="aspect-video w-full object-contain">
@@ -277,7 +280,7 @@
                     <div class="rounded-lg border border-slate-200 bg-white p-4">
                         <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Status</div>
                         <div class="mt-2 text-sm font-semibold text-slate-900">
-                            {{ data_get($verificationMailboxSessionResult, 'statusMessage', 'Noch kein Webmail-Sessionlauf gestartet.') }}
+                            {{ data_get($verificationMailboxSessionResult, 'statusMessage', data_get($verificationMailboxSessionResult, 'message', 'Noch kein Webmail-Sessionlauf gestartet.')) }}
                         </div>
                         <div class="mt-2 text-xs text-slate-500">
                             {{ data_get($verificationMailboxSessionResult, 'providerKey', $verificationMailboxProvider) }} · {{ data_get($verificationMailboxSessionResult, 'activeBrowserEngine', data_get($verificationMailboxSessionResult, 'requestedBrowserEngine', '-')) }}
@@ -288,7 +291,27 @@
                         <div class="mt-2 text-xs text-slate-500">
                             Cookies: {{ data_get($verificationMailboxSessionResult, 'cookieCount', data_get($verificationMailboxSessionResult, 'sessionSummary.cookieCount', 0)) }}
                         </div>
+                        @if(data_get($verificationMailboxSessionResult, 'stage'))
+                            <div class="mt-1 text-xs text-slate-500">
+                                Schritt: {{ data_get($verificationMailboxSessionResult, 'stage') }}
+                            </div>
+                        @endif
                     </div>
+
+                    @if(!empty($verificationMailboxSessionResult['events']))
+                        <div class="max-h-64 overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-4">
+                            <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Ablauf</div>
+                            <div class="mt-3 space-y-2">
+                                @foreach(array_reverse(data_get($verificationMailboxSessionResult, 'events', [])) as $event)
+                                    <div class="rounded-md bg-white p-3 text-xs shadow-sm">
+                                        <div class="font-semibold text-slate-900">{{ data_get($event, 'stage', '-') }}</div>
+                                        <div class="mt-1 text-slate-600">{{ data_get($event, 'message', '-') }}</div>
+                                        <div class="mt-1 text-slate-400">{{ data_get($event, 'at', '') }}</div>
+                                    </div>
+                                @endforeach
+                            </div>
+                        </div>
+                    @endif
 
                     @if(!empty($verificationMailboxSessionResult['notes']))
                         <div class="rounded-lg border border-slate-200 bg-slate-50 p-4 text-xs text-slate-700">

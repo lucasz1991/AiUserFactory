@@ -20,6 +20,7 @@ const SCRIPT_NAME = process.env.WEBMAIL_SESSION_SCRIPT_NAME || 'webmail_session.
 const SCRIPT_VERSION = 1;
 const DEFAULT_VIEWPORT = { width: 1365, height: 900 };
 const LIVE_PREVIEW_MIN_INTERVAL_MS = 2500;
+const statusEvents = [];
 let lastLivePreviewAt = 0;
 
 function normalizeText(value) {
@@ -43,6 +44,61 @@ function ensureDirectory(directoryPath) {
 function writeJsonFile(filePath, payload) {
   ensureDirectory(path.dirname(filePath));
   fs.writeFileSync(filePath, JSON.stringify(payload, null, 2), 'utf8');
+}
+
+function publicStatusPayload(runtimeConfig, state, stage, message, data = {}) {
+  return {
+    runId: runtimeConfig.runId || null,
+    providerKey: webmailProviderKey(runtimeConfig),
+    state,
+    stage,
+    message,
+    at: new Date().toISOString(),
+    pid: process.pid,
+    scriptName: SCRIPT_NAME,
+    scriptVersion: SCRIPT_VERSION,
+    scriptVersions: {
+      webmailSession: SCRIPT_VERSION,
+      browserLauncher: BROWSER_LAUNCHER_SCRIPT_VERSION || 1,
+    },
+    requestedBrowserEngine: data.requestedBrowserEngine || null,
+    activeBrowserEngine: data.activeBrowserEngine || null,
+    browserFallbackReason: data.browserFallbackReason || null,
+    finalUrl: data.finalUrl || null,
+    title: data.title || null,
+    liveScreenshotPath: data.liveScreenshotPath || null,
+    liveScreenshotAt: data.liveScreenshotAt || null,
+    events: statusEvents.slice(-40),
+  };
+}
+
+function progress(runtimeConfig, stage, message, data = {}, state = 'running') {
+  const event = {
+    at: new Date().toISOString(),
+    stage,
+    message,
+    finalUrl: data.finalUrl || null,
+    title: data.title || null,
+    liveScreenshotAt: data.liveScreenshotAt || null,
+  };
+
+  statusEvents.push(event);
+
+  if (statusEvents.length > 80) {
+    statusEvents.shift();
+  }
+
+  if (runtimeConfig.statusPath) {
+    writeJsonFile(runtimeConfig.statusPath, publicStatusPayload(runtimeConfig, state, stage, message, data));
+  }
+}
+
+function writeResult(runtimeConfig, result) {
+  if (runtimeConfig.resultPath) {
+    writeJsonFile(runtimeConfig.resultPath, result);
+  }
+
+  console.log(JSON.stringify(result));
 }
 
 async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = false) {
@@ -359,6 +415,10 @@ async function main() {
   let activeBrowserEngine = null;
   let browserFallbackReason = null;
 
+  progress(runtimeConfig, 'starting', 'Webmail-Sessionlauf wird vorbereitet.', {
+    requestedBrowserEngine,
+  }, 'starting');
+
   if (!webmailUrl || !/^https?:\/\//i.test(webmailUrl)) {
     throw new Error('Gueltige Webmail-URL fehlt.');
   }
@@ -394,6 +454,12 @@ async function main() {
     activeBrowserEngine = launchResult.activeEngine;
     browserFallbackReason = launchResult.fallbackReason;
 
+    progress(runtimeConfig, 'browser-started', 'Browser fuer Webmail-Session wurde gestartet.', {
+      requestedBrowserEngine,
+      activeBrowserEngine,
+      browserFallbackReason,
+    });
+
     const page = await browser.newPage();
     page.setDefaultNavigationTimeout(Math.max(30000, Number(runtimeConfig.navigationTimeoutMs || 120000)));
     await page.setViewport(DEFAULT_VIEWPORT);
@@ -401,10 +467,26 @@ async function main() {
       waitUntil: 'domcontentloaded',
       timeout: Math.max(30000, Number(runtimeConfig.navigationTimeoutMs || 120000)),
     });
-    await captureLivePreviewScreenshot(page, runtimeConfig, true);
+    let livePreview = await captureLivePreviewScreenshot(page, runtimeConfig, true);
+    progress(runtimeConfig, 'webmail-opened', `Webmail-Portal wurde geoeffnet: ${webmailUrl}`, {
+      ...livePreview,
+      finalUrl: page.url(),
+      title: await page.title().catch(() => ''),
+      requestedBrowserEngine,
+      activeBrowserEngine,
+      browserFallbackReason,
+    });
 
     const loginDiagnostics = await attemptWebmailLogin(page, runtimeConfig);
-    await captureLivePreviewScreenshot(page, runtimeConfig, true);
+    livePreview = await captureLivePreviewScreenshot(page, runtimeConfig, true);
+    progress(runtimeConfig, 'webmail-login-attempted', 'Webmail-Login wurde versucht.', {
+      ...livePreview,
+      finalUrl: page.url(),
+      title: await page.title().catch(() => ''),
+      requestedBrowserEngine,
+      activeBrowserEngine,
+      browserFallbackReason,
+    });
     notes.push(loginDiagnostics.attempted
       ? 'Webmail-Login wurde mit hinterlegten Zugangsdaten versucht. Falls ein zweiter Faktor oder Provider-Zwischenschritt erscheint, bitte manuell abschliessen.'
       : 'Keine vollstaendigen Webmail-Zugangsdaten vorhanden. Bitte Login im sichtbaren Browser manuell abschliessen.');
@@ -413,11 +495,19 @@ async function main() {
     const stopAt = Date.now() + observationTimeoutMs;
 
     while (Date.now() < stopAt) {
-      await captureLivePreviewScreenshot(page, runtimeConfig);
+      livePreview = await captureLivePreviewScreenshot(page, runtimeConfig);
+      progress(runtimeConfig, 'webmail-observing', 'Webmail-Session wird beobachtet.', {
+        ...livePreview,
+        finalUrl: page.url(),
+        title: await page.title().catch(() => ''),
+        requestedBrowserEngine,
+        activeBrowserEngine,
+        browserFallbackReason,
+      });
       await sleep(1000);
     }
 
-    const livePreview = await captureLivePreviewScreenshot(page, runtimeConfig, true);
+    livePreview = await captureLivePreviewScreenshot(page, runtimeConfig, true);
 
     const origin = sameOriginUrl(page.url()) || sameOriginUrl(webmailUrl);
     const cookies = origin ? await page.cookies(origin).catch(() => []) : await page.cookies().catch(() => []);
@@ -440,9 +530,10 @@ async function main() {
 
     writeJsonFile(sessionFilePath, sessionPayload);
 
-    console.log(JSON.stringify({
+    const result = {
       ok: cookies.length > 0 || Object.keys(storage.localStorage || {}).length > 0 || Object.keys(storage.sessionStorage || {}).length > 0,
       statusMessage: 'Webmail-Sessiondaten wurden gespeichert.',
+      runId: runtimeConfig.runId || null,
       scriptName: SCRIPT_NAME,
       scriptVersion: SCRIPT_VERSION,
       scriptVersions: {
@@ -462,7 +553,19 @@ async function main() {
       loginDiagnostics,
       notes,
       warnings,
-    }));
+      finishedAt: new Date().toISOString(),
+    };
+
+    progress(runtimeConfig, result.ok ? 'completed' : 'completed-with-warnings', result.statusMessage, {
+      ...livePreview,
+      finalUrl: page.url(),
+      title: await page.title().catch(() => ''),
+      requestedBrowserEngine,
+      activeBrowserEngine,
+      browserFallbackReason,
+    }, 'completed');
+
+    writeResult(runtimeConfig, result);
   } finally {
     if (browser) {
       await browser.close().catch(() => {});
@@ -471,9 +574,11 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.log(JSON.stringify({
+  const runtimeConfig = process.argv[2] ? readJsonFile(process.argv[2], {}) : {};
+  const result = {
     ok: false,
     statusMessage: 'Webmail-Session-Skript ist fehlgeschlagen.',
+    runId: runtimeConfig.runId || null,
     scriptName: SCRIPT_NAME,
     scriptVersion: SCRIPT_VERSION,
     scriptVersions: {
@@ -482,6 +587,15 @@ main().catch((error) => {
     },
     warnings: [normalizeText(error?.message || String(error))],
     notes: [],
-  }));
+    finishedAt: new Date().toISOString(),
+  };
+
+  try {
+    progress(runtimeConfig, 'failed', normalizeText(error?.message || String(error)), {}, 'failed');
+    writeResult(runtimeConfig, result);
+  } catch {
+    console.log(JSON.stringify(result));
+  }
+
   process.exitCode = 1;
 });

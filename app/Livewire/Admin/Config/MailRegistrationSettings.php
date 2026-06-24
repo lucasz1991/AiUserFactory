@@ -47,6 +47,7 @@ class MailRegistrationSettings extends Component
     public array $registrationRunStatus = [];
     public array $verificationMailboxSessionResult = [];
     public bool $showVerificationMailboxSessionModal = false;
+    public ?string $verificationMailboxSessionRunId = null;
 
     public function mount(MailAccountRegistrationRunner $runner): void
     {
@@ -137,7 +138,7 @@ class MailRegistrationSettings extends Component
             $mailbox = is_array($settings['verification_mailbox'] ?? null) ? $settings['verification_mailbox'] : [];
             $password = $this->decryptStoredPassword($mailbox['password_encrypted'] ?? null);
 
-            $result = app(WebmailSessionRunner::class)->capture([
+            $run = app(WebmailSessionRunner::class)->start([
                 'provider' => $mailbox['provider'] ?? '',
                 'email' => $mailbox['email'] ?? '',
                 'username' => ($mailbox['username'] ?? '') ?: ($mailbox['email'] ?? ''),
@@ -152,25 +153,17 @@ class MailRegistrationSettings extends Component
                 'observationTimeoutMs' => min(180000, max(30000, ((int) ($settings['observation_timeout_seconds'] ?? 60)) * 1000)),
             ], 'master-mailbox-webmail');
 
-            if (! empty($result['encryptedSessionPayload'])) {
-                $settings['verification_mailbox']['webmail_session'] = $this->webmailSessionPayload($result);
-                $settings = app(MailAccountRegistrationRunner::class)->saveSettings($settings);
-                $this->fillFromSettings($settings);
-            }
-
-            unset($result['encryptedSessionPayload']);
-            $this->verificationMailboxSessionResult = $result;
+            $this->verificationMailboxSessionRunId = $run['runId'] ?? null;
+            $this->verificationMailboxSessionResult = $run;
             $this->showVerificationMailboxSessionModal = true;
 
-            $this->dispatch(
-                'showAlert',
-                ($result['ok'] ?? false) ? 'Master-Webmail-Session wurde gespeichert.' : 'Master-Webmail-Session wurde mit Hinweisen gespeichert.',
-                ($result['ok'] ?? false) ? 'success' : 'warning'
-            );
+            $this->dispatch('showAlert', 'Master-Webmail-Sessionlauf wurde gestartet.', 'success');
         } catch (\Throwable $exception) {
             $this->verificationMailboxSessionResult = [
                 'ok' => false,
+                'state' => 'failed',
                 'statusMessage' => 'Master-Webmail-Session konnte nicht gespeichert werden.',
+                'message' => 'Master-Webmail-Session konnte nicht gespeichert werden.',
                 'warnings' => [$exception->getMessage()],
                 'notes' => [],
             ];
@@ -178,6 +171,39 @@ class MailRegistrationSettings extends Component
 
             $this->dispatch('showAlert', 'Master-Webmail-Session konnte nicht gespeichert werden.', 'error');
         }
+    }
+
+    public function refreshVerificationMailboxSessionRun(): void
+    {
+        if (! $this->verificationMailboxSessionRunId) {
+            return;
+        }
+
+        $run = app(WebmailSessionRunner::class)->readRun($this->verificationMailboxSessionRunId);
+
+        if (! is_array($run)) {
+            return;
+        }
+
+        $result = is_array($run['result'] ?? null) ? $run['result'] : [];
+
+        if (! empty($result['encryptedSessionPayload'])) {
+            $settings = app(MailAccountRegistrationRunner::class)->settings();
+            $settings['verification_mailbox']['webmail_session'] = $this->webmailSessionPayload($result);
+            $settings = app(MailAccountRegistrationRunner::class)->saveSettings($settings);
+            $this->fillFromSettings($settings);
+            unset($result['encryptedSessionPayload']);
+            $run['result'] = $result;
+            $this->verificationMailboxSessionRunId = null;
+
+            $this->dispatch(
+                'showAlert',
+                ($result['ok'] ?? false) ? 'Master-Webmail-Session wurde gespeichert.' : 'Master-Webmail-Session wurde mit Hinweisen beendet.',
+                ($result['ok'] ?? false) ? 'success' : 'warning'
+            );
+        }
+
+        $this->verificationMailboxSessionResult = array_replace($run, $result);
     }
 
     public function closeVerificationMailboxSessionModal(): void
