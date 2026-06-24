@@ -11,7 +11,7 @@ try {
   puppeteer = require('puppeteer');
 }
 
-const SCRIPT_NAME = 'webmail_session.cjs';
+const SCRIPT_NAME = process.env.WEBMAIL_SESSION_SCRIPT_NAME || 'webmail_session.cjs';
 const SCRIPT_VERSION = 1;
 const DEFAULT_VIEWPORT = { width: 1365, height: 900 };
 
@@ -125,12 +125,85 @@ async function clickSubmit(page) {
   }).catch(() => false);
 }
 
+function webmailProviderKey(runtimeConfig) {
+  const provider = normalizeText(process.env.WEBMAIL_SESSION_PROVIDER || runtimeConfig.provider).toLowerCase();
+
+  if (provider.includes('gmx')) {
+    return 'gmx';
+  }
+
+  if (provider.includes('proton')) {
+    return 'proton';
+  }
+
+  return provider || 'proton';
+}
+
+async function clickByText(page, patterns, selector = 'button, [role="button"], a, input[type="submit"]') {
+  return page.evaluate((patternValues, targetSelector) => {
+    const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const patterns = patternValues.map((pattern) => new RegExp(pattern, 'i'));
+    const candidates = Array.from(document.querySelectorAll(targetSelector));
+    const target = candidates.find((element) => {
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+      const text = normalize([
+        element.innerText,
+        element.textContent,
+        element.value,
+        element.getAttribute('aria-label'),
+        element.getAttribute('title'),
+        element.getAttribute('data-testid'),
+      ].join(' '));
+
+      return rect.width > 0
+        && rect.height > 0
+        && style.visibility !== 'hidden'
+        && style.display !== 'none'
+        && !element.disabled
+        && patterns.some((pattern) => pattern.test(text));
+    });
+
+    if (!target) {
+      return false;
+    }
+
+    target.click();
+
+    return true;
+  }, patterns, selector).catch(() => false);
+}
+
+async function prepareGmxLogin(page) {
+  await clickByText(page, [
+    'accept',
+    'akzeptieren',
+    'zustimmen',
+    'alle akzeptieren',
+    'einverstanden',
+  ]).catch(() => false);
+  await sleep(800);
+
+  await clickByText(page, [
+    'login',
+    'log in',
+    'einloggen',
+    'anmelden',
+    'e-mail',
+    'email',
+    'mail',
+  ], 'button, [role="button"], a').catch(() => false);
+  await sleep(1000);
+}
+
 async function attemptWebmailLogin(page, runtimeConfig) {
   const username = normalizeText(runtimeConfig.username || runtimeConfig.email);
   const password = normalizeText(runtimeConfig.password);
   const typingDelay = Math.max(0, Number(runtimeConfig.typingDelayMs || 35));
+  const providerKey = webmailProviderKey(runtimeConfig);
   const diagnostics = {
     attempted: false,
+    providerKey,
     usernameFilled: false,
     passwordFilled: false,
     submitted: false,
@@ -141,7 +214,19 @@ async function attemptWebmailLogin(page, runtimeConfig) {
   }
 
   diagnostics.attempted = true;
+
+  if (providerKey === 'gmx') {
+    await prepareGmxLogin(page);
+  }
+
   diagnostics.usernameFilled = await fillFirstMatchingInput(page, [
+    ...(providerKey === 'gmx' ? [
+      '#login-email',
+      'input[name="username"]',
+      'input[name="login"]',
+      'input[data-testid*="email" i]',
+      'input[data-testid*="login" i]',
+    ] : []),
     'input[type="email"]',
     'input[name*="user" i]',
     'input[id*="user" i]',
@@ -160,6 +245,11 @@ async function attemptWebmailLogin(page, runtimeConfig) {
   }
 
   diagnostics.passwordFilled = await fillFirstMatchingInput(page, [
+    ...(providerKey === 'gmx' ? [
+      '#login-password',
+      'input[name="password"]',
+      'input[data-testid*="password" i]',
+    ] : []),
     'input[type="password"]',
     'input[name*="pass" i]',
     'input[id*="pass" i]',
@@ -167,7 +257,15 @@ async function attemptWebmailLogin(page, runtimeConfig) {
   ], password, typingDelay);
 
   if (diagnostics.passwordFilled) {
-    diagnostics.submitted = await clickSubmit(page);
+    diagnostics.submitted = providerKey === 'gmx'
+      ? await clickByText(page, [
+        'login',
+        'log in',
+        'einloggen',
+        'anmelden',
+        'weiter',
+      ], '#login-submit, button, input[type="submit"], [role="button"]')
+      : await clickSubmit(page);
   }
 
   return diagnostics;
@@ -212,6 +310,7 @@ async function main() {
   const runtimeConfig = readJsonFile(runtimeConfigPath, {});
   const webmailUrl = normalizeText(runtimeConfig.webmailUrl);
   const sessionFilePath = normalizeText(runtimeConfig.sessionFilePath);
+  const providerKey = webmailProviderKey(runtimeConfig);
   const observationTimeoutMs = Math.max(30000, Number(runtimeConfig.observationTimeoutMs || 300000));
   const notes = [];
   const warnings = [];
@@ -256,7 +355,7 @@ async function main() {
     const storage = await captureStorage(page);
     const sessionPayload = {
       capturedAt: new Date().toISOString(),
-      provider: normalizeText(runtimeConfig.provider),
+      provider: providerKey,
       email: normalizeText(runtimeConfig.email),
       username: normalizeText(runtimeConfig.username || runtimeConfig.email),
       webmailUrl,
@@ -277,6 +376,7 @@ async function main() {
       statusMessage: 'Webmail-Sessiondaten wurden gespeichert.',
       scriptName: SCRIPT_NAME,
       scriptVersion: SCRIPT_VERSION,
+      providerKey,
       sessionFilePath,
       finalUrl: page.url(),
       cookieCount: cookies.length,

@@ -66,7 +66,7 @@ class PersonEmailAccountSettings extends Component
 
         $validated = $this->validate([
             'emailAddress' => ['nullable', 'email', 'max:255'],
-            'provider' => ['nullable', 'string', 'max:120'],
+            'provider' => ['required', 'string', 'in:proton,gmx'],
             'accountUsername' => ['nullable', 'string', 'max:255'],
             'accountPassword' => ['nullable', 'string', 'max:512'],
             'recoveryEmail' => ['nullable', 'email', 'max:255'],
@@ -89,14 +89,17 @@ class PersonEmailAccountSettings extends Component
             $encryptedPassword = Crypt::encryptString((string) $validated['accountPassword']);
         }
 
+        $provider = $this->normalizeWebmailProvider($validated['provider'] ?? 'proton');
+        $webmailUrl = trim((string) ($validated['webmailUrl'] ?? '')) ?: $this->defaultWebmailUrl($provider);
+
         $metadata['email_account'] = [
             'email' => $this->nullableString($validated['emailAddress'] ?? null),
-            'provider' => $this->nullableString($validated['provider'] ?? null),
+            'provider' => $provider,
             'username' => $this->nullableString($validated['accountUsername'] ?? null),
             'password_encrypted' => $this->nullableString($encryptedPassword),
             'recovery_email' => $this->nullableString($validated['recoveryEmail'] ?? null),
             'recovery_phone' => $this->nullableString($validated['recoveryPhone'] ?? null),
-            'webmail_url' => $this->nullableString($validated['webmailUrl'] ?? null),
+            'webmail_url' => $webmailUrl,
             'imap' => [
                 'host' => $this->nullableString($validated['imapHost'] ?? null),
                 'port' => ($validated['imapPort'] ?? null) !== null ? (int) $validated['imapPort'] : null,
@@ -145,6 +148,12 @@ class PersonEmailAccountSettings extends Component
         $this->dispatch('refreshPersonDetail');
 
         session()->flash('success', 'Gespeichertes E-Mail-Passwort wurde geloescht.');
+    }
+
+    public function updatedProvider(mixed $value = null): void
+    {
+        $this->provider = $this->normalizeWebmailProvider($this->provider);
+        $this->webmailUrl = $this->defaultWebmailUrl($this->provider);
     }
 
     public function startMailRegistration(): void
@@ -200,9 +209,9 @@ class PersonEmailAccountSettings extends Component
         }
 
         $this->emailAddress = (string) ($account['email'] ?? $this->emailAddress);
-        $this->provider = (string) ($account['provider'] ?? $this->provider);
+        $this->provider = $this->normalizeWebmailProvider($account['provider'] ?? $this->provider);
         $this->accountUsername = (string) ($account['username'] ?? $this->accountUsername);
-        $this->webmailUrl = (string) ($account['webmailUrl'] ?? $this->webmailUrl);
+        $this->webmailUrl = (string) ($account['webmailUrl'] ?? $this->webmailUrl) ?: $this->defaultWebmailUrl($this->provider);
         $this->recoveryEmail = (string) ($account['recoveryEmail'] ?? $this->recoveryEmail);
 
         if (trim((string) ($account['password'] ?? '')) !== '') {
@@ -280,13 +289,13 @@ class PersonEmailAccountSettings extends Component
         $emailAccount = is_array($metadata['email_account'] ?? null) ? $metadata['email_account'] : [];
 
         $this->emailAddress = (string) ($emailAccount['email'] ?? $this->person->person_email ?? '');
-        $this->provider = (string) ($emailAccount['provider'] ?? '');
+        $this->provider = $this->normalizeWebmailProvider($emailAccount['provider'] ?? 'proton');
         $this->accountUsername = (string) ($emailAccount['username'] ?? $this->emailAddress ?: $this->suggestedUsername());
         $this->accountPassword = '';
         $this->hasStoredPassword = trim((string) ($emailAccount['password_encrypted'] ?? '')) !== '';
         $this->recoveryEmail = (string) ($emailAccount['recovery_email'] ?? '');
         $this->recoveryPhone = (string) ($emailAccount['recovery_phone'] ?? '');
-        $this->webmailUrl = (string) ($emailAccount['webmail_url'] ?? '');
+        $this->webmailUrl = (string) ($emailAccount['webmail_url'] ?? '') ?: $this->defaultWebmailUrl($this->provider);
         $this->imapHost = (string) data_get($emailAccount, 'imap.host', '');
         $this->imapPort = data_get($emailAccount, 'imap.port') !== null ? (int) data_get($emailAccount, 'imap.port') : null;
         $this->imapEncryption = (string) data_get($emailAccount, 'imap.encryption', '');
@@ -349,6 +358,28 @@ class PersonEmailAccountSettings extends Component
         $value = trim((string) $value);
 
         return $value === '' ? null : $value;
+    }
+
+    protected function normalizeWebmailProvider(mixed $provider): string
+    {
+        $provider = strtolower(trim((string) $provider));
+
+        if ($provider === '' || str_contains($provider, 'proton')) {
+            return 'proton';
+        }
+
+        if (str_contains($provider, 'gmx')) {
+            return 'gmx';
+        }
+
+        return 'proton';
+    }
+
+    protected function defaultWebmailUrl(string $provider): string
+    {
+        return $provider === 'gmx'
+            ? 'https://www.gmx.net'
+            : 'https://mail.proton.me';
     }
 
     protected function mailRegistrationSubject(): array

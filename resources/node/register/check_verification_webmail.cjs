@@ -16,7 +16,7 @@ try {
   puppeteer = require('puppeteer');
 }
 
-const SCRIPT_NAME = 'check_verification_webmail.cjs';
+const SCRIPT_NAME = process.env.VERIFICATION_WEBMAIL_CHECK_SCRIPT_NAME || 'check_verification_webmail.cjs';
 const SCRIPT_VERSION = 1;
 const DEFAULT_VIEWPORT = { width: 1365, height: 900 };
 
@@ -51,12 +51,27 @@ function verificationMailboxFromConfig(runtimeConfig = {}) {
 
   return {
     enabled: mailbox.enabled !== false,
+    provider: webmailProviderKey(mailbox.provider || runtimeConfig.provider?.key || runtimeConfig.provider?.label),
     email,
     username,
     password,
     webmailUrl,
     usable: email !== '' && webmailUrl !== '',
   };
+}
+
+function webmailProviderKey(value) {
+  const provider = normalizeText(process.env.VERIFICATION_WEBMAIL_CHECK_PROVIDER || value).toLowerCase();
+
+  if (provider.includes('gmx')) {
+    return 'gmx';
+  }
+
+  if (provider.includes('proton')) {
+    return 'proton';
+  }
+
+  return provider || 'proton';
 }
 
 async function fillFirstMatchingInput(page, selectors, value, delay = 35) {
@@ -133,6 +148,28 @@ async function clickVisibleTextTarget(page, patterns, selector = 'button, [role=
   }, patterns, selector).catch(() => false);
 }
 
+async function prepareGmxLogin(page) {
+  await clickVisibleTextTarget(page, [
+    'accept',
+    'akzeptieren',
+    'zustimmen',
+    'alle akzeptieren',
+    'einverstanden',
+  ]).catch(() => false);
+  await sleep(800);
+
+  await clickVisibleTextTarget(page, [
+    'login',
+    'log in',
+    'einloggen',
+    'anmelden',
+    'e-mail',
+    'email',
+    'mail',
+  ], 'button, [role="button"], a').catch(() => false);
+  await sleep(1000);
+}
+
 async function attemptWebmailLogin(page, mailbox) {
   const diagnostics = {
     attempted: false,
@@ -146,7 +183,19 @@ async function attemptWebmailLogin(page, mailbox) {
   }
 
   diagnostics.attempted = true;
+
+  if (mailbox.provider === 'gmx') {
+    await prepareGmxLogin(page);
+  }
+
   diagnostics.usernameFilled = await fillFirstMatchingInput(page, [
+    ...(mailbox.provider === 'gmx' ? [
+      '#login-email',
+      'input[name="username"]',
+      'input[name="login"]',
+      'input[data-testid*="email" i]',
+      'input[data-testid*="login" i]',
+    ] : []),
     'input[type="email"]',
     'input[name*="user" i]',
     'input[id*="user" i]',
@@ -174,6 +223,11 @@ async function attemptWebmailLogin(page, mailbox) {
   }
 
   diagnostics.passwordFilled = await fillFirstMatchingInput(page, [
+    ...(mailbox.provider === 'gmx' ? [
+      '#login-password',
+      'input[name="password"]',
+      'input[data-testid*="password" i]',
+    ] : []),
     'input[type="password"]',
     'input[name*="pass" i]',
     'input[id*="pass" i]',
@@ -181,16 +235,24 @@ async function attemptWebmailLogin(page, mailbox) {
   ], mailbox.password);
 
   if (diagnostics.passwordFilled) {
-    diagnostics.submitted = await clickVisibleTextTarget(page, [
-      'sign in',
-      'log in',
-      'login',
-      'anmelden',
-      'einloggen',
-      'next',
-      'continue',
-      'weiter',
-    ]);
+    diagnostics.submitted = mailbox.provider === 'gmx'
+      ? await clickVisibleTextTarget(page, [
+        'login',
+        'log in',
+        'einloggen',
+        'anmelden',
+        'weiter',
+      ], '#login-submit, button, input[type="submit"], [role="button"]')
+      : await clickVisibleTextTarget(page, [
+        'sign in',
+        'log in',
+        'login',
+        'anmelden',
+        'einloggen',
+        'next',
+        'continue',
+        'weiter',
+      ]);
   }
 
   return diagnostics;
@@ -348,6 +410,7 @@ async function main() {
       title: verificationState.title || await page.title().catch(() => ''),
       textSample: verificationState.textSample || '',
       login,
+      providerKey: mailbox.provider,
       requestedBrowserEngine,
       activeBrowserEngine: launchResult.activeEngine,
       browserFallbackReason: launchResult.fallbackReason || null,

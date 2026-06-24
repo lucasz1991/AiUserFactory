@@ -37,7 +37,10 @@
 
                 <div>
                     <label for="email-account-provider" class="block text-sm font-medium text-gray-700">Provider</label>
-                    <input id="email-account-provider" type="text" wire:model.defer="provider" placeholder="z.B. Gmail, Outlook, IONOS" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                    <select id="email-account-provider" wire:model.live="provider" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                        <option value="proton">Proton</option>
+                        <option value="gmx">GMX</option>
+                    </select>
                     @error('provider') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
                 </div>
 

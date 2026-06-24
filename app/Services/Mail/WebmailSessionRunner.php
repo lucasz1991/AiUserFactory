@@ -9,18 +9,26 @@ use Illuminate\Support\Str;
 
 class WebmailSessionRunner
 {
+    public const PROVIDER_PROTON = 'proton';
+    public const PROVIDER_GMX = 'gmx';
+
     public function capture(array $account, string $scope = 'webmail'): array
     {
+        $provider = $this->normalizeProvider($account['provider'] ?? null);
         $webmailUrl = trim((string) ($account['webmailUrl'] ?? $account['webmail_url'] ?? ''));
         $sessionFilePath = storage_path('app/mail-sessions/'.$this->safeScope($scope).'-'.Str::uuid().'.json');
         $runtimeConfigPath = storage_path('app/tmp/webmail-session-'.Str::uuid().'.json');
+
+        if ($webmailUrl === '') {
+            $webmailUrl = $this->defaultWebmailUrl($provider);
+        }
 
         if ($webmailUrl === '' || ! filter_var($webmailUrl, FILTER_VALIDATE_URL)) {
             throw new \RuntimeException('Bitte hinterlege eine gueltige Webmail-URL.');
         }
 
         $runtimeConfig = [
-            'provider' => trim((string) ($account['provider'] ?? '')),
+            'provider' => $provider,
             'email' => trim((string) ($account['email'] ?? '')),
             'username' => trim((string) ($account['username'] ?? $account['email'] ?? '')),
             'password' => (string) ($account['password'] ?? ''),
@@ -41,7 +49,7 @@ class WebmailSessionRunner
                 ->timeout(max(90, (int) ceil($runtimeConfig['observationTimeoutMs'] / 1000) + 60))
                 ->run([
                     $this->resolveNodeBinary(),
-                    $this->resolveNodeScriptPath(),
+                    $this->resolveNodeScriptPath($provider),
                     $runtimeConfigPath,
                 ]);
         } finally {
@@ -77,6 +85,7 @@ class WebmailSessionRunner
         $decodedSession = json_decode($sessionPayload, true);
         $payload['encryptedSessionPayload'] = Crypt::encryptString($sessionPayload);
         $payload['sessionPayloadHash'] = hash('sha256', $sessionPayload);
+        $payload['providerKey'] = $provider;
         $payload['sessionSummary'] = [
             'capturedAt' => is_array($decodedSession) ? ($decodedSession['capturedAt'] ?? now()->toIso8601String()) : now()->toIso8601String(),
             'finalUrl' => is_array($decodedSession) ? ($decodedSession['finalUrl'] ?? null) : null,
@@ -91,15 +100,48 @@ class WebmailSessionRunner
         return $payload;
     }
 
-    protected function resolveNodeScriptPath(): string
+    protected function resolveNodeScriptPath(string $provider): string
     {
-        $nodeScript = base_path('resources/node/session/webmail_session.cjs');
+        $scriptName = match ($provider) {
+            self::PROVIDER_GMX => 'webmail_session_gmx.cjs',
+            self::PROVIDER_PROTON => 'webmail_session_proton.cjs',
+            default => throw new \RuntimeException('Nicht unterstuetzter Webmail-Provider: '.$provider),
+        };
+        $nodeScript = base_path('resources/node/session/'.$scriptName);
 
         if (! File::exists($nodeScript)) {
             throw new \RuntimeException(sprintf('Das lokale Node-Skript fuer Webmail-Session wurde nicht gefunden: %s', $nodeScript));
         }
 
         return $nodeScript;
+    }
+
+    protected function normalizeProvider(mixed $provider): string
+    {
+        $provider = strtolower(trim((string) $provider));
+
+        if ($provider === '' || str_contains($provider, 'proton')) {
+            return self::PROVIDER_PROTON;
+        }
+
+        if (str_contains($provider, 'gmx')) {
+            return self::PROVIDER_GMX;
+        }
+
+        if (in_array($provider, [self::PROVIDER_PROTON, self::PROVIDER_GMX], true)) {
+            return $provider;
+        }
+
+        throw new \RuntimeException('Bitte waehle als Webmail-Provider Proton oder GMX.');
+    }
+
+    protected function defaultWebmailUrl(string $provider): string
+    {
+        return match ($provider) {
+            self::PROVIDER_GMX => 'https://www.gmx.net',
+            self::PROVIDER_PROTON => 'https://mail.proton.me',
+            default => '',
+        };
     }
 
     protected function resolveNodeBinary(): string

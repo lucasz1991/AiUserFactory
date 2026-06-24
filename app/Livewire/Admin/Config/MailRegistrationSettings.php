@@ -122,6 +122,12 @@ class MailRegistrationSettings extends Component
         $this->dispatch('showAlert', 'Verifikations-Passwort geloescht.', 'success');
     }
 
+    public function updatedVerificationMailboxProvider(mixed $value = null): void
+    {
+        $this->verificationMailboxProvider = $this->normalizeWebmailProvider($this->verificationMailboxProvider);
+        $this->verificationMailboxWebmailUrl = $this->defaultWebmailUrl($this->verificationMailboxProvider);
+    }
+
     public function buildVerificationMailboxWebmailSession(): void
     {
         try {
@@ -183,7 +189,7 @@ class MailRegistrationSettings extends Component
 
             'verificationMailboxEnabled' => ['boolean'],
             'verificationMailboxEmail' => ['nullable', 'email', 'max:255'],
-            'verificationMailboxProvider' => ['nullable', 'string', 'max:120'],
+            'verificationMailboxProvider' => ['required', 'string', 'in:proton,gmx'],
             'verificationMailboxUsername' => ['nullable', 'string', 'max:255'],
             'verificationMailboxPassword' => ['nullable', 'string', 'max:512'],
             'verificationMailboxWebmailUrl' => ['nullable', 'url', 'max:2048'],
@@ -211,6 +217,10 @@ class MailRegistrationSettings extends Component
             $encryptedVerificationPassword = Crypt::encryptString((string) $validated['verificationMailboxPassword']);
         }
 
+        $verificationMailboxProvider = $this->normalizeWebmailProvider($validated['verificationMailboxProvider'] ?? 'proton');
+        $verificationMailboxWebmailUrl = trim((string) ($validated['verificationMailboxWebmailUrl'] ?? ''))
+            ?: $this->defaultWebmailUrl($verificationMailboxProvider);
+
         return [
             'browser_engine' => $validated['browserEngine'],
             'cloak_humanize_enabled' => (bool) $validated['cloakHumanizeEnabled'],
@@ -223,10 +233,10 @@ class MailRegistrationSettings extends Component
             'verification_mailbox' => [
                 'enabled' => (bool) $validated['verificationMailboxEnabled'],
                 'email' => trim((string) ($validated['verificationMailboxEmail'] ?? '')),
-                'provider' => trim((string) ($validated['verificationMailboxProvider'] ?? '')),
+                'provider' => $verificationMailboxProvider,
                 'username' => trim((string) ($validated['verificationMailboxUsername'] ?? '')),
                 'password_encrypted' => $this->nullableString($encryptedVerificationPassword),
-                'webmail_url' => trim((string) ($validated['verificationMailboxWebmailUrl'] ?? '')),
+                'webmail_url' => $verificationMailboxWebmailUrl,
                 'webmail_session' => is_array($existingMailbox['webmail_session'] ?? null) ? $existingMailbox['webmail_session'] : null,
             ],
             'providers' => [
@@ -285,11 +295,11 @@ class MailRegistrationSettings extends Component
         $verificationMailbox = is_array($settings['verification_mailbox'] ?? null) ? $settings['verification_mailbox'] : [];
         $this->verificationMailboxEnabled = (bool) ($verificationMailbox['enabled'] ?? false);
         $this->verificationMailboxEmail = (string) ($verificationMailbox['email'] ?? '');
-        $this->verificationMailboxProvider = (string) ($verificationMailbox['provider'] ?? '');
+        $this->verificationMailboxProvider = $this->normalizeWebmailProvider($verificationMailbox['provider'] ?? 'proton');
         $this->verificationMailboxUsername = (string) ($verificationMailbox['username'] ?? '');
         $this->verificationMailboxPassword = '';
         $this->hasStoredVerificationMailboxPassword = trim((string) ($verificationMailbox['password_encrypted'] ?? '')) !== '';
-        $this->verificationMailboxWebmailUrl = (string) ($verificationMailbox['webmail_url'] ?? '');
+        $this->verificationMailboxWebmailUrl = (string) ($verificationMailbox['webmail_url'] ?? '') ?: $this->defaultWebmailUrl($this->verificationMailboxProvider);
 
         $this->providerOneEnabled = (bool) ($providerOne['enabled'] ?? true);
         $this->providerOneMode = in_array(($providerOne['mode'] ?? ''), ['observed_manual', 'proton_username_check'], true)
@@ -328,6 +338,28 @@ class MailRegistrationSettings extends Component
         } catch (\Throwable) {
             return '';
         }
+    }
+
+    protected function normalizeWebmailProvider(mixed $provider): string
+    {
+        $provider = strtolower(trim((string) $provider));
+
+        if ($provider === '' || str_contains($provider, 'proton')) {
+            return 'proton';
+        }
+
+        if (str_contains($provider, 'gmx')) {
+            return 'gmx';
+        }
+
+        return 'proton';
+    }
+
+    protected function defaultWebmailUrl(string $provider): string
+    {
+        return $provider === 'gmx'
+            ? 'https://www.gmx.net'
+            : 'https://mail.proton.me';
     }
 
     protected function webmailSessionPayload(array $result): array

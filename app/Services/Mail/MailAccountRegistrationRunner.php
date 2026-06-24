@@ -48,10 +48,10 @@ class MailAccountRegistrationRunner
             'verification_mailbox' => [
                 'enabled' => false,
                 'email' => '',
-                'provider' => '',
+                'provider' => 'proton',
                 'username' => '',
                 'password_encrypted' => null,
-                'webmail_url' => '',
+                'webmail_url' => 'https://mail.proton.me',
             ],
             'providers' => [
                 [
@@ -348,6 +348,7 @@ class MailAccountRegistrationRunner
         $runtimeConfigPath = $runDirectory.DIRECTORY_SEPARATOR.'runtime.json';
         $status = $this->readJsonFile($statusPath) ?: [];
         $result = $this->readJsonFile($resultPath) ?: [];
+        $runtimeConfig = $this->readJsonFile($runtimeConfigPath) ?: [];
 
         if (! File::exists($runtimeConfigPath)) {
             $message = 'Runtime-Konfiguration fuer den Webmail-Check wurde nicht gefunden.';
@@ -371,7 +372,7 @@ class MailAccountRegistrationRunner
                 ->timeout(80)
                 ->run([
                     $this->resolveNodeBinary(),
-                    $this->resolveVerificationWebmailCheckScriptPath(),
+                    $this->resolveVerificationWebmailCheckScriptPath($this->runtimeWebmailProvider($runtimeConfig)),
                     $runtimeConfigPath,
                 ]);
 
@@ -571,12 +572,34 @@ class MailAccountRegistrationRunner
         return [
             'enabled' => (bool) ($mailbox['enabled'] ?? false),
             'email' => trim((string) ($mailbox['email'] ?? '')),
-            'provider' => trim((string) ($mailbox['provider'] ?? '')),
+            'provider' => $this->normalizeWebmailProvider($mailbox['provider'] ?? 'proton'),
             'username' => trim((string) ($mailbox['username'] ?? '')),
             'password_encrypted' => $this->nullableString($mailbox['password_encrypted'] ?? null),
-            'webmail_url' => trim((string) ($mailbox['webmail_url'] ?? '')),
+            'webmail_url' => trim((string) ($mailbox['webmail_url'] ?? '')) ?: $this->defaultWebmailUrl($this->normalizeWebmailProvider($mailbox['provider'] ?? 'proton')),
             'webmail_session' => is_array($mailbox['webmail_session'] ?? null) ? $mailbox['webmail_session'] : null,
         ];
+    }
+
+    protected function normalizeWebmailProvider(mixed $provider): string
+    {
+        $provider = strtolower(trim((string) $provider));
+
+        if ($provider === '' || str_contains($provider, 'proton')) {
+            return 'proton';
+        }
+
+        if (str_contains($provider, 'gmx')) {
+            return 'gmx';
+        }
+
+        return 'proton';
+    }
+
+    protected function defaultWebmailUrl(string $provider): string
+    {
+        return $provider === 'gmx'
+            ? 'https://www.gmx.net'
+            : 'https://mail.proton.me';
     }
 
     protected function runtimeVerificationMailbox(array $mailbox): array
@@ -760,15 +783,25 @@ class MailAccountRegistrationRunner
         return $nodeScript;
     }
 
-    protected function resolveVerificationWebmailCheckScriptPath(): string
+    protected function resolveVerificationWebmailCheckScriptPath(string $provider = 'proton'): string
     {
-        $nodeScript = base_path('resources/node/register/check_verification_webmail.cjs');
+        $scriptName = $provider === 'gmx'
+            ? 'check_verification_webmail_gmx.cjs'
+            : 'check_verification_webmail_proton.cjs';
+        $nodeScript = base_path('resources/node/register/'.$scriptName);
 
         if (! File::exists($nodeScript)) {
             throw new \RuntimeException(sprintf('Das lokale Node-Skript fuer Webmail-Verifikationscheck wurde nicht gefunden: %s', $nodeScript));
         }
 
         return $nodeScript;
+    }
+
+    protected function runtimeWebmailProvider(array $runtimeConfig): string
+    {
+        $mailbox = is_array($runtimeConfig['verificationMailbox'] ?? null) ? $runtimeConfig['verificationMailbox'] : [];
+
+        return $this->normalizeWebmailProvider($mailbox['provider'] ?? 'proton');
     }
 
     protected function resolveNodeBinary(): string

@@ -86,7 +86,10 @@
 
             <div>
                 <label for="verification-mailbox-provider" class="block text-sm font-medium text-gray-700">Provider</label>
-                <input id="verification-mailbox-provider" type="text" wire:model.defer="verificationMailboxProvider" placeholder="z.B. Gmail, Outlook, IONOS" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                <select id="verification-mailbox-provider" wire:model.live="verificationMailboxProvider" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                    <option value="proton">Proton</option>
+                    <option value="gmx">GMX</option>
+                </select>
                 @error('verificationMailboxProvider') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
             </div>
 
