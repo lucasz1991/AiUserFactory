@@ -64,25 +64,27 @@
                 @endif
             </div>
 
-            <div>
-                <div class="hidden grid-cols-[160px_180px_150px_minmax(0,1fr)_150px] border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 md:grid">
-                    <div>PID</div>
-                    <div>Typ</div>
-                    <div>Status</div>
-                    <div>Kommando</div>
-                    <div class="text-right">Aktion</div>
-                </div>
-
-                @forelse($processTree as $process)
-                    @include('livewire.admin.processes.partials.process-tree-node', [
-                        'process' => $process,
-                        'depth' => 0,
-                    ])
-                @empty
-                    <div class="px-4 py-12 text-center text-sm text-gray-500">
-                        Keine Prozesse fuer diesen Filter.
+            <div class="overflow-x-auto">
+                <div class="min-w-[980px]">
+                    <div class="grid grid-cols-[160px_180px_150px_minmax(360px,1fr)_150px] border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        <div>PID</div>
+                        <div>Typ</div>
+                        <div>Status</div>
+                        <div>Kommando</div>
+                        <div class="text-right">Aktion</div>
                     </div>
-                @endforelse
+
+                    @forelse($processTree as $process)
+                        @include('livewire.admin.processes.partials.process-tree-node', [
+                            'process' => $process,
+                            'depth' => 0,
+                        ])
+                    @empty
+                        <div class="px-4 py-12 text-center text-sm text-gray-500">
+                            Keine Prozesse fuer diesen Filter.
+                        </div>
+                    @endforelse
+                </div>
             </div>
         </div>
     @endif

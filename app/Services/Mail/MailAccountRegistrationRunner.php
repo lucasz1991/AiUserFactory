@@ -344,6 +344,18 @@ class MailAccountRegistrationRunner
             || ($webmailCheckPending && ($status['state'] ?? null) !== 'failed');
         $status['screenshotUrl'] = $this->screenshotUrl($runId);
         $status['webmailScreenshotUrl'] = $this->webmailScreenshotUrl($runId);
+        $status['registrationWindowStatus'] = $this->browserWindowStatus(
+            $status,
+            'Registrierung',
+            $this->publicScreenshotRelativePath($runId),
+            'Noch kein Screenshot verfuegbar.'
+        );
+        $status['webmailWindowStatus'] = $this->browserWindowStatus(
+            $status,
+            'Webmail',
+            $this->publicWebmailScreenshotRelativePath($runId),
+            'Webmail-Fenster noch nicht geoeffnet.'
+        );
         $status['registrationDebugDomUrl'] = $this->debugDomUrlFor($runId, $status, 'registrationDebugDom', 'debug-dom-registration.json');
         $status['webmailDebugDomUrl'] = $this->debugDomUrlFor($runId, $status, 'webmailDebugDom', 'debug-dom-webmail.json');
         $status['debugDomUrl'] = $this->debugDomUrl($runId, $status);
@@ -806,6 +818,50 @@ class MailAccountRegistrationRunner
         }
 
         return Storage::disk('public')->url($relativePath).'?v='.File::lastModified($absolutePath);
+    }
+
+    protected function browserWindowStatus(array $status, string $label, string $relativePath, string $emptyMessage): array
+    {
+        $absolutePath = storage_path('app/public/'.$relativePath);
+        $hasScreenshot = File::exists($absolutePath);
+        $heartbeatAt = null;
+        $ageSeconds = null;
+        $livePreviewEnabled = (bool) ($status['livePreviewEnabled'] ?? true);
+        $intervalSeconds = max(1, (int) ($status['livePreviewIntervalSeconds'] ?? $status['livePreviewPollIntervalSeconds'] ?? 3));
+        $isRunning = in_array((string) ($status['state'] ?? ''), ['queued', 'starting', 'running', 'waiting'], true);
+        $aliveThreshold = max(10, ($intervalSeconds * 3) + 5);
+
+        if ($hasScreenshot) {
+            $heartbeat = Carbon::createFromTimestamp(File::lastModified($absolutePath));
+            $heartbeatAt = $heartbeat->toIso8601String();
+            $ageSeconds = (int) $heartbeat->diffInSeconds(now());
+        }
+
+        $alive = $hasScreenshot && (! $isRunning || $ageSeconds === null || $ageSeconds <= $aliveThreshold);
+
+        if (! $livePreviewEnabled) {
+            $statusText = 'Screenshots deaktiviert';
+        } elseif ($alive && $isRunning) {
+            $statusText = 'Lebenszeichen aktiv';
+        } elseif ($hasScreenshot) {
+            $statusText = 'Letztes Lebenszeichen';
+        } else {
+            $statusText = $emptyMessage;
+        }
+
+        return [
+            'label' => $label,
+            'alive' => $alive,
+            'hasScreenshot' => $hasScreenshot,
+            'heartbeatAt' => $heartbeatAt,
+            'ageSeconds' => $ageSeconds,
+            'statusText' => $statusText,
+            'state' => (string) ($status['state'] ?? 'unknown'),
+            'stage' => (string) ($status['stage'] ?? ''),
+            'message' => (string) ($status['message'] ?? ''),
+            'livePreviewEnabled' => $livePreviewEnabled,
+            'livePreviewIntervalSeconds' => $intervalSeconds,
+        ];
     }
 
     protected function debugDomUrl(string $runId, array $status): ?string

@@ -5,7 +5,7 @@
 @endphp
 
 <details class="group border-t border-slate-200 first:border-t-0" @if($depth === 0) open @endif>
-    <summary class="grid cursor-pointer list-none gap-3 px-4 py-3 hover:bg-slate-50 md:grid-cols-[160px_180px_150px_minmax(0,1fr)_150px] md:items-center">
+    <summary class="grid cursor-pointer list-none grid-cols-[160px_180px_150px_minmax(360px,1fr)_150px] items-center gap-3 px-4 py-3 hover:bg-slate-50">
         <div class="flex items-center gap-2" style="padding-left: {{ $depth * 18 }}px">
             <span class="inline-flex h-6 w-6 items-center justify-center rounded border border-slate-300 text-xs font-bold text-slate-600">
                 {{ $hasChildren ? '+' : '-' }}

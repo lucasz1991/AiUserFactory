@@ -192,7 +192,12 @@
                     <div class="grid gap-3">
                         <div class="overflow-hidden rounded-lg border border-slate-200 bg-slate-950">
                             <div class="flex items-center justify-between gap-3 border-b border-slate-800 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-300">
-                                <span>Registrierung</span>
+                                <div class="min-w-0">
+                                    <div>Registrierung</div>
+                                    @include('livewire.admin.config.partials.browser-window-status', [
+                                        'windowStatus' => data_get($mailRegistrationStatus, 'registrationWindowStatus'),
+                                    ])
+                                </div>
                                 @if(data_get($mailRegistrationStatus, 'registrationDebugDomUrl'))
                                     <a href="{{ data_get($mailRegistrationStatus, 'registrationDebugDomUrl') }}" download="mail-registration-window-dom.json" class="rounded border border-slate-700 px-2 py-1 text-[10px] text-slate-200 hover:bg-slate-800">
                                         DOM
@@ -214,7 +219,12 @@
 
                         <div class="overflow-hidden rounded-lg border border-slate-200 bg-slate-950">
                             <div class="flex items-center justify-between gap-3 border-b border-slate-800 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-300">
-                                <span>Webmail</span>
+                                <div class="min-w-0">
+                                    <div>Webmail</div>
+                                    @include('livewire.admin.config.partials.browser-window-status', [
+                                        'windowStatus' => data_get($mailRegistrationStatus, 'webmailWindowStatus'),
+                                    ])
+                                </div>
                                 @if(data_get($mailRegistrationStatus, 'webmailDebugDomUrl'))
                                     <a href="{{ data_get($mailRegistrationStatus, 'webmailDebugDomUrl') }}" download="mail-registration-webmail-window-dom.json" class="rounded border border-slate-700 px-2 py-1 text-[10px] text-slate-200 hover:bg-slate-800">
                                         DOM

@@ -2,6 +2,7 @@
 
 namespace App\Services\Mail;
 
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Process;
@@ -122,6 +123,7 @@ class WebmailSessionRunner
         $status['livePreviewIntervalSeconds'] = (int) ($status['livePreviewIntervalSeconds'] ?? 3);
         $status['livePreviewPollIntervalSeconds'] = (int) ($status['livePreviewPollIntervalSeconds'] ?? $status['livePreviewIntervalSeconds']);
         $status['screenshotUrl'] = $this->runScreenshotUrl($runId);
+        $status['windowStatus'] = $this->browserWindowStatus($status, $this->publicScreenshotRelativePath($runId));
         $status['debugDomUrl'] = $this->debugDomUrl($runId, $status);
         $status['debugDom'] = $this->latestDebugDom($status);
         $status['result'] = $result;
@@ -353,6 +355,50 @@ class WebmailSessionRunner
     protected function runScreenshotUrl(string $runId): ?string
     {
         return $this->screenshotUrl($this->publicScreenshotRelativePath($runId));
+    }
+
+    protected function browserWindowStatus(array $status, string $relativePath): array
+    {
+        $absolutePath = storage_path('app/public/'.$relativePath);
+        $hasScreenshot = File::exists($absolutePath);
+        $heartbeatAt = null;
+        $ageSeconds = null;
+        $livePreviewEnabled = (bool) ($status['livePreviewEnabled'] ?? true);
+        $intervalSeconds = max(1, (int) ($status['livePreviewIntervalSeconds'] ?? $status['livePreviewPollIntervalSeconds'] ?? 3));
+        $isRunning = in_array((string) ($status['state'] ?? ''), ['queued', 'starting', 'running'], true);
+        $aliveThreshold = max(10, ($intervalSeconds * 3) + 5);
+
+        if ($hasScreenshot) {
+            $heartbeat = Carbon::createFromTimestamp(File::lastModified($absolutePath));
+            $heartbeatAt = $heartbeat->toIso8601String();
+            $ageSeconds = (int) $heartbeat->diffInSeconds(now());
+        }
+
+        $alive = $hasScreenshot && (! $isRunning || $ageSeconds === null || $ageSeconds <= $aliveThreshold);
+
+        if (! $livePreviewEnabled) {
+            $statusText = 'Screenshots deaktiviert';
+        } elseif ($alive && $isRunning) {
+            $statusText = 'Lebenszeichen aktiv';
+        } elseif ($hasScreenshot) {
+            $statusText = 'Letztes Lebenszeichen';
+        } else {
+            $statusText = 'Noch kein Screenshot verfuegbar.';
+        }
+
+        return [
+            'label' => 'Webmail',
+            'alive' => $alive,
+            'hasScreenshot' => $hasScreenshot,
+            'heartbeatAt' => $heartbeatAt,
+            'ageSeconds' => $ageSeconds,
+            'statusText' => $statusText,
+            'state' => (string) ($status['state'] ?? 'unknown'),
+            'stage' => (string) ($status['stage'] ?? ''),
+            'message' => (string) ($status['message'] ?? ''),
+            'livePreviewEnabled' => $livePreviewEnabled,
+            'livePreviewIntervalSeconds' => $intervalSeconds,
+        ];
     }
 
     protected function debugDomUrl(string $runId, array $status): ?string
