@@ -1068,7 +1068,47 @@ async function clickProtonEmailVerificationTabInContext(pageOrFrame) {
       element.value,
       element.getAttribute('aria-label'),
       element.getAttribute('title'),
+      element.getAttribute('data-title'),
     ].join(' '));
+    const clickTarget = (target) => {
+      target.scrollIntoView({ block: 'center', inline: 'center' });
+      const rect = target.getBoundingClientRect();
+      const pointTarget = document.elementFromPoint(
+        rect.left + rect.width / 2,
+        rect.top + rect.height / 2,
+      ) || target;
+
+      if (typeof PointerEvent === 'function') {
+        pointTarget.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+      }
+
+      pointTarget.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+
+      if (typeof PointerEvent === 'function') {
+        pointTarget.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
+      }
+
+      pointTarget.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+      pointTarget.click();
+      target.click();
+    };
+    const directEmailTab = allElementsDeep()
+      .filter(visible)
+      .find((element) => (
+        element.getAttribute('data-testid') === 'tab-header-e-mail-button'
+        || (
+          element.getAttribute('role') === 'tab'
+          && element.getAttribute('aria-controls')
+          && /^e-?mail$/.test(textFor(element))
+        )
+      ));
+
+    if (directEmailTab) {
+      clickTarget(directEmailTab);
+
+      return true;
+    }
+
     const humanDialog = allElementsDeep()
       .filter((element) => element.matches('[role="dialog"], [aria-modal="true"], dialog, .modal, section, div'))
       .filter(visible)
@@ -1077,11 +1117,11 @@ async function clickProtonEmailVerificationTabInContext(pageOrFrame) {
         const text = element.innerText || element.textContent || '';
         let score = 0;
 
-        if (!/human verification/i.test(text)) {
+        if (!/human verification|bitte beweise|spam und missbrauch|captcha|e-mail/i.test(text)) {
           return null;
         }
 
-        if (/(captcha|to fight spam and abuse|sorry, you did not pass|email)/i.test(text)) {
+        if (/(captcha|to fight spam and abuse|sorry, you did not pass|email|e-mail|spam und missbrauch|mensch)/i.test(text)) {
           score += 50;
         }
 
@@ -1173,26 +1213,7 @@ async function clickProtonEmailVerificationTabInContext(pageOrFrame) {
       return false;
     }
 
-    target.scrollIntoView({ block: 'center', inline: 'center' });
-    const rect = target.getBoundingClientRect();
-    const pointTarget = document.elementFromPoint(
-      rect.left + rect.width / 2,
-      rect.top + rect.height / 2,
-    ) || target;
-
-    if (typeof PointerEvent === 'function') {
-      pointTarget.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
-    }
-
-    pointTarget.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-
-    if (typeof PointerEvent === 'function') {
-      pointTarget.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
-    }
-
-    pointTarget.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-    pointTarget.click();
-    target.click();
+    clickTarget(target);
 
     return true;
   }).catch(() => false);
@@ -1255,7 +1276,28 @@ async function protonEmailVerificationTabPoint(pageOrFrame) {
       element.value,
       element.getAttribute('aria-label'),
       element.getAttribute('title'),
+      element.getAttribute('data-title'),
     ].join(' '));
+    const directEmailTab = allElementsDeep()
+      .filter(visible)
+      .find((element) => (
+        element.getAttribute('data-testid') === 'tab-header-e-mail-button'
+        || (
+          element.getAttribute('role') === 'tab'
+          && element.getAttribute('aria-controls')
+          && /^e-?mail$/.test(textFor(element))
+        )
+      ));
+
+    if (directEmailTab) {
+      const rect = directEmailTab.getBoundingClientRect();
+
+      return {
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2,
+      };
+    }
+
     const humanDialog = allElementsDeep()
       .filter((element) => element.matches('[role="dialog"], [aria-modal="true"], dialog, .modal, section, div'))
       .filter(visible)
@@ -1264,11 +1306,11 @@ async function protonEmailVerificationTabPoint(pageOrFrame) {
         const text = element.innerText || element.textContent || '';
         let score = 0;
 
-        if (!/human verification/i.test(text)) {
+        if (!/human verification|bitte beweise|spam und missbrauch|captcha|e-mail/i.test(text)) {
           return null;
         }
 
-        if (/(captcha|to fight spam and abuse|sorry, you did not pass|email)/i.test(text)) {
+        if (/(captcha|to fight spam and abuse|sorry, you did not pass|email|e-mail|spam und missbrauch|mensch)/i.test(text)) {
           score += 50;
         }
 
@@ -1398,16 +1440,29 @@ async function hasProtonHumanVerificationDialog(pageOrFrame) {
         && style.visibility !== 'hidden'
         && style.display !== 'none';
     };
+    const elements = allElementsDeep();
+    const hasCaptchaTab = elements.some((element) => (
+      visible(element)
+      && element.getAttribute('data-testid') === 'tab-header-captcha-button'
+    ));
+    const hasEmailTab = elements.some((element) => (
+      visible(element)
+      && element.getAttribute('data-testid') === 'tab-header-e-mail-button'
+    ));
 
-    return allElementsDeep()
+    if (hasCaptchaTab && hasEmailTab) {
+      return true;
+    }
+
+    return elements
       .filter((element) => element.matches('[role="dialog"], [aria-modal="true"], dialog, .modal, section, div'))
       .filter(visible)
       .some((element) => {
         const rect = element.getBoundingClientRect();
         const text = element.innerText || element.textContent || '';
 
-        return /human verification/i.test(text)
-          && /(captcha|to fight spam and abuse|sorry, you did not pass|email)/i.test(text)
+        return /human verification|bitte beweise|spam und missbrauch|captcha|e-mail/i.test(text)
+          && /(captcha|to fight spam and abuse|sorry, you did not pass|email|e-mail|spam und missbrauch|mensch)/i.test(text)
           && rect.width < window.innerWidth * 0.95
           && rect.height < window.innerHeight * 0.98;
       });
@@ -1529,7 +1584,12 @@ async function findVisibleEmailInput(pageOrFrame) {
         && style.visibility !== 'hidden'
         && style.display !== 'none';
     };
-    const humanDialog = allElementsDeep()
+    const elements = allElementsDeep();
+    const emailTab = elements
+      .filter(visible)
+      .find((element) => element.getAttribute('data-testid') === 'tab-header-e-mail-button');
+    const emailTabDialog = emailTab?.closest('[role="dialog"], [aria-modal="true"], dialog, .modal, .modal-two-content, section, div') || null;
+    const humanDialog = emailTabDialog || elements
       .filter((element) => element.matches('[role="dialog"], [aria-modal="true"], dialog, .modal, section, div'))
       .filter(visible)
       .map((element, index) => {
@@ -1537,11 +1597,11 @@ async function findVisibleEmailInput(pageOrFrame) {
         const text = element.innerText || element.textContent || '';
         let score = 0;
 
-        if (!/human verification/i.test(text)) {
+        if (!/human verification|bitte beweise|spam und missbrauch|captcha|e-mail/i.test(text)) {
           return null;
         }
 
-        if (/(captcha|to fight spam and abuse|sorry, you did not pass|email)/i.test(text)) {
+        if (/(captcha|to fight spam and abuse|sorry, you did not pass|email|e-mail|spam und missbrauch|mensch)/i.test(text)) {
           score += 50;
         }
 
