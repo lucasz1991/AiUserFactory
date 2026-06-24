@@ -607,6 +607,7 @@ class MailAccountRegistrationRunner
         $mailbox = $this->normalizeVerificationMailbox($mailbox);
         $enabled = (bool) ($mailbox['enabled'] ?? false);
         $password = $enabled ? $this->decryptString($mailbox['password_encrypted'] ?? null) : null;
+        $webmailSession = $this->runtimeWebmailSession($mailbox['webmail_session'] ?? null);
 
         return [
             'enabled' => $enabled,
@@ -615,7 +616,31 @@ class MailAccountRegistrationRunner
             'username' => $mailbox['username'] ?: ($mailbox['email'] ?? ''),
             'password' => $password,
             'webmailUrl' => $mailbox['webmail_url'] ?? '',
+            'webmailSession' => $webmailSession,
         ];
+    }
+
+    protected function runtimeWebmailSession(mixed $session): ?array
+    {
+        if (! is_array($session)) {
+            return null;
+        }
+
+        $encryptedPayload = trim((string) ($session['payload_encrypted'] ?? ''));
+
+        if ($encryptedPayload === '') {
+            return null;
+        }
+
+        $payload = $this->decryptString($encryptedPayload);
+
+        if ($payload === null || trim($payload) === '') {
+            return null;
+        }
+
+        $decoded = json_decode($payload, true);
+
+        return is_array($decoded) ? $decoded : null;
     }
 
     protected function nullableString(mixed $value): ?string

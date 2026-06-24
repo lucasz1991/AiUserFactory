@@ -261,6 +261,53 @@ function sameOriginUrl(value) {
   }
 }
 
+function isWebmailPortalReached(state, providerKey) {
+  const url = normalizeText(state?.url).toLowerCase();
+  const title = normalizeText(state?.title).toLowerCase();
+  const text = normalizeText(state?.text).toLowerCase();
+
+  if (providerKey === 'gmx') {
+    return url.includes('bap.navigator.gmx.net/mail')
+      || (title.includes('gmx freemail') && text.includes('e-mail') && text.includes('logout'));
+  }
+
+  if (providerKey === 'proton') {
+    return url.includes('mail.proton.me') && !/sign in|login|anmelden/.test(text);
+  }
+
+  return false;
+}
+
+async function collectSessionCookies(page, browser, urls = []) {
+  const normalizedUrls = urls.map(sameOriginUrl).filter(Boolean);
+  const cookieMap = new Map();
+
+  const addCookies = (cookies = []) => {
+    for (const cookie of cookies) {
+      const key = [
+        cookie.name,
+        cookie.domain,
+        cookie.path,
+      ].join('|');
+      cookieMap.set(key, cookie);
+    }
+  };
+
+  for (const url of normalizedUrls) {
+    addCookies(await page.cookies(url).catch(() => []));
+  }
+
+  addCookies(await page.cookies().catch(() => []));
+
+  const context = browser?.defaultBrowserContext?.();
+
+  if (context && typeof context.cookies === 'function') {
+    addCookies(await context.cookies(...normalizedUrls).catch(() => []));
+  }
+
+  return Array.from(cookieMap.values());
+}
+
 async function fillFirstMatchingInput(page, selectors, value, delay = 35) {
   for (const selector of selectors) {
     const input = await page.$(selector).catch(() => null);
@@ -678,8 +725,15 @@ async function main() {
     livePreview = await captureLivePreviewScreenshot(page, runtimeConfig, true);
 
     const origin = sameOriginUrl(page.url()) || sameOriginUrl(webmailUrl);
-    const cookies = origin ? await page.cookies(origin).catch(() => []) : await page.cookies().catch(() => []);
     const storage = await captureStorage(page);
+    const portalReached = isWebmailPortalReached(storage, providerKey);
+    const cookies = await collectSessionCookies(page, browser, [
+      webmailUrl,
+      page.url(),
+      storage.url,
+      ...(providerKey === 'gmx' ? ['https://www.gmx.net', 'https://bap.navigator.gmx.net'] : []),
+      ...(providerKey === 'proton' ? ['https://mail.proton.me', 'https://account.proton.me'] : []),
+    ]);
     const sessionPayload = {
       capturedAt: new Date().toISOString(),
       provider: providerKey,
@@ -688,6 +742,7 @@ async function main() {
       webmailUrl,
       finalUrl: page.url(),
       origin,
+      portalReached,
       cookies,
       storage,
     };
@@ -696,11 +751,19 @@ async function main() {
       warnings.push('Es wurden keine Cookies oder Browser-Storage-Daten erkannt.');
     }
 
+    if (portalReached) {
+      notes.push('Webmail-Portal wurde erreicht; Session wird fuer spaetere Mail-Abrufe gespeichert.');
+    }
+
     writeJsonFile(sessionFilePath, sessionPayload);
 
+    const hasSessionMaterial = cookies.length > 0 || Object.keys(storage.localStorage || {}).length > 0 || Object.keys(storage.sessionStorage || {}).length > 0;
     const result = {
-      ok: cookies.length > 0 || Object.keys(storage.localStorage || {}).length > 0 || Object.keys(storage.sessionStorage || {}).length > 0,
-      statusMessage: 'Webmail-Sessiondaten wurden gespeichert.',
+      ok: hasSessionMaterial || portalReached,
+      portalReached,
+      statusMessage: portalReached
+        ? 'Webmail-Portal wurde erreicht; Sessiondaten wurden gespeichert.'
+        : 'Webmail-Sessiondaten wurden gespeichert.',
       runId: runtimeConfig.runId || null,
       scriptName: SCRIPT_NAME,
       scriptVersion: SCRIPT_VERSION,

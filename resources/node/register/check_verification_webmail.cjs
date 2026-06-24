@@ -56,6 +56,7 @@ function verificationMailboxFromConfig(runtimeConfig = {}) {
     username,
     password,
     webmailUrl,
+    webmailSession: mailbox.webmailSession || mailbox.webmail_session || null,
     usable: email !== '' && webmailUrl !== '',
   };
 }
@@ -148,25 +149,136 @@ async function clickVisibleTextTarget(page, patterns, selector = 'button, [role=
   }, patterns, selector).catch(() => false);
 }
 
-async function prepareGmxLogin(page) {
-  await clickVisibleTextTarget(page, [
-    'accept',
-    'akzeptieren',
-    'zustimmen',
-    'alle akzeptieren',
-    'einverstanden',
-  ]).catch(() => false);
-  await sleep(800);
+async function clickSelectorInPageOrFrames(page, selector, timeoutMs = 5000) {
+  const stopAt = Date.now() + Math.max(500, Number(timeoutMs) || 5000);
 
-  await clickVisibleTextTarget(page, [
-    'login',
-    'log in',
-    'einloggen',
-    'anmelden',
-    'e-mail',
-    'email',
-    'mail',
-  ], 'button, [role="button"], a').catch(() => false);
+  while (Date.now() < stopAt) {
+    for (const frame of page.frames()) {
+      const clicked = await frame.evaluate((targetSelector) => {
+        const element = document.querySelector(targetSelector);
+
+        if (!element) {
+          return false;
+        }
+
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+
+        if (rect.width <= 0 || rect.height <= 0 || style.visibility === 'hidden' || style.display === 'none' || element.disabled) {
+          return false;
+        }
+
+        element.scrollIntoView({ block: 'center', inline: 'center' });
+        element.focus?.({ preventScroll: true });
+        element.click();
+
+        return true;
+      }, selector).catch(() => false);
+
+      if (clicked) {
+        await sleep(700);
+
+        return true;
+      }
+    }
+
+    await sleep(250);
+  }
+
+  return false;
+}
+
+async function restoreWebmailSession(page, mailbox) {
+  const session = mailbox.webmailSession;
+  const diagnostics = {
+    attempted: false,
+    cookiesRestored: 0,
+    storageRestored: false,
+    targetUrl: mailbox.webmailUrl,
+  };
+
+  if (!session || typeof session !== 'object') {
+    return diagnostics;
+  }
+
+  diagnostics.attempted = true;
+  diagnostics.targetUrl = normalizeText(session.finalUrl || session.webmailUrl || mailbox.webmailUrl);
+
+  const cookies = Array.isArray(session.cookies) ? session.cookies : [];
+  const safeCookies = cookies
+    .filter((cookie) => cookie && cookie.name && (cookie.domain || cookie.url))
+    .map((cookie) => {
+      const nextCookie = { ...cookie };
+      delete nextCookie.partitionKey;
+      delete nextCookie.sourcePort;
+      delete nextCookie.sourceScheme;
+
+      return nextCookie;
+    });
+
+  if (safeCookies.length > 0) {
+    await page.setCookie(...safeCookies).catch(() => {});
+    diagnostics.cookiesRestored = safeCookies.length;
+  }
+
+  if (diagnostics.targetUrl && /^https?:\/\//i.test(diagnostics.targetUrl)) {
+    await page.goto(diagnostics.targetUrl, {
+      waitUntil: 'domcontentloaded',
+      timeout: 60000,
+    }).catch(() => null);
+  }
+
+  const storage = session.storage || {};
+  const localStorageValues = storage.localStorage || {};
+  const sessionStorageValues = storage.sessionStorage || {};
+
+  if (Object.keys(localStorageValues).length > 0 || Object.keys(sessionStorageValues).length > 0) {
+    diagnostics.storageRestored = await page.evaluate((payload) => {
+      for (const [key, value] of Object.entries(payload.localStorage || {})) {
+        window.localStorage.setItem(key, String(value));
+      }
+
+      for (const [key, value] of Object.entries(payload.sessionStorage || {})) {
+        window.sessionStorage.setItem(key, String(value));
+      }
+
+      return true;
+    }, {
+      localStorage: localStorageValues,
+      sessionStorage: sessionStorageValues,
+    }).catch(() => false);
+
+    if (diagnostics.storageRestored) {
+      await page.reload({
+        waitUntil: 'domcontentloaded',
+        timeout: 60000,
+      }).catch(() => null);
+    }
+  }
+
+  return diagnostics;
+}
+
+async function prepareGmxLogin(page) {
+  await clickSelectorInPageOrFrames(page, '#save-all-pur', 10000);
+  await sleep(1000);
+  await clickSelectorInPageOrFrames(page, 'account-avatar[role="button"], account-avatar, a[aria-label="Login"]', 8000);
+  await sleep(1000);
+  const dropdownLoginClicked = await clickSelectorInPageOrFrames(
+    page,
+    'button.account-avatar__button, .account-avatar__button, button[data-component="button"][data-importance="primary"][data-size="l"][data-type="text"]',
+    8000,
+  );
+
+  if (!dropdownLoginClicked) {
+    await clickVisibleTextTarget(page, [
+      '^login$',
+      'log in',
+      'einloggen',
+      'anmelden',
+    ], 'button.account-avatar__button, button[data-component="button"], button, [role="button"], a').catch(() => false);
+  }
+
   await sleep(1000);
 }
 
@@ -293,12 +405,15 @@ async function openLikelyVerificationMessage(page) {
         element.getAttribute('aria-label'),
         element.getAttribute('title'),
       ].join(' '));
+      const exactText = text.replace(/\s+/g, ' ').trim();
 
       return rect.width > 0
         && rect.height > 0
         && style.visibility !== 'hidden'
         && style.display !== 'none'
-        && /(proton|verification|verify|code|bestaetigung|confirm)/.test(text);
+        && exactText !== 'anzeige'
+        && !/^anzeige\b/.test(exactText)
+        && /(proton|verification|verify|code|bestaetigung|confirm|security|sicherheit)/.test(text);
     });
 
     if (!target) {
@@ -309,6 +424,15 @@ async function openLikelyVerificationMessage(page) {
 
     return true;
   }).catch(() => false);
+}
+
+async function openInbox(page) {
+  return clickVisibleTextTarget(page, [
+    'posteingang',
+    'inbox',
+    'e-mail',
+    'mail',
+  ], 'button, [role="button"], a, [data-testid]').catch(() => false);
 }
 
 async function waitForVerificationEmail(page, timeoutMs) {
@@ -382,13 +506,25 @@ async function main() {
     const page = await browser.newPage();
     page.setDefaultNavigationTimeout(Math.max(15000, Number(runtimeConfig.navigationTimeoutMs || 120000)));
     await page.setViewport(DEFAULT_VIEWPORT);
-    await page.goto(mailbox.webmailUrl, {
-      waitUntil: 'domcontentloaded',
-      timeout: Math.max(15000, Number(runtimeConfig.navigationTimeoutMs || 120000)),
-    });
+    const restoredSession = await restoreWebmailSession(page, mailbox);
 
-    const login = await attemptWebmailLogin(page, mailbox);
+    if (!restoredSession.attempted || !page.url().startsWith('http')) {
+      await page.goto(mailbox.webmailUrl, {
+        waitUntil: 'domcontentloaded',
+        timeout: Math.max(15000, Number(runtimeConfig.navigationTimeoutMs || 120000)),
+      });
+    }
+
+    const sessionUsable = restoredSession.cookiesRestored > 0 || restoredSession.storageRestored === true;
+    const login = sessionUsable
+      ? {
+        attempted: false,
+        skippedBecauseSessionRestored: true,
+      }
+      : await attemptWebmailLogin(page, mailbox);
     await sleep(Math.max(2000, Number(runtimeConfig.verificationWebmailPostLoginWaitMs || 4000)));
+    await openInbox(page);
+    await sleep(1500);
 
     const verificationState = await waitForVerificationEmail(
       page,
@@ -410,6 +546,7 @@ async function main() {
       title: verificationState.title || await page.title().catch(() => ''),
       textSample: verificationState.textSample || '',
       login,
+      restoredSession,
       providerKey: mailbox.provider,
       requestedBrowserEngine,
       activeBrowserEngine: launchResult.activeEngine,
