@@ -2110,15 +2110,31 @@ function verificationMailboxFromConfig(runtimeConfig) {
   const username = normalizeText(mailbox.username || email);
   const password = normalizeText(mailbox.password);
   const webmailUrl = normalizeText(mailbox.webmailUrl || mailbox.webmail_url);
+  const provider = webmailProviderKey(mailbox.provider || mailbox.webmailProvider || webmailUrl || runtimeConfig.provider?.key || runtimeConfig.provider?.label);
 
   return {
     enabled,
+    provider,
     email,
     username,
     password,
     webmailUrl,
     usable: enabled && email !== '',
   };
+}
+
+function webmailProviderKey(value) {
+  const provider = normalizeText(value).toLowerCase();
+
+  if (provider.includes('gmx')) {
+    return 'gmx';
+  }
+
+  if (provider.includes('proton')) {
+    return 'proton';
+  }
+
+  return provider || 'proton';
 }
 
 async function findVisibleEmailInput(pageOrFrame) {
@@ -2602,6 +2618,208 @@ async function fillFirstVisibleInputByHints(page, hints, value, timeoutMs = 1200
   return true;
 }
 
+async function clickSelectorInPageOrFrames(page, selector, timeoutMs = 5000) {
+  const stopAt = Date.now() + Math.max(500, Number(timeoutMs) || 5000);
+
+  while (Date.now() < stopAt) {
+    for (const frame of page.frames()) {
+      const clicked = await frame.evaluate((targetSelector) => {
+        const element = document.querySelector(targetSelector);
+
+        if (!element) {
+          return false;
+        }
+
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+
+        if (rect.width <= 0 || rect.height <= 0 || style.visibility === 'hidden' || style.display === 'none' || element.disabled) {
+          return false;
+        }
+
+        element.scrollIntoView({ block: 'center', inline: 'center' });
+        element.focus?.({ preventScroll: true });
+        element.click();
+
+        return true;
+      }, selector).catch(() => false);
+
+      if (clicked) {
+        await sleep(700);
+
+        return true;
+      }
+    }
+
+    await sleep(250);
+  }
+
+  return false;
+}
+
+async function clickVisibleTextTargetInPageOrFrames(page, labels, selectors = '*', allowPartial = false) {
+  if (await clickVisibleTextTarget(page, labels, selectors, allowPartial)) {
+    return true;
+  }
+
+  for (const frame of page.frames()) {
+    if (frame === page.mainFrame()) {
+      continue;
+    }
+
+    if (await clickVisibleTextTarget(frame, labels, selectors, allowPartial)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+async function fillFirstMatchingInputInPageOrFrames(page, selectors, value, timeoutMs = 12000) {
+  const stopAt = Date.now() + Math.max(500, Number(timeoutMs) || 12000);
+
+  while (Date.now() < stopAt) {
+    for (const frame of page.frames()) {
+      for (const selector of selectors) {
+        const input = await frame.$(selector).catch(() => null);
+
+        if (!input) {
+          continue;
+        }
+
+        const usable = await input.evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          const style = window.getComputedStyle(element);
+
+          return rect.width > 0
+            && rect.height > 0
+            && style.visibility !== 'hidden'
+            && style.display !== 'none'
+            && !element.disabled
+            && !element.readOnly;
+        }).catch(() => false);
+
+        if (!usable) {
+          await input.dispose().catch(() => {});
+          continue;
+        }
+
+        await fillInputValue(input, value);
+        await input.dispose().catch(() => {});
+        await pauseStep();
+
+        return true;
+      }
+    }
+
+    await sleep(350);
+  }
+
+  return false;
+}
+
+async function prepareGmxWebmailLogin(page) {
+  const diagnostics = {
+    cookieAccepted: false,
+    avatarClicked: false,
+    dropdownLoginClicked: false,
+  };
+
+  diagnostics.cookieAccepted = await clickSelectorInPageOrFrames(page, '#save-all-pur', 10000);
+
+  if (!diagnostics.cookieAccepted) {
+    diagnostics.cookieAccepted = await clickVisibleTextTargetInPageOrFrames(page, [
+      'akzeptieren und weiter',
+      'accept',
+      'akzeptieren',
+      'zustimmen',
+      'alle akzeptieren',
+      'einverstanden',
+    ], '#save-all-pur, button, [role="button"], a', true);
+  }
+
+  await sleep(1000);
+  diagnostics.avatarClicked = await clickSelectorInPageOrFrames(page, 'account-avatar[role="button"], account-avatar, a[aria-label="Login"]', 8000);
+  await sleep(1000);
+  diagnostics.dropdownLoginClicked = await clickSelectorInPageOrFrames(
+    page,
+    'button.account-avatar__button, .account-avatar__button, button[data-component="button"][data-importance="primary"][data-size="l"][data-type="text"]',
+    8000,
+  );
+
+  if (!diagnostics.dropdownLoginClicked) {
+    diagnostics.dropdownLoginClicked = await clickVisibleTextTargetInPageOrFrames(page, [
+      '^login$',
+      'login',
+      'log in',
+      'einloggen',
+      'anmelden',
+    ], 'button.account-avatar__button, button[data-component="button"], button, [role="button"], a', true);
+  }
+
+  await sleep(1000);
+
+  return diagnostics;
+}
+
+async function fillWebmailUsername(page, mailbox) {
+  const selectors = [
+    ...(mailbox.provider === 'gmx' ? [
+      '#login-email',
+      'input[name="username"]',
+      'input[name="login"]',
+      'input[data-testid*="email" i]',
+      'input[data-testid*="login" i]',
+    ] : []),
+    'input[type="email"]',
+    'input[name*="user" i]',
+    'input[id*="user" i]',
+    'input[name*="email" i]',
+    'input[id*="email" i]',
+    'input[name*="login" i]',
+    'input[id*="login" i]',
+    'input[autocomplete="username"]',
+    'input[type="text"]',
+  ];
+
+  return fillFirstMatchingInputInPageOrFrames(page, selectors, mailbox.username || mailbox.email, 15000);
+}
+
+async function fillWebmailPassword(page, mailbox) {
+  const selectors = [
+    ...(mailbox.provider === 'gmx' ? [
+      '#login-password',
+      'input[name="password"]',
+      'input[data-testid*="password" i]',
+    ] : []),
+    'input[type="password"]',
+    'input[name*="pass" i]',
+    'input[id*="pass" i]',
+    'input[autocomplete="current-password"]',
+  ];
+
+  return fillFirstMatchingInputInPageOrFrames(page, selectors, mailbox.password, 15000);
+}
+
+async function clickWebmailLoginContinue(page, mailbox) {
+  const labels = [
+    'weiter',
+    'next',
+    'continue',
+    'login',
+    'log in',
+    'sign in',
+    'anmelden',
+    'einloggen',
+  ];
+  const selectors = mailbox.provider === 'gmx'
+    ? '#login-submit, button, input[type="submit"], [role="button"]'
+    : 'button, input[type="submit"], [role="button"], a';
+
+  return clickVisibleTextTargetInPageOrFrames(page, labels, selectors, true)
+    || clickFirstMatchingButtonIncludingFrames(page, labels);
+}
+
 async function openLikelyVerificationMessageInWebmail(page) {
   return page.evaluate(() => {
     const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
@@ -2841,60 +3059,104 @@ async function openVerificationWebmailPage(browser, runtimeConfig, primaryPage =
     },
   );
 
-  if (mailbox.username) {
-    await fillFirstVisibleInputByHints(page, ['email', 'mail', 'user', 'login', 'username'], mailbox.username).catch(() => false);
+  let gmxStart = null;
+
+  if (mailbox.provider === 'gmx') {
+    gmxStart = await prepareGmxWebmailLogin(page);
     await captureWebmailLivePreviewScreenshot(page, runtimeConfig, true);
-    progress(runtimeConfig, 'verification-webmail-username-entered', 'Webmail-Benutzername wurde eingetragen.', {
+    progress(runtimeConfig, 'verification-webmail-gmx-login-started', 'GMX-Login wurde vorbereitet.', {
+      gmxStart,
       ...(primaryPage ? await pageSnapshot(primaryPage, runtimeConfig, true, false) : {}),
       ...(await webmailWindowSnapshot(page, runtimeConfig, true, true)),
     });
     await restorePrimaryPage();
   }
 
+  const usernameFilled = mailbox.username
+    ? await fillWebmailUsername(page, mailbox).catch(() => false)
+    : false;
+
   if (mailbox.username) {
-    await clickFirstMatchingButton(page, [
-      'next',
-      'continue',
-      'weiter',
-      'sign in',
-      'log in',
-      'login',
-      'anmelden',
-    ]).catch(() => false);
+    await captureWebmailLivePreviewScreenshot(page, runtimeConfig, true);
+    progress(
+      runtimeConfig,
+      usernameFilled ? 'verification-webmail-username-entered' : 'verification-webmail-username-not-found',
+      usernameFilled
+        ? `Webmail-Benutzername wurde eingetragen: ${mailbox.username}.`
+        : 'Webmail-Benutzername konnte nicht eingetragen werden; Login-Feld wurde nicht gefunden.',
+      {
+        gmxStart,
+        usernameFilled,
+        ...(primaryPage ? await pageSnapshot(primaryPage, runtimeConfig, true, false) : {}),
+        ...(await webmailWindowSnapshot(page, runtimeConfig, true, true)),
+      },
+    );
+    await restorePrimaryPage();
+  }
+
+  const usernameAdvanced = usernameFilled
+    ? await clickWebmailLoginContinue(page, mailbox).catch(() => false)
+    : false;
+
+  if (mailbox.username) {
     await pauseStep();
     await captureWebmailLivePreviewScreenshot(page, runtimeConfig, true);
-    progress(runtimeConfig, 'verification-webmail-login-advanced', 'Webmail-Loginformular wurde weitergeschaltet.', {
-      ...(primaryPage ? await pageSnapshot(primaryPage, runtimeConfig, true, false) : {}),
-      ...(await webmailWindowSnapshot(page, runtimeConfig, true, true)),
-    });
+    progress(
+      runtimeConfig,
+      usernameAdvanced ? 'verification-webmail-login-advanced' : 'verification-webmail-login-advance-not-found',
+      usernameAdvanced
+        ? 'Webmail-Loginformular wurde nach dem Benutzernamen weitergeschaltet.'
+        : 'Weiter/Login-Button nach dem Benutzernamen wurde nicht gefunden.',
+      {
+        usernameFilled,
+        usernameAdvanced,
+        ...(primaryPage ? await pageSnapshot(primaryPage, runtimeConfig, true, false) : {}),
+        ...(await webmailWindowSnapshot(page, runtimeConfig, true, true)),
+      },
+    );
     await restorePrimaryPage();
   }
 
+  const passwordFilled = mailbox.password
+    ? await fillWebmailPassword(page, mailbox).catch(() => false)
+    : false;
+
   if (mailbox.password) {
-    await fillFirstVisibleInputByHints(page, ['password', 'passwort'], mailbox.password).catch(() => false);
     await captureWebmailLivePreviewScreenshot(page, runtimeConfig, true);
-    progress(runtimeConfig, 'verification-webmail-password-entered', 'Webmail-Passwort wurde eingetragen.', {
-      ...(primaryPage ? await pageSnapshot(primaryPage, runtimeConfig, true, false) : {}),
-      ...(await webmailWindowSnapshot(page, runtimeConfig, true, true)),
-    });
+    progress(
+      runtimeConfig,
+      passwordFilled ? 'verification-webmail-password-entered' : 'verification-webmail-password-not-found',
+      passwordFilled
+        ? 'Webmail-Passwort wurde eingetragen.'
+        : 'Webmail-Passwortfeld wurde nicht gefunden.',
+      {
+        passwordFilled,
+        ...(primaryPage ? await pageSnapshot(primaryPage, runtimeConfig, true, false) : {}),
+        ...(await webmailWindowSnapshot(page, runtimeConfig, true, true)),
+      },
+    );
     await restorePrimaryPage();
   }
 
+  const passwordSubmitted = passwordFilled
+    ? await clickWebmailLoginContinue(page, mailbox).catch(() => false)
+    : false;
+
   if (mailbox.password) {
-    await clickFirstMatchingButton(page, [
-      'sign in',
-      'log in',
-      'login',
-      'anmelden',
-      'next',
-      'continue',
-      'weiter',
-    ]).catch(() => false);
     await captureWebmailLivePreviewScreenshot(page, runtimeConfig, true);
-    progress(runtimeConfig, 'verification-webmail-login-submitted', 'Webmail-Login wurde abgesendet.', {
-      ...(primaryPage ? await pageSnapshot(primaryPage, runtimeConfig, true, false) : {}),
-      ...(await webmailWindowSnapshot(page, runtimeConfig, true, true)),
-    });
+    progress(
+      runtimeConfig,
+      passwordSubmitted ? 'verification-webmail-login-submitted' : 'verification-webmail-login-submit-not-found',
+      passwordSubmitted
+        ? 'Webmail-Login wurde abgesendet.'
+        : 'Login-Button nach dem Passwort wurde nicht gefunden.',
+      {
+        passwordFilled,
+        passwordSubmitted,
+        ...(primaryPage ? await pageSnapshot(primaryPage, runtimeConfig, true, false) : {}),
+        ...(await webmailWindowSnapshot(page, runtimeConfig, true, true)),
+      },
+    );
     await restorePrimaryPage();
   }
 
