@@ -49,6 +49,15 @@ function writeJsonFile(filePath, payload) {
 }
 
 function publicStatusPayload(runtimeConfig, state, stage, message, data = {}) {
+  const livePreviewIntervalSeconds = Math.max(
+    1,
+    Math.round((
+      Number(runtimeConfig.livePreviewIntervalMs)
+      || (Number(runtimeConfig.livePreviewIntervalSeconds) > 0 ? Number(runtimeConfig.livePreviewIntervalSeconds) * 1000 : 0)
+      || LIVE_PREVIEW_MIN_INTERVAL_MS
+    ) / 1000),
+  );
+
   return {
     runId: runtimeConfig.runId || null,
     providerKey: webmailProviderKey(runtimeConfig),
@@ -66,6 +75,9 @@ function publicStatusPayload(runtimeConfig, state, stage, message, data = {}) {
     requestedBrowserEngine: data.requestedBrowserEngine || null,
     activeBrowserEngine: data.activeBrowserEngine || null,
     browserFallbackReason: data.browserFallbackReason || null,
+    livePreviewEnabled: runtimeConfig.livePreviewEnabled !== false,
+    livePreviewIntervalSeconds,
+    livePreviewPollIntervalSeconds: livePreviewIntervalSeconds,
     finalUrl: data.finalUrl || null,
     title: data.title || null,
     debugDom: data.debugDom || null,
@@ -113,8 +125,14 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
   }
 
   const now = Date.now();
+  const intervalMs = Math.max(
+    500,
+    Number(runtimeConfig.livePreviewIntervalMs)
+      || (Number(runtimeConfig.livePreviewIntervalSeconds) > 0 ? Number(runtimeConfig.livePreviewIntervalSeconds) * 1000 : 0)
+      || LIVE_PREVIEW_MIN_INTERVAL_MS,
+  );
 
-  if (!force && now - lastLivePreviewAt < LIVE_PREVIEW_MIN_INTERVAL_MS) {
+  if (!force && now - lastLivePreviewAt < intervalMs) {
     return {};
   }
 

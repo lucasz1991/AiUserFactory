@@ -169,14 +169,24 @@
             </div>
         </x-admin.panel>
 
+        @if(!$showMailRegistrationModal && $mailRegistrationRunId)
+            @php
+                $mailRegistrationBackgroundPollSeconds = max(1, min(60, (int) data_get($mailRegistrationStatus, 'livePreviewPollIntervalSeconds', 3)));
+            @endphp
+            <div class="hidden" wire:poll.{{ $mailRegistrationBackgroundPollSeconds }}s="refreshMailRegistration"></div>
+        @endif
+
         <x-dialog-modal wire:model="showMailRegistrationModal" maxWidth="6xl">
             <x-slot name="title">
                 Mail-Registrierung beobachten
             </x-slot>
 
             <x-slot name="content">
+                @php
+                    $mailRegistrationPollSeconds = max(1, min(60, (int) data_get($mailRegistrationStatus, 'livePreviewPollIntervalSeconds', 3)));
+                @endphp
                 <div
-                    @if(data_get($mailRegistrationStatus, 'isRunning')) wire:poll.2500ms="refreshMailRegistration" @endif
+                    @if(data_get($mailRegistrationStatus, 'isRunning')) wire:poll.{{ $mailRegistrationPollSeconds }}s="refreshMailRegistration" @endif
                     class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(420px,560px)]"
                 >
                     <div class="grid gap-3">
@@ -220,6 +230,12 @@
                             </div>
                             <div class="mt-1 text-xs text-slate-500">
                                 Script: {{ data_get($mailRegistrationStatus, 'scriptVersionLabel', 'mail_account.cjs v2') }}
+                            </div>
+                            <div class="mt-1 text-xs text-slate-500">
+                                Screenshots: {{ data_get($mailRegistrationStatus, 'livePreviewEnabled', true) ? 'aktiv' : 'inaktiv' }} · Intervall: {{ data_get($mailRegistrationStatus, 'livePreviewIntervalSeconds', $mailRegistrationPollSeconds) }}s
+                            </div>
+                            <div class="mt-1 text-xs text-slate-500">
+                                Browser-Aktivitaetscheck: {{ data_get($mailRegistrationStatus, 'browserActivityCheckEnabled', true) ? 'aktiv' : 'inaktiv' }}
                             </div>
                             @if(data_get($mailRegistrationStatus, 'result.webmailCheckPending') && data_get($mailRegistrationStatus, 'result.verificationWebmailCheckDueAt'))
                                 <div class="mt-2 text-xs font-semibold text-amber-700">

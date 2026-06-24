@@ -256,14 +256,27 @@
         </button>
     </div>
 
+    @php
+        $backgroundPollSeconds = max(1, min(60, (int) ($livePreviewIntervalSeconds ?? 3)));
+    @endphp
+    @if(!$showRegistrationRunModal && $registrationRunId)
+        <div class="hidden" wire:poll.{{ $backgroundPollSeconds }}s="refreshRegistrationRun"></div>
+    @endif
+    @if(!$showVerificationMailboxSessionModal && $verificationMailboxSessionRunId)
+        <div class="hidden" wire:poll.{{ $backgroundPollSeconds }}s="refreshVerificationMailboxSessionRun"></div>
+    @endif
+
     <x-dialog-modal wire:model="showVerificationMailboxSessionModal" maxWidth="6xl">
         <x-slot name="title">
             Webmail-Session beobachten
         </x-slot>
 
         <x-slot name="content">
+            @php
+                $webmailSessionPollSeconds = max(1, min(60, (int) data_get($verificationMailboxSessionResult, 'livePreviewPollIntervalSeconds', $livePreviewIntervalSeconds ?? 3)));
+            @endphp
             <div
-                @if(data_get($verificationMailboxSessionResult, 'isRunning')) wire:poll.2500ms="refreshVerificationMailboxSessionRun" @endif
+                @if(data_get($verificationMailboxSessionResult, 'isRunning')) wire:poll.{{ $webmailSessionPollSeconds }}s="refreshVerificationMailboxSessionRun" @endif
                 class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(360px,460px)]"
             >
                 <div class="overflow-hidden rounded-lg border border-slate-200 bg-slate-950">
@@ -296,6 +309,9 @@
                                 Schritt: {{ data_get($verificationMailboxSessionResult, 'stage') }}
                             </div>
                         @endif
+                        <div class="mt-1 text-xs text-slate-500">
+                            Screenshots: {{ data_get($verificationMailboxSessionResult, 'livePreviewEnabled', true) ? 'aktiv' : 'inaktiv' }} · Intervall: {{ data_get($verificationMailboxSessionResult, 'livePreviewIntervalSeconds', $webmailSessionPollSeconds) }}s
+                        </div>
                     </div>
 
                     @if(!empty($verificationMailboxSessionResult['events']))
@@ -375,8 +391,11 @@
         </x-slot>
 
         <x-slot name="content">
+            @php
+                $registrationPollSeconds = max(1, min(60, (int) data_get($registrationRunStatus, 'livePreviewPollIntervalSeconds', $livePreviewIntervalSeconds ?? 3)));
+            @endphp
             <div
-                @if(data_get($registrationRunStatus, 'isRunning')) wire:poll.2500ms="refreshRegistrationRun" @endif
+                @if(data_get($registrationRunStatus, 'isRunning')) wire:poll.{{ $registrationPollSeconds }}s="refreshRegistrationRun" @endif
                 class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(420px,560px)]"
             >
                 <div class="grid gap-3">
@@ -420,6 +439,12 @@
                         </div>
                         <div class="mt-1 text-xs text-slate-500">
                             Script: {{ data_get($registrationRunStatus, 'scriptVersionLabel', 'mail_account.cjs v2') }}
+                        </div>
+                        <div class="mt-1 text-xs text-slate-500">
+                            Screenshots: {{ data_get($registrationRunStatus, 'livePreviewEnabled', true) ? 'aktiv' : 'inaktiv' }} · Intervall: {{ data_get($registrationRunStatus, 'livePreviewIntervalSeconds', $registrationPollSeconds) }}s
+                        </div>
+                        <div class="mt-1 text-xs text-slate-500">
+                            Browser-Aktivitaetscheck: {{ data_get($registrationRunStatus, 'browserActivityCheckEnabled', true) ? 'aktiv' : 'inaktiv' }}
                         </div>
                         @if(data_get($registrationRunStatus, 'result.webmailCheckPending') && data_get($registrationRunStatus, 'result.verificationWebmailCheckDueAt'))
                             <div class="mt-2 text-xs font-semibold text-amber-700">

@@ -37,4 +37,11 @@
     <div class="rounded-lg border border-blue-200 bg-blue-50 p-5 text-sm text-blue-900">
         Die Installation ist auf die Verwaltung von Personen fuer Instagram-Sessions reduziert. Alte Shop-, CMS-, Bewertungs- und Kursmodule sind aus der Navigation und den Einstiegsseiten entfernt.
     </div>
+
+    <livewire:admin.processes.process-monitor
+        :compact="true"
+        :limit="6"
+        :show-header="true"
+        :auto-refresh="true"
+    />
 </div>

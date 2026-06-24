@@ -41,7 +41,10 @@ class MailAccountRegistrationRunner
             'cloak_humanize_enabled' => false,
             'cloak_human_preset' => '',
             'headless_enabled' => false,
+            'preview_modal_enabled' => true,
             'live_preview_enabled' => true,
+            'live_preview_interval_seconds' => 3,
+            'browser_activity_check_enabled' => true,
             'dom_debug_enabled' => true,
             'navigation_timeout_seconds' => 120,
             'observation_timeout_seconds' => 300,
@@ -109,7 +112,10 @@ class MailAccountRegistrationRunner
             'cloak_humanize_enabled' => (bool) ($settings['cloak_humanize_enabled'] ?? false),
             'cloak_human_preset' => trim((string) ($settings['cloak_human_preset'] ?? '')),
             'headless_enabled' => (bool) ($settings['headless_enabled'] ?? false),
+            'preview_modal_enabled' => (bool) ($settings['preview_modal_enabled'] ?? $defaults['preview_modal_enabled']),
             'live_preview_enabled' => (bool) ($settings['live_preview_enabled'] ?? $defaults['live_preview_enabled']),
+            'live_preview_interval_seconds' => max(1, min(60, (int) ($settings['live_preview_interval_seconds'] ?? $defaults['live_preview_interval_seconds']))),
+            'browser_activity_check_enabled' => (bool) ($settings['browser_activity_check_enabled'] ?? $defaults['browser_activity_check_enabled']),
             'dom_debug_enabled' => (bool) ($settings['dom_debug_enabled'] ?? $defaults['dom_debug_enabled']),
             'navigation_timeout_seconds' => max(30, min(300, (int) ($settings['navigation_timeout_seconds'] ?? 120))),
             'observation_timeout_seconds' => max(30, min(1800, (int) ($settings['observation_timeout_seconds'] ?? 300))),
@@ -162,10 +168,15 @@ class MailAccountRegistrationRunner
             'cloakHumanizeEnabled' => (bool) $settings['cloak_humanize_enabled'],
             'cloakHumanPreset' => $settings['cloak_human_preset'],
             'headlessEnabled' => (bool) $settings['headless_enabled'],
+            'previewModalEnabled' => (bool) $settings['preview_modal_enabled'],
             'navigationTimeoutMs' => $settings['navigation_timeout_seconds'] * 1000,
             'observationTimeoutMs' => $settings['observation_timeout_seconds'] * 1000,
             'browserProfilePath' => $runDirectory.DIRECTORY_SEPARATOR.'browser-profile',
             'livePreviewEnabled' => (bool) $settings['live_preview_enabled'],
+            'livePreviewIntervalSeconds' => (int) $settings['live_preview_interval_seconds'],
+            'livePreviewIntervalMs' => (int) $settings['live_preview_interval_seconds'] * 1000,
+            'livePreviewPollIntervalSeconds' => (int) $settings['live_preview_interval_seconds'],
+            'browserActivityCheckEnabled' => (bool) $settings['browser_activity_check_enabled'],
             'domDebugEnabled' => (bool) $settings['dom_debug_enabled'],
             'verificationMailbox' => $this->runtimeVerificationMailbox($settings['verification_mailbox'] ?? []),
             'livePreviewPath' => $livePreviewPath,
@@ -202,7 +213,11 @@ class MailAccountRegistrationRunner
             'state' => 'queued',
             'stage' => 'queued',
             'message' => 'Mail-Registrierung ist eingeplant.',
+            'previewModalEnabled' => (bool) $settings['preview_modal_enabled'],
             'livePreviewEnabled' => (bool) $settings['live_preview_enabled'],
+            'livePreviewIntervalSeconds' => (int) $settings['live_preview_interval_seconds'],
+            'livePreviewPollIntervalSeconds' => (int) $settings['live_preview_interval_seconds'],
+            'browserActivityCheckEnabled' => (bool) $settings['browser_activity_check_enabled'],
             'domDebugEnabled' => (bool) $settings['dom_debug_enabled'],
             'scriptName' => 'mail_account.cjs',
             'scriptVersion' => self::MAIL_ACCOUNT_SCRIPT_VERSION,
@@ -233,7 +248,11 @@ class MailAccountRegistrationRunner
             $status['state'] = 'starting';
             $status['stage'] = 'process-started';
             $status['message'] = 'Node-Prozess wurde gestartet.';
+            $status['previewModalEnabled'] = (bool) $settings['preview_modal_enabled'];
             $status['livePreviewEnabled'] = (bool) $settings['live_preview_enabled'];
+            $status['livePreviewIntervalSeconds'] = (int) $settings['live_preview_interval_seconds'];
+            $status['livePreviewPollIntervalSeconds'] = (int) $settings['live_preview_interval_seconds'];
+            $status['browserActivityCheckEnabled'] = (bool) $settings['browser_activity_check_enabled'];
             $status['domDebugEnabled'] = (bool) $settings['dom_debug_enabled'];
             $status['scriptName'] = 'mail_account.cjs';
             $status['scriptVersion'] = self::MAIL_ACCOUNT_SCRIPT_VERSION;
@@ -252,7 +271,11 @@ class MailAccountRegistrationRunner
                 'state' => 'failed',
                 'stage' => 'process-start-failed',
                 'message' => $exception->getMessage(),
+                'previewModalEnabled' => (bool) $settings['preview_modal_enabled'],
                 'livePreviewEnabled' => (bool) $settings['live_preview_enabled'],
+                'livePreviewIntervalSeconds' => (int) $settings['live_preview_interval_seconds'],
+                'livePreviewPollIntervalSeconds' => (int) $settings['live_preview_interval_seconds'],
+                'browserActivityCheckEnabled' => (bool) $settings['browser_activity_check_enabled'],
                 'domDebugEnabled' => (bool) $settings['dom_debug_enabled'],
                 'scriptName' => 'mail_account.cjs',
                 'scriptVersion' => self::MAIL_ACCOUNT_SCRIPT_VERSION,
@@ -311,6 +334,12 @@ class MailAccountRegistrationRunner
         }
 
         $status['runId'] = $runId;
+        $settings = $this->settings();
+        $status['previewModalEnabled'] = (bool) ($status['previewModalEnabled'] ?? $settings['preview_modal_enabled'] ?? true);
+        $status['livePreviewEnabled'] = (bool) ($status['livePreviewEnabled'] ?? $settings['live_preview_enabled'] ?? true);
+        $status['livePreviewIntervalSeconds'] = (int) ($status['livePreviewIntervalSeconds'] ?? $settings['live_preview_interval_seconds'] ?? 3);
+        $status['livePreviewPollIntervalSeconds'] = (int) ($status['livePreviewPollIntervalSeconds'] ?? $settings['live_preview_interval_seconds'] ?? 3);
+        $status['browserActivityCheckEnabled'] = (bool) ($status['browserActivityCheckEnabled'] ?? $settings['browser_activity_check_enabled'] ?? true);
         $status['isRunning'] = in_array((string) ($status['state'] ?? ''), ['queued', 'starting', 'running'], true)
             || ($webmailCheckPending && ($status['state'] ?? null) !== 'failed');
         $status['screenshotUrl'] = $this->screenshotUrl($runId);

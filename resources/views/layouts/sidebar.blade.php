@@ -22,6 +22,13 @@
                 </li>
 
                 <li>
+                    <a href="{{ route('processes.index') }}" class="block py-2.5 px-6 text-sm font-medium transition-all duration-150 ease-linear {{ request()->routeIs('processes.*') ? 'text-blue-600' : 'text-gray-600 hover:text-blue-500' }}">
+                        <i data-feather="activity" fill="#545a6d33"></i>
+                        <span>Prozesse</span>
+                    </a>
+                </li>
+
+                <li>
                     <a href="javascript: void(0);" aria-expanded="{{ request()->routeIs('persons.*') || request()->routeIs('network.*') ? 'true' : 'false' }}" class="block py-2.5 px-6 text-sm font-medium transition-all duration-150 ease-linear nav-menu {{ request()->routeIs('persons.*') || request()->routeIs('network.*') ? 'text-blue-600' : 'text-gray-600 hover:text-blue-500' }}">
                         <i data-feather="share-2" fill="#545a6d33"></i>
                         <span>Netzwerk</span>

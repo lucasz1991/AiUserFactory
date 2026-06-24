@@ -35,6 +35,10 @@
                     Aktivitaetsplanung
                 </button>
 
+                <button type="button" wire:click="switchTab('processes')" class="rounded-md px-4 py-2 text-sm font-semibold {{ $activeTab === 'processes' ? 'bg-slate-900 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200' }}">
+                    Prozesse
+                </button>
+
                 <button type="button" wire:click="switchTab('mail-registration')" class="rounded-md px-4 py-2 text-sm font-semibold {{ $activeTab === 'mail-registration' ? 'bg-slate-900 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200' }}">
                     Mail-Registrierung
                 </button>
@@ -290,6 +294,12 @@
         @if($activeTab === 'activity-planning')
             <div class="px-6 py-6">
                 <livewire:admin.config.activity-planning-settings />
+            </div>
+        @endif
+
+        @if($activeTab === 'processes')
+            <div class="px-6 py-6">
+                <livewire:admin.config.process-settings />
             </div>
         @endif
 

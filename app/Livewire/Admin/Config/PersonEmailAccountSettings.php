@@ -163,19 +163,23 @@ class PersonEmailAccountSettings extends Component
         }
 
         try {
-            $run = app(MailAccountRegistrationRunner::class)->start($this->mailRegistrationSubject());
+            $runner = app(MailAccountRegistrationRunner::class);
+            $settings = $runner->settings();
+            $run = $runner->start($this->mailRegistrationSubject());
 
             $this->mailRegistrationRunId = $run['runId'] ?? null;
             $this->mailRegistrationStatus = $run;
-            $this->showMailRegistrationModal = true;
+            $this->showMailRegistrationModal = (bool) ($settings['preview_modal_enabled'] ?? true);
+            $this->dispatch('showAlert', 'Mail-Registrierung wurde gestartet.', 'success');
         } catch (\Throwable $exception) {
+            $settings = app(MailAccountRegistrationRunner::class)->settings();
             $this->mailRegistrationStatus = [
                 'state' => 'failed',
                 'stage' => 'start-failed',
                 'message' => $exception->getMessage(),
                 'events' => [],
             ];
-            $this->showMailRegistrationModal = true;
+            $this->showMailRegistrationModal = (bool) ($settings['preview_modal_enabled'] ?? true);
             $this->dispatch('showAlert', 'Mail-Registrierung konnte nicht gestartet werden.', 'error');
         }
     }

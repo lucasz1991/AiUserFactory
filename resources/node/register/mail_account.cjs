@@ -86,7 +86,11 @@ function publicStatusPayload(runtimeConfig, state, stage, message, data = {}) {
       mailAccount: MAIL_ACCOUNT_SCRIPT_VERSION,
       browserLauncher: BROWSER_LAUNCHER_SCRIPT_VERSION || 1,
     },
+    previewModalEnabled: runtimeConfig.previewModalEnabled !== false,
     livePreviewEnabled: runtimeConfig.livePreviewEnabled !== false,
+    livePreviewIntervalSeconds: Math.max(1, Math.round(livePreviewIntervalMs(runtimeConfig) / 1000)),
+    livePreviewPollIntervalSeconds: Math.max(1, Math.round(livePreviewIntervalMs(runtimeConfig) / 1000)),
+    browserActivityCheckEnabled: runtimeConfig.browserActivityCheckEnabled !== false,
     domDebugEnabled: runtimeConfig.domDebugEnabled !== false,
     finalUrl: data.finalUrl || null,
     title: data.title || null,
@@ -134,6 +138,21 @@ async function pauseStep() {
   await sleep(STEP_DELAY_MS);
 }
 
+function livePreviewIntervalMs(runtimeConfig = {}) {
+  const configuredMs = Number(runtimeConfig.livePreviewIntervalMs);
+  const configuredSeconds = Number(runtimeConfig.livePreviewIntervalSeconds);
+
+  if (Number.isFinite(configuredMs) && configuredMs > 0) {
+    return Math.max(500, configuredMs);
+  }
+
+  if (Number.isFinite(configuredSeconds) && configuredSeconds > 0) {
+    return Math.max(500, configuredSeconds * 1000);
+  }
+
+  return LIVE_PREVIEW_MIN_INTERVAL_MS;
+}
+
 async function captureScreenshotToPath(page, runtimeConfig = {}, livePreviewPath = '', force = false) {
   if (!page || !livePreviewPath || runtimeConfig.livePreviewEnabled === false) {
     return {};
@@ -142,7 +161,7 @@ async function captureScreenshotToPath(page, runtimeConfig = {}, livePreviewPath
   const now = Date.now();
   const lastLivePreviewAt = lastLivePreviewByPath.get(livePreviewPath) || 0;
 
-  if (!force && now - lastLivePreviewAt < LIVE_PREVIEW_MIN_INTERVAL_MS) {
+  if (!force && now - lastLivePreviewAt < livePreviewIntervalMs(runtimeConfig)) {
     return {};
   }
 
@@ -2559,22 +2578,133 @@ async function fillFirstVisibleInputByHints(page, hints, value, timeoutMs = 1200
   return true;
 }
 
+async function openLikelyVerificationMessageInWebmail(page) {
+  return page.evaluate(() => {
+    const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const collectElements = (root) => {
+      const elements = [];
+      const visit = (node) => {
+        if (!node || !node.querySelectorAll) {
+          return;
+        }
+
+        const nextElements = Array.from(node.querySelectorAll('a, button, [role="button"], [role="row"], [data-testid], li, tr, mail-list-container, webmailer-mail-detail, webmailer-mail-list-item'));
+        elements.push(...nextElements);
+
+        nextElements.forEach((element) => {
+          if (element.shadowRoot) {
+            visit(element.shadowRoot);
+          }
+        });
+      };
+
+      visit(root);
+
+      return elements;
+    };
+
+    const target = collectElements(document).find((element) => {
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+      const text = normalize([
+        element.innerText,
+        element.textContent,
+        element.getAttribute('aria-label'),
+        element.getAttribute('title'),
+        element.shadowRoot?.textContent,
+      ].join(' '));
+      const exactText = text.replace(/\s+/g, ' ').trim();
+
+      return rect.width > 0
+        && rect.height > 0
+        && style.visibility !== 'hidden'
+        && style.display !== 'none'
+        && exactText !== 'anzeige'
+        && !/^anzeige\b/.test(exactText)
+        && /(proton|verification|verify|code|bestaetigung|confirm|security|sicherheit)/.test(text);
+    });
+
+    if (!target) {
+      return false;
+    }
+
+    target.click();
+
+    return true;
+  }).catch(() => false);
+}
+
 async function waitForVerificationEmailInWebmail(page, runtimeConfig, timeoutMs = 120000, primaryPage = null) {
   const stopAt = Date.now() + Math.max(10000, Number(timeoutMs) || 120000);
+  const activityCheckEnabled = runtimeConfig.browserActivityCheckEnabled !== false;
   const restorePrimaryPage = async () => {
     if (primaryPage) {
       await primaryPage.bringToFront().catch(() => {});
     }
   };
+  const captureActiveWindows = async (force = false) => {
+    if (!activityCheckEnabled) {
+      return;
+    }
+
+    await captureWebmailLivePreviewScreenshot(page, runtimeConfig, force);
+
+    if (primaryPage) {
+      await captureLivePreviewScreenshot(primaryPage, runtimeConfig, force);
+    }
+  };
 
   while (Date.now() < stopAt) {
-    await captureWebmailLivePreviewScreenshot(page, runtimeConfig, false);
+    await captureActiveWindows(false);
     await restorePrimaryPage();
 
     const result = await page.evaluate(() => {
-      const text = document.body?.innerText || '';
+      const collectDeepText = (root) => {
+        const parts = [];
+        const visit = (node) => {
+          if (!node) {
+            return;
+          }
+
+          if (node.nodeType === Node.TEXT_NODE) {
+            parts.push(node.textContent || '');
+            return;
+          }
+
+          if (node.nodeType !== Node.ELEMENT_NODE && node.nodeType !== Node.DOCUMENT_NODE && node.nodeType !== Node.DOCUMENT_FRAGMENT_NODE) {
+            return;
+          }
+
+          const element = node.nodeType === Node.ELEMENT_NODE ? node : null;
+
+          if (element) {
+            const tagName = element.tagName.toLowerCase();
+
+            if (['script', 'style', 'noscript'].includes(tagName)) {
+              return;
+            }
+
+            parts.push(element.getAttribute('aria-label') || '');
+            parts.push(element.getAttribute('title') || '');
+          }
+
+          node.childNodes?.forEach(visit);
+
+          if (element?.shadowRoot) {
+            visit(element.shadowRoot);
+          }
+        };
+
+        visit(root);
+
+        return parts.join(' ');
+      };
+      const text = [
+        document.body?.innerText || '',
+        collectDeepText(document),
+      ].join(' ');
       const normalized = text.replace(/\s+/g, ' ').trim();
-      const detected = /verification code|verify your email|email verification|one-time verification|confirm your email|bestätigungscode|bestaetigungscode|\b\d{6}\b/i.test(normalized);
+      const detected = /verification code|verify your email|email verification|one-time verification|confirm your email|bestaetigungscode|\b\d{6}\b/i.test(normalized);
       const codeMatch = normalized.match(/\b\d{6}\b/);
 
       return {
@@ -2607,6 +2737,10 @@ async function waitForVerificationEmailInWebmail(page, runtimeConfig, timeoutMs 
       };
     }
 
+    await openLikelyVerificationMessageInWebmail(page);
+    await sleep(1000);
+    await captureActiveWindows(false);
+
     await clickVisibleTextTarget(page, [
       'refresh',
       'aktualisieren',
@@ -2616,7 +2750,7 @@ async function waitForVerificationEmailInWebmail(page, runtimeConfig, timeoutMs 
     ], 'button, [role="button"], a', true).catch(() => false);
     await restorePrimaryPage();
 
-    await sleep(5000);
+    await sleep(Math.max(1000, Math.min(5000, livePreviewIntervalMs(runtimeConfig))));
   }
 
   progress(

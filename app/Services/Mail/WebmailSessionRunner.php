@@ -33,6 +33,9 @@ class WebmailSessionRunner
             'state' => 'queued',
             'stage' => 'queued',
             'message' => 'Webmail-Sessionlauf ist eingeplant.',
+            'livePreviewEnabled' => (bool) ($runtime['livePreviewEnabled'] ?? true),
+            'livePreviewIntervalSeconds' => (int) ($runtime['livePreviewIntervalSeconds'] ?? 3),
+            'livePreviewPollIntervalSeconds' => (int) ($runtime['livePreviewPollIntervalSeconds'] ?? 3),
             'scriptName' => basename($this->resolveNodeScriptPath($runtime['provider'])),
             'scriptVersion' => 1,
             'at' => now()->toIso8601String(),
@@ -52,6 +55,9 @@ class WebmailSessionRunner
             $status['state'] = 'starting';
             $status['stage'] = 'process-started';
             $status['message'] = 'Webmail-Sessionprozess wurde gestartet.';
+            $status['livePreviewEnabled'] = (bool) ($runtime['livePreviewEnabled'] ?? true);
+            $status['livePreviewIntervalSeconds'] = (int) ($runtime['livePreviewIntervalSeconds'] ?? 3);
+            $status['livePreviewPollIntervalSeconds'] = (int) ($runtime['livePreviewPollIntervalSeconds'] ?? 3);
             $status['at'] = now()->toIso8601String();
             $this->writeJsonFile($statusPath, $status);
         } catch (\Throwable $exception) {
@@ -61,6 +67,9 @@ class WebmailSessionRunner
                 'state' => 'failed',
                 'stage' => 'process-start-failed',
                 'message' => $exception->getMessage(),
+                'livePreviewEnabled' => (bool) ($runtime['livePreviewEnabled'] ?? true),
+                'livePreviewIntervalSeconds' => (int) ($runtime['livePreviewIntervalSeconds'] ?? 3),
+                'livePreviewPollIntervalSeconds' => (int) ($runtime['livePreviewPollIntervalSeconds'] ?? 3),
                 'scriptName' => basename($this->resolveNodeScriptPath($runtime['provider'])),
                 'scriptVersion' => 1,
                 'at' => now()->toIso8601String(),
@@ -110,6 +119,8 @@ class WebmailSessionRunner
 
         $status['runId'] = $runId;
         $status['isRunning'] = in_array((string) ($status['state'] ?? ''), ['queued', 'starting', 'running'], true);
+        $status['livePreviewIntervalSeconds'] = (int) ($status['livePreviewIntervalSeconds'] ?? 3);
+        $status['livePreviewPollIntervalSeconds'] = (int) ($status['livePreviewPollIntervalSeconds'] ?? $status['livePreviewIntervalSeconds']);
         $status['screenshotUrl'] = $this->runScreenshotUrl($runId);
         $status['debugDomUrl'] = $this->debugDomUrl($runId, $status);
         $status['debugDom'] = $this->latestDebugDom($status);
@@ -167,6 +178,9 @@ class WebmailSessionRunner
             'headlessEnabled' => (bool) ($account['headlessEnabled'] ?? false),
             'browserProfilePath' => storage_path('app/mail-sessions/'.$safeScope.'-'.$runId.'/browser-profile'),
             'livePreviewEnabled' => (bool) ($account['livePreviewEnabled'] ?? true),
+            'livePreviewIntervalSeconds' => max(1, min(60, (int) ($account['livePreviewIntervalSeconds'] ?? ceil(((int) ($account['livePreviewIntervalMs'] ?? 3000)) / 1000)))),
+            'livePreviewIntervalMs' => max(1000, (int) ($account['livePreviewIntervalMs'] ?? ((int) ($account['livePreviewIntervalSeconds'] ?? 3)) * 1000)),
+            'livePreviewPollIntervalSeconds' => max(1, min(60, (int) ($account['livePreviewIntervalSeconds'] ?? ceil(((int) ($account['livePreviewIntervalMs'] ?? 3000)) / 1000)))),
             'livePreviewPath' => $livePreviewPath,
             'livePreviewRelativePath' => $publicRelativePreviewPath,
             'navigationTimeoutMs' => max(30000, (int) ($account['navigationTimeoutMs'] ?? 120000)),
@@ -263,6 +277,9 @@ class WebmailSessionRunner
             'headlessEnabled' => (bool) ($account['headlessEnabled'] ?? false),
             'browserProfilePath' => $runDirectory.DIRECTORY_SEPARATOR.'browser-profile',
             'livePreviewEnabled' => (bool) ($account['livePreviewEnabled'] ?? true),
+            'livePreviewIntervalSeconds' => max(1, min(60, (int) ($account['livePreviewIntervalSeconds'] ?? ceil(((int) ($account['livePreviewIntervalMs'] ?? 3000)) / 1000)))),
+            'livePreviewIntervalMs' => max(1000, (int) ($account['livePreviewIntervalMs'] ?? ((int) ($account['livePreviewIntervalSeconds'] ?? 3)) * 1000)),
+            'livePreviewPollIntervalSeconds' => max(1, min(60, (int) ($account['livePreviewIntervalSeconds'] ?? ceil(((int) ($account['livePreviewIntervalMs'] ?? 3000)) / 1000)))),
             'livePreviewPath' => storage_path('app/public/'.$publicRelativePreviewPath),
             'livePreviewRelativePath' => $publicRelativePreviewPath,
             'statusPath' => $runDirectory.DIRECTORY_SEPARATOR.'status.json',

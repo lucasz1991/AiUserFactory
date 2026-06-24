@@ -372,7 +372,52 @@ async function attemptWebmailLogin(page, mailbox) {
 
 async function pageVerificationState(page) {
   return page.evaluate(() => {
-    const normalized = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
+    const collectDeepText = (root) => {
+      const parts = [];
+      const visit = (node) => {
+        if (!node) {
+          return;
+        }
+
+        if (node.nodeType === Node.TEXT_NODE) {
+          parts.push(node.textContent || '');
+          return;
+        }
+
+        if (node.nodeType !== Node.ELEMENT_NODE && node.nodeType !== Node.DOCUMENT_NODE && node.nodeType !== Node.DOCUMENT_FRAGMENT_NODE) {
+          return;
+        }
+
+        const element = node.nodeType === Node.ELEMENT_NODE ? node : null;
+
+        if (element) {
+          const tagName = element.tagName.toLowerCase();
+
+          if (['script', 'style', 'noscript'].includes(tagName)) {
+            return;
+          }
+
+          parts.push(element.getAttribute('aria-label') || '');
+          parts.push(element.getAttribute('title') || '');
+        }
+
+        node.childNodes?.forEach(visit);
+
+        if (element?.shadowRoot) {
+          visit(element.shadowRoot);
+        }
+      };
+
+      visit(root);
+
+      return parts.join(' ');
+    };
+    const deepText = collectDeepText(document);
+    const normalized = [
+      document.body?.innerText || '',
+      deepText,
+    ].join(' ').replace(/\s+/g, ' ').trim();
+    const gmxMailSurfaceReached = Boolean(document.querySelector('mail-list-container, webmailer-mail-detail'));
     const detected = /verification code|verify your email|email verification|one-time verification|confirm your email|bestaetigungscode|\b\d{6}\b/i.test(normalized);
     const codeMatch = normalized.match(/\b\d{6}\b/);
 
@@ -380,6 +425,7 @@ async function pageVerificationState(page) {
       detected,
       code: codeMatch ? codeMatch[0] : '',
       textSample: normalized.slice(0, 1600),
+      gmxMailSurfaceReached,
       title: document.title || '',
       url: window.location.href,
     };
@@ -395,7 +441,28 @@ async function pageVerificationState(page) {
 async function openLikelyVerificationMessage(page) {
   return page.evaluate(() => {
     const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
-    const candidates = Array.from(document.querySelectorAll('a, button, [role="button"], [role="row"], [data-testid], li, tr'));
+    const collectElements = (root) => {
+      const elements = [];
+      const visit = (node) => {
+        if (!node || !node.querySelectorAll) {
+          return;
+        }
+
+        const nextElements = Array.from(node.querySelectorAll('a, button, [role="button"], [role="row"], [data-testid], li, tr, mail-list-container, webmailer-mail-detail, webmailer-mail-list-item'));
+        elements.push(...nextElements);
+
+        nextElements.forEach((element) => {
+          if (element.shadowRoot) {
+            visit(element.shadowRoot);
+          }
+        });
+      };
+
+      visit(root);
+
+      return elements;
+    };
+    const candidates = collectElements(document);
     const target = candidates.find((element) => {
       const rect = element.getBoundingClientRect();
       const style = window.getComputedStyle(element);
@@ -404,6 +471,7 @@ async function openLikelyVerificationMessage(page) {
         element.textContent,
         element.getAttribute('aria-label'),
         element.getAttribute('title'),
+        element.shadowRoot?.textContent,
       ].join(' '));
       const exactText = text.replace(/\s+/g, ' ').trim();
 

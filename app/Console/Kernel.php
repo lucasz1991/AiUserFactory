@@ -2,9 +2,11 @@
 
 namespace App\Console;
 
+use App\Jobs\SyncManagedProcessesJob;
 use App\Services\Simulation\NetworkActivityPlanningSettings;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Foundation\Console\Kernel as ConsoleKernel;
+use Illuminate\Support\Facades\Schema;
 
 class Kernel extends ConsoleKernel
 {
@@ -13,6 +15,12 @@ class Kernel extends ConsoleKernel
      */
     protected function schedule(Schedule $schedule): void
     {
+        if (Schema::hasTable('managed_processes')) {
+            $schedule->job(new SyncManagedProcessesJob)
+                ->everyMinute()
+                ->withoutOverlapping(5);
+        }
+
         $settings = app(NetworkActivityPlanningSettings::class)->get();
 
         if (! $settings['enabled']) {
