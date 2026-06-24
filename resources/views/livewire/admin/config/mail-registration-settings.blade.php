@@ -285,7 +285,7 @@
                             {{ data_get($registrationRunStatus, 'providerLabel', '-') }} · {{ data_get($registrationRunStatus, 'activeBrowserEngine', data_get($registrationRunStatus, 'requestedBrowserEngine', '-')) }}
                         </div>
                         <div class="mt-1 text-xs text-slate-500">
-                            Script: {{ data_get($registrationRunStatus, 'scriptVersionLabel', 'mail_account.cjs v1') }}
+                            Script: {{ data_get($registrationRunStatus, 'scriptVersionLabel', 'mail_account.cjs v2') }}
                         </div>
                     </div>
 

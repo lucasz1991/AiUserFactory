@@ -198,7 +198,7 @@
                                 {{ data_get($mailRegistrationStatus, 'providerLabel', '-') }} · {{ data_get($mailRegistrationStatus, 'activeBrowserEngine', data_get($mailRegistrationStatus, 'requestedBrowserEngine', '-')) }}
                             </div>
                             <div class="mt-1 text-xs text-slate-500">
-                                Script: {{ data_get($mailRegistrationStatus, 'scriptVersionLabel', 'mail_account.cjs v1') }}
+                                Script: {{ data_get($mailRegistrationStatus, 'scriptVersionLabel', 'mail_account.cjs v2') }}
                             </div>
                         </div>
 

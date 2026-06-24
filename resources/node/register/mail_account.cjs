@@ -27,7 +27,7 @@ const STEP_DELAY_MS = 150;
 const TYPING_DELAY_MS = 150;
 const SUBMIT_DELAY_MS = 1500;
 const MAIL_ACCOUNT_SCRIPT_NAME = 'mail_account.cjs';
-const MAIL_ACCOUNT_SCRIPT_VERSION = 1;
+const MAIL_ACCOUNT_SCRIPT_VERSION = 2;
 const MAIL_ACCOUNT_SCRIPT_VERSION_LABEL = `${MAIL_ACCOUNT_SCRIPT_NAME} v${MAIL_ACCOUNT_SCRIPT_VERSION}`;
 
 const runtimeConfigPath = process.argv[2] || '';
@@ -1251,29 +1251,339 @@ async function waitForProtonVerificationEmailInput(page, timeoutMs = 4000) {
   return input;
 }
 
-async function isProtonEmailVerificationTabSelected(pageOrFrame) {
+async function protonHumanVerificationDomState(pageOrFrame) {
   return pageOrFrame.evaluate(() => {
-    const tab = document.querySelector('[data-testid="tab-header-e-mail-button"]');
+    const allElementsDeep = (root = document) => {
+      const elements = [];
+      const visit = (node) => {
+        const children = Array.from(node?.children || []);
 
-    if (!tab) {
-      return false;
+        for (const child of children) {
+          elements.push(child);
+
+          if (child.shadowRoot) {
+            visit(child.shadowRoot);
+          }
+
+          visit(child);
+        }
+      };
+
+      visit(root);
+
+      return elements;
+    };
+    const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const visible = (element) => {
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+
+      return rect.width > 0
+        && rect.height > 0
+        && style.visibility !== 'hidden'
+        && style.display !== 'none'
+        && style.opacity !== '0'
+        && !element.disabled;
+    };
+    const textFor = (element) => normalize([
+      element.innerText,
+      element.textContent,
+      element.value,
+      element.getAttribute('aria-label'),
+      element.getAttribute('title'),
+      element.getAttribute('data-title'),
+    ].join(' '));
+    const hasEmailText = (element) => /(^|\s)e-?mail(\s|$)/i.test(textFor(element));
+    const isEmailTab = (element) => (
+      element.getAttribute('data-testid') === 'tab-header-e-mail-button'
+      || (
+        element.getAttribute('role') === 'tab'
+        && (
+          hasEmailText(element)
+          || /e-?mail/i.test(element.getAttribute('aria-controls') || '')
+        )
+      )
+      || (
+        element.tagName?.toLowerCase() === 'button'
+        && hasEmailText(element)
+        && Boolean(element.closest('.tabs-list-item, .tabs-list, .tabs-nav, [role="tablist"]'))
+      )
+    );
+    const isCaptchaTab = (element) => (
+      element.getAttribute('data-testid') === 'tab-header-captcha-button'
+      || (
+        element.getAttribute('role') === 'tab'
+        && /captcha/i.test(textFor(element))
+      )
+    );
+    const elements = allElementsDeep();
+    const visibleElements = elements.filter(visible);
+    const scoreModal = (element, index) => {
+      const rect = element.getBoundingClientRect();
+      const text = element.innerText || element.textContent || '';
+      const descendants = [element, ...allElementsDeep(element)];
+      const containsEmailTab = descendants.some((candidate) => visible(candidate) && isEmailTab(candidate));
+      const containsCaptchaTab = descendants.some((candidate) => visible(candidate) && isCaptchaTab(candidate));
+      let score = 0;
+
+      if (element.matches('.modal-two-content, [id^="modal-"][id$="-description"]')) {
+        score += 200;
+      }
+
+      if (element.matches('[role="dialog"], [aria-modal="true"], dialog, .modal')) {
+        score += 100;
+      }
+
+      if (/human verification|bitte beweise|spam und missbrauch|captcha|e-mail|email/i.test(text)) {
+        score += 50;
+      }
+
+      if (containsEmailTab) {
+        score += 80;
+      }
+
+      if (containsCaptchaTab) {
+        score += 80;
+      }
+
+      if (rect.width >= 400 && rect.width <= window.innerWidth * 0.95) {
+        score += 20;
+      }
+
+      if (rect.height >= 150 && rect.height <= window.innerHeight * 0.98) {
+        score += 20;
+      }
+
+      return {
+        element,
+        index,
+        score,
+        area: rect.width * rect.height,
+        containsEmailTab,
+        containsCaptchaTab,
+      };
+    };
+    const modal = visibleElements
+      .filter((element) => element.matches('.modal-two-content, [id^="modal-"][id$="-description"], [role="dialog"], [aria-modal="true"], dialog, .modal, section, div'))
+      .map(scoreModal)
+      .filter((candidate) => candidate.score >= 100 && (candidate.containsEmailTab || candidate.containsCaptchaTab || /human verification|bitte beweise|spam und missbrauch|captcha/i.test(candidate.element.innerText || candidate.element.textContent || '')))
+      .sort((left, right) => right.score - left.score || left.area - right.area || left.index - right.index)[0] || null;
+    const searchRoot = modal?.element || document;
+    const searchElements = searchRoot === document ? visibleElements : [searchRoot, ...allElementsDeep(searchRoot)].filter(visible);
+    const emailTab = searchElements.find(isEmailTab) || visibleElements.find(isEmailTab) || null;
+    const captchaTab = searchElements.find(isCaptchaTab) || visibleElements.find(isCaptchaTab) || null;
+    const rect = emailTab?.getBoundingClientRect();
+    const modalRect = modal?.element.getBoundingClientRect();
+    const selected = Boolean(emailTab && (
+      emailTab.getAttribute('aria-selected') === 'true'
+      || emailTab.closest('.tabs-list-item')?.classList.contains('tabs-list-item--selected')
+    ));
+
+    return {
+      hasDialog: Boolean(modal || (emailTab && captchaTab)),
+      hasEmailTab: Boolean(emailTab),
+      hasCaptchaTab: Boolean(captchaTab),
+      emailSelected: selected,
+      emailTabText: emailTab ? textFor(emailTab) : '',
+      emailTabTestId: emailTab?.getAttribute('data-testid') || '',
+      emailTabRole: emailTab?.getAttribute('role') || '',
+      emailTabAriaSelected: emailTab?.getAttribute('aria-selected') || '',
+      emailTabRect: rect ? {
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2,
+        left: rect.left,
+        top: rect.top,
+        width: rect.width,
+        height: rect.height,
+      } : null,
+      modalRect: modalRect ? {
+        left: modalRect.left,
+        top: modalRect.top,
+        width: modalRect.width,
+        height: modalRect.height,
+      } : null,
+      bodyTextSample: normalize(document.body?.innerText || '').slice(0, 500),
+    };
+  }).catch((error) => ({
+    hasDialog: false,
+    hasEmailTab: false,
+    hasCaptchaTab: false,
+    emailSelected: false,
+    error: truncateText(error?.message || String(error), 300),
+  }));
+}
+
+async function clickProtonEmailVerificationTabFresh(page, pageOrFrame = page) {
+  const clickResult = await pageOrFrame.evaluate(() => {
+    const allElementsDeep = (root = document) => {
+      const elements = [];
+      const visit = (node) => {
+        const children = Array.from(node?.children || []);
+
+        for (const child of children) {
+          elements.push(child);
+
+          if (child.shadowRoot) {
+            visit(child.shadowRoot);
+          }
+
+          visit(child);
+        }
+      };
+
+      visit(root);
+
+      return elements;
+    };
+    const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const visible = (element) => {
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+
+      return rect.width > 0
+        && rect.height > 0
+        && style.visibility !== 'hidden'
+        && style.display !== 'none'
+        && style.opacity !== '0'
+        && !element.disabled;
+    };
+    const textFor = (element) => normalize([
+      element.innerText,
+      element.textContent,
+      element.value,
+      element.getAttribute('aria-label'),
+      element.getAttribute('title'),
+      element.getAttribute('data-title'),
+    ].join(' '));
+    const hasEmailText = (element) => /(^|\s)e-?mail(\s|$)/i.test(textFor(element));
+    const isEmailTab = (element) => (
+      element.getAttribute('data-testid') === 'tab-header-e-mail-button'
+      || (
+        element.getAttribute('role') === 'tab'
+        && (
+          hasEmailText(element)
+          || /e-?mail/i.test(element.getAttribute('aria-controls') || '')
+        )
+      )
+      || (
+        element.tagName?.toLowerCase() === 'button'
+        && hasEmailText(element)
+        && Boolean(element.closest('.tabs-list-item, .tabs-list, .tabs-nav, [role="tablist"]'))
+      )
+    );
+    const elements = allElementsDeep();
+    const target = elements
+      .filter(visible)
+      .find((element) => element.getAttribute('data-testid') === 'tab-header-e-mail-button')
+      || elements.filter(visible).find(isEmailTab)
+      || null;
+
+    if (!target) {
+      return {
+        clicked: false,
+        reason: 'email-tab-not-found',
+      };
     }
 
-    const rect = tab.getBoundingClientRect();
-    const style = window.getComputedStyle(tab);
+    target.scrollIntoView({ block: 'center', inline: 'center' });
+    target.focus?.({ preventScroll: true });
 
-    if (
-      rect.width <= 0
-      || rect.height <= 0
-      || style.visibility === 'hidden'
-      || style.display === 'none'
-    ) {
-      return false;
+    const rect = target.getBoundingClientRect();
+    const clientX = rect.left + rect.width / 2;
+    const clientY = rect.top + rect.height / 2;
+    const pointTarget = document.elementFromPoint(clientX, clientY) || target;
+    const eventInit = {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      view: window,
+      clientX,
+      clientY,
+      screenX: window.screenX + clientX,
+      screenY: window.screenY + clientY,
+      button: 0,
+      buttons: 1,
+    };
+    const dispatchMouseSequence = (node) => {
+      if (!node) {
+        return;
+      }
+
+      if (typeof PointerEvent === 'function') {
+        node.dispatchEvent(new PointerEvent('pointerover', { ...eventInit, pointerId: 1, pointerType: 'mouse', isPrimary: true }));
+        node.dispatchEvent(new PointerEvent('pointerenter', { ...eventInit, pointerId: 1, pointerType: 'mouse', isPrimary: true }));
+        node.dispatchEvent(new PointerEvent('pointerdown', { ...eventInit, pointerId: 1, pointerType: 'mouse', isPrimary: true }));
+      }
+
+      node.dispatchEvent(new MouseEvent('mouseover', eventInit));
+      node.dispatchEvent(new MouseEvent('mouseenter', eventInit));
+      node.dispatchEvent(new MouseEvent('mousedown', eventInit));
+
+      if (typeof PointerEvent === 'function') {
+        node.dispatchEvent(new PointerEvent('pointerup', { ...eventInit, pointerId: 1, pointerType: 'mouse', isPrimary: true, buttons: 0 }));
+      }
+
+      node.dispatchEvent(new MouseEvent('mouseup', { ...eventInit, buttons: 0 }));
+      node.dispatchEvent(new MouseEvent('click', { ...eventInit, buttons: 0 }));
+    };
+
+    dispatchMouseSequence(pointTarget);
+
+    if (pointTarget !== target) {
+      dispatchMouseSequence(target);
     }
 
-    return tab.getAttribute('aria-selected') === 'true'
-      || Boolean(tab.closest('.tabs-list-item--selected'));
-  }).catch(() => false);
+    target.click();
+
+    return {
+      clicked: true,
+      reason: 'fresh-dom-click',
+      selectedAfterClick: target.getAttribute('aria-selected') === 'true'
+        || Boolean(target.closest('.tabs-list-item')?.classList.contains('tabs-list-item--selected')),
+      text: textFor(target),
+      testId: target.getAttribute('data-testid') || '',
+      role: target.getAttribute('role') || '',
+      point: {
+        x: clientX,
+        y: clientY,
+      },
+    };
+  }).catch((error) => ({
+    clicked: false,
+    reason: 'fresh-dom-click-error',
+    error: truncateText(error?.message || String(error), 300),
+  }));
+
+  if (!clickResult.clicked) {
+    return false;
+  }
+
+  if (clickResult.point) {
+    let x = clickResult.point.x;
+    let y = clickResult.point.y;
+
+    if (pageOrFrame !== page) {
+      const frameElement = await pageOrFrame.frameElement().catch(() => null);
+      const frameBox = frameElement ? await frameElement.boundingBox().catch(() => null) : null;
+
+      if (frameBox) {
+        x += frameBox.x;
+        y += frameBox.y;
+      }
+    }
+
+    await page.mouse.click(x, y, { delay: 80 }).catch(() => {});
+  }
+
+  await pauseStep();
+
+  return true;
+}
+
+async function isProtonEmailVerificationTabSelected(pageOrFrame) {
+  const state = await protonHumanVerificationDomState(pageOrFrame);
+
+  return state.emailSelected === true;
 }
 
 async function waitForProtonEmailVerificationTabReady(page, timeoutMs = 5000) {
@@ -1665,69 +1975,58 @@ async function selectProtonEmailVerificationTab(page) {
     'verify via email',
   ];
   const selectors = 'button, [role="button"], [role="tab"], a, label, input[type="button"], input[type="submit"], span';
-  const humanDialogContext = await waitForProtonHumanVerificationDialogIncludingFrames(page);
-  let humanDialogVisible = Boolean(humanDialogContext);
+  const stopAt = Date.now() + 30000;
+  let humanDialogVisible = false;
 
-  if (humanDialogContext) {
-    if (await clickProtonEmailVerificationTabByHandle(humanDialogContext)) {
-      if (await waitForProtonEmailVerificationTabReady(page)) {
-        return true;
-      }
-    }
-
-    if (await clickProtonEmailVerificationTabInContext(humanDialogContext)) {
-      if (await waitForProtonEmailVerificationTabReady(page)) {
-        return true;
-      }
-    }
-
-    if (await clickProtonEmailVerificationTabByMouse(page, humanDialogContext)) {
-      if (await waitForProtonEmailVerificationTabReady(page)) {
-        return true;
-      }
-    }
-  }
-
-  if (await clickProtonEmailVerificationTabByHandle(page)) {
-    if (await waitForProtonEmailVerificationTabReady(page)) {
+  while (Date.now() < stopAt) {
+    if (await waitForProtonEmailVerificationTabReady(page, 300)) {
       return true;
     }
-  }
 
-  if (await clickProtonEmailVerificationTabInContext(page)) {
-    if (await waitForProtonEmailVerificationTabReady(page)) {
-      return true;
-    }
-  }
+    const contexts = [
+      page,
+      ...page.frames().filter((frame) => frame !== page.mainFrame()),
+    ];
 
-  if (humanDialogVisible && await clickProtonEmailVerificationTabByMouse(page)) {
-    return waitForProtonEmailVerificationTabReady(page);
-  }
+    for (const context of contexts) {
+      const state = await protonHumanVerificationDomState(context);
+      humanDialogVisible = humanDialogVisible
+        || state.hasDialog === true
+        || state.hasCaptchaTab === true
+        || state.hasEmailTab === true;
 
-  for (const frame of page.frames()) {
-    if (frame === page.mainFrame()) {
-      continue;
-    }
-
-    humanDialogVisible = humanDialogVisible || await hasProtonHumanVerificationDialog(frame);
-
-    if (await clickProtonEmailVerificationTabByHandle(frame)) {
-      if (await waitForProtonEmailVerificationTabReady(page)) {
+      if (state.emailSelected === true) {
         return true;
+      }
+
+      if (state.hasEmailTab === true) {
+        if (await clickProtonEmailVerificationTabFresh(page, context)) {
+          if (await waitForProtonEmailVerificationTabReady(page, 1500)) {
+            return true;
+          }
+        }
+
+        if (await clickProtonEmailVerificationTabByHandle(context)) {
+          if (await waitForProtonEmailVerificationTabReady(page, 1000)) {
+            return true;
+          }
+        }
+
+        if (await clickProtonEmailVerificationTabInContext(context)) {
+          if (await waitForProtonEmailVerificationTabReady(page, 1000)) {
+            return true;
+          }
+        }
+
+        if (await clickProtonEmailVerificationTabByMouse(page, context)) {
+          if (await waitForProtonEmailVerificationTabReady(page, 1000)) {
+            return true;
+          }
+        }
       }
     }
 
-    if (await clickProtonEmailVerificationTabInContext(frame)) {
-      if (await waitForProtonEmailVerificationTabReady(page)) {
-        return true;
-      }
-    }
-
-    if (await hasProtonHumanVerificationDialog(frame) && await clickProtonEmailVerificationTabByMouse(page, frame)) {
-      if (await waitForProtonEmailVerificationTabReady(page)) {
-        return true;
-      }
-    }
+    await sleep(500);
   }
 
   if (humanDialogVisible) {
@@ -2200,7 +2499,7 @@ async function protonPasswordSubmitStatus(page) {
     const normalized = text.toLowerCase();
     const url = window.location.href;
     const providerBlockPattern = /potentially abusive traffic|blocked any further signups|appeal-abuse|support\/appeal-abuse|abusive traffic/;
-    const manualVerificationPattern = /human verification|captcha|recaptcha|hcaptcha|verify you.?re human|to fight spam and abuse|please verify you are human/;
+    const manualVerificationPattern = /human verification|captcha|recaptcha|hcaptcha|verify you.?re human|to fight spam and abuse|please verify you are human|bitte beweise|spam und missbrauch|mensch bist/;
     const visiblePasswordInputs = Array.from(document.querySelectorAll('input')).filter((input) => {
       const rect = input.getBoundingClientRect();
       const style = window.getComputedStyle(input);
@@ -2307,7 +2606,7 @@ async function protonManualVerificationStatus(page) {
     const normalized = text.toLowerCase();
     const url = window.location.href;
     const providerBlockPattern = /potentially abusive traffic|blocked any further signups|appeal-abuse|support\/appeal-abuse|abusive traffic/;
-    const manualVerificationPattern = /human verification|captcha|recaptcha|hcaptcha|verify you.?re human|to fight spam and abuse|please verify you are human/;
+    const manualVerificationPattern = /human verification|captcha|recaptcha|hcaptcha|verify you.?re human|to fight spam and abuse|please verify you are human|bitte beweise|spam und missbrauch|mensch bist/;
     const visiblePasswordInputs = Array.from(document.querySelectorAll('input')).filter((input) => {
       const rect = input.getBoundingClientRect();
       const style = window.getComputedStyle(input);
@@ -2419,7 +2718,7 @@ async function waitForProtonManualVerification(page, browser, runtimeConfig, tim
         ? 'Proton-Tab Email wurde ausgewaehlt, Verifikationscode wurde angefordert und Webmail wird beobachtet.'
         : 'Proton-Tab Email wurde ausgewaehlt; warte auf erfolgreichen Submit fuer den Verifikationscode.')
       : 'Proton verlangt Email-Verifikation; der Email-Tab wird im Human-Verification-Dialog gesucht.',
-    await pageSnapshot(page, runtimeConfig, true, false),
+    await pageSnapshot(page, runtimeConfig, true, !emailTabSelected),
   );
 
   while (status.completed === null && Date.now() < stopAt) {
@@ -2447,7 +2746,7 @@ async function waitForProtonManualVerification(page, browser, runtimeConfig, tim
         : emailTabSelected
         ? 'Email-Tab ist aktiv; warte auf erfolgreichen Submit fuer den Verifikationscode.'
         : 'Warte auf Email-Tab im Human-Verification-Dialog; CAPTCHA wird nicht verwendet.',
-      await pageSnapshot(page, runtimeConfig, false, false),
+      await pageSnapshot(page, runtimeConfig, false, !emailTabSelected),
     );
   }
 
