@@ -24,6 +24,9 @@ const DOM_DEBUG_TEXT_LIMIT = 3000;
 const DOM_DEBUG_HTML_LIMIT = 6000;
 const statusEvents = [];
 let lastLivePreviewAt = 0;
+let currentStatusPayload = null;
+let heartbeatTimer = null;
+let heartbeatCounter = 0;
 
 function normalizeText(value) {
   return String(value || '').trim();
@@ -49,6 +52,8 @@ function writeJsonFile(filePath, payload) {
 }
 
 function publicStatusPayload(runtimeConfig, state, stage, message, data = {}) {
+  const processIdentity = runtimeConfig.processIdentity || {};
+  const heartbeatAt = new Date().toISOString();
   const livePreviewIntervalSeconds = Math.max(
     1,
     Math.round((
@@ -60,12 +65,17 @@ function publicStatusPayload(runtimeConfig, state, stage, message, data = {}) {
 
   return {
     runId: runtimeConfig.runId || null,
+    processKey: processIdentity.processKey || runtimeConfig.processKey || null,
+    processIdentity: Object.keys(processIdentity).length > 0 ? processIdentity : null,
     providerKey: webmailProviderKey(runtimeConfig),
     state,
     stage,
     message,
-    at: new Date().toISOString(),
+    at: heartbeatAt,
+    heartbeatAt,
+    heartbeatCounter: heartbeatCounter += 1,
     pid: process.pid,
+    runtimeConfigPath: process.argv[2] || null,
     scriptName: SCRIPT_NAME,
     scriptVersion: SCRIPT_VERSION,
     scriptVersions: {
@@ -105,7 +115,55 @@ function progress(runtimeConfig, stage, message, data = {}, state = 'running') {
   }
 
   if (runtimeConfig.statusPath) {
-    writeJsonFile(runtimeConfig.statusPath, publicStatusPayload(runtimeConfig, state, stage, message, data));
+    currentStatusPayload = publicStatusPayload(runtimeConfig, state, stage, message, data);
+    writeJsonFile(runtimeConfig.statusPath, currentStatusPayload);
+  }
+}
+
+function livePreviewIntervalMs(runtimeConfig = {}) {
+  return Math.max(
+    500,
+    Number(runtimeConfig.livePreviewIntervalMs)
+      || (Number(runtimeConfig.livePreviewIntervalSeconds) > 0 ? Number(runtimeConfig.livePreviewIntervalSeconds) * 1000 : 0)
+      || LIVE_PREVIEW_MIN_INTERVAL_MS,
+  );
+}
+
+function startProcessHeartbeat(runtimeConfig) {
+  const statusPath = normalizeText(runtimeConfig.statusPath);
+
+  if (!statusPath || heartbeatTimer) {
+    return;
+  }
+
+  const intervalMs = Math.max(5000, Number(runtimeConfig.processHeartbeatIntervalSeconds || 0) * 1000 || livePreviewIntervalMs(runtimeConfig));
+
+  heartbeatTimer = setInterval(() => {
+    if (!currentStatusPayload) {
+      return;
+    }
+
+    const heartbeatAt = new Date().toISOString();
+    currentStatusPayload = {
+      ...currentStatusPayload,
+      at: heartbeatAt,
+      heartbeatAt,
+      heartbeatCounter: heartbeatCounter += 1,
+      pid: process.pid,
+    };
+
+    writeJsonFile(statusPath, currentStatusPayload);
+  }, intervalMs);
+
+  if (typeof heartbeatTimer.unref === 'function') {
+    heartbeatTimer.unref();
+  }
+}
+
+function stopProcessHeartbeat() {
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
   }
 }
 
@@ -125,12 +183,7 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
   }
 
   const now = Date.now();
-  const intervalMs = Math.max(
-    500,
-    Number(runtimeConfig.livePreviewIntervalMs)
-      || (Number(runtimeConfig.livePreviewIntervalSeconds) > 0 ? Number(runtimeConfig.livePreviewIntervalSeconds) * 1000 : 0)
-      || LIVE_PREVIEW_MIN_INTERVAL_MS,
-  );
+  const intervalMs = livePreviewIntervalMs(runtimeConfig);
 
   if (!force && now - lastLivePreviewAt < intervalMs) {
     return {};
@@ -657,6 +710,8 @@ async function main() {
   let activeBrowserEngine = null;
   let browserFallbackReason = null;
 
+  startProcessHeartbeat(runtimeConfig);
+
   progress(runtimeConfig, 'starting', 'Webmail-Sessionlauf wird vorbereitet.', {
     requestedBrowserEngine,
   }, 'starting');
@@ -813,6 +868,7 @@ async function main() {
 
     writeResult(runtimeConfig, result);
   } finally {
+    stopProcessHeartbeat();
     if (browser) {
       await browser.close().catch(() => {});
     }

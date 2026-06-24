@@ -32,6 +32,9 @@ const MAIL_ACCOUNT_SCRIPT_VERSION_LABEL = `${MAIL_ACCOUNT_SCRIPT_NAME} v${MAIL_A
 const runtimeConfigPath = process.argv[2] || '';
 const statusEvents = [];
 const lastLivePreviewByPath = new Map();
+let currentStatusPayload = null;
+let heartbeatTimer = null;
+let heartbeatCounter = 0;
 let activeBrowserEngine = null;
 let requestedBrowserEngine = null;
 let browserFallbackReason = null;
@@ -67,15 +70,23 @@ function writeJsonFile(filePath, payload) {
 }
 
 function publicStatusPayload(runtimeConfig, state, stage, message, data = {}) {
+  const processIdentity = runtimeConfig.processIdentity || {};
+  const heartbeatAt = new Date().toISOString();
+
   return {
     runId: runtimeConfig.runId || null,
+    processKey: processIdentity.processKey || runtimeConfig.processKey || null,
+    processIdentity: Object.keys(processIdentity).length > 0 ? processIdentity : null,
     providerKey: runtimeConfig.provider?.key || null,
     providerLabel: runtimeConfig.provider?.label || null,
     state,
     stage,
     message,
-    at: new Date().toISOString(),
+    at: heartbeatAt,
+    heartbeatAt,
+    heartbeatCounter: heartbeatCounter += 1,
     pid: process.pid,
+    runtimeConfigPath,
     requestedBrowserEngine,
     activeBrowserEngine,
     browserFallbackReason,
@@ -123,7 +134,8 @@ function progress(runtimeConfig, stage, message, data = {}, state = 'running') {
   const statusPath = normalizeText(runtimeConfig.statusPath);
 
   if (statusPath) {
-    writeJsonFile(statusPath, publicStatusPayload(runtimeConfig, state, stage, message, data));
+    currentStatusPayload = publicStatusPayload(runtimeConfig, state, stage, message, data);
+    writeJsonFile(statusPath, currentStatusPayload);
   }
 
   process.stderr.write(`[MAIL REGISTER PROGRESS] ${JSON.stringify({
@@ -140,6 +152,44 @@ function sleep(ms) {
 
 async function pauseStep() {
   await sleep(STEP_DELAY_MS);
+}
+
+function startProcessHeartbeat(runtimeConfig) {
+  const statusPath = normalizeText(runtimeConfig.statusPath);
+
+  if (!statusPath || heartbeatTimer) {
+    return;
+  }
+
+  const intervalMs = Math.max(5000, Number(runtimeConfig.processHeartbeatIntervalSeconds || 0) * 1000 || livePreviewIntervalMs(runtimeConfig));
+
+  heartbeatTimer = setInterval(() => {
+    if (!currentStatusPayload) {
+      return;
+    }
+
+    const heartbeatAt = new Date().toISOString();
+    currentStatusPayload = {
+      ...currentStatusPayload,
+      at: heartbeatAt,
+      heartbeatAt,
+      heartbeatCounter: heartbeatCounter += 1,
+      pid: process.pid,
+    };
+
+    writeJsonFile(statusPath, currentStatusPayload);
+  }, intervalMs);
+
+  if (typeof heartbeatTimer.unref === 'function') {
+    heartbeatTimer.unref();
+  }
+}
+
+function stopProcessHeartbeat() {
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  }
 }
 
 function livePreviewIntervalMs(runtimeConfig = {}) {
@@ -4050,6 +4100,7 @@ async function main() {
   const provider = validateProvider(runtimeConfig);
   runtimeConfig.provider = provider;
   requestedBrowserEngine = resolveBrowserEngine(runtimeConfig);
+  startProcessHeartbeat(runtimeConfig);
 
   progress(runtimeConfig, 'starting', 'Mail-Registrierung wird vorbereitet.', {}, 'starting');
 
@@ -4150,6 +4201,7 @@ async function main() {
 
     writeResult(runtimeConfig, result);
   } finally {
+    stopProcessHeartbeat();
     if (browser) {
       await browser.close().catch(() => {});
     }

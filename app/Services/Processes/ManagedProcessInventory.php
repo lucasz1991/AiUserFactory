@@ -5,8 +5,10 @@ namespace App\Services\Processes;
 use App\Models\ManagedProcess;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
 class ManagedProcessInventory
@@ -28,6 +30,7 @@ class ManagedProcessInventory
         }
 
         $childrenByParent = $inventory->groupBy('parent_pid');
+        $entriesByPid = $inventory->keyBy('pid');
         $rootPids = $inventory
             ->filter(fn (object $entry): bool => $this->isManagedRootCommand((string) ($entry->command ?? '')))
             ->pluck('pid')
@@ -36,10 +39,15 @@ class ManagedProcessInventory
             ->values();
         $managedPids = [];
         $familyRootByPid = [];
+        $rootMetadataByPid = [];
 
         foreach ($rootPids as $rootPid) {
             $managedPids[$rootPid] = true;
             $familyRootByPid[$rootPid] = $rootPid;
+            $rootEntry = $entriesByPid->get($rootPid);
+            $rootMetadataByPid[$rootPid] = $rootEntry
+                ? $this->metadataForCommand((string) ($rootEntry->command ?? ''))
+                : [];
 
             foreach ($this->descendantPids($rootPid, $childrenByParent) as $descendantPid) {
                 $managedPids[$descendantPid] = true;
@@ -53,41 +61,78 @@ class ManagedProcessInventory
         foreach ($inventory->filter(fn (object $entry): bool => isset($managedPids[(int) $entry->pid])) as $entry) {
             $pid = (int) $entry->pid;
             $seenPids[] = $pid;
-            $metadata = $this->metadataForCommand((string) ($entry->command ?? ''));
+            $rootPid = $familyRootByPid[$pid] ?? $pid;
+            $commandMetadata = $this->metadataForCommand((string) ($entry->command ?? ''));
+            $rootMetadata = $rootMetadataByPid[$rootPid] ?? [];
+            $runtimeConfigPath = $commandMetadata['runtime_config_path'] ?: ($rootMetadata['runtime_config_path'] ?? null);
+            $runtimeContext = $this->runtimeProcessContext($runtimeConfigPath, $pid === $rootPid ? 'main' : 'child');
+            $metadata = array_filter([
+                ...$commandMetadata,
+                'runtime_config_path' => $runtimeConfigPath,
+                'root_runtime_config_path' => $rootMetadata['runtime_config_path'] ?? null,
+                'status_path' => $runtimeContext['status_path'],
+                'process_identity' => $runtimeContext['process_identity'],
+                'subject_person_id' => $runtimeContext['person_id'],
+                'status_state' => $runtimeContext['status_state'],
+                'status_stage' => $runtimeContext['last_stage'],
+            ], fn (mixed $value): bool => $value !== null && $value !== '');
             $elapsedSeconds = max(0, (int) ($entry->elapsed_seconds ?? 0));
             $cpuPercent = is_numeric($entry->cpu_percent ?? null) ? (float) $entry->cpu_percent : null;
             $isIdle = $elapsedSeconds >= self::IDLE_MINUTES * 60
                 && $cpuPercent !== null
                 && $cpuPercent <= self::IDLE_CPU_PERCENT;
+            $payload = [
+                'parent_pid' => $this->nullablePositiveInteger($entry->parent_pid ?? null),
+                'family_root_pid' => $rootPid,
+                'process_type' => $metadata['process_type'],
+                'executable' => $metadata['executable'],
+                'script_name' => $metadata['script_name'],
+                'command' => (string) ($entry->command ?? ''),
+                'short_command' => $this->shortenCommand((string) ($entry->command ?? '')),
+                'status' => 'running',
+                'is_managed' => true,
+                'is_root' => $rootPids->contains($pid),
+                'is_idle_suspect' => $isIdle,
+                'cpu_percent' => $cpuPercent,
+                'memory_mb' => is_numeric($entry->memory_mb ?? null) ? (float) $entry->memory_mb : null,
+                'elapsed_seconds' => $elapsedSeconds,
+                'started_at' => $entry->started_at ?? null,
+                'detected_at' => ManagedProcess::query()->where('pid', $pid)->value('detected_at') ?: $now,
+                'last_seen_at' => $now,
+                'exited_at' => null,
+                'metadata' => [
+                    'platform' => PHP_OS_FAMILY,
+                    'state' => $entry->state ?? null,
+                    'runtime_config_path' => $runtimeConfigPath,
+                    'raw_executable' => $entry->executable ?? null,
+                    'process_identity' => $runtimeContext['process_identity'],
+                    'subject_person_id' => $runtimeContext['person_id'],
+                    'status_state' => $runtimeContext['status_state'],
+                    'status_stage' => $runtimeContext['last_stage'],
+                    'heartbeat_at' => $runtimeContext['heartbeat_at']?->toIso8601String(),
+                ],
+            ];
+
+            foreach ([
+                'process_key' => $runtimeContext['process_key'],
+                'run_id' => $runtimeContext['run_id'],
+                'run_type' => $runtimeContext['run_type'],
+                'process_role' => $runtimeContext['process_role'],
+                'runtime_config_path' => $runtimeConfigPath,
+                'status_path' => $runtimeContext['status_path'],
+                'heartbeat_at' => $runtimeContext['heartbeat_at'],
+                'heartbeat_age_seconds' => $runtimeContext['heartbeat_age_seconds'],
+                'last_stage' => $runtimeContext['last_stage'],
+                'last_message' => $runtimeContext['last_message'],
+            ] as $column => $value) {
+                if ($this->managedProcessHasColumn($column)) {
+                    $payload[$column] = $value;
+                }
+            }
 
             ManagedProcess::query()->updateOrCreate(
                 ['pid' => $pid],
-                [
-                    'parent_pid' => $this->nullablePositiveInteger($entry->parent_pid ?? null),
-                    'family_root_pid' => $familyRootByPid[$pid] ?? $pid,
-                    'process_type' => $metadata['process_type'],
-                    'executable' => $metadata['executable'],
-                    'script_name' => $metadata['script_name'],
-                    'command' => (string) ($entry->command ?? ''),
-                    'short_command' => $this->shortenCommand((string) ($entry->command ?? '')),
-                    'status' => 'running',
-                    'is_managed' => true,
-                    'is_root' => $rootPids->contains($pid),
-                    'is_idle_suspect' => $isIdle,
-                    'cpu_percent' => $cpuPercent,
-                    'memory_mb' => is_numeric($entry->memory_mb ?? null) ? (float) $entry->memory_mb : null,
-                    'elapsed_seconds' => $elapsedSeconds,
-                    'started_at' => $entry->started_at ?? null,
-                    'detected_at' => ManagedProcess::query()->where('pid', $pid)->value('detected_at') ?: $now,
-                    'last_seen_at' => $now,
-                    'exited_at' => null,
-                    'metadata' => [
-                        'platform' => PHP_OS_FAMILY,
-                        'state' => $entry->state ?? null,
-                        'runtime_config_path' => $metadata['runtime_config_path'],
-                        'raw_executable' => $entry->executable ?? null,
-                    ],
-                ],
+                $payload,
             );
         }
 
@@ -382,6 +427,110 @@ POWERSHELL;
         }
 
         return null;
+    }
+
+    private function runtimeProcessContext(?string $runtimeConfigPath, string $fallbackRole): array
+    {
+        $runtimeConfigPath = trim((string) $runtimeConfigPath) ?: null;
+        $runtimeConfig = $runtimeConfigPath ? $this->readJsonFile($runtimeConfigPath) : [];
+        $statusPath = trim((string) data_get($runtimeConfig, 'statusPath')) ?: null;
+        $status = $statusPath ? $this->readJsonFile($statusPath) : [];
+        $identity = data_get($status, 'processIdentity');
+
+        if (! is_array($identity) || $identity === []) {
+            $identity = data_get($runtimeConfig, 'processIdentity');
+        }
+
+        $identity = is_array($identity) ? $identity : [];
+        $runId = trim((string) (data_get($identity, 'runId') ?: data_get($status, 'runId') ?: data_get($runtimeConfig, 'runId')));
+        $runType = trim((string) (data_get($identity, 'runType') ?: $this->runTypeFromRuntimePath($runtimeConfigPath)));
+        $role = trim((string) (data_get($identity, 'role') ?: $fallbackRole));
+        $personId = (int) (
+            data_get($identity, 'personId')
+            ?: data_get($runtimeConfig, 'subject.personId')
+            ?: data_get($runtimeConfig, 'subject.person_id')
+            ?: data_get($runtimeConfig, 'personId')
+            ?: 0
+        );
+        $processKey = trim((string) (data_get($identity, 'processKey') ?: data_get($status, 'processKey')));
+
+        if ($processKey === '' && $runId !== '' && $runType !== '') {
+            $processKey = $runType.':'.$runId.':'.$role;
+        }
+
+        $heartbeatAt = $this->parseTimestamp(data_get($status, 'heartbeatAt') ?: data_get($status, 'at'));
+
+        if (! $heartbeatAt && $statusPath && File::exists($statusPath)) {
+            $heartbeatAt = Carbon::createFromTimestamp(File::lastModified($statusPath));
+        }
+
+        return [
+            'process_key' => $processKey ?: null,
+            'run_id' => $runId ?: null,
+            'run_type' => $runType ?: null,
+            'process_role' => $role ?: null,
+            'runtime_config_path' => $runtimeConfigPath,
+            'status_path' => $statusPath,
+            'process_identity' => $identity ?: null,
+            'person_id' => $personId > 0 ? $personId : null,
+            'heartbeat_at' => $heartbeatAt,
+            'heartbeat_age_seconds' => $heartbeatAt ? (int) $heartbeatAt->diffInSeconds(now()) : null,
+            'status_state' => trim((string) data_get($status, 'state')) ?: null,
+            'last_stage' => trim((string) data_get($status, 'stage')) ?: null,
+            'last_message' => trim((string) data_get($status, 'message')) ?: null,
+        ];
+    }
+
+    private function runTypeFromRuntimePath(?string $runtimeConfigPath): ?string
+    {
+        $path = Str::of((string) $runtimeConfigPath)->replace('\\', '/')->lower()->toString();
+
+        return match (true) {
+            str_contains($path, '/mail-registration/') => 'mail-registration',
+            str_contains($path, '/webmail-session/') => 'webmail-session',
+            default => null,
+        };
+    }
+
+    private function readJsonFile(string $path): array
+    {
+        try {
+            if (! File::exists($path)) {
+                return [];
+            }
+
+            $decoded = json_decode(File::get($path), true);
+
+            return is_array($decoded) ? $decoded : [];
+        } catch (\Throwable) {
+            return [];
+        }
+    }
+
+    private function parseTimestamp(mixed $value): ?Carbon
+    {
+        if (! is_scalar($value) || trim((string) $value) === '') {
+            return null;
+        }
+
+        try {
+            return Carbon::parse((string) $value);
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    private function managedProcessHasColumn(string $column): bool
+    {
+        static $columns = null;
+
+        if ($columns === null) {
+            $columns = Schema::hasTable('managed_processes')
+                ? array_flip(Schema::getColumnListing('managed_processes'))
+                : [];
+        }
+
+        return isset($columns[$column]);
     }
 
     private function parseElapsedSeconds(string $elapsed): int

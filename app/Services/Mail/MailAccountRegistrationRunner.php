@@ -3,6 +3,7 @@
 namespace App\Services\Mail;
 
 use App\Jobs\CheckMailRegistrationWebmailJob;
+use App\Jobs\SuperviseManagedProcessesJob;
 use App\Models\Setting;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Crypt;
@@ -164,6 +165,13 @@ class MailAccountRegistrationRunner
 
         $runtimeConfig = [
             'runId' => $runId,
+            'processIdentity' => $this->processIdentity($runId, 'main', $normalizedSubject['personId'] ?? null),
+            'processHeartbeatIntervalSeconds' => max(5, (int) $settings['live_preview_interval_seconds']),
+            'supervisor' => [
+                'enabled' => true,
+                'staleAfterSeconds' => max(30, (int) $settings['live_preview_interval_seconds'] * 5),
+                'maxRestarts' => 2,
+            ],
             'browserEngine' => $settings['browser_engine'],
             'cloakHumanizeEnabled' => (bool) $settings['cloak_humanize_enabled'],
             'cloakHumanPreset' => $settings['cloak_human_preset'],
@@ -208,6 +216,8 @@ class MailAccountRegistrationRunner
 
         $this->writeJsonFile($statusPath, [
             'runId' => $runId,
+            'processKey' => $this->processIdentity($runId, 'main', $normalizedSubject['personId'] ?? null)['processKey'],
+            'processIdentity' => $this->processIdentity($runId, 'main', $normalizedSubject['personId'] ?? null),
             'providerKey' => $provider['key'],
             'providerLabel' => $provider['label'],
             'state' => 'queued',
@@ -266,6 +276,8 @@ class MailAccountRegistrationRunner
         } catch (\Throwable $exception) {
             $this->writeJsonFile($statusPath, [
                 'runId' => $runId,
+                'processKey' => $this->processIdentity($runId, 'main', $normalizedSubject['personId'] ?? null)['processKey'],
+                'processIdentity' => $this->processIdentity($runId, 'main', $normalizedSubject['personId'] ?? null),
                 'providerKey' => $provider['key'],
                 'providerLabel' => $provider['label'],
                 'state' => 'failed',
@@ -360,6 +372,11 @@ class MailAccountRegistrationRunner
         $status['webmailDebugDomUrl'] = $this->debugDomUrlFor($runId, $status, 'webmailDebugDom', 'debug-dom-webmail.json');
         $status['debugDomUrl'] = $this->debugDomUrl($runId, $status);
         $status['result'] = $this->resultSummary($result);
+        $status['processHeartbeatStatus'] = $this->processHeartbeatStatus($status);
+
+        if (($status['processHeartbeatStatus']['stale'] ?? false) === true) {
+            $status = $this->queueSupervisorJobIfNeeded($runId, $status);
+        }
 
         return $status;
     }
@@ -649,6 +666,22 @@ class MailAccountRegistrationRunner
             : 'https://mail.proton.me';
     }
 
+    protected function processIdentity(string $runId, string $role, mixed $personId = null): array
+    {
+        $identity = [
+            'processKey' => 'mail-registration:'.$runId.':'.$role,
+            'runId' => $runId,
+            'runType' => 'mail-registration',
+            'role' => $role,
+        ];
+
+        if ((int) $personId > 0) {
+            $identity['personId'] = (int) $personId;
+        }
+
+        return $identity;
+    }
+
     protected function runtimeVerificationMailbox(array $mailbox): array
     {
         $mailbox = $this->normalizeVerificationMailbox($mailbox);
@@ -862,6 +895,74 @@ class MailAccountRegistrationRunner
             'livePreviewEnabled' => $livePreviewEnabled,
             'livePreviewIntervalSeconds' => $intervalSeconds,
         ];
+    }
+
+    protected function processHeartbeatStatus(array $status): array
+    {
+        $intervalSeconds = max(1, (int) ($status['livePreviewIntervalSeconds'] ?? $status['livePreviewPollIntervalSeconds'] ?? 3));
+        $staleAfterSeconds = max(30, $intervalSeconds * 5);
+        $isRunning = in_array((string) ($status['state'] ?? ''), ['queued', 'starting', 'running'], true);
+        $heartbeatAt = $this->parseStatusTimestamp($status['heartbeatAt'] ?? $status['at'] ?? null);
+        $ageSeconds = $heartbeatAt ? (int) $heartbeatAt->diffInSeconds(now()) : null;
+        $stale = $isRunning && ($heartbeatAt === null || $ageSeconds > $staleAfterSeconds);
+
+        return [
+            'heartbeatAt' => $heartbeatAt?->toIso8601String(),
+            'ageSeconds' => $ageSeconds,
+            'staleAfterSeconds' => $staleAfterSeconds,
+            'stale' => $stale,
+            'statusText' => $stale
+                ? 'Kein aktuelles Node-Lebenszeichen; Supervisor wird angefordert.'
+                : ($heartbeatAt ? 'Node-Lebenszeichen aktiv.' : 'Noch kein Node-Lebenszeichen.'),
+        ];
+    }
+
+    protected function queueSupervisorJobIfNeeded(string $runId, array $status): array
+    {
+        $queuedAt = $this->parseStatusTimestamp($status['supervisorJobQueuedAt'] ?? null);
+
+        if ($queuedAt && $queuedAt->diffInSeconds(now()) < 60) {
+            return $status;
+        }
+
+        try {
+            SuperviseManagedProcessesJob::dispatch($runId)->onConnection('database');
+            $message = 'Supervisor-Job wurde wegen fehlendem Node-Lebenszeichen eingereiht.';
+        } catch (\Throwable $exception) {
+            $message = 'Supervisor-Job konnte nicht eingereiht werden: '.$exception->getMessage();
+        }
+
+        $events = is_array($status['events'] ?? null) ? $status['events'] : [];
+        $events[] = [
+            'at' => now()->toIso8601String(),
+            'stage' => 'supervisor-job-queued',
+            'message' => $message,
+        ];
+
+        if (count($events) > 80) {
+            $events = array_slice($events, -80);
+        }
+
+        $status['supervisorJobQueuedAt'] = now()->toIso8601String();
+        $status['supervisorMessage'] = $message;
+        $status['events'] = $events;
+
+        $this->writeJsonFile($this->runDirectory($runId).DIRECTORY_SEPARATOR.'status.json', $status);
+
+        return $status;
+    }
+
+    protected function parseStatusTimestamp(mixed $value): ?Carbon
+    {
+        if (! is_scalar($value) || trim((string) $value) === '') {
+            return null;
+        }
+
+        try {
+            return Carbon::parse((string) $value);
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     protected function debugDomUrl(string $runId, array $status): ?string

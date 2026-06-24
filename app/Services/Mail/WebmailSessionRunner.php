@@ -2,6 +2,7 @@
 
 namespace App\Services\Mail;
 
+use App\Jobs\SuperviseManagedProcessesJob;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\File;
@@ -30,6 +31,8 @@ class WebmailSessionRunner
 
         $this->writeJsonFile($statusPath, [
             'runId' => $runId,
+            'processKey' => $runtime['processIdentity']['processKey'] ?? null,
+            'processIdentity' => $runtime['processIdentity'] ?? null,
             'providerKey' => $runtime['provider'],
             'state' => 'queued',
             'stage' => 'queued',
@@ -64,6 +67,8 @@ class WebmailSessionRunner
         } catch (\Throwable $exception) {
             $this->writeJsonFile($statusPath, [
                 'runId' => $runId,
+                'processKey' => $runtime['processIdentity']['processKey'] ?? null,
+                'processIdentity' => $runtime['processIdentity'] ?? null,
                 'providerKey' => $runtime['provider'],
                 'state' => 'failed',
                 'stage' => 'process-start-failed',
@@ -127,6 +132,11 @@ class WebmailSessionRunner
         $status['debugDomUrl'] = $this->debugDomUrl($runId, $status);
         $status['debugDom'] = $this->latestDebugDom($status);
         $status['result'] = $result;
+        $status['processHeartbeatStatus'] = $this->processHeartbeatStatus($status);
+
+        if (($status['processHeartbeatStatus']['stale'] ?? false) === true) {
+            $status = $this->queueSupervisorJobIfNeeded($runId, $status);
+        }
 
         return $status;
     }
@@ -266,6 +276,13 @@ class WebmailSessionRunner
 
         return [
             'runId' => $runId,
+            'processIdentity' => $this->processIdentity($runId, 'main', $account['personId'] ?? $account['person_id'] ?? null),
+            'processHeartbeatIntervalSeconds' => max(5, (int) ($account['livePreviewIntervalSeconds'] ?? 3)),
+            'supervisor' => [
+                'enabled' => true,
+                'staleAfterSeconds' => max(30, (int) ($account['livePreviewIntervalSeconds'] ?? 3) * 5),
+                'maxRestarts' => 2,
+            ],
             'scope' => $this->safeScope($scope),
             'provider' => $provider,
             'email' => trim((string) ($account['email'] ?? '')),
@@ -401,6 +418,74 @@ class WebmailSessionRunner
         ];
     }
 
+    protected function processHeartbeatStatus(array $status): array
+    {
+        $intervalSeconds = max(1, (int) ($status['livePreviewIntervalSeconds'] ?? $status['livePreviewPollIntervalSeconds'] ?? 3));
+        $staleAfterSeconds = max(30, $intervalSeconds * 5);
+        $isRunning = in_array((string) ($status['state'] ?? ''), ['queued', 'starting', 'running'], true);
+        $heartbeatAt = $this->parseStatusTimestamp($status['heartbeatAt'] ?? $status['at'] ?? null);
+        $ageSeconds = $heartbeatAt ? (int) $heartbeatAt->diffInSeconds(now()) : null;
+        $stale = $isRunning && ($heartbeatAt === null || $ageSeconds > $staleAfterSeconds);
+
+        return [
+            'heartbeatAt' => $heartbeatAt?->toIso8601String(),
+            'ageSeconds' => $ageSeconds,
+            'staleAfterSeconds' => $staleAfterSeconds,
+            'stale' => $stale,
+            'statusText' => $stale
+                ? 'Kein aktuelles Node-Lebenszeichen; Supervisor wird angefordert.'
+                : ($heartbeatAt ? 'Node-Lebenszeichen aktiv.' : 'Noch kein Node-Lebenszeichen.'),
+        ];
+    }
+
+    protected function queueSupervisorJobIfNeeded(string $runId, array $status): array
+    {
+        $queuedAt = $this->parseStatusTimestamp($status['supervisorJobQueuedAt'] ?? null);
+
+        if ($queuedAt && $queuedAt->diffInSeconds(now()) < 60) {
+            return $status;
+        }
+
+        try {
+            SuperviseManagedProcessesJob::dispatch($runId)->onConnection('database');
+            $message = 'Supervisor-Job wurde wegen fehlendem Node-Lebenszeichen eingereiht.';
+        } catch (\Throwable $exception) {
+            $message = 'Supervisor-Job konnte nicht eingereiht werden: '.$exception->getMessage();
+        }
+
+        $events = is_array($status['events'] ?? null) ? $status['events'] : [];
+        $events[] = [
+            'at' => now()->toIso8601String(),
+            'stage' => 'supervisor-job-queued',
+            'message' => $message,
+        ];
+
+        if (count($events) > 80) {
+            $events = array_slice($events, -80);
+        }
+
+        $status['supervisorJobQueuedAt'] = now()->toIso8601String();
+        $status['supervisorMessage'] = $message;
+        $status['events'] = $events;
+
+        $this->writeJsonFile($this->runDirectory($runId).DIRECTORY_SEPARATOR.'status.json', $status);
+
+        return $status;
+    }
+
+    protected function parseStatusTimestamp(mixed $value): ?Carbon
+    {
+        if (! is_scalar($value) || trim((string) $value) === '') {
+            return null;
+        }
+
+        try {
+            return Carbon::parse((string) $value);
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
     protected function debugDomUrl(string $runId, array $status): ?string
     {
         $debugDom = $this->latestDebugDom($status);
@@ -489,6 +574,22 @@ class WebmailSessionRunner
             self::PROVIDER_PROTON => 'https://mail.proton.me',
             default => '',
         };
+    }
+
+    protected function processIdentity(string $runId, string $role, mixed $personId = null): array
+    {
+        $identity = [
+            'processKey' => 'webmail-session:'.$runId.':'.$role,
+            'runId' => $runId,
+            'runType' => 'webmail-session',
+            'role' => $role,
+        ];
+
+        if ((int) $personId > 0) {
+            $identity['personId'] = (int) $personId;
+        }
+
+        return $identity;
     }
 
     protected function resolveNodeBinary(): string

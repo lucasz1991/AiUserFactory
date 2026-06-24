@@ -261,6 +261,11 @@
                             <div class="mt-1 text-xs text-slate-500">
                                 Browser-Aktivitaetscheck: {{ data_get($mailRegistrationStatus, 'browserActivityCheckEnabled', true) ? 'aktiv' : 'inaktiv' }}
                             </div>
+                            @if(data_get($mailRegistrationStatus, 'processHeartbeatStatus.statusText'))
+                                <div class="mt-2 rounded-md {{ data_get($mailRegistrationStatus, 'processHeartbeatStatus.stale') ? 'bg-amber-50 text-amber-800' : 'bg-emerald-50 text-emerald-800' }} px-3 py-2 text-xs font-semibold">
+                                    {{ data_get($mailRegistrationStatus, 'processHeartbeatStatus.statusText') }}
+                                </div>
+                            @endif
                             @if(data_get($mailRegistrationStatus, 'result.webmailCheckPending') && data_get($mailRegistrationStatus, 'result.verificationWebmailCheckDueAt'))
                                 <div class="mt-2 text-xs font-semibold text-amber-700">
                                     Webmail-Check faellig: {{ data_get($mailRegistrationStatus, 'result.verificationWebmailCheckDueAt') }}
@@ -275,6 +280,7 @@
                                 :show-header="false"
                                 :auto-refresh="true"
                                 :root-pid="(int) data_get($mailRegistrationStatus, 'pid')"
+                                :run-id="data_get($mailRegistrationStatus, 'runId')"
                                 :key="'person-mail-registration-processes-'.data_get($mailRegistrationStatus, 'runId', data_get($mailRegistrationStatus, 'pid'))"
                             />
                         @endif

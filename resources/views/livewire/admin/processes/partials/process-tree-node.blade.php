@@ -13,6 +13,9 @@
             <div>
                 <div class="font-semibold text-slate-900">PID {{ $process->pid }}</div>
                 <div class="text-xs text-slate-500">PPID {{ $process->parent_pid ?: '-' }}</div>
+                @if($process->run_id)
+                    <div class="mt-1 max-w-32 truncate text-xs text-blue-700">{{ $process->run_id }}</div>
+                @endif
             </div>
         </div>
 
@@ -31,10 +34,16 @@
             @if($process->is_idle_suspect)
                 <div class="mt-1 text-xs font-semibold text-amber-700">Leerlauf-Verdacht</div>
             @endif
+            @if($process->heartbeat_at)
+                <div class="mt-1 text-xs text-slate-500">Heartbeat {{ $process->heartbeat_at->diffInSeconds(now()) }}s</div>
+            @endif
         </div>
 
         <div class="min-w-0">
             <div class="break-all text-xs text-slate-700">{{ $process->short_command ?: '-' }}</div>
+            @if($process->last_stage)
+                <div class="mt-1 text-xs font-semibold text-slate-600">{{ $process->last_stage }}</div>
+            @endif
             <div class="mt-1 text-xs text-slate-400">zuletzt: {{ optional($process->last_seen_at)->format('d.m.Y H:i:s') ?: '-' }}</div>
             @if($process->action_message)
                 <div class="mt-1 text-xs text-blue-700">{{ $process->action_message }}</div>

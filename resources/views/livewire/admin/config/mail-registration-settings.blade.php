@@ -327,6 +327,12 @@
                         </div>
                     </div>
 
+                    @if(data_get($verificationMailboxSessionResult, 'processHeartbeatStatus.statusText'))
+                        <div class="rounded-md {{ data_get($verificationMailboxSessionResult, 'processHeartbeatStatus.stale') ? 'bg-amber-50 text-amber-800' : 'bg-emerald-50 text-emerald-800' }} px-3 py-2 text-xs font-semibold">
+                            {{ data_get($verificationMailboxSessionResult, 'processHeartbeatStatus.statusText') }}
+                        </div>
+                    @endif
+
                     @if(!empty($verificationMailboxSessionResult['events']))
                         <div class="max-h-64 overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-4">
                             <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Ablauf</div>
@@ -483,6 +489,11 @@
                         <div class="mt-1 text-xs text-slate-500">
                             Browser-Aktivitaetscheck: {{ data_get($registrationRunStatus, 'browserActivityCheckEnabled', true) ? 'aktiv' : 'inaktiv' }}
                         </div>
+                        @if(data_get($registrationRunStatus, 'processHeartbeatStatus.statusText'))
+                            <div class="mt-2 rounded-md {{ data_get($registrationRunStatus, 'processHeartbeatStatus.stale') ? 'bg-amber-50 text-amber-800' : 'bg-emerald-50 text-emerald-800' }} px-3 py-2 text-xs font-semibold">
+                                {{ data_get($registrationRunStatus, 'processHeartbeatStatus.statusText') }}
+                            </div>
+                        @endif
                         @if(data_get($registrationRunStatus, 'result.webmailCheckPending') && data_get($registrationRunStatus, 'result.verificationWebmailCheckDueAt'))
                             <div class="mt-2 text-xs font-semibold text-amber-700">
                                 Webmail-Check faellig: {{ data_get($registrationRunStatus, 'result.verificationWebmailCheckDueAt') }}
@@ -497,6 +508,7 @@
                             :show-header="false"
                             :auto-refresh="true"
                             :root-pid="(int) data_get($registrationRunStatus, 'pid')"
+                            :run-id="data_get($registrationRunStatus, 'runId')"
                             :key="'mail-registration-processes-'.data_get($registrationRunStatus, 'runId', data_get($registrationRunStatus, 'pid'))"
                         />
                     @endif

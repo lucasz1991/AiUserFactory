@@ -32,6 +32,8 @@ class ProcessMonitor extends Component
 
     public ?int $rootPid = null;
 
+    public ?string $runId = null;
+
     public ?string $notice = null;
 
     public function mount(
@@ -40,12 +42,14 @@ class ProcessMonitor extends Component
         bool $showHeader = true,
         bool $autoRefresh = true,
         ?int $rootPid = null,
+        ?string $runId = null,
     ): void {
         $this->compact = $compact;
         $this->limit = max(1, min(200, $limit));
         $this->showHeader = $showHeader;
         $this->autoRefresh = $autoRefresh;
         $this->rootPid = $rootPid && $rootPid > 0 ? $rootPid : null;
+        $this->runId = $runId !== null && trim($runId) !== '' ? trim($runId) : null;
 
         if ($compact) {
             $this->filter = 'running';
@@ -116,9 +120,12 @@ class ProcessMonitor extends Component
 
     protected function loadProcesses(): Collection
     {
+        $canFilterByRunId = $this->runId && Schema::hasColumn('managed_processes', 'run_id');
+
         return ManagedProcess::query()
             ->whereIn('process_type', self::FACTORY_NODE_PROCESS_TYPES)
-            ->when($this->rootPid, fn ($query) => $query->where(function ($inner): void {
+            ->when($canFilterByRunId, fn ($query) => $query->where('run_id', $this->runId))
+            ->when(! $canFilterByRunId && $this->rootPid, fn ($query) => $query->where(function ($inner): void {
                 $inner->where('pid', $this->rootPid)
                     ->orWhere('family_root_pid', $this->rootPid);
             }))
@@ -185,9 +192,12 @@ class ProcessMonitor extends Component
 
     protected function baseStatsQuery()
     {
+        $canFilterByRunId = $this->runId && Schema::hasColumn('managed_processes', 'run_id');
+
         return ManagedProcess::query()
             ->whereIn('process_type', self::FACTORY_NODE_PROCESS_TYPES)
-            ->when($this->rootPid, fn ($query) => $query->where(function ($inner): void {
+            ->when($canFilterByRunId, fn ($query) => $query->where('run_id', $this->runId))
+            ->when(! $canFilterByRunId && $this->rootPid, fn ($query) => $query->where(function ($inner): void {
                 $inner->where('pid', $this->rootPid)
                     ->orWhere('family_root_pid', $this->rootPid);
             }));
