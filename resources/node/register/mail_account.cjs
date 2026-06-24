@@ -1441,6 +1441,23 @@ async function hasProtonHumanVerificationDialog(pageOrFrame) {
         && style.display !== 'none';
     };
     const elements = allElementsDeep();
+    const exactHumanVerificationModal = elements
+      .filter(visible)
+      .find((element) => {
+        const modalLike = element.matches('.modal-two-content, [id^="modal-"][id$="-description"]');
+
+        if (!modalLike) {
+          return false;
+        }
+
+        return Boolean(element.querySelector('[data-testid="tab-header-captcha-button"]'))
+          && Boolean(element.querySelector('[data-testid="tab-header-e-mail-button"]'));
+      });
+
+    if (exactHumanVerificationModal) {
+      return true;
+    }
+
     const hasCaptchaTab = elements.some((element) => (
       visible(element)
       && element.getAttribute('data-testid') === 'tab-header-captcha-button'
@@ -1469,6 +1486,30 @@ async function hasProtonHumanVerificationDialog(pageOrFrame) {
   }).catch(() => false);
 }
 
+async function waitForProtonHumanVerificationDialogIncludingFrames(page, timeoutMs = 15000) {
+  const stopAt = Date.now() + Math.max(1000, Number(timeoutMs) || 15000);
+
+  while (Date.now() < stopAt) {
+    if (await hasProtonHumanVerificationDialog(page)) {
+      return page;
+    }
+
+    for (const frame of page.frames()) {
+      if (frame === page.mainFrame()) {
+        continue;
+      }
+
+      if (await hasProtonHumanVerificationDialog(frame)) {
+        return frame;
+      }
+    }
+
+    await sleep(250);
+  }
+
+  return null;
+}
+
 async function selectProtonEmailVerificationTab(page) {
   const labels = [
     'email',
@@ -1482,7 +1523,18 @@ async function selectProtonEmailVerificationTab(page) {
     'verify via email',
   ];
   const selectors = 'button, [role="button"], [role="tab"], a, label, input[type="button"], input[type="submit"], span';
-  let humanDialogVisible = await hasProtonHumanVerificationDialog(page);
+  const humanDialogContext = await waitForProtonHumanVerificationDialogIncludingFrames(page);
+  let humanDialogVisible = Boolean(humanDialogContext);
+
+  if (humanDialogContext) {
+    if (await clickProtonEmailVerificationTabInContext(humanDialogContext)) {
+      return Boolean(await waitForProtonVerificationEmailInput(page));
+    }
+
+    if (await clickProtonEmailVerificationTabByMouse(page, humanDialogContext)) {
+      return Boolean(await waitForProtonVerificationEmailInput(page));
+    }
+  }
 
   if (await clickProtonEmailVerificationTabInContext(page)) {
     if (await waitForProtonVerificationEmailInput(page)) {
