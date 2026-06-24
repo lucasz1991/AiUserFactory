@@ -1,5 +1,10 @@
 const fs = require('fs');
 const path = require('path');
+const {
+  BROWSER_LAUNCHER_SCRIPT_VERSION,
+  launchConfiguredBrowser,
+  resolveBrowserEngine,
+} = require('../register/lib/browser-launcher.cjs');
 
 let puppeteer = null;
 
@@ -14,6 +19,8 @@ try {
 const SCRIPT_NAME = process.env.WEBMAIL_SESSION_SCRIPT_NAME || 'webmail_session.cjs';
 const SCRIPT_VERSION = 1;
 const DEFAULT_VIEWPORT = { width: 1365, height: 900 };
+const LIVE_PREVIEW_MIN_INTERVAL_MS = 2500;
+let lastLivePreviewAt = 0;
 
 function normalizeText(value) {
   return String(value || '').trim();
@@ -36,6 +43,39 @@ function ensureDirectory(directoryPath) {
 function writeJsonFile(filePath, payload) {
   ensureDirectory(path.dirname(filePath));
   fs.writeFileSync(filePath, JSON.stringify(payload, null, 2), 'utf8');
+}
+
+async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = false) {
+  const livePreviewPath = normalizeText(runtimeConfig.livePreviewPath);
+
+  if (!page || !livePreviewPath || runtimeConfig.livePreviewEnabled === false) {
+    return {};
+  }
+
+  const now = Date.now();
+
+  if (!force && now - lastLivePreviewAt < LIVE_PREVIEW_MIN_INTERVAL_MS) {
+    return {};
+  }
+
+  try {
+    ensureDirectory(path.dirname(livePreviewPath));
+    await page.screenshot({
+      path: livePreviewPath,
+      fullPage: false,
+      type: 'png',
+    });
+    lastLivePreviewAt = now;
+
+    return {
+      liveScreenshotPath: livePreviewPath,
+      liveScreenshotAt: new Date(now).toISOString(),
+    };
+  } catch (error) {
+    return {
+      liveScreenshotError: normalizeText(error?.message || String(error)),
+    };
+  }
 }
 
 function sleep(ms) {
@@ -314,7 +354,10 @@ async function main() {
   const observationTimeoutMs = Math.max(30000, Number(runtimeConfig.observationTimeoutMs || 300000));
   const notes = [];
   const warnings = [];
+  const requestedBrowserEngine = resolveBrowserEngine(runtimeConfig);
   let browser = null;
+  let activeBrowserEngine = null;
+  let browserFallbackReason = null;
 
   if (!webmailUrl || !/^https?:\/\//i.test(webmailUrl)) {
     throw new Error('Gueltige Webmail-URL fehlt.');
@@ -325,30 +368,56 @@ async function main() {
   }
 
   try {
-    browser = await puppeteer.launch({
+    const launchOptions = {
       headless: runtimeConfig.headlessEnabled === true ? 'new' : false,
       defaultViewport: DEFAULT_VIEWPORT,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
         `--window-size=${DEFAULT_VIEWPORT.width},${DEFAULT_VIEWPORT.height}`,
       ],
+    };
+
+    if (runtimeConfig.browserProfilePath) {
+      launchOptions.userDataDir = runtimeConfig.browserProfilePath;
+      ensureDirectory(runtimeConfig.browserProfilePath);
+    }
+
+    const launchResult = await launchConfiguredBrowser({
+      puppeteer,
+      runtimeConfig,
+      launchOptions,
     });
+
+    browser = launchResult.browser;
+    activeBrowserEngine = launchResult.activeEngine;
+    browserFallbackReason = launchResult.fallbackReason;
 
     const page = await browser.newPage();
     page.setDefaultNavigationTimeout(Math.max(30000, Number(runtimeConfig.navigationTimeoutMs || 120000)));
+    await page.setViewport(DEFAULT_VIEWPORT);
     await page.goto(webmailUrl, {
       waitUntil: 'domcontentloaded',
       timeout: Math.max(30000, Number(runtimeConfig.navigationTimeoutMs || 120000)),
     });
+    await captureLivePreviewScreenshot(page, runtimeConfig, true);
 
     const loginDiagnostics = await attemptWebmailLogin(page, runtimeConfig);
+    await captureLivePreviewScreenshot(page, runtimeConfig, true);
     notes.push(loginDiagnostics.attempted
       ? 'Webmail-Login wurde mit hinterlegten Zugangsdaten versucht. Falls ein zweiter Faktor oder Provider-Zwischenschritt erscheint, bitte manuell abschliessen.'
       : 'Keine vollstaendigen Webmail-Zugangsdaten vorhanden. Bitte Login im sichtbaren Browser manuell abschliessen.');
 
     await sleep(Math.max(1500, Number(runtimeConfig.postLoginWaitMs || 2500)));
-    await sleep(observationTimeoutMs);
+    const stopAt = Date.now() + observationTimeoutMs;
+
+    while (Date.now() < stopAt) {
+      await captureLivePreviewScreenshot(page, runtimeConfig);
+      await sleep(1000);
+    }
+
+    const livePreview = await captureLivePreviewScreenshot(page, runtimeConfig, true);
 
     const origin = sameOriginUrl(page.url()) || sameOriginUrl(webmailUrl);
     const cookies = origin ? await page.cookies(origin).catch(() => []) : await page.cookies().catch(() => []);
@@ -376,9 +445,19 @@ async function main() {
       statusMessage: 'Webmail-Sessiondaten wurden gespeichert.',
       scriptName: SCRIPT_NAME,
       scriptVersion: SCRIPT_VERSION,
+      scriptVersions: {
+        webmailSession: SCRIPT_VERSION,
+        browserLauncher: BROWSER_LAUNCHER_SCRIPT_VERSION || 1,
+      },
       providerKey,
       sessionFilePath,
       finalUrl: page.url(),
+      title: await page.title().catch(() => ''),
+      requestedBrowserEngine,
+      activeBrowserEngine,
+      browserFallbackReason,
+      liveScreenshotPath: livePreview.liveScreenshotPath || runtimeConfig.livePreviewPath || null,
+      liveScreenshotAt: livePreview.liveScreenshotAt || null,
       cookieCount: cookies.length,
       loginDiagnostics,
       notes,
@@ -397,6 +476,10 @@ main().catch((error) => {
     statusMessage: 'Webmail-Session-Skript ist fehlgeschlagen.',
     scriptName: SCRIPT_NAME,
     scriptVersion: SCRIPT_VERSION,
+    scriptVersions: {
+      webmailSession: SCRIPT_VERSION,
+      browserLauncher: BROWSER_LAUNCHER_SCRIPT_VERSION || 1,
+    },
     warnings: [normalizeText(error?.message || String(error))],
     notes: [],
   }));

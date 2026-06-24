@@ -5,6 +5,7 @@ namespace App\Services\Mail;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Process;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 class WebmailSessionRunner
@@ -16,8 +17,12 @@ class WebmailSessionRunner
     {
         $provider = $this->normalizeProvider($account['provider'] ?? null);
         $webmailUrl = trim((string) ($account['webmailUrl'] ?? $account['webmail_url'] ?? ''));
-        $sessionFilePath = storage_path('app/mail-sessions/'.$this->safeScope($scope).'-'.Str::uuid().'.json');
+        $runId = (string) Str::uuid();
+        $safeScope = $this->safeScope($scope);
+        $sessionFilePath = storage_path('app/mail-sessions/'.$safeScope.'-'.$runId.'.json');
         $runtimeConfigPath = storage_path('app/tmp/webmail-session-'.Str::uuid().'.json');
+        $publicRelativePreviewPath = 'mail-sessions/'.$safeScope.'-'.$runId.'/live.png';
+        $livePreviewPath = storage_path('app/public/'.$publicRelativePreviewPath);
 
         if ($webmailUrl === '') {
             $webmailUrl = $this->defaultWebmailUrl($provider);
@@ -34,7 +39,14 @@ class WebmailSessionRunner
             'password' => (string) ($account['password'] ?? ''),
             'webmailUrl' => $webmailUrl,
             'sessionFilePath' => $sessionFilePath,
-            'headlessEnabled' => false,
+            'browserEngine' => trim((string) ($account['browserEngine'] ?? 'cloak-with-chrome-fallback')),
+            'cloakHumanizeEnabled' => (bool) ($account['cloakHumanizeEnabled'] ?? false),
+            'cloakHumanPreset' => trim((string) ($account['cloakHumanPreset'] ?? '')),
+            'headlessEnabled' => (bool) ($account['headlessEnabled'] ?? false),
+            'browserProfilePath' => storage_path('app/mail-sessions/'.$safeScope.'-'.$runId.'/browser-profile'),
+            'livePreviewEnabled' => (bool) ($account['livePreviewEnabled'] ?? true),
+            'livePreviewPath' => $livePreviewPath,
+            'livePreviewRelativePath' => $publicRelativePreviewPath,
             'navigationTimeoutMs' => max(30000, (int) ($account['navigationTimeoutMs'] ?? 120000)),
             'observationTimeoutMs' => max(30000, min(180000, (int) ($account['observationTimeoutMs'] ?? 60000))),
             'postLoginWaitMs' => max(500, (int) ($account['postLoginWaitMs'] ?? 2500)),
@@ -78,6 +90,7 @@ class WebmailSessionRunner
                 ...((array) ($payload['warnings'] ?? [])),
                 'Es wurde keine Webmail-Session-Datei erzeugt.',
             ]));
+            $payload['screenshotUrl'] = $this->screenshotUrl($publicRelativePreviewPath);
 
             return $payload;
         }
@@ -86,6 +99,7 @@ class WebmailSessionRunner
         $payload['encryptedSessionPayload'] = Crypt::encryptString($sessionPayload);
         $payload['sessionPayloadHash'] = hash('sha256', $sessionPayload);
         $payload['providerKey'] = $provider;
+        $payload['screenshotUrl'] = $this->screenshotUrl($publicRelativePreviewPath);
         $payload['sessionSummary'] = [
             'capturedAt' => is_array($decodedSession) ? ($decodedSession['capturedAt'] ?? now()->toIso8601String()) : now()->toIso8601String(),
             'finalUrl' => is_array($decodedSession) ? ($decodedSession['finalUrl'] ?? null) : null,
@@ -184,5 +198,16 @@ class WebmailSessionRunner
     protected function safeScope(string $scope): string
     {
         return Str::slug($scope) ?: 'webmail';
+    }
+
+    protected function screenshotUrl(string $relativePath): ?string
+    {
+        $absolutePath = storage_path('app/public/'.$relativePath);
+
+        if (! File::exists($absolutePath)) {
+            return null;
+        }
+
+        return Storage::disk('public')->url($relativePath).'?v='.File::lastModified($absolutePath);
     }
 }

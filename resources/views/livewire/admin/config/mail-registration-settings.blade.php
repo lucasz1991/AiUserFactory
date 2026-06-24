@@ -256,6 +256,72 @@
         </button>
     </div>
 
+    <x-dialog-modal wire:model="showVerificationMailboxSessionModal" maxWidth="6xl">
+        <x-slot name="title">
+            Webmail-Session beobachten
+        </x-slot>
+
+        <x-slot name="content">
+            <div class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(360px,460px)]">
+                <div class="overflow-hidden rounded-lg border border-slate-200 bg-slate-950">
+                    @if(data_get($verificationMailboxSessionResult, 'screenshotUrl'))
+                        <img src="{{ data_get($verificationMailboxSessionResult, 'screenshotUrl') }}" alt="Webmail Live Screenshot" class="aspect-video w-full object-contain">
+                    @else
+                        <div class="flex aspect-video items-center justify-center text-sm font-semibold text-slate-300">
+                            Noch kein Screenshot verfuegbar.
+                        </div>
+                    @endif
+                </div>
+
+                <div class="space-y-4">
+                    <div class="rounded-lg border border-slate-200 bg-white p-4">
+                        <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Status</div>
+                        <div class="mt-2 text-sm font-semibold text-slate-900">
+                            {{ data_get($verificationMailboxSessionResult, 'statusMessage', 'Noch kein Webmail-Sessionlauf gestartet.') }}
+                        </div>
+                        <div class="mt-2 text-xs text-slate-500">
+                            {{ data_get($verificationMailboxSessionResult, 'providerKey', $verificationMailboxProvider) }} · {{ data_get($verificationMailboxSessionResult, 'activeBrowserEngine', data_get($verificationMailboxSessionResult, 'requestedBrowserEngine', '-')) }}
+                        </div>
+                        <div class="mt-1 text-xs text-slate-500">
+                            Script: {{ data_get($verificationMailboxSessionResult, 'scriptName', 'webmail_session.cjs') }} v{{ data_get($verificationMailboxSessionResult, 'scriptVersion', 1) }}
+                        </div>
+                        <div class="mt-2 text-xs text-slate-500">
+                            Cookies: {{ data_get($verificationMailboxSessionResult, 'cookieCount', data_get($verificationMailboxSessionResult, 'sessionSummary.cookieCount', 0)) }}
+                        </div>
+                    </div>
+
+                    @if(!empty($verificationMailboxSessionResult['notes']))
+                        <div class="rounded-lg border border-slate-200 bg-slate-50 p-4 text-xs text-slate-700">
+                            <div class="font-semibold uppercase tracking-wide text-slate-500">Notizen</div>
+                            <ul class="mt-2 list-disc space-y-1 pl-5">
+                                @foreach($verificationMailboxSessionResult['notes'] as $note)
+                                    <li>{{ $note }}</li>
+                                @endforeach
+                            </ul>
+                        </div>
+                    @endif
+
+                    @if(!empty($verificationMailboxSessionResult['warnings']))
+                        <div class="rounded-lg border border-amber-200 bg-amber-50 p-4 text-xs text-amber-950">
+                            <div class="font-semibold uppercase tracking-wide text-amber-700">Hinweise</div>
+                            <ul class="mt-2 list-disc space-y-1 pl-5">
+                                @foreach($verificationMailboxSessionResult['warnings'] as $warning)
+                                    <li>{{ $warning }}</li>
+                                @endforeach
+                            </ul>
+                        </div>
+                    @endif
+                </div>
+            </div>
+        </x-slot>
+
+        <x-slot name="footer">
+            <button type="button" wire:click="closeVerificationMailboxSessionModal" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">
+                Schliessen
+            </button>
+        </x-slot>
+    </x-dialog-modal>
+
     <x-dialog-modal wire:model="showRegistrationRunModal" maxWidth="6xl">
         <x-slot name="title">
             Mail-Registrierung beobachten

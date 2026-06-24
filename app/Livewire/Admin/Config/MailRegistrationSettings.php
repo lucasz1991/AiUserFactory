@@ -46,6 +46,7 @@ class MailRegistrationSettings extends Component
     public ?string $registrationRunId = null;
     public array $registrationRunStatus = [];
     public array $verificationMailboxSessionResult = [];
+    public bool $showVerificationMailboxSessionModal = false;
 
     public function mount(MailAccountRegistrationRunner $runner): void
     {
@@ -142,6 +143,13 @@ class MailRegistrationSettings extends Component
                 'username' => ($mailbox['username'] ?? '') ?: ($mailbox['email'] ?? ''),
                 'password' => $password,
                 'webmailUrl' => $mailbox['webmail_url'] ?? '',
+                'browserEngine' => $settings['browser_engine'] ?? 'cloak-with-chrome-fallback',
+                'cloakHumanizeEnabled' => (bool) ($settings['cloak_humanize_enabled'] ?? false),
+                'cloakHumanPreset' => $settings['cloak_human_preset'] ?? '',
+                'headlessEnabled' => (bool) ($settings['headless_enabled'] ?? false),
+                'livePreviewEnabled' => (bool) ($settings['live_preview_enabled'] ?? true),
+                'navigationTimeoutMs' => ((int) ($settings['navigation_timeout_seconds'] ?? 120)) * 1000,
+                'observationTimeoutMs' => min(180000, max(30000, ((int) ($settings['observation_timeout_seconds'] ?? 60)) * 1000)),
             ], 'master-mailbox-webmail');
 
             if (! empty($result['encryptedSessionPayload'])) {
@@ -152,6 +160,7 @@ class MailRegistrationSettings extends Component
 
             unset($result['encryptedSessionPayload']);
             $this->verificationMailboxSessionResult = $result;
+            $this->showVerificationMailboxSessionModal = true;
 
             $this->dispatch(
                 'showAlert',
@@ -165,9 +174,15 @@ class MailRegistrationSettings extends Component
                 'warnings' => [$exception->getMessage()],
                 'notes' => [],
             ];
+            $this->showVerificationMailboxSessionModal = true;
 
             $this->dispatch('showAlert', 'Master-Webmail-Session konnte nicht gespeichert werden.', 'error');
         }
+    }
+
+    public function closeVerificationMailboxSessionModal(): void
+    {
+        $this->showVerificationMailboxSessionModal = false;
     }
 
     public function render()
