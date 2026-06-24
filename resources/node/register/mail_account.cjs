@@ -29,11 +29,9 @@ const SUBMIT_DELAY_MS = 1500;
 const MAIL_ACCOUNT_SCRIPT_NAME = 'mail_account.cjs';
 const MAIL_ACCOUNT_SCRIPT_VERSION = 2;
 const MAIL_ACCOUNT_SCRIPT_VERSION_LABEL = `${MAIL_ACCOUNT_SCRIPT_NAME} v${MAIL_ACCOUNT_SCRIPT_VERSION}`;
-const DEFAULT_VERIFICATION_WEBMAIL_CHECK_DELAY_MS = 5 * 60 * 1000;
-
 const runtimeConfigPath = process.argv[2] || '';
 const statusEvents = [];
-let lastLivePreviewAt = 0;
+const lastLivePreviewByPath = new Map();
 let activeBrowserEngine = null;
 let requestedBrowserEngine = null;
 let browserFallbackReason = null;
@@ -136,14 +134,13 @@ async function pauseStep() {
   await sleep(STEP_DELAY_MS);
 }
 
-async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = false) {
-  const livePreviewPath = normalizeText(runtimeConfig.livePreviewPath);
-
+async function captureScreenshotToPath(page, runtimeConfig = {}, livePreviewPath = '', force = false) {
   if (!page || !livePreviewPath || runtimeConfig.livePreviewEnabled === false) {
     return {};
   }
 
   const now = Date.now();
+  const lastLivePreviewAt = lastLivePreviewByPath.get(livePreviewPath) || 0;
 
   if (!force && now - lastLivePreviewAt < LIVE_PREVIEW_MIN_INTERVAL_MS) {
     return {};
@@ -157,7 +154,7 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
       type: 'png',
     });
 
-    lastLivePreviewAt = now;
+    lastLivePreviewByPath.set(livePreviewPath, now);
 
     return {
       liveScreenshotPath: livePreviewPath,
@@ -168,6 +165,14 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
       liveScreenshotError: normalizeText(error?.message || String(error)),
     };
   }
+}
+
+async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = false) {
+  return captureScreenshotToPath(page, runtimeConfig, normalizeText(runtimeConfig.livePreviewPath), force);
+}
+
+async function captureWebmailLivePreviewScreenshot(page, runtimeConfig = {}, force = false) {
+  return captureScreenshotToPath(page, runtimeConfig, normalizeText(runtimeConfig.webmailLivePreviewPath), force);
 }
 
 function truncateText(value, limit) {
@@ -2554,10 +2559,18 @@ async function fillFirstVisibleInputByHints(page, hints, value, timeoutMs = 1200
   return true;
 }
 
-async function waitForVerificationEmailInWebmail(page, runtimeConfig, timeoutMs = 120000) {
+async function waitForVerificationEmailInWebmail(page, runtimeConfig, timeoutMs = 120000, primaryPage = null) {
   const stopAt = Date.now() + Math.max(10000, Number(timeoutMs) || 120000);
+  const restorePrimaryPage = async () => {
+    if (primaryPage) {
+      await primaryPage.bringToFront().catch(() => {});
+    }
+  };
 
   while (Date.now() < stopAt) {
+    await captureWebmailLivePreviewScreenshot(page, runtimeConfig, false);
+    await restorePrimaryPage();
+
     const result = await page.evaluate(() => {
       const text = document.body?.innerText || '';
       const normalized = text.replace(/\s+/g, ' ').trim();
@@ -2583,8 +2596,10 @@ async function waitForVerificationEmailInWebmail(page, runtimeConfig, timeoutMs 
         {
           title: await page.title().catch(() => null),
           finalUrl: page.url(),
+          ...(await captureWebmailLivePreviewScreenshot(page, runtimeConfig, true)),
         },
       );
+      await restorePrimaryPage();
 
       return {
         detected: true,
@@ -2599,6 +2614,7 @@ async function waitForVerificationEmailInWebmail(page, runtimeConfig, timeoutMs 
       'inbox',
       'posteingang',
     ], 'button, [role="button"], a', true).catch(() => false);
+    await restorePrimaryPage();
 
     await sleep(5000);
   }
@@ -2610,8 +2626,10 @@ async function waitForVerificationEmailInWebmail(page, runtimeConfig, timeoutMs 
     {
       title: await page.title().catch(() => null),
       finalUrl: page.url(),
+      ...(await captureWebmailLivePreviewScreenshot(page, runtimeConfig, true)),
     },
   );
+  await restorePrimaryPage();
 
   return {
     detected: false,
@@ -2620,7 +2638,7 @@ async function waitForVerificationEmailInWebmail(page, runtimeConfig, timeoutMs 
   };
 }
 
-async function openVerificationWebmailPage(browser, runtimeConfig) {
+async function openVerificationWebmailPage(browser, runtimeConfig, primaryPage = null) {
   const mailbox = verificationMailboxFromConfig(runtimeConfig);
 
   if (!mailbox.enabled || !mailbox.webmailUrl) {
@@ -2631,6 +2649,12 @@ async function openVerificationWebmailPage(browser, runtimeConfig) {
   }
 
   const page = await browser.newPage();
+  const restorePrimaryPage = async () => {
+    if (primaryPage) {
+      await primaryPage.bringToFront().catch(() => {});
+    }
+  };
+
   await page.setViewport(DEFAULT_VIEWPORT);
   await page.bringToFront().catch(() => {});
   page.setDefaultNavigationTimeout(Math.max(15000, Number(runtimeConfig.navigationTimeoutMs || 120000)));
@@ -2639,7 +2663,8 @@ async function openVerificationWebmailPage(browser, runtimeConfig) {
     waitUntil: 'domcontentloaded',
     timeout: Math.max(15000, Number(runtimeConfig.navigationTimeoutMs || 120000)),
   });
-  await page.bringToFront().catch(() => {});
+  await captureWebmailLivePreviewScreenshot(page, runtimeConfig, true);
+  await restorePrimaryPage();
 
   progress(
     runtimeConfig,
@@ -2648,11 +2673,14 @@ async function openVerificationWebmailPage(browser, runtimeConfig) {
     {
       title: await page.title().catch(() => null),
       finalUrl: page.url(),
+      ...(await captureWebmailLivePreviewScreenshot(page, runtimeConfig, true)),
     },
   );
 
   if (mailbox.username) {
     await fillFirstVisibleInputByHints(page, ['email', 'mail', 'user', 'login', 'username'], mailbox.username).catch(() => false);
+    await captureWebmailLivePreviewScreenshot(page, runtimeConfig, true);
+    await restorePrimaryPage();
   }
 
   if (mailbox.username) {
@@ -2666,10 +2694,14 @@ async function openVerificationWebmailPage(browser, runtimeConfig) {
       'anmelden',
     ]).catch(() => false);
     await pauseStep();
+    await captureWebmailLivePreviewScreenshot(page, runtimeConfig, true);
+    await restorePrimaryPage();
   }
 
   if (mailbox.password) {
     await fillFirstVisibleInputByHints(page, ['password', 'passwort'], mailbox.password).catch(() => false);
+    await captureWebmailLivePreviewScreenshot(page, runtimeConfig, true);
+    await restorePrimaryPage();
   }
 
   if (mailbox.password) {
@@ -2682,14 +2714,19 @@ async function openVerificationWebmailPage(browser, runtimeConfig) {
       'continue',
       'weiter',
     ]).catch(() => false);
+    await captureWebmailLivePreviewScreenshot(page, runtimeConfig, true);
+    await restorePrimaryPage();
   }
 
   await sleep(3000);
+  await captureWebmailLivePreviewScreenshot(page, runtimeConfig, true);
+  await restorePrimaryPage();
 
   const waitResult = await waitForVerificationEmailInWebmail(
     page,
     runtimeConfig,
     runtimeConfig.verificationEmailWaitTimeoutMs || runtimeConfig.manualVerificationEmailWaitTimeoutMs || 120000,
+    primaryPage,
   );
 
   return {
@@ -2885,40 +2922,42 @@ async function waitForProtonManualVerification(page, browser, runtimeConfig, tim
     reason: 'email-tab-not-selected',
   };
 
-  const deferWebmailCheck = () => {
-    if (webmail.scheduled === true) {
+  const checkWebmailNow = async () => {
+    if (webmail.opened === true || webmail.checking === true || webmail.attempted === true) {
       return;
     }
 
-    const delayMs = Math.max(
-      60000,
-      Number(runtimeConfig.verificationWebmailCheckDelayMs || DEFAULT_VERIFICATION_WEBMAIL_CHECK_DELAY_MS),
+    webmail = {
+      ...webmail,
+      attempted: true,
+      checking: true,
+      reason: 'verification-webmail-check-running',
+    };
+
+    progress(
+      runtimeConfig,
+      'verification-webmail-check-started',
+      'Verifikationscode wurde angefordert; Webmail wird direkt in einem zweiten Fenster geprueft.',
+      await pageSnapshot(page, runtimeConfig, true, false),
     );
 
-    webmail = {
-      opened: false,
-      scheduled: true,
-      pending: true,
-      reason: 'verification-webmail-check-scheduled',
-      checkDueAt: new Date(Date.now() + delayMs).toISOString(),
-      delayMs,
-    };
+    try {
+      webmail = {
+        ...(await openVerificationWebmailPage(browser, runtimeConfig, page)),
+        attempted: true,
+      };
+    } catch (error) {
+      webmail = {
+        attempted: true,
+        opened: false,
+        reason: 'verification-webmail-check-failed',
+        error: normalizeText(error?.message || String(error)),
+      };
+    } finally {
+      await page.bringToFront().catch(() => {});
+      await captureLivePreviewScreenshot(page, runtimeConfig, true);
+    }
   };
-
-  const waitingResult = () => ({
-    completed: false,
-    providerBlocked: status.providerBlocked === true,
-    reason: 'verification-webmail-check-scheduled',
-    message: 'Proton-Verifikationscode wurde angefordert; Webmail-Check ist als verzoegerter Job eingeplant.',
-    url: status.url || page.url(),
-    emailTabSelected,
-    verificationEmail,
-    webmailOpened: false,
-    webmailMailDetected: false,
-    verificationCode: '',
-    webmailCheckPending: true,
-    verificationWebmailCheckDueAt: webmail.checkDueAt || null,
-  });
 
   const tryEmailVerificationTab = async () => {
     const selected = await selectProtonEmailVerificationTab(page);
@@ -2939,9 +2978,11 @@ async function waitForProtonManualVerification(page, browser, runtimeConfig, tim
 
     if (
       verificationEmail.submitted === true
-      && webmail.pending !== true
+      && webmail.opened !== true
+      && webmail.checking !== true
+      && webmail.attempted !== true
     ) {
-      deferWebmailCheck();
+      await checkWebmailNow();
     }
 
     return true;
@@ -2956,23 +2997,11 @@ async function waitForProtonManualVerification(page, browser, runtimeConfig, tim
     emailTabSelected ? 'proton-email-verification-selected' : 'proton-email-verification-tab-pending',
     emailTabSelected
       ? (verificationEmail.submitted === true
-        ? 'Proton-Tab Email wurde ausgewaehlt, Verifikationscode wurde angefordert und Webmail-Check wurde eingeplant.'
+        ? 'Proton-Tab Email wurde ausgewaehlt, Verifikationscode wurde angefordert und Webmail wird direkt geprueft.'
         : 'Proton-Tab Email wurde ausgewaehlt; warte auf erfolgreichen Submit fuer den Verifikationscode.')
       : 'Proton verlangt Email-Verifikation; der Email-Tab wird im Human-Verification-Dialog gesucht.',
     await pageSnapshot(page, runtimeConfig, true, !emailTabSelected),
   );
-
-  if (verificationEmail.submitted === true && webmail.pending === true) {
-    progress(
-      runtimeConfig,
-      'verification-webmail-check-scheduled',
-      `Webmail-Check fuer die Verifikations-E-Mail wurde fuer ${webmail.checkDueAt} eingeplant.`,
-      await pageSnapshot(page, runtimeConfig, true, false),
-      'waiting',
-    );
-
-    return waitingResult();
-  }
 
   while (status.completed === null && Date.now() < stopAt) {
     await sleep(2500);
@@ -2991,23 +3020,20 @@ async function waitForProtonManualVerification(page, browser, runtimeConfig, tim
       }
     }
 
-    if (verificationEmail.submitted === true && webmail.pending === true) {
-      progress(
-        runtimeConfig,
-        'verification-webmail-check-scheduled',
-        `Webmail-Check fuer die Verifikations-E-Mail wurde fuer ${webmail.checkDueAt} eingeplant.`,
-        await pageSnapshot(page, runtimeConfig, true, false),
-        'waiting',
-      );
-
-      return waitingResult();
+    if (
+      verificationEmail.submitted === true
+      && webmail.opened !== true
+      && webmail.checking !== true
+      && webmail.attempted !== true
+    ) {
+      await checkWebmailNow();
     }
 
     progress(
       runtimeConfig,
       'proton-email-verification-required',
       verificationEmail.submitted === true
-        ? 'Verifikationscode wurde angefordert; Webmail-Check wird eingeplant.'
+        ? 'Verifikationscode wurde angefordert; Proton-Fenster bleibt offen, Webmail wurde im zweiten Fenster geprueft.'
         : emailTabSelected
         ? 'Email-Tab ist aktiv; warte auf erfolgreichen Submit fuer den Verifikationscode.'
         : 'Warte auf Email-Tab im Human-Verification-Dialog; CAPTCHA wird nicht verwendet.',
@@ -3046,8 +3072,8 @@ async function waitForProtonManualVerification(page, browser, runtimeConfig, tim
     webmailOpened: webmail.opened === true,
     webmailMailDetected: webmail.mailDetected === true,
     verificationCode: webmail.verificationCode || '',
-    webmailCheckPending: webmail.pending === true,
-    verificationWebmailCheckDueAt: webmail.checkDueAt || null,
+    webmailCheckPending: false,
+    verificationWebmailCheckDueAt: null,
   };
 }
 
@@ -3461,7 +3487,7 @@ async function runProtonUsernameCheckProvider(page, browser, runtimeConfig, prov
       : status.available === true
       ? (passwordStep?.manualVerificationRequired && !passwordStep?.manualVerificationCompleted
         ? (passwordStep?.webmailCheckPending
-          ? 'Proton-Verifikationscode wurde angefordert; Webmail-Check wird in 5 Minuten als Job gestartet.'
+          ? 'Proton-Verifikationscode wurde angefordert; Webmail-Check laeuft.'
           : 'Proton Email-Verifikation konnte nicht abgeschlossen werden; der Lauf wurde ohne Abschluss beendet.')
         : passwordStep?.passwordStepAdvanced
         ? 'Proton-Passwort wurde gesetzt; naechster Registrierungsschritt wurde erreicht.'

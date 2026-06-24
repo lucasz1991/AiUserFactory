@@ -144,6 +144,7 @@ class MailAccountRegistrationRunner
         $stdoutPath = $runDirectory.DIRECTORY_SEPARATOR.'stdout.log';
         $stderrPath = $runDirectory.DIRECTORY_SEPARATOR.'stderr.log';
         $livePreviewPath = $publicRunDirectory.DIRECTORY_SEPARATOR.'live.png';
+        $webmailLivePreviewPath = $publicRunDirectory.DIRECTORY_SEPARATOR.'live-webmail.png';
         $normalizedSubject = $this->normalizeSubject($subject);
         $verificationMailbox = is_array($settings['verification_mailbox'] ?? null) ? $settings['verification_mailbox'] : [];
 
@@ -169,6 +170,8 @@ class MailAccountRegistrationRunner
             'verificationMailbox' => $this->runtimeVerificationMailbox($settings['verification_mailbox'] ?? []),
             'livePreviewPath' => $livePreviewPath,
             'livePreviewRelativePath' => $this->publicScreenshotRelativePath($runId),
+            'webmailLivePreviewPath' => $webmailLivePreviewPath,
+            'webmailLivePreviewRelativePath' => $this->publicWebmailScreenshotRelativePath($runId),
             'statusPath' => $statusPath,
             'resultPath' => $resultPath,
             'scriptName' => 'mail_account.cjs',
@@ -311,6 +314,7 @@ class MailAccountRegistrationRunner
         $status['isRunning'] = in_array((string) ($status['state'] ?? ''), ['queued', 'starting', 'running'], true)
             || ($webmailCheckPending && ($status['state'] ?? null) !== 'failed');
         $status['screenshotUrl'] = $this->screenshotUrl($runId);
+        $status['webmailScreenshotUrl'] = $this->webmailScreenshotUrl($runId);
         $status['debugDomUrl'] = $this->debugDomUrl($runId, $status);
         $status['result'] = $this->resultSummary($result);
 
@@ -734,6 +738,11 @@ class MailAccountRegistrationRunner
         return 'mail-registration/runs/'.$runId.'/live.png';
     }
 
+    protected function publicWebmailScreenshotRelativePath(string $runId): string
+    {
+        return 'mail-registration/runs/'.$runId.'/live-webmail.png';
+    }
+
     protected function publicDebugDomRelativePath(string $runId): string
     {
         return 'mail-registration/runs/'.$runId.'/debug-dom.json';
@@ -742,6 +751,18 @@ class MailAccountRegistrationRunner
     protected function screenshotUrl(string $runId): ?string
     {
         $relativePath = $this->publicScreenshotRelativePath($runId);
+        $absolutePath = storage_path('app/public/'.$relativePath);
+
+        if (! File::exists($absolutePath)) {
+            return null;
+        }
+
+        return Storage::disk('public')->url($relativePath).'?v='.File::lastModified($absolutePath);
+    }
+
+    protected function webmailScreenshotUrl(string $runId): ?string
+    {
+        $relativePath = $this->publicWebmailScreenshotRelativePath($runId);
         $absolutePath = storage_path('app/public/'.$relativePath);
 
         if (! File::exists($absolutePath)) {

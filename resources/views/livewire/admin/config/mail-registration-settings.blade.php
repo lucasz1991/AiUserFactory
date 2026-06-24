@@ -379,18 +379,36 @@
                 @if(data_get($registrationRunStatus, 'isRunning')) wire:poll.2500ms="refreshRegistrationRun" @endif
                 class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(420px,560px)]"
             >
-                <div class="overflow-hidden rounded-lg border border-slate-200 bg-slate-950">
-                    @if(data_get($registrationRunStatus, 'screenshotUrl'))
-                        <img src="{{ data_get($registrationRunStatus, 'screenshotUrl') }}" alt="Live Screenshot" class="aspect-video w-full object-contain">
-                    @elseif(data_get($registrationRunStatus, 'livePreviewEnabled') === false)
-                        <div class="flex aspect-video items-center justify-center text-sm font-semibold text-slate-300">
-                            Live-Screenshots sind deaktiviert.
-                        </div>
-                    @else
-                        <div class="flex aspect-video items-center justify-center text-sm font-semibold text-slate-300">
-                            Noch kein Screenshot verfuegbar.
-                        </div>
-                    @endif
+                <div class="grid gap-3">
+                    <div class="overflow-hidden rounded-lg border border-slate-200 bg-slate-950">
+                        <div class="border-b border-slate-800 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-300">Registrierung</div>
+                        @if(data_get($registrationRunStatus, 'screenshotUrl'))
+                            <img src="{{ data_get($registrationRunStatus, 'screenshotUrl') }}" alt="Registrierung Live Screenshot" class="aspect-video w-full object-contain">
+                        @elseif(data_get($registrationRunStatus, 'livePreviewEnabled') === false)
+                            <div class="flex aspect-video items-center justify-center text-sm font-semibold text-slate-300">
+                                Live-Screenshots sind deaktiviert.
+                            </div>
+                        @else
+                            <div class="flex aspect-video items-center justify-center text-sm font-semibold text-slate-300">
+                                Noch kein Screenshot verfuegbar.
+                            </div>
+                        @endif
+                    </div>
+
+                    <div class="overflow-hidden rounded-lg border border-slate-200 bg-slate-950">
+                        <div class="border-b border-slate-800 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-300">Webmail</div>
+                        @if(data_get($registrationRunStatus, 'webmailScreenshotUrl'))
+                            <img src="{{ data_get($registrationRunStatus, 'webmailScreenshotUrl') }}" alt="Webmail Live Screenshot" class="aspect-video w-full object-contain">
+                        @elseif(data_get($registrationRunStatus, 'livePreviewEnabled') === false)
+                            <div class="flex aspect-video items-center justify-center text-sm font-semibold text-slate-300">
+                                Live-Screenshots sind deaktiviert.
+                            </div>
+                        @else
+                            <div class="flex aspect-video items-center justify-center text-sm font-semibold text-slate-300">
+                                Webmail-Fenster noch nicht geoeffnet.
+                            </div>
+                        @endif
+                    </div>
                 </div>
 
                 <div class="space-y-4">
