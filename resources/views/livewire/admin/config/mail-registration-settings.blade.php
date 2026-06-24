@@ -287,6 +287,18 @@
                         <div class="mt-1 text-xs text-slate-500">
                             Script: {{ data_get($registrationRunStatus, 'scriptVersionLabel', 'mail_account.cjs v2') }}
                         </div>
+                        @if(data_get($registrationRunStatus, 'result.webmailCheckPending') && data_get($registrationRunStatus, 'result.verificationWebmailCheckDueAt'))
+                            <div class="mt-2 text-xs font-semibold text-amber-700">
+                                Webmail-Check faellig: {{ data_get($registrationRunStatus, 'result.verificationWebmailCheckDueAt') }}
+                            </div>
+                        @endif
+                        @if(data_get($registrationRunStatus, 'debugDomUrl'))
+                            <div class="mt-3">
+                                <a href="{{ data_get($registrationRunStatus, 'debugDomUrl') }}" download="mail-registration-dom.json" class="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
+                                    DOM herunterladen
+                                </a>
+                            </div>
+                        @endif
                     </div>
 
                     <div class="max-h-[560px] overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-4">

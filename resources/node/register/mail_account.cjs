@@ -29,6 +29,7 @@ const SUBMIT_DELAY_MS = 1500;
 const MAIL_ACCOUNT_SCRIPT_NAME = 'mail_account.cjs';
 const MAIL_ACCOUNT_SCRIPT_VERSION = 2;
 const MAIL_ACCOUNT_SCRIPT_VERSION_LABEL = `${MAIL_ACCOUNT_SCRIPT_NAME} v${MAIL_ACCOUNT_SCRIPT_VERSION}`;
+const DEFAULT_VERIFICATION_WEBMAIL_CHECK_DELAY_MS = 5 * 60 * 1000;
 
 const runtimeConfigPath = process.argv[2] || '';
 const statusEvents = [];
@@ -2247,6 +2248,204 @@ async function waitForVisibleEmailInputIncludingFrames(page, timeoutMs = 15000) 
   return input;
 }
 
+async function clickProtonGetVerificationCodeButton(pageOrFrame) {
+  const clicked = await pageOrFrame.evaluate(() => {
+    const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const visible = (element) => {
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+
+      return rect.width > 0
+        && rect.height > 0
+        && style.visibility !== 'hidden'
+        && style.display !== 'none'
+        && !element.disabled;
+    };
+    const textFor = (element) => normalize([
+      element.innerText,
+      element.textContent,
+      element.value,
+      element.getAttribute('aria-label'),
+      element.getAttribute('title'),
+      element.getAttribute('data-title'),
+    ].join(' '));
+    const scoreButton = (element, index) => {
+      const text = textFor(element);
+      let score = 0;
+
+      if (/get verification code/.test(text)) {
+        score += 200;
+      }
+
+      if (/send verification code|send code|verification code/.test(text)) {
+        score += 120;
+      }
+
+      if (/code/.test(text)) {
+        score += 40;
+      }
+
+      if (element.closest('.modal-two-content, [id^="modal-"][id$="-description"], [role="dialog"], [aria-modal="true"], .modal')) {
+        score += 50;
+      }
+
+      if (element.tagName?.toLowerCase() === 'button') {
+        score += 20;
+      }
+
+      if (/next|continue|weiter/.test(text) && !/code/.test(text)) {
+        score -= 80;
+      }
+
+      return {
+        element,
+        score,
+        index,
+      };
+    };
+    const target = Array.from(document.querySelectorAll('button, [role="button"], input[type="button"], input[type="submit"]'))
+      .filter(visible)
+      .map(scoreButton)
+      .filter((candidate) => candidate.score > 0)
+      .sort((left, right) => right.score - left.score || left.index - right.index)[0]?.element || null;
+
+    if (!target) {
+      return false;
+    }
+
+    target.scrollIntoView({ block: 'center', inline: 'center' });
+    target.focus?.({ preventScroll: true });
+    const rect = target.getBoundingClientRect();
+    const clientX = rect.left + rect.width / 2;
+    const clientY = rect.top + rect.height / 2;
+    const eventInit = {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      view: window,
+      clientX,
+      clientY,
+      button: 0,
+      buttons: 1,
+    };
+
+    if (typeof PointerEvent === 'function') {
+      target.dispatchEvent(new PointerEvent('pointerdown', { ...eventInit, pointerId: 1, pointerType: 'mouse', isPrimary: true }));
+    }
+
+    target.dispatchEvent(new MouseEvent('mousedown', eventInit));
+
+    if (typeof PointerEvent === 'function') {
+      target.dispatchEvent(new PointerEvent('pointerup', { ...eventInit, pointerId: 1, pointerType: 'mouse', isPrimary: true, buttons: 0 }));
+    }
+
+    target.dispatchEvent(new MouseEvent('mouseup', { ...eventInit, buttons: 0 }));
+    target.dispatchEvent(new MouseEvent('click', { ...eventInit, buttons: 0 }));
+    target.click();
+
+    return true;
+  }).catch(() => false);
+
+  if (clicked) {
+    await pauseStep();
+  }
+
+  return clicked;
+}
+
+async function clickProtonGetVerificationCodeButtonIncludingFrames(page) {
+  if (await clickProtonGetVerificationCodeButton(page)) {
+    return true;
+  }
+
+  for (const frame of page.frames()) {
+    if (frame === page.mainFrame()) {
+      continue;
+    }
+
+    if (await clickProtonGetVerificationCodeButton(frame)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+async function protonVerificationCodeRequestStatus(page) {
+  return page.evaluate(() => {
+    const text = document.body?.innerText || '';
+    const normalized = text.replace(/\s+/g, ' ').trim().toLowerCase();
+    const visibleInputs = Array.from(document.querySelectorAll('input')).filter((input) => {
+      const rect = input.getBoundingClientRect();
+      const style = window.getComputedStyle(input);
+      const haystack = [
+        input.name,
+        input.id,
+        input.autocomplete,
+        input.placeholder,
+        input.getAttribute('aria-label'),
+        input.type,
+        input.closest('label, div, form')?.innerText,
+      ].join(' ').toLowerCase();
+
+      return rect.width > 0
+        && rect.height > 0
+        && style.visibility !== 'hidden'
+        && style.display !== 'none'
+        && !input.disabled
+        && /(code|verification|otp|one-time|token|bestätigung|bestaetigung)/.test(haystack);
+    });
+
+    if (
+      visibleInputs.length > 0
+      || /verification code|enter.*code|code.*sent|we sent.*code|check your email|one-time verification|bestätigungscode|bestaetigungscode|code eingeben/.test(normalized)
+    ) {
+      return {
+        ready: true,
+        reason: 'verification-code-page-visible',
+        message: text.slice(0, 1200),
+      };
+    }
+
+    if (/get verification code|send verification code|send code/.test(normalized)) {
+      return {
+        ready: false,
+        reason: 'verification-code-request-button-still-visible',
+        message: text.slice(0, 1200),
+      };
+    }
+
+    return {
+      ready: false,
+      reason: 'waiting-for-verification-code-page',
+      message: text.slice(0, 1200),
+    };
+  }).catch((error) => ({
+    ready: false,
+    reason: 'verification-code-status-error',
+    message: normalizeText(error?.message || String(error)),
+  }));
+}
+
+async function waitForProtonVerificationCodeRequest(page, runtimeConfig, timeoutMs = 30000) {
+  const stopAt = Date.now() + Math.max(5000, Number(timeoutMs) || 30000);
+  let status = await protonVerificationCodeRequestStatus(page);
+
+  while (!status.ready && Date.now() < stopAt) {
+    await sleep(1000);
+    status = await protonVerificationCodeRequestStatus(page);
+
+    progress(
+      runtimeConfig,
+      'proton-verification-code-request-pending',
+      'Warte auf Proton-Bestaetigungsseite fuer den Verifikationscode.',
+      await pageSnapshot(page, runtimeConfig, false, true),
+    );
+  }
+
+  return status;
+}
+
 async function fillProtonVerificationEmail(page, runtimeConfig) {
   const mailbox = verificationMailboxFromConfig(runtimeConfig);
 
@@ -2279,27 +2478,34 @@ async function fillProtonVerificationEmail(page, runtimeConfig) {
     await pageSnapshot(page, runtimeConfig, true, false),
   );
 
-  const submitted = await clickFirstMatchingButtonIncludingFrames(page, [
-    'get verification code',
-    'send verification code',
-    'send code',
-    'send email',
-    'send',
-    'continue',
-    'next',
-    'weiter',
-    'verify',
-  ]);
+  const clicked = await clickProtonGetVerificationCodeButtonIncludingFrames(page);
+  const requestStatus = clicked
+    ? await waitForProtonVerificationCodeRequest(
+      page,
+      runtimeConfig,
+      Math.max(10000, Number(runtimeConfig.protonVerificationCodeRequestTimeoutMs || 30000)),
+    )
+    : {
+      ready: false,
+      reason: 'get-verification-code-button-not-found',
+    };
+  const submitted = clicked && requestStatus.ready === true;
 
-  if (submitted) {
-    await pauseStep();
-  }
+  progress(
+    runtimeConfig,
+    submitted ? 'proton-verification-code-requested' : 'proton-verification-code-request-failed',
+    submitted
+      ? 'Proton-Bestaetigungsseite fuer den Verifikationscode ist sichtbar.'
+      : `Verifikationscode konnte noch nicht angefordert werden: ${requestStatus.reason}.`,
+    await pageSnapshot(page, runtimeConfig, true, !submitted),
+    submitted ? 'running' : 'running',
+  );
 
   return {
     filled: enteredEmail === mailbox.email,
     submitted,
     email: mailbox.email,
-    reason: submitted ? 'verification-email-submitted' : 'verification-email-entered',
+    reason: submitted ? 'verification-email-submitted' : requestStatus.reason,
   };
 }
 
@@ -2426,12 +2632,14 @@ async function openVerificationWebmailPage(browser, runtimeConfig) {
 
   const page = await browser.newPage();
   await page.setViewport(DEFAULT_VIEWPORT);
+  await page.bringToFront().catch(() => {});
   page.setDefaultNavigationTimeout(Math.max(15000, Number(runtimeConfig.navigationTimeoutMs || 120000)));
 
   await page.goto(mailbox.webmailUrl, {
     waitUntil: 'domcontentloaded',
     timeout: Math.max(15000, Number(runtimeConfig.navigationTimeoutMs || 120000)),
   });
+  await page.bringToFront().catch(() => {});
 
   progress(
     runtimeConfig,
@@ -2676,7 +2884,41 @@ async function waitForProtonManualVerification(page, browser, runtimeConfig, tim
     opened: false,
     reason: 'email-tab-not-selected',
   };
-  let webmailAttempted = false;
+
+  const deferWebmailCheck = () => {
+    if (webmail.scheduled === true) {
+      return;
+    }
+
+    const delayMs = Math.max(
+      60000,
+      Number(runtimeConfig.verificationWebmailCheckDelayMs || DEFAULT_VERIFICATION_WEBMAIL_CHECK_DELAY_MS),
+    );
+
+    webmail = {
+      opened: false,
+      scheduled: true,
+      pending: true,
+      reason: 'verification-webmail-check-scheduled',
+      checkDueAt: new Date(Date.now() + delayMs).toISOString(),
+      delayMs,
+    };
+  };
+
+  const waitingResult = () => ({
+    completed: false,
+    providerBlocked: status.providerBlocked === true,
+    reason: 'verification-webmail-check-scheduled',
+    message: 'Proton-Verifikationscode wurde angefordert; Webmail-Check ist als verzoegerter Job eingeplant.',
+    url: status.url || page.url(),
+    emailTabSelected,
+    verificationEmail,
+    webmailOpened: false,
+    webmailMailDetected: false,
+    verificationCode: '',
+    webmailCheckPending: true,
+    verificationWebmailCheckDueAt: webmail.checkDueAt || null,
+  });
 
   const tryEmailVerificationTab = async () => {
     const selected = await selectProtonEmailVerificationTab(page);
@@ -2697,10 +2939,9 @@ async function waitForProtonManualVerification(page, browser, runtimeConfig, tim
 
     if (
       verificationEmail.submitted === true
-      && !webmailAttempted
+      && webmail.pending !== true
     ) {
-      webmailAttempted = true;
-      webmail = await openVerificationWebmailPage(browser, runtimeConfig);
+      deferWebmailCheck();
     }
 
     return true;
@@ -2715,11 +2956,23 @@ async function waitForProtonManualVerification(page, browser, runtimeConfig, tim
     emailTabSelected ? 'proton-email-verification-selected' : 'proton-email-verification-tab-pending',
     emailTabSelected
       ? (verificationEmail.submitted === true
-        ? 'Proton-Tab Email wurde ausgewaehlt, Verifikationscode wurde angefordert und Webmail wird beobachtet.'
+        ? 'Proton-Tab Email wurde ausgewaehlt, Verifikationscode wurde angefordert und Webmail-Check wurde eingeplant.'
         : 'Proton-Tab Email wurde ausgewaehlt; warte auf erfolgreichen Submit fuer den Verifikationscode.')
       : 'Proton verlangt Email-Verifikation; der Email-Tab wird im Human-Verification-Dialog gesucht.',
     await pageSnapshot(page, runtimeConfig, true, !emailTabSelected),
   );
+
+  if (verificationEmail.submitted === true && webmail.pending === true) {
+    progress(
+      runtimeConfig,
+      'verification-webmail-check-scheduled',
+      `Webmail-Check fuer die Verifikations-E-Mail wurde fuer ${webmail.checkDueAt} eingeplant.`,
+      await pageSnapshot(page, runtimeConfig, true, false),
+      'waiting',
+    );
+
+    return waitingResult();
+  }
 
   while (status.completed === null && Date.now() < stopAt) {
     await sleep(2500);
@@ -2738,11 +2991,23 @@ async function waitForProtonManualVerification(page, browser, runtimeConfig, tim
       }
     }
 
+    if (verificationEmail.submitted === true && webmail.pending === true) {
+      progress(
+        runtimeConfig,
+        'verification-webmail-check-scheduled',
+        `Webmail-Check fuer die Verifikations-E-Mail wurde fuer ${webmail.checkDueAt} eingeplant.`,
+        await pageSnapshot(page, runtimeConfig, true, false),
+        'waiting',
+      );
+
+      return waitingResult();
+    }
+
     progress(
       runtimeConfig,
       'proton-email-verification-required',
       verificationEmail.submitted === true
-        ? 'Verifikationscode wurde angefordert; warte auf Abschluss der Email-Verifikation.'
+        ? 'Verifikationscode wurde angefordert; Webmail-Check wird eingeplant.'
         : emailTabSelected
         ? 'Email-Tab ist aktiv; warte auf erfolgreichen Submit fuer den Verifikationscode.'
         : 'Warte auf Email-Tab im Human-Verification-Dialog; CAPTCHA wird nicht verwendet.',
@@ -2765,6 +3030,8 @@ async function waitForProtonManualVerification(page, browser, runtimeConfig, tim
       webmailOpened: webmail.opened === true,
       webmailMailDetected: webmail.mailDetected === true,
       verificationCode: webmail.verificationCode || '',
+      webmailCheckPending: false,
+      verificationWebmailCheckDueAt: null,
     };
   }
 
@@ -2779,6 +3046,8 @@ async function waitForProtonManualVerification(page, browser, runtimeConfig, tim
     webmailOpened: webmail.opened === true,
     webmailMailDetected: webmail.mailDetected === true,
     verificationCode: webmail.verificationCode || '',
+    webmailCheckPending: webmail.pending === true,
+    verificationWebmailCheckDueAt: webmail.checkDueAt || null,
   };
 }
 
@@ -2859,6 +3128,9 @@ async function completeProtonPasswordStep(page, browser, runtimeConfig) {
       verificationWebmailOpened: manualVerification.webmailOpened === true,
       verificationWebmailMailDetected: manualVerification.webmailMailDetected === true,
       verificationCode: manualVerification.verificationCode || '',
+      verificationEmailSubmitted: manualVerification.verificationEmail?.submitted === true,
+      webmailCheckPending: manualVerification.webmailCheckPending === true,
+      verificationWebmailCheckDueAt: manualVerification.verificationWebmailCheckDueAt || null,
     };
   }
 
@@ -2885,6 +3157,9 @@ async function completeProtonPasswordStep(page, browser, runtimeConfig) {
       verificationWebmailOpened: false,
       verificationWebmailMailDetected: false,
       verificationCode: '',
+      verificationEmailSubmitted: false,
+      webmailCheckPending: false,
+      verificationWebmailCheckDueAt: null,
     };
   }
 
@@ -2914,6 +3189,9 @@ async function completeProtonPasswordStep(page, browser, runtimeConfig) {
     verificationWebmailOpened: false,
     verificationWebmailMailDetected: false,
     verificationCode: '',
+    verificationEmailSubmitted: false,
+    webmailCheckPending: false,
+    verificationWebmailCheckDueAt: null,
   };
 }
 
@@ -3168,9 +3446,12 @@ async function runProtonUsernameCheckProvider(page, browser, runtimeConfig, prov
     manualVerificationCompleted: passwordStep?.manualVerificationCompleted || false,
     emailVerificationSelected: passwordStep?.emailVerificationSelected || false,
     verificationEmailEntered: passwordStep?.verificationEmailEntered || false,
+    verificationEmailSubmitted: passwordStep?.verificationEmailSubmitted || false,
     verificationWebmailOpened: passwordStep?.verificationWebmailOpened || false,
     verificationWebmailMailDetected: passwordStep?.verificationWebmailMailDetected || false,
     verificationCode: passwordStep?.verificationCode || '',
+    webmailCheckPending: passwordStep?.webmailCheckPending || false,
+    verificationWebmailCheckDueAt: passwordStep?.verificationWebmailCheckDueAt || null,
     finalUrl: finalSnapshot.finalUrl,
     title: finalSnapshot.title,
     liveScreenshotPath: finalSnapshot.liveScreenshotPath || null,
@@ -3179,7 +3460,9 @@ async function runProtonUsernameCheckProvider(page, browser, runtimeConfig, prov
       ? 'Proton blockiert weitere Registrierungen von diesem Netzwerk. Der Lauf wurde gestoppt.'
       : status.available === true
       ? (passwordStep?.manualVerificationRequired && !passwordStep?.manualVerificationCompleted
-        ? 'Proton Email-Verifikation konnte nicht abgeschlossen werden; der Lauf wurde ohne Abschluss beendet.'
+        ? (passwordStep?.webmailCheckPending
+          ? 'Proton-Verifikationscode wurde angefordert; Webmail-Check wird in 5 Minuten als Job gestartet.'
+          : 'Proton Email-Verifikation konnte nicht abgeschlossen werden; der Lauf wurde ohne Abschluss beendet.')
         : passwordStep?.passwordStepAdvanced
         ? 'Proton-Passwort wurde gesetzt; naechster Registrierungsschritt wurde erreicht.'
         : 'Proton-Passwort wurde generiert, eingetragen und abgesendet.')
@@ -3348,9 +3631,10 @@ async function main() {
     const account = buildAccountPayload(runtimeConfig, provider, providerResult);
     const ok = providerResult.completed;
     const providerBlocked = providerResult.providerBlocked === true;
+    const webmailCheckPending = providerResult.webmailCheckPending === true;
     const result = {
       ok,
-      statusLevel: ok ? 'success' : (providerBlocked ? 'error' : 'partial'),
+      statusLevel: ok ? 'success' : (providerBlocked ? 'error' : (webmailCheckPending ? 'waiting' : 'partial')),
       statusMessage: ok
         ? (providerResult.statusMessage || 'Mail-Registrierung wurde als abgeschlossen erkannt.')
         : (providerResult.statusMessage || 'Beobachtung beendet. Eine automatische Registrierung wurde nicht bestaetigt.'),
@@ -3364,9 +3648,12 @@ async function main() {
       providerBlocked,
       emailVerificationSelected: providerResult.emailVerificationSelected ?? null,
       verificationEmailEntered: providerResult.verificationEmailEntered ?? null,
+      verificationEmailSubmitted: providerResult.verificationEmailSubmitted ?? null,
       verificationWebmailOpened: providerResult.verificationWebmailOpened ?? null,
       verificationWebmailMailDetected: providerResult.verificationWebmailMailDetected ?? null,
       verificationCode: providerResult.verificationCode ?? null,
+      webmailCheckPending,
+      verificationWebmailCheckDueAt: providerResult.verificationWebmailCheckDueAt ?? null,
       account,
       finalUrl: providerResult.finalUrl,
       title: providerResult.title,
@@ -3387,10 +3674,10 @@ async function main() {
 
     progress(
       runtimeConfig,
-      ok ? 'completed' : 'observation-ended',
+      ok ? 'completed' : (webmailCheckPending ? 'verification-webmail-check-scheduled' : 'observation-ended'),
       result.statusMessage,
       providerResult,
-      'completed',
+      ok ? 'completed' : (webmailCheckPending ? 'waiting' : 'completed'),
     );
 
     writeResult(runtimeConfig, result);

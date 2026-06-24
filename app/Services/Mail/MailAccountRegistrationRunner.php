@@ -2,7 +2,9 @@
 
 namespace App\Services\Mail;
 
+use App\Jobs\CheckMailRegistrationWebmailJob;
 use App\Models\Setting;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Process;
@@ -288,8 +290,17 @@ class MailAccountRegistrationRunner
         $status = $this->readJsonFile($statusPath) ?: [];
         $result = $this->readResult($runId);
         $state = (string) ($status['state'] ?? 'unknown');
+        $webmailCheckPending = is_array($result) && (bool) ($result['webmailCheckPending'] ?? false);
 
-        if (is_array($result) && in_array($state, ['queued', 'starting', 'running'], true)) {
+        if ($webmailCheckPending) {
+            $status = $this->scheduleWebmailCheckIfNeeded($runId, $status, $result);
+            if (($status['state'] ?? null) !== 'failed') {
+                $state = 'waiting';
+                $status['state'] = $state;
+                $status['stage'] = $status['stage'] ?? 'verification-webmail-check-scheduled';
+                $status['message'] = (string) ($status['message'] ?? $result['statusMessage'] ?? '');
+            }
+        } elseif (is_array($result) && in_array($state, ['queued', 'starting', 'running'], true)) {
             $state = ($result['ok'] ?? false) ? 'completed' : 'failed';
             $status['state'] = $state;
             $status['stage'] = $state;
@@ -297,8 +308,10 @@ class MailAccountRegistrationRunner
         }
 
         $status['runId'] = $runId;
-        $status['isRunning'] = in_array((string) ($status['state'] ?? ''), ['queued', 'starting', 'running'], true);
+        $status['isRunning'] = in_array((string) ($status['state'] ?? ''), ['queued', 'starting', 'running'], true)
+            || ($webmailCheckPending && ($status['state'] ?? null) !== 'failed');
         $status['screenshotUrl'] = $this->screenshotUrl($runId);
+        $status['debugDomUrl'] = $this->debugDomUrl($runId, $status);
         $status['result'] = $this->resultSummary($result);
 
         return $status;
@@ -319,6 +332,192 @@ class MailAccountRegistrationRunner
         }
 
         return $this->readJsonFile($resultPath);
+    }
+
+    public function checkVerificationWebmail(string $runId): array
+    {
+        $runId = trim($runId);
+
+        if ($runId === '') {
+            throw new \InvalidArgumentException('Run-ID fuer Webmail-Check fehlt.');
+        }
+
+        $runDirectory = $this->runDirectory($runId);
+        $statusPath = $runDirectory.DIRECTORY_SEPARATOR.'status.json';
+        $resultPath = $runDirectory.DIRECTORY_SEPARATOR.'result.json';
+        $runtimeConfigPath = $runDirectory.DIRECTORY_SEPARATOR.'runtime.json';
+        $status = $this->readJsonFile($statusPath) ?: [];
+        $result = $this->readJsonFile($resultPath) ?: [];
+
+        if (! File::exists($runtimeConfigPath)) {
+            $message = 'Runtime-Konfiguration fuer den Webmail-Check wurde nicht gefunden.';
+            $this->writeJsonFile($statusPath, $this->statusWithEvent($status, 'failed', 'verification-webmail-check-failed', $message));
+
+            throw new \RuntimeException($message);
+        }
+
+        $this->writeJsonFile($statusPath, $this->statusWithEvent(
+            $status,
+            'running',
+            'verification-webmail-checking',
+            'Webmail-Portal wird per verzoegertem Job auf Verifikations-E-Mail geprueft.'
+        ));
+
+        $processSuccessful = false;
+        $processErrorOutput = '';
+
+        try {
+            $process = Process::path(base_path())
+                ->timeout(80)
+                ->run([
+                    $this->resolveNodeBinary(),
+                    $this->resolveVerificationWebmailCheckScriptPath(),
+                    $runtimeConfigPath,
+                ]);
+
+            $processSuccessful = $process->successful();
+            $processErrorOutput = trim($process->errorOutput());
+            $payload = json_decode(trim($process->output()), true);
+        } catch (\Throwable $exception) {
+            $payload = [
+                'ok' => false,
+                'opened' => false,
+                'mailDetected' => false,
+                'verificationCode' => '',
+                'statusMessage' => 'Webmail-Check konnte nicht ausgefuehrt werden.',
+                'error' => $exception->getMessage(),
+            ];
+        }
+
+        if (! is_array($payload)) {
+            $payload = [
+                'ok' => false,
+                'opened' => false,
+                'mailDetected' => false,
+                'verificationCode' => '',
+                'statusMessage' => 'Webmail-Check hat kein gueltiges JSON-Ergebnis geliefert.',
+                'error' => $processErrorOutput,
+            ];
+        }
+
+        $mailDetected = (bool) ($payload['mailDetected'] ?? $payload['ok'] ?? false);
+        $verificationCode = trim((string) ($payload['verificationCode'] ?? ''));
+        $message = $mailDetected
+            ? ($verificationCode !== ''
+                ? 'Verifikationsmail wurde im Webmail erkannt; Code wurde im Ergebnis gespeichert.'
+                : 'Verifikationsmail wurde im Webmail erkannt.')
+            : (trim((string) ($payload['statusMessage'] ?? '')) ?: 'Keine Verifikationsmail im Webmail erkannt.');
+
+        if (! $processSuccessful && ! $mailDetected) {
+            $message = trim((string) ($payload['error'] ?? '')) ?: $message;
+        }
+
+        $result = array_replace($result, [
+            'ok' => false,
+            'statusLevel' => $mailDetected ? 'waiting' : 'partial',
+            'statusMessage' => $message,
+            'registrationCompleted' => false,
+            'manualActionRequired' => true,
+            'verificationWebmailOpened' => (bool) ($payload['opened'] ?? false),
+            'verificationWebmailMailDetected' => $mailDetected,
+            'verificationCode' => $verificationCode,
+            'webmailCheckPending' => false,
+            'verificationWebmailCheckedAt' => now()->toIso8601String(),
+            'verificationWebmailCheckResult' => $payload,
+        ]);
+
+        $this->writeJsonFile($resultPath, $result);
+
+        $latestStatus = $this->readJsonFile($statusPath) ?: $status;
+        $this->writeJsonFile($statusPath, $this->statusWithEvent(
+            $latestStatus,
+            $mailDetected ? 'waiting' : 'failed',
+            $mailDetected ? 'verification-webmail-message-detected' : 'verification-webmail-message-timeout',
+            $message,
+            [
+                'verificationWebmailCheckedAt' => $result['verificationWebmailCheckedAt'],
+                'verificationWebmailMailDetected' => $mailDetected,
+            ]
+        ));
+
+        return $result;
+    }
+
+    protected function scheduleWebmailCheckIfNeeded(string $runId, array $status, array $result): array
+    {
+        if (! (bool) ($result['webmailCheckPending'] ?? false)) {
+            return $status;
+        }
+
+        if (trim((string) ($status['webmailCheckJobScheduledAt'] ?? '')) !== '') {
+            return $status;
+        }
+
+        $dueAt = $this->verificationWebmailCheckDueAt($result);
+
+        try {
+            CheckMailRegistrationWebmailJob::dispatch($runId)
+                ->onConnection('database')
+                ->delay($dueAt);
+
+            $message = 'Registrierung wartet; Webmail-Check wird um '.$dueAt->format('Y-m-d H:i:s').' gestartet.';
+            $status = $this->statusWithEvent($status, 'waiting', 'verification-webmail-check-scheduled', $message, [
+                'verificationWebmailCheckDueAt' => $dueAt->toIso8601String(),
+            ]);
+            $status['webmailCheckJobScheduledAt'] = now()->toIso8601String();
+            $status['verificationWebmailCheckDueAt'] = $dueAt->toIso8601String();
+        } catch (\Throwable $exception) {
+            $status = $this->statusWithEvent(
+                $status,
+                'failed',
+                'verification-webmail-check-schedule-failed',
+                'Webmail-Check konnte nicht eingeplant werden: '.$exception->getMessage()
+            );
+        }
+
+        $this->writeJsonFile($this->runDirectory($runId).DIRECTORY_SEPARATOR.'status.json', $status);
+
+        return $status;
+    }
+
+    protected function verificationWebmailCheckDueAt(array $result): Carbon
+    {
+        $rawDueAt = trim((string) ($result['verificationWebmailCheckDueAt'] ?? ''));
+
+        if ($rawDueAt !== '') {
+            try {
+                return Carbon::parse($rawDueAt);
+            } catch (\Throwable) {
+                // Fall back to the default delay below.
+            }
+        }
+
+        return now()->addMinutes(5);
+    }
+
+    protected function statusWithEvent(array $status, string $state, string $stage, string $message, array $data = []): array
+    {
+        $event = array_filter([
+            'at' => now()->toIso8601String(),
+            'stage' => $stage,
+            'message' => $message,
+            ...$data,
+        ], fn (mixed $value): bool => $value !== null && $value !== '');
+
+        $events = is_array($status['events'] ?? null) ? $status['events'] : [];
+        $events[] = $event;
+
+        if (count($events) > 80) {
+            $events = array_slice($events, -80);
+        }
+
+        return array_replace($status, [
+            'state' => $state,
+            'stage' => $stage,
+            'message' => $message,
+            'at' => now()->toIso8601String(),
+            'events' => $events,
+        ], $data);
     }
 
     protected function normalizeProviders(mixed $providers): array
@@ -461,6 +660,11 @@ class MailAccountRegistrationRunner
             'statusLevel' => $result['statusLevel'] ?? null,
             'statusMessage' => $result['statusMessage'] ?? null,
             'registrationCompleted' => (bool) ($result['registrationCompleted'] ?? false),
+            'webmailCheckPending' => (bool) ($result['webmailCheckPending'] ?? false),
+            'verificationWebmailCheckDueAt' => $result['verificationWebmailCheckDueAt'] ?? null,
+            'verificationWebmailCheckedAt' => $result['verificationWebmailCheckedAt'] ?? null,
+            'verificationWebmailMailDetected' => (bool) ($result['verificationWebmailMailDetected'] ?? false),
+            'verificationCode' => $result['verificationCode'] ?? null,
             'account' => is_array($result['account'] ?? null)
                 ? collect($result['account'])->except(['password', 'passwordEncrypted'])->all()
                 : null,
@@ -482,6 +686,11 @@ class MailAccountRegistrationRunner
         return 'mail-registration/runs/'.$runId.'/live.png';
     }
 
+    protected function publicDebugDomRelativePath(string $runId): string
+    {
+        return 'mail-registration/runs/'.$runId.'/debug-dom.json';
+    }
+
     protected function screenshotUrl(string $runId): ?string
     {
         $relativePath = $this->publicScreenshotRelativePath($runId);
@@ -492,6 +701,35 @@ class MailAccountRegistrationRunner
         }
 
         return Storage::disk('public')->url($relativePath).'?v='.File::lastModified($absolutePath);
+    }
+
+    protected function debugDomUrl(string $runId, array $status): ?string
+    {
+        $debugDom = $this->latestDebugDom($status);
+
+        if ($debugDom === null) {
+            return null;
+        }
+
+        $relativePath = $this->publicDebugDomRelativePath($runId);
+        $absolutePath = storage_path('app/public/'.$relativePath);
+        File::ensureDirectoryExists(dirname($absolutePath));
+        File::put($absolutePath, json_encode($debugDom, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+
+        return Storage::disk('public')->url($relativePath).'?v='.File::lastModified($absolutePath);
+    }
+
+    protected function latestDebugDom(array $status): mixed
+    {
+        $events = is_array($status['events'] ?? null) ? array_reverse($status['events']) : [];
+
+        foreach ($events as $event) {
+            if (is_array($event) && array_key_exists('debugDom', $event) && $event['debugDom'] !== null && $event['debugDom'] !== '') {
+                return $event['debugDom'];
+            }
+        }
+
+        return null;
     }
 
     protected function writeJsonFile(string $path, array $payload): void
@@ -517,6 +755,17 @@ class MailAccountRegistrationRunner
 
         if (! File::exists($nodeScript)) {
             throw new \RuntimeException(sprintf('Das lokale Node-Skript fuer Mail-Registrierung wurde nicht gefunden: %s', $nodeScript));
+        }
+
+        return $nodeScript;
+    }
+
+    protected function resolveVerificationWebmailCheckScriptPath(): string
+    {
+        $nodeScript = base_path('resources/node/register/check_verification_webmail.cjs');
+
+        if (! File::exists($nodeScript)) {
+            throw new \RuntimeException(sprintf('Das lokale Node-Skript fuer Webmail-Verifikationscheck wurde nicht gefunden: %s', $nodeScript));
         }
 
         return $nodeScript;
