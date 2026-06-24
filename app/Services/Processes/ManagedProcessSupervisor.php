@@ -15,7 +15,7 @@ class ManagedProcessSupervisor
         protected ManagedProcessInventory $inventory,
     ) {}
 
-    public function supervise(?string $runId = null): array
+    public function supervise(?string $runId = null, bool $force = false): array
     {
         $this->inventory->sync();
 
@@ -43,7 +43,7 @@ class ManagedProcessSupervisor
         foreach ($query->latest('last_seen_at')->limit(50)->get() as $process) {
             $checked++;
 
-            if (! $this->shouldRestart($process)) {
+            if (! $this->shouldRestart($process, $force)) {
                 $process->forceFill([
                     'supervisor_checked_at' => now(),
                 ])->save();
@@ -65,7 +65,7 @@ class ManagedProcessSupervisor
         ];
     }
 
-    protected function shouldRestart(ManagedProcess $process): bool
+    protected function shouldRestart(ManagedProcess $process, bool $force = false): bool
     {
         if ($this->hasActiveSiblingForRun($process)) {
             return false;
@@ -87,6 +87,10 @@ class ManagedProcessSupervisor
 
         if ((int) $process->restart_count >= $maxRestarts) {
             return false;
+        }
+
+        if ($force) {
+            return true;
         }
 
         $staleAfterSeconds = $this->staleAfterSeconds($runtime);

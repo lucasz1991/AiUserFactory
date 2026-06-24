@@ -22,12 +22,13 @@ class SuperviseManagedProcessesJob implements ShouldQueue
 
     public function __construct(
         public ?string $runId = null,
+        public bool $force = false,
     ) {
         $this->onConnection('database');
     }
 
     public function handle(ManagedProcessSupervisor $supervisor): void
     {
-        $supervisor->supervise($this->runId);
+        $supervisor->supervise($this->runId, $this->force);
     }
 }

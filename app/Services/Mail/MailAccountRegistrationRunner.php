@@ -376,6 +376,8 @@ class MailAccountRegistrationRunner
 
         if (($status['processHeartbeatStatus']['stale'] ?? false) === true) {
             $status = $this->queueSupervisorJobIfNeeded($runId, $status);
+        } elseif (($status['webmailWindowStatus']['stale'] ?? false) === true && ($status['webmailWindowStatus']['hasScreenshot'] ?? false) === true) {
+            $status = $this->queueSupervisorJobIfNeeded($runId, $status, true, 'Webmail-Fenster liefert keine aktuellen Screenshots mehr; Supervisor-Restart wird angefordert.');
         }
 
         return $status;
@@ -871,6 +873,7 @@ class MailAccountRegistrationRunner
         }
 
         $alive = $hasScreenshot && (! $isRunning || $ageSeconds === null || $ageSeconds <= $aliveThreshold);
+        $stale = $isRunning && $hasScreenshot && $ageSeconds !== null && $ageSeconds > max(60, $intervalSeconds * 10);
 
         if (! $livePreviewEnabled) {
             $statusText = 'Screenshots deaktiviert';
@@ -885,6 +888,8 @@ class MailAccountRegistrationRunner
         return [
             'label' => $label,
             'alive' => $alive,
+            'stale' => $stale,
+            'staleAfterSeconds' => max(60, $intervalSeconds * 10),
             'hasScreenshot' => $hasScreenshot,
             'heartbeatAt' => $heartbeatAt,
             'ageSeconds' => $ageSeconds,
@@ -917,7 +922,7 @@ class MailAccountRegistrationRunner
         ];
     }
 
-    protected function queueSupervisorJobIfNeeded(string $runId, array $status): array
+    protected function queueSupervisorJobIfNeeded(string $runId, array $status, bool $force = false, ?string $reason = null): array
     {
         $queuedAt = $this->parseStatusTimestamp($status['supervisorJobQueuedAt'] ?? null);
 
@@ -926,8 +931,8 @@ class MailAccountRegistrationRunner
         }
 
         try {
-            SuperviseManagedProcessesJob::dispatch($runId)->onConnection('database');
-            $message = 'Supervisor-Job wurde wegen fehlendem Node-Lebenszeichen eingereiht.';
+            SuperviseManagedProcessesJob::dispatch($runId, $force)->onConnection('database');
+            $message = $reason ?: 'Supervisor-Job wurde wegen fehlendem Node-Lebenszeichen eingereiht.';
         } catch (\Throwable $exception) {
             $message = 'Supervisor-Job konnte nicht eingereiht werden: '.$exception->getMessage();
         }

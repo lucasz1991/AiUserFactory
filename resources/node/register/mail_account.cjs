@@ -220,6 +220,7 @@ async function captureScreenshotToPath(page, runtimeConfig = {}, livePreviewPath
   }
 
   try {
+    await page.bringToFront().catch(() => {});
     ensureDirectory(path.dirname(livePreviewPath));
     await page.screenshot({
       path: livePreviewPath,
@@ -3071,6 +3072,30 @@ async function waitForVerificationEmailInWebmail(page, runtimeConfig, timeoutMs 
   };
 }
 
+async function refreshOpenWebmailWindow(webmailPage, runtimeConfig, primaryPage = null, force = false) {
+  if (!webmailPage || (typeof webmailPage.isClosed === 'function' && webmailPage.isClosed())) {
+    return {};
+  }
+
+  await webmailPage.bringToFront().catch(() => {});
+  await openLikelyVerificationMessageInWebmail(webmailPage).catch(() => false);
+  await clickVisibleTextTarget(webmailPage, [
+    'refresh',
+    'aktualisieren',
+    'reload',
+    'inbox',
+    'posteingang',
+  ], 'button, [role="button"], a', true).catch(() => false);
+
+  const snapshot = await webmailWindowSnapshot(webmailPage, runtimeConfig, force, true);
+
+  if (primaryPage) {
+    await primaryPage.bringToFront().catch(() => {});
+  }
+
+  return snapshot;
+}
+
 async function openVerificationWebmailPage(browser, runtimeConfig, primaryPage = null) {
   const mailbox = verificationMailboxFromConfig(runtimeConfig);
 
@@ -3413,6 +3438,8 @@ async function waitForProtonManualVerification(page, browser, runtimeConfig, tim
     opened: false,
     reason: 'email-tab-not-selected',
   };
+  let lastWebmailRefreshAt = 0;
+  const webmailRefreshInterval = () => Math.max(2000, Math.min(10000, livePreviewIntervalMs(runtimeConfig)));
 
   const checkWebmailNow = async () => {
     if (webmail.opened === true || webmail.checking === true || webmail.attempted === true) {
@@ -3521,6 +3548,17 @@ async function waitForProtonManualVerification(page, browser, runtimeConfig, tim
       await checkWebmailNow();
     }
 
+    let webmailSnapshot = {};
+
+    if (webmail.opened === true && webmail.page && webmail.mailDetected !== true) {
+      const now = Date.now();
+
+      if (now - lastWebmailRefreshAt >= webmailRefreshInterval()) {
+        lastWebmailRefreshAt = now;
+        webmailSnapshot = await refreshOpenWebmailWindow(webmail.page, runtimeConfig, page, false);
+      }
+    }
+
     progress(
       runtimeConfig,
       'proton-email-verification-required',
@@ -3529,7 +3567,10 @@ async function waitForProtonManualVerification(page, browser, runtimeConfig, tim
         : emailTabSelected
         ? 'Email-Tab ist aktiv; warte auf erfolgreichen Submit fuer den Verifikationscode.'
         : 'Warte auf Email-Tab im Human-Verification-Dialog; CAPTCHA wird nicht verwendet.',
-      await pageSnapshot(page, runtimeConfig, false, !emailTabSelected),
+      {
+        ...(await pageSnapshot(page, runtimeConfig, false, !emailTabSelected)),
+        ...webmailSnapshot,
+      },
     );
   }
 
@@ -4111,10 +4152,6 @@ async function main() {
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
-      '--disable-features=IsolateOrigins,site-per-process,Translate,BackForwardCache',
-      '--disable-site-isolation-trials',
-      '--process-per-site',
-      '--renderer-process-limit=2',
       `--window-size=${DEFAULT_VIEWPORT.width},${DEFAULT_VIEWPORT.height}`,
     ],
   };

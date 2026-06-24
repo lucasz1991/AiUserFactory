@@ -4,6 +4,7 @@ namespace App\Livewire\Admin\Config;
 
 use Illuminate\Encryption\Encrypter;
 use App\Models\File as StoredFile;
+use App\Models\ManagedProcess;
 use App\Models\Person;
 use App\Models\Setting;
 use App\Services\Base\ScraperProfileSyncClient;
@@ -1098,14 +1099,25 @@ class PersonList extends Component
 
     protected function buildProfileOptions(array $collection): array
     {
-        return array_map(function (array $profile) use ($collection): array {
+        $personRecords = $this->personRecordsForProfiles($collection['profiles']);
+        $runningProcessesByPersonId = $this->runningProcessesByPersonId();
+
+        return array_map(function (array $profile) use ($collection, $personRecords, $runningProcessesByPersonId): array {
+            /** @var Person|null $personRecord */
+            $personRecord = $personRecords[$profile['id']] ?? null;
+            $runningProcesses = $personRecord
+                ? ($runningProcessesByPersonId[(int) $personRecord->getKey()] ?? [])
+                : [];
+
             return [
                 'id' => $profile['id'],
+                'person_record_id' => $personRecord?->getKey(),
                 'label' => $profile['profile_label'],
                 'avatar_url' => $this->profileAvatarUrl($profile),
                 'display_name' => trim(collect([$profile['person_first_name'] ?? '', $profile['person_last_name'] ?? ''])->filter()->implode(' '))
                     ?: ($profile['person_alias'] ?: $profile['profile_label']),
                 'person_alias' => $profile['person_alias'] ?? '',
+                'person_email' => $profile['person_email'] ?? '',
                 'person_city' => $profile['person_city'] ?? '',
                 'person_country' => $profile['person_country'] ?? '',
                 'bot_status' => $profile['bot_status'] ?? 'manual',
@@ -1125,8 +1137,206 @@ class PersonList extends Component
                 'base_sync_status' => $profile['base_sync_status'] ?? 'pending',
                 'base_synced_at_label' => $this->formatTimestampLabel($profile['base_synced_at'] ?? null),
                 'base_sync_error' => $profile['base_sync_error'] ?? '',
+                'instagram_status' => $this->instagramAccountStatus($profile),
+                'mail_status' => $this->mailAccountStatus($profile, $personRecord),
+                'process_status' => $this->processStatus($runningProcesses),
+                'base_status' => $this->baseStatus($profile),
             ];
         }, $collection['profiles']);
+    }
+
+    protected function personRecordsForProfiles(array $profiles): array
+    {
+        if (! Schema::hasTable('persons')) {
+            return [];
+        }
+
+        $profileIds = array_values(array_filter(array_map(
+            static fn (array $profile): string => trim((string) ($profile['id'] ?? '')),
+            $profiles,
+        )));
+
+        if ($profileIds === []) {
+            return [];
+        }
+
+        return Person::query()
+            ->where('platform', 'instagram')
+            ->whereIn('profile_key', $profileIds)
+            ->get()
+            ->keyBy('profile_key')
+            ->all();
+    }
+
+    protected function runningProcessesByPersonId(): array
+    {
+        if (! Schema::hasTable('managed_processes')) {
+            return [];
+        }
+
+        $columns = array_flip(Schema::getColumnListing('managed_processes'));
+
+        if (! isset($columns['status'], $columns['metadata'])) {
+            return [];
+        }
+
+        return ManagedProcess::query()
+            ->whereIn('status', ['running', 'terminate_requested', 'kill_requested'])
+            ->orderByDesc(isset($columns['last_seen_at']) ? 'last_seen_at' : 'updated_at')
+            ->get()
+            ->reduce(function (array $grouped, ManagedProcess $process): array {
+                $personId = (int) data_get($process->metadata, 'subject_person_id', 0);
+
+                if ($personId <= 0) {
+                    return $grouped;
+                }
+
+                $grouped[$personId] ??= [];
+                $grouped[$personId][] = $process;
+
+                return $grouped;
+            }, []);
+    }
+
+    protected function instagramAccountStatus(array $profile): array
+    {
+        $username = trim((string) ($profile['login_username'] ?? ''));
+        $hasPassword = filled($profile['login_password_encrypted'] ?? null)
+            || filled($profile['login_password_base_encrypted'] ?? null);
+        $hasSession = (bool) ($profile['session_cookie_present'] ?? false)
+            || (int) ($profile['cookie_count'] ?? 0) > 0
+            || trim((string) ($profile['cookie_payload_hash'] ?? '')) !== '';
+
+        $level = match (true) {
+            $username !== '' && $hasSession => 'success',
+            $username !== '' && $hasPassword => 'warning',
+            $username !== '' => 'partial',
+            default => 'empty',
+        };
+
+        $label = match ($level) {
+            'success' => 'Instagram bereit',
+            'warning' => 'Instagram Login vorbereitet',
+            'partial' => 'Instagram ohne Session',
+            default => 'Kein Instagram Account',
+        };
+
+        return [
+            'level' => $level,
+            'label' => $label,
+            'detail' => $username !== '' ? '@'.ltrim($username, '@') : 'Benutzername fehlt',
+            'username' => $username,
+            'has_password' => $hasPassword,
+            'has_session' => $hasSession,
+            'auto_login_enabled' => (bool) ($profile['auto_login_enabled'] ?? false),
+            'cookie_count' => (int) ($profile['cookie_count'] ?? 0),
+            'synced_at_label' => $this->formatTimestampLabel($profile['cookies_synced_at'] ?? null),
+        ];
+    }
+
+    protected function mailAccountStatus(array $profile, ?Person $person): array
+    {
+        $metadata = $person && is_array($person->metadata) ? $person->metadata : [];
+        $emailAccount = is_array(data_get($metadata, 'email_account')) ? data_get($metadata, 'email_account') : [];
+        $email = trim((string) (data_get($emailAccount, 'email') ?: ($profile['person_email'] ?? '')));
+        $hasPassword = trim((string) data_get($emailAccount, 'password_encrypted', '')) !== '';
+        $hasWebmailSession = trim((string) data_get($emailAccount, 'webmail_session.payload_encrypted', '')) !== '';
+        $provider = trim((string) data_get($emailAccount, 'provider', ''));
+
+        $level = match (true) {
+            $email !== '' && $hasPassword && $hasWebmailSession => 'success',
+            $email !== '' && $hasPassword => 'warning',
+            $email !== '' => 'partial',
+            default => 'empty',
+        };
+
+        $label = match ($level) {
+            'success' => 'Mailaccount mit Webmail-Session',
+            'warning' => 'Mailaccount ohne Webmail-Session',
+            'partial' => 'Mailadresse ohne Passwort',
+            default => 'Kein Mailaccount',
+        };
+
+        return [
+            'level' => $level,
+            'label' => $label,
+            'detail' => $email !== '' ? $email : 'E-Mail fehlt',
+            'email' => $email,
+            'provider' => $provider,
+            'has_password' => $hasPassword,
+            'has_webmail_session' => $hasWebmailSession,
+            'webmail_cookie_count' => (int) data_get($emailAccount, 'webmail_session.cookie_count', 0),
+            'updated_at_label' => $this->formatTimestampLabel(data_get($emailAccount, 'updated_at')),
+        ];
+    }
+
+    protected function processStatus(array $processes): array
+    {
+        $processes = collect($processes);
+        $latest = $processes->first();
+        $count = $processes->count();
+
+        if (! $latest) {
+            return [
+                'level' => 'empty',
+                'label' => 'Kein laufender Prozess',
+                'detail' => 'Aktuell inaktiv',
+                'count' => 0,
+                'run_type' => null,
+                'last_stage' => null,
+                'last_seen_label' => null,
+                'is_idle_suspect' => false,
+            ];
+        }
+
+        $runType = trim((string) ($latest->run_type ?: data_get($latest->metadata, 'process_identity.runType') ?: data_get($latest->metadata, 'run_type')));
+        $lastStage = trim((string) ($latest->last_stage ?: data_get($latest->metadata, 'status_stage')));
+        $isIdleSuspect = $processes->contains(fn (ManagedProcess $process): bool => (bool) $process->is_idle_suspect);
+        $level = $isIdleSuspect ? 'warning' : 'running';
+
+        return [
+            'level' => $level,
+            'label' => $count === 1 ? '1 Prozess laeuft' : $count.' Prozesse laufen',
+            'detail' => trim(collect([$this->processTypeLabel($runType), $lastStage])->filter()->implode(' - ')) ?: 'Prozess aktiv',
+            'count' => $count,
+            'run_type' => $runType ?: null,
+            'last_stage' => $lastStage ?: null,
+            'last_seen_label' => $this->formatTimestampLabel($latest->last_seen_at),
+            'is_idle_suspect' => $isIdleSuspect,
+        ];
+    }
+
+    protected function baseStatus(array $profile): array
+    {
+        $status = $profile['base_sync_status'] ?? 'pending';
+
+        return [
+            'level' => match ($status) {
+                'synced' => 'success',
+                'failed' => 'danger',
+                default => 'empty',
+            },
+            'label' => match ($status) {
+                'synced' => 'Base synchronisiert',
+                'failed' => 'Base-Sync Fehler',
+                default => 'Base-Sync offen',
+            },
+            'detail' => match ($status) {
+                'synced' => $this->formatTimestampLabel($profile['base_synced_at'] ?? null) ?: 'Synchronisiert',
+                'failed' => trim((string) ($profile['base_sync_error'] ?? '')) ?: 'Fehler ohne Details',
+                default => 'Noch nicht synchronisiert',
+            },
+        ];
+    }
+
+    protected function processTypeLabel(?string $runType): string
+    {
+        return match ($runType) {
+            'mail-registration' => 'Mail-Registrierung',
+            'webmail-session' => 'Webmail-Session',
+            'instagram-scraper' => 'Instagram-Scraper',
+            default => $runType ?: '',
+        };
     }
 
     protected function profileAvatarUrl(array $profile): string
@@ -1416,6 +1626,12 @@ class PersonList extends Component
 
     protected function formatTimestampLabel(mixed $value): ?string
     {
+        if ($value instanceof \DateTimeInterface) {
+            return Carbon::instance($value)
+                ->timezone(config('app.timezone', 'Europe/Berlin'))
+                ->format('d.m.Y H:i');
+        }
+
         if (! is_scalar($value) || trim((string) $value) === '') {
             return null;
         }

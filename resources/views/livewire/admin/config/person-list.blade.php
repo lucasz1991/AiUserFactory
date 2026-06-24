@@ -5,8 +5,18 @@
         $totalPersonsCount = $profiles->count();
         $activePersonsCount = $profiles->where('is_active', true)->count();
         $blockedPersonsCount = $profiles->where('is_scrape_blocked', true)->count();
-        $botReadyPersonsCount = $profiles->whereIn('bot_status', ['ready', 'training'])->count();
         $baseSyncedPersonsCount = $profiles->where('base_sync_status', 'synced')->count();
+        $instagramReadyPersonsCount = $profiles->filter(fn ($profile) => data_get($profile, 'instagram_status.level') === 'success')->count();
+        $mailReadyPersonsCount = $profiles->filter(fn ($profile) => data_get($profile, 'mail_status.level') === 'success')->count();
+        $runningProcessPersonsCount = $profiles->filter(fn ($profile) => (int) data_get($profile, 'process_status.count', 0) > 0)->count();
+        $statusIconClass = fn ($level) => match($level) {
+            'success' => 'bg-emerald-50 text-emerald-700 ring-emerald-200',
+            'running' => 'bg-blue-50 text-blue-700 ring-blue-200',
+            'warning' => 'bg-amber-50 text-amber-700 ring-amber-200',
+            'danger' => 'bg-red-50 text-red-700 ring-red-200',
+            'partial' => 'bg-sky-50 text-sky-700 ring-sky-200',
+            default => 'bg-slate-100 text-slate-500 ring-slate-200',
+        };
     @endphp
 
     <div class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
@@ -30,7 +40,7 @@
             </div>
         </div>
 
-        <div class="grid gap-px bg-slate-200 sm:grid-cols-2 xl:grid-cols-5">
+        <div class="grid gap-px bg-slate-200 sm:grid-cols-2 xl:grid-cols-6">
             <div class="bg-white p-4">
                 <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Personen</p>
                 <p class="mt-2 text-2xl font-semibold text-slate-900">{{ $totalPersonsCount }}</p>
@@ -44,8 +54,16 @@
                 <p class="mt-2 text-2xl font-semibold text-amber-700">{{ $blockedPersonsCount }}</p>
             </div>
             <div class="bg-white p-4">
-                <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Bot-bereit</p>
-                <p class="mt-2 text-2xl font-semibold text-blue-700">{{ $botReadyPersonsCount }}</p>
+                <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Instagram bereit</p>
+                <p class="mt-2 text-2xl font-semibold text-pink-700">{{ $instagramReadyPersonsCount }}</p>
+            </div>
+            <div class="bg-white p-4">
+                <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Mail bereit</p>
+                <p class="mt-2 text-2xl font-semibold text-sky-700">{{ $mailReadyPersonsCount }}</p>
+            </div>
+            <div class="bg-white p-4">
+                <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Prozesse</p>
+                <p class="mt-2 text-2xl font-semibold text-blue-700">{{ $runningProcessPersonsCount }}</p>
             </div>
             <div class="bg-white p-4">
                 <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Base-Sync</p>
@@ -109,8 +127,8 @@
         </div>
 
         <div class="hidden grid-cols-12 gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 lg:grid">
-            <div class="col-span-4">Person</div>
-            <div class="col-span-3">Session</div>
+            <div class="col-span-3">Person</div>
+            <div class="col-span-4">Accounts</div>
             <div class="col-span-3">Status</div>
             <div class="col-span-2 text-right">Aktionen</div>
         </div>
@@ -144,10 +162,14 @@
                         'failed' => 'bg-red-50 text-red-700 ring-1 ring-red-200',
                         default => 'bg-slate-100 text-slate-700 ring-1 ring-slate-200',
                     };
+                    $instagramStatus = $profile['instagram_status'] ?? [];
+                    $mailStatus = $profile['mail_status'] ?? [];
+                    $processStatus = $profile['process_status'] ?? [];
+                    $baseStatus = $profile['base_status'] ?? [];
                 @endphp
 
                 <article wire:key="scraper-profile-{{ $profile['id'] }}" class="grid gap-5 border-l-4 px-5 py-5 text-sm lg:grid-cols-12 {{ $rowClass }}">
-                    <div class="flex min-w-0 items-start gap-4 lg:col-span-4">
+                    <div class="flex min-w-0 items-start gap-4 lg:col-span-3">
                         @if(!empty($profile['avatar_url']))
                             <img
                                 src="{{ $profile['avatar_url'] }}"
@@ -170,20 +192,70 @@
                             <p class="mt-1 truncate text-xs font-medium {{ $profile['login_username'] !== '' ? 'text-pink-700' : 'text-slate-400' }}">
                                 {{ $profile['login_username'] !== '' ? '@'.$profile['login_username'] : 'Kein Instagram-Benutzername' }}
                             </p>
+                            <p class="mt-1 truncate text-xs font-medium {{ $profile['person_email'] !== '' ? 'text-sky-700' : 'text-slate-400' }}">
+                                {{ $profile['person_email'] !== '' ? $profile['person_email'] : 'Kein Mailaccount' }}
+                            </p>
                             <p class="mt-2 truncate text-xs text-slate-500">
                                 {{ trim(($profile['person_city'] ?? '').' '.($profile['person_country'] ?? '')) ?: 'Keine Personendaten hinterlegt' }}
                             </p>
                         </div>
                     </div>
 
-                    <div class="min-w-0 space-y-2 text-xs text-slate-500 lg:col-span-3">
-                        <div class="rounded-md bg-slate-50 p-3 ring-1 ring-slate-200">
-                            <p class="font-semibold text-slate-700">Browser-Profil</p>
-                            <p class="mt-1 break-all">{{ $profile['browser_profile_path'] }}</p>
+                    <div class="min-w-0 space-y-3 lg:col-span-4">
+                        <div class="flex flex-wrap items-center gap-2">
+                            <span title="{{ data_get($instagramStatus, 'label') }} - {{ data_get($instagramStatus, 'detail') }}" class="inline-flex h-10 w-10 items-center justify-center rounded-md ring-1 {{ $statusIconClass(data_get($instagramStatus, 'level')) }}">
+                                <span class="sr-only">{{ data_get($instagramStatus, 'label') }}</span>
+                                <svg class="h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.7" stroke="currentColor" aria-hidden="true">
+                                    <rect width="16" height="16" x="4" y="4" rx="4"></rect>
+                                    <circle cx="12" cy="12" r="3"></circle>
+                                    <path d="M16.5 7.5h.01"></path>
+                                </svg>
+                            </span>
+
+                            <span title="{{ data_get($mailStatus, 'label') }} - {{ data_get($mailStatus, 'detail') }}" class="inline-flex h-10 w-10 items-center justify-center rounded-md ring-1 {{ $statusIconClass(data_get($mailStatus, 'level')) }}">
+                                <span class="sr-only">{{ data_get($mailStatus, 'label') }}</span>
+                                <svg class="h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.7" stroke="currentColor" aria-hidden="true">
+                                    <path d="M4 6h16v12H4z"></path>
+                                    <path d="m4 7 8 6 8-6"></path>
+                                </svg>
+                            </span>
+
+                            <span title="{{ data_get($processStatus, 'label') }} - {{ data_get($processStatus, 'detail') }}" class="inline-flex h-10 w-10 items-center justify-center rounded-md ring-1 {{ $statusIconClass(data_get($processStatus, 'level')) }}">
+                                <span class="sr-only">{{ data_get($processStatus, 'label') }}</span>
+                                <svg class="h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.7" stroke="currentColor" aria-hidden="true">
+                                    <path d="M8 5v14l11-7z"></path>
+                                    <path d="M4 5v14"></path>
+                                </svg>
+                            </span>
+
+                            <span title="{{ data_get($baseStatus, 'label') }} - {{ data_get($baseStatus, 'detail') }}" class="inline-flex h-10 w-10 items-center justify-center rounded-md ring-1 {{ $statusIconClass(data_get($baseStatus, 'level')) }}">
+                                <span class="sr-only">{{ data_get($baseStatus, 'label') }}</span>
+                                <svg class="h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.7" stroke="currentColor" aria-hidden="true">
+                                    <ellipse cx="12" cy="5" rx="7" ry="3"></ellipse>
+                                    <path d="M5 5v6c0 1.7 3.1 3 7 3s7-1.3 7-3V5"></path>
+                                    <path d="M5 11v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"></path>
+                                </svg>
+                            </span>
                         </div>
-                        <div class="rounded-md bg-slate-50 p-3 ring-1 ring-slate-200">
-                            <p class="font-semibold text-slate-700">Cookie-Datei</p>
-                            <p class="mt-1 break-all">{{ $profile['cookie_file_path'] }}</p>
+
+                        <div class="grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
+                            <div class="min-w-0 rounded-md bg-slate-50 px-3 py-2 ring-1 ring-slate-200">
+                                <p class="font-semibold text-slate-700">Instagram</p>
+                                <p class="mt-1 truncate">{{ data_get($instagramStatus, 'detail') }}</p>
+                                <p class="mt-1 text-slate-500">
+                                    {{ data_get($instagramStatus, 'has_session') ? 'Session vorhanden' : 'Keine Session' }}
+                                    @if((int) data_get($instagramStatus, 'cookie_count') > 0)
+                                        - {{ data_get($instagramStatus, 'cookie_count') }} Cookies
+                                    @endif
+                                </p>
+                            </div>
+                            <div class="min-w-0 rounded-md bg-slate-50 px-3 py-2 ring-1 ring-slate-200">
+                                <p class="font-semibold text-slate-700">Mail</p>
+                                <p class="mt-1 truncate">{{ data_get($mailStatus, 'detail') }}</p>
+                                <p class="mt-1 text-slate-500">
+                                    {{ data_get($mailStatus, 'has_webmail_session') ? 'Webmail-Session vorhanden' : (data_get($mailStatus, 'has_password') ? 'Passwort gespeichert' : 'Unvollstaendig') }}
+                                </p>
+                            </div>
                         </div>
                     </div>
 
@@ -205,6 +277,13 @@
                         <span class="rounded-full {{ $profile['has_stored_password'] ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200' : 'bg-amber-50 text-amber-700 ring-1 ring-amber-200' }} px-2.5 py-1 text-xs font-semibold">
                             {{ $profile['has_stored_password'] ? 'Passwort gespeichert' : 'Kein Passwort' }}
                         </span>
+
+                        @if((int) data_get($processStatus, 'count') > 0)
+                            <span class="rounded-full {{ data_get($processStatus, 'is_idle_suspect') ? 'bg-amber-50 text-amber-800 ring-1 ring-amber-200' : 'bg-blue-50 text-blue-700 ring-1 ring-blue-200' }} px-2.5 py-1 text-xs font-semibold">
+                                {{ data_get($processStatus, 'label') }}
+                            </span>
+                            <p class="basis-full text-xs text-slate-500">{{ data_get($processStatus, 'detail') }}</p>
+                        @endif
 
                         @if($profile['is_scrape_blocked'])
                             <span class="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800 ring-1 ring-amber-300">
