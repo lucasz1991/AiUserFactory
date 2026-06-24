@@ -314,9 +314,12 @@ POWERSHELL;
             return false;
         }
 
+        if (! preg_match('/\bnode(?:js)?(?:\.exe)?\b/i', $command)) {
+            return false;
+        }
+
         return str_contains($normalized, $basePath)
-            || preg_match('/\b(mail_account|webmail_session|check_verification_webmail|scrape-instagram)[\w.-]*\.cjs\b/i', $command)
-            || preg_match('/\bartisan(?:\.php)?\s+(queue:work|schedule:run|network:plan-activities)\b/i', $command);
+            && preg_match('/\b(mail_account|webmail_session|check_verification_webmail|scrape-instagram)[\w.-]*\.cjs\b/i', $command);
     }
 
     private function isManagedCommand(string $command): bool
@@ -340,10 +343,8 @@ POWERSHELL;
             is_string($scriptName) && str_starts_with($scriptName, 'webmail_session') => 'webmail-session',
             is_string($scriptName) && str_starts_with($scriptName, 'check_verification_webmail') => 'verification-webmail-check',
             is_string($scriptName) && str_starts_with($scriptName, 'scrape-instagram') => 'instagram-scraper',
-            is_string($scriptName) && str_starts_with($scriptName, 'artisan queue:work') => 'queue-worker',
             preg_match('/\b(chrome|chromium|msedge|cloak)(?:\.exe)?\b/i', $command) === 1 => 'browser-child',
             preg_match('/\bnode(?:js)?(?:\.exe)?\b/i', $command) === 1 => 'node',
-            preg_match('/\bphp(?:\.exe)?\b/i', $command) === 1 => 'php',
             default => 'app-process',
         };
 

@@ -344,6 +344,8 @@ class MailAccountRegistrationRunner
             || ($webmailCheckPending && ($status['state'] ?? null) !== 'failed');
         $status['screenshotUrl'] = $this->screenshotUrl($runId);
         $status['webmailScreenshotUrl'] = $this->webmailScreenshotUrl($runId);
+        $status['registrationDebugDomUrl'] = $this->debugDomUrlFor($runId, $status, 'registrationDebugDom', 'debug-dom-registration.json');
+        $status['webmailDebugDomUrl'] = $this->debugDomUrlFor($runId, $status, 'webmailDebugDom', 'debug-dom-webmail.json');
         $status['debugDomUrl'] = $this->debugDomUrl($runId, $status);
         $status['result'] = $this->resultSummary($result);
 
@@ -777,6 +779,11 @@ class MailAccountRegistrationRunner
         return 'mail-registration/runs/'.$runId.'/debug-dom.json';
     }
 
+    protected function publicWindowDebugDomRelativePath(string $runId, string $filename): string
+    {
+        return 'mail-registration/runs/'.$runId.'/'.$filename;
+    }
+
     protected function screenshotUrl(string $runId): ?string
     {
         $relativePath = $this->publicScreenshotRelativePath($runId);
@@ -803,7 +810,7 @@ class MailAccountRegistrationRunner
 
     protected function debugDomUrl(string $runId, array $status): ?string
     {
-        $debugDom = $this->latestDebugDom($status);
+        $debugDom = $this->latestDebugDom($status, 'debugDom');
 
         if ($debugDom === null) {
             return null;
@@ -817,13 +824,33 @@ class MailAccountRegistrationRunner
         return Storage::disk('public')->url($relativePath).'?v='.File::lastModified($absolutePath);
     }
 
-    protected function latestDebugDom(array $status): mixed
+    protected function debugDomUrlFor(string $runId, array $status, string $key, string $filename): ?string
     {
+        $debugDom = $this->latestDebugDom($status, $key);
+
+        if ($debugDom === null) {
+            return null;
+        }
+
+        $relativePath = $this->publicWindowDebugDomRelativePath($runId, $filename);
+        $absolutePath = storage_path('app/public/'.$relativePath);
+        File::ensureDirectoryExists(dirname($absolutePath));
+        File::put($absolutePath, json_encode($debugDom, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+
+        return Storage::disk('public')->url($relativePath).'?v='.File::lastModified($absolutePath);
+    }
+
+    protected function latestDebugDom(array $status, string $key = 'debugDom'): mixed
+    {
+        if (array_key_exists($key, $status) && $status[$key] !== null && $status[$key] !== '') {
+            return $status[$key];
+        }
+
         $events = is_array($status['events'] ?? null) ? array_reverse($status['events']) : [];
 
         foreach ($events as $event) {
-            if (is_array($event) && array_key_exists('debugDom', $event) && $event['debugDom'] !== null && $event['debugDom'] !== '') {
-                return $event['debugDom'];
+            if (is_array($event) && array_key_exists($key, $event) && $event[$key] !== null && $event[$key] !== '') {
+                return $event[$key];
             }
         }
 

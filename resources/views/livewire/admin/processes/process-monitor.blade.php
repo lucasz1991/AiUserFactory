@@ -64,71 +64,25 @@
                 @endif
             </div>
 
-            <div class="overflow-x-auto">
-                <table class="min-w-full divide-y divide-gray-200 text-sm">
-                    <thead class="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
-                        <tr>
-                            <th class="px-4 py-3 text-left">PID</th>
-                            <th class="px-4 py-3 text-left">Typ</th>
-                            <th class="px-4 py-3 text-left">Status</th>
-                            <th class="px-4 py-3 text-left">Ressourcen</th>
-                            <th class="px-4 py-3 text-left">Kommando</th>
-                            <th class="px-4 py-3 text-right">Aktion</th>
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-gray-100 bg-white">
-                        @forelse($processes as $process)
-                            <tr wire:key="managed-process-{{ $process->id }}" class="{{ $process->is_idle_suspect ? 'bg-amber-50/60' : '' }}">
-                                <td class="whitespace-nowrap px-4 py-3">
-                                    <div class="font-semibold text-gray-900">{{ $process->pid }}</div>
-                                    <div class="text-xs text-gray-500">PPID {{ $process->parent_pid ?: '-' }}</div>
-                                </td>
-                                <td class="whitespace-nowrap px-4 py-3">
-                                    <div class="font-semibold text-gray-900">{{ $process->process_type }}</div>
-                                    <div class="text-xs text-gray-500">{{ $process->script_name ?: $process->executable ?: '-' }}</div>
-                                </td>
-                                <td class="whitespace-nowrap px-4 py-3">
-                                    <span class="inline-flex rounded-full px-2.5 py-1 text-xs font-semibold {{ in_array($process->status, ['running', 'terminate_requested', 'kill_requested'], true) ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-700' }}">
-                                        {{ $process->status }}
-                                    </span>
-                                    @if($process->is_idle_suspect)
-                                        <div class="mt-1 text-xs font-semibold text-amber-700">Leerlauf-Verdacht</div>
-                                    @endif
-                                </td>
-                                <td class="whitespace-nowrap px-4 py-3 text-xs text-gray-600">
-                                    <div>CPU: {{ $process->cpu_percent !== null ? $process->cpu_percent.'%' : '-' }}</div>
-                                    <div>RAM: {{ $process->memory_mb !== null ? $process->memory_mb.' MB' : '-' }}</div>
-                                    <div>Alter: {{ floor($process->elapsed_seconds / 60) }} Min.</div>
-                                </td>
-                                <td class="max-w-xl px-4 py-3">
-                                    <div class="break-all text-xs text-gray-700">{{ $process->short_command ?: '-' }}</div>
-                                    <div class="mt-1 text-xs text-gray-400">zuletzt: {{ optional($process->last_seen_at)->format('d.m.Y H:i:s') ?: '-' }}</div>
-                                    @if($process->action_message)
-                                        <div class="mt-1 text-xs text-blue-700">{{ $process->action_message }}</div>
-                                    @endif
-                                </td>
-                                <td class="whitespace-nowrap px-4 py-3 text-right">
-                                    @if($process->isRunning())
-                                        <button type="button" wire:click="terminate({{ $process->id }}, false)" wire:confirm="Prozess {{ $process->pid }} beenden?" class="rounded border border-amber-300 px-2 py-1 text-xs font-semibold text-amber-700 hover:bg-amber-50">
-                                            Beenden
-                                        </button>
-                                        <button type="button" wire:click="terminate({{ $process->id }}, true)" wire:confirm="Prozess {{ $process->pid }} wirklich erzwingen beenden?" class="ml-2 rounded border border-red-300 px-2 py-1 text-xs font-semibold text-red-700 hover:bg-red-50">
-                                            Kill
-                                        </button>
-                                    @else
-                                        <span class="text-xs text-gray-400">Keine Aktion</span>
-                                    @endif
-                                </td>
-                            </tr>
-                        @empty
-                            <tr>
-                                <td colspan="6" class="px-4 py-12 text-center text-sm text-gray-500">
-                                    Keine Prozesse fuer diesen Filter.
-                                </td>
-                            </tr>
-                        @endforelse
-                    </tbody>
-                </table>
+            <div>
+                <div class="hidden grid-cols-[160px_180px_150px_minmax(0,1fr)_150px] border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 md:grid">
+                    <div>PID</div>
+                    <div>Typ</div>
+                    <div>Status</div>
+                    <div>Kommando</div>
+                    <div class="text-right">Aktion</div>
+                </div>
+
+                @forelse($processTree as $process)
+                    @include('livewire.admin.processes.partials.process-tree-node', [
+                        'process' => $process,
+                        'depth' => 0,
+                    ])
+                @empty
+                    <div class="px-4 py-12 text-center text-sm text-gray-500">
+                        Keine Prozesse fuer diesen Filter.
+                    </div>
+                @endforelse
             </div>
         </div>
     @endif

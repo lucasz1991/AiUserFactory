@@ -92,6 +92,8 @@ function publicStatusPayload(runtimeConfig, state, stage, message, data = {}) {
     livePreviewPollIntervalSeconds: Math.max(1, Math.round(livePreviewIntervalMs(runtimeConfig) / 1000)),
     browserActivityCheckEnabled: runtimeConfig.browserActivityCheckEnabled !== false,
     domDebugEnabled: runtimeConfig.domDebugEnabled !== false,
+    registrationDebugDom: data.registrationDebugDom || data.debugDom || null,
+    webmailDebugDom: data.webmailDebugDom || null,
     finalUrl: data.finalUrl || null,
     title: data.title || null,
     liveScreenshotPath: data.liveScreenshotPath || null,
@@ -108,6 +110,8 @@ function progress(runtimeConfig, stage, message, data = {}, state = 'running') {
     finalUrl: data.finalUrl || null,
     title: data.title || null,
     debugDom: data.debugDom || null,
+    registrationDebugDom: data.registrationDebugDom || data.debugDom || null,
+    webmailDebugDom: data.webmailDebugDom || null,
   };
 
   statusEvents.push(event);
@@ -316,6 +320,26 @@ async function pageSnapshot(page, runtimeConfig, force = false, includeDom = fal
     title,
     finalUrl,
     debugDom,
+    registrationDebugDom: debugDom,
+    ...screenshot,
+  };
+}
+
+async function webmailWindowSnapshot(page, runtimeConfig, force = false, includeDom = true) {
+  const shouldIncludeDom = includeDom && runtimeConfig.domDebugEnabled !== false;
+  const [title, finalUrl, screenshot, webmailDebugDom] = await Promise.all([
+    page.title().catch(() => null),
+    Promise.resolve(page.url()).catch(() => null),
+    captureWebmailLivePreviewScreenshot(page, runtimeConfig, force),
+    shouldIncludeDom ? domDebugSnapshot(page).catch((error) => ({
+      error: truncateText(error?.message || String(error), 800),
+    })) : Promise.resolve(null),
+  ]);
+
+  return {
+    title,
+    finalUrl,
+    webmailDebugDom,
     ...screenshot,
   };
 }
@@ -2656,6 +2680,15 @@ async function waitForVerificationEmailInWebmail(page, runtimeConfig, timeoutMs 
 
   while (Date.now() < stopAt) {
     await captureActiveWindows(false);
+    progress(
+      runtimeConfig,
+      'verification-webmail-windows-observing',
+      'Browserfenster werden waehrend der Webmail-Pruefung aktualisiert.',
+      {
+        ...(primaryPage ? await pageSnapshot(primaryPage, runtimeConfig, false, true) : {}),
+        ...(await webmailWindowSnapshot(page, runtimeConfig, false, true)),
+      },
+    );
     await restorePrimaryPage();
 
     const result = await page.evaluate(() => {
@@ -2724,9 +2757,8 @@ async function waitForVerificationEmailInWebmail(page, runtimeConfig, timeoutMs 
           ? `Verifikationsmail wurde im Webmail erkannt. Code: ${result.code}`
           : 'Verifikationsmail wurde im Webmail erkannt.',
         {
-          title: await page.title().catch(() => null),
-          finalUrl: page.url(),
-          ...(await captureWebmailLivePreviewScreenshot(page, runtimeConfig, true)),
+          ...(primaryPage ? await pageSnapshot(primaryPage, runtimeConfig, true, true) : {}),
+          ...(await webmailWindowSnapshot(page, runtimeConfig, true, true)),
         },
       );
       await restorePrimaryPage();
@@ -2758,9 +2790,8 @@ async function waitForVerificationEmailInWebmail(page, runtimeConfig, timeoutMs 
     'verification-webmail-message-timeout',
     'Keine Verifikationsmail im Webmail erkannt; warte im Proton-Fenster weiter.',
     {
-      title: await page.title().catch(() => null),
-      finalUrl: page.url(),
-      ...(await captureWebmailLivePreviewScreenshot(page, runtimeConfig, true)),
+      ...(primaryPage ? await pageSnapshot(primaryPage, runtimeConfig, true, true) : {}),
+      ...(await webmailWindowSnapshot(page, runtimeConfig, true, true)),
     },
   );
   await restorePrimaryPage();
@@ -2805,15 +2836,18 @@ async function openVerificationWebmailPage(browser, runtimeConfig, primaryPage =
     'verification-webmail-opened',
     `Webmail-Portal fuer Verifikations-E-Mail wurde geoeffnet: ${mailbox.webmailUrl}`,
     {
-      title: await page.title().catch(() => null),
-      finalUrl: page.url(),
-      ...(await captureWebmailLivePreviewScreenshot(page, runtimeConfig, true)),
+      ...(primaryPage ? await pageSnapshot(primaryPage, runtimeConfig, true, true) : {}),
+      ...(await webmailWindowSnapshot(page, runtimeConfig, true, true)),
     },
   );
 
   if (mailbox.username) {
     await fillFirstVisibleInputByHints(page, ['email', 'mail', 'user', 'login', 'username'], mailbox.username).catch(() => false);
     await captureWebmailLivePreviewScreenshot(page, runtimeConfig, true);
+    progress(runtimeConfig, 'verification-webmail-username-entered', 'Webmail-Benutzername wurde eingetragen.', {
+      ...(primaryPage ? await pageSnapshot(primaryPage, runtimeConfig, true, false) : {}),
+      ...(await webmailWindowSnapshot(page, runtimeConfig, true, true)),
+    });
     await restorePrimaryPage();
   }
 
@@ -2829,12 +2863,20 @@ async function openVerificationWebmailPage(browser, runtimeConfig, primaryPage =
     ]).catch(() => false);
     await pauseStep();
     await captureWebmailLivePreviewScreenshot(page, runtimeConfig, true);
+    progress(runtimeConfig, 'verification-webmail-login-advanced', 'Webmail-Loginformular wurde weitergeschaltet.', {
+      ...(primaryPage ? await pageSnapshot(primaryPage, runtimeConfig, true, false) : {}),
+      ...(await webmailWindowSnapshot(page, runtimeConfig, true, true)),
+    });
     await restorePrimaryPage();
   }
 
   if (mailbox.password) {
     await fillFirstVisibleInputByHints(page, ['password', 'passwort'], mailbox.password).catch(() => false);
     await captureWebmailLivePreviewScreenshot(page, runtimeConfig, true);
+    progress(runtimeConfig, 'verification-webmail-password-entered', 'Webmail-Passwort wurde eingetragen.', {
+      ...(primaryPage ? await pageSnapshot(primaryPage, runtimeConfig, true, false) : {}),
+      ...(await webmailWindowSnapshot(page, runtimeConfig, true, true)),
+    });
     await restorePrimaryPage();
   }
 
@@ -2849,6 +2891,10 @@ async function openVerificationWebmailPage(browser, runtimeConfig, primaryPage =
       'weiter',
     ]).catch(() => false);
     await captureWebmailLivePreviewScreenshot(page, runtimeConfig, true);
+    progress(runtimeConfig, 'verification-webmail-login-submitted', 'Webmail-Login wurde abgesendet.', {
+      ...(primaryPage ? await pageSnapshot(primaryPage, runtimeConfig, true, false) : {}),
+      ...(await webmailWindowSnapshot(page, runtimeConfig, true, true)),
+    });
     await restorePrimaryPage();
   }
 

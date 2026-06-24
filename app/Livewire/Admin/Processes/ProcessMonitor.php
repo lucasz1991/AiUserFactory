@@ -11,6 +11,15 @@ use Livewire\Component;
 
 class ProcessMonitor extends Component
 {
+    private const FACTORY_NODE_PROCESS_TYPES = [
+        'mail-registration',
+        'webmail-session',
+        'verification-webmail-check',
+        'instagram-scraper',
+        'browser-child',
+        'node',
+    ];
+
     public string $filter = 'running';
 
     public int $limit = 25;
@@ -21,6 +30,8 @@ class ProcessMonitor extends Component
 
     public bool $autoRefresh = true;
 
+    public ?int $rootPid = null;
+
     public ?string $notice = null;
 
     public function mount(
@@ -28,11 +39,13 @@ class ProcessMonitor extends Component
         int $limit = 25,
         bool $showHeader = true,
         bool $autoRefresh = true,
+        ?int $rootPid = null,
     ): void {
         $this->compact = $compact;
         $this->limit = max(1, min(200, $limit));
         $this->showHeader = $showHeader;
         $this->autoRefresh = $autoRefresh;
+        $this->rootPid = $rootPid && $rootPid > 0 ? $rootPid : null;
 
         if ($compact) {
             $this->filter = 'running';
@@ -93,6 +106,7 @@ class ProcessMonitor extends Component
 
         $view = view('livewire.admin.processes.process-monitor', [
             'processes' => $processes,
+            'processTree' => $this->buildProcessTree($processes),
             'stats' => $this->stats(),
             'tableReady' => Schema::hasTable('managed_processes'),
         ]);
@@ -103,6 +117,11 @@ class ProcessMonitor extends Component
     protected function loadProcesses(): Collection
     {
         return ManagedProcess::query()
+            ->whereIn('process_type', self::FACTORY_NODE_PROCESS_TYPES)
+            ->when($this->rootPid, fn ($query) => $query->where(function ($inner): void {
+                $inner->where('pid', $this->rootPid)
+                    ->orWhere('family_root_pid', $this->rootPid);
+            }))
             ->when($this->filter === 'running', fn ($query) => $query->whereIn('status', ['running', 'terminate_requested', 'kill_requested']))
             ->when($this->filter === 'exited', fn ($query) => $query->whereIn('status', ['exited', 'terminated', 'killed']))
             ->when($this->filter === 'idle', fn ($query) => $query->where('is_idle_suspect', true)->where('status', 'running'))
@@ -112,6 +131,37 @@ class ProcessMonitor extends Component
             ->orderBy('pid')
             ->limit($this->limit)
             ->get();
+    }
+
+    protected function buildProcessTree(Collection $processes): Collection
+    {
+        if ($processes->isEmpty()) {
+            return collect();
+        }
+
+        $nodesByPid = $processes->mapWithKeys(function (ManagedProcess $process): array {
+            $node = clone $process;
+            $node->children = collect();
+
+            return [(int) $node->pid => $node];
+        });
+        $roots = collect();
+
+        foreach ($nodesByPid as $pid => $node) {
+            $parentPid = (int) ($node->parent_pid ?? 0);
+
+            if ($parentPid > 0 && $parentPid !== $pid && $nodesByPid->has($parentPid)) {
+                $nodesByPid->get($parentPid)->children->push($node);
+
+                continue;
+            }
+
+            $roots->push($node);
+        }
+
+        return $roots
+            ->sortBy(fn ($node) => [(int) ($node->family_root_pid ?? $node->pid), (int) $node->pid])
+            ->values();
     }
 
     protected function stats(): array
@@ -126,10 +176,20 @@ class ProcessMonitor extends Component
         }
 
         return [
-            'total' => ManagedProcess::query()->count(),
-            'running' => ManagedProcess::query()->whereIn('status', ['running', 'terminate_requested', 'kill_requested'])->count(),
-            'idle' => ManagedProcess::query()->where('is_idle_suspect', true)->where('status', 'running')->count(),
-            'exited' => ManagedProcess::query()->whereIn('status', ['exited', 'terminated', 'killed'])->count(),
+            'total' => $this->baseStatsQuery()->count(),
+            'running' => $this->baseStatsQuery()->whereIn('status', ['running', 'terminate_requested', 'kill_requested'])->count(),
+            'idle' => $this->baseStatsQuery()->where('is_idle_suspect', true)->where('status', 'running')->count(),
+            'exited' => $this->baseStatsQuery()->whereIn('status', ['exited', 'terminated', 'killed'])->count(),
         ];
+    }
+
+    protected function baseStatsQuery()
+    {
+        return ManagedProcess::query()
+            ->whereIn('process_type', self::FACTORY_NODE_PROCESS_TYPES)
+            ->when($this->rootPid, fn ($query) => $query->where(function ($inner): void {
+                $inner->where('pid', $this->rootPid)
+                    ->orWhere('family_root_pid', $this->rootPid);
+            }));
     }
 }

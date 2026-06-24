@@ -280,6 +280,14 @@
                 class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(360px,460px)]"
             >
                 <div class="overflow-hidden rounded-lg border border-slate-200 bg-slate-950">
+                    <div class="flex items-center justify-between gap-3 border-b border-slate-800 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-300">
+                        <span>Webmail</span>
+                        @if(data_get($verificationMailboxSessionResult, 'debugDomUrl'))
+                            <a href="{{ data_get($verificationMailboxSessionResult, 'debugDomUrl') }}" download="webmail-session-window-dom.json" class="rounded border border-slate-700 px-2 py-1 text-[10px] text-slate-200 hover:bg-slate-800">
+                                DOM
+                            </a>
+                        @endif
+                    </div>
                     @if(data_get($verificationMailboxSessionResult, 'screenshotUrl'))
                         <img src="{{ data_get($verificationMailboxSessionResult, 'screenshotUrl') }}" alt="Webmail Live Screenshot" class="aspect-video w-full object-contain">
                     @else
@@ -400,7 +408,14 @@
             >
                 <div class="grid gap-3">
                     <div class="overflow-hidden rounded-lg border border-slate-200 bg-slate-950">
-                        <div class="border-b border-slate-800 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-300">Registrierung</div>
+                        <div class="flex items-center justify-between gap-3 border-b border-slate-800 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-300">
+                            <span>Registrierung</span>
+                            @if(data_get($registrationRunStatus, 'registrationDebugDomUrl'))
+                                <a href="{{ data_get($registrationRunStatus, 'registrationDebugDomUrl') }}" download="mail-registration-window-dom.json" class="rounded border border-slate-700 px-2 py-1 text-[10px] text-slate-200 hover:bg-slate-800">
+                                    DOM
+                                </a>
+                            @endif
+                        </div>
                         @if(data_get($registrationRunStatus, 'screenshotUrl'))
                             <img src="{{ data_get($registrationRunStatus, 'screenshotUrl') }}" alt="Registrierung Live Screenshot" class="aspect-video w-full object-contain">
                         @elseif(data_get($registrationRunStatus, 'livePreviewEnabled') === false)
@@ -415,7 +430,14 @@
                     </div>
 
                     <div class="overflow-hidden rounded-lg border border-slate-200 bg-slate-950">
-                        <div class="border-b border-slate-800 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-300">Webmail</div>
+                        <div class="flex items-center justify-between gap-3 border-b border-slate-800 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-300">
+                            <span>Webmail</span>
+                            @if(data_get($registrationRunStatus, 'webmailDebugDomUrl'))
+                                <a href="{{ data_get($registrationRunStatus, 'webmailDebugDomUrl') }}" download="mail-registration-webmail-window-dom.json" class="rounded border border-slate-700 px-2 py-1 text-[10px] text-slate-200 hover:bg-slate-800">
+                                    DOM
+                                </a>
+                            @endif
+                        </div>
                         @if(data_get($registrationRunStatus, 'webmailScreenshotUrl'))
                             <img src="{{ data_get($registrationRunStatus, 'webmailScreenshotUrl') }}" alt="Webmail Live Screenshot" class="aspect-video w-full object-contain">
                         @elseif(data_get($registrationRunStatus, 'livePreviewEnabled') === false)
@@ -451,14 +473,18 @@
                                 Webmail-Check faellig: {{ data_get($registrationRunStatus, 'result.verificationWebmailCheckDueAt') }}
                             </div>
                         @endif
-                        @if(data_get($registrationRunStatus, 'debugDomUrl'))
-                            <div class="mt-3">
-                                <a href="{{ data_get($registrationRunStatus, 'debugDomUrl') }}" download="mail-registration-dom.json" class="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
-                                    DOM herunterladen
-                                </a>
-                            </div>
-                        @endif
                     </div>
+
+                    @if((int) data_get($registrationRunStatus, 'pid') > 0)
+                        <livewire:admin.processes.process-monitor
+                            :compact="true"
+                            :limit="30"
+                            :show-header="false"
+                            :auto-refresh="true"
+                            :root-pid="(int) data_get($registrationRunStatus, 'pid')"
+                            :key="'mail-registration-processes-'.data_get($registrationRunStatus, 'runId', data_get($registrationRunStatus, 'pid'))"
+                        />
+                    @endif
 
                     <div class="max-h-[560px] overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-4">
                         <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Ablauf</div>
