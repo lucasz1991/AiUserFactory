@@ -1,7 +1,11 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { launchConfiguredBrowser, resolveBrowserEngine } = require('./lib/browser-launcher.cjs');
+const {
+  BROWSER_LAUNCHER_SCRIPT_VERSION,
+  launchConfiguredBrowser,
+  resolveBrowserEngine,
+} = require('./lib/browser-launcher.cjs');
 
 let puppeteer = null;
 
@@ -22,6 +26,9 @@ const DOM_DEBUG_HTML_LIMIT = 6000;
 const STEP_DELAY_MS = 150;
 const TYPING_DELAY_MS = 150;
 const SUBMIT_DELAY_MS = 1500;
+const MAIL_ACCOUNT_SCRIPT_NAME = 'mail_account.cjs';
+const MAIL_ACCOUNT_SCRIPT_VERSION = 1;
+const MAIL_ACCOUNT_SCRIPT_VERSION_LABEL = `${MAIL_ACCOUNT_SCRIPT_NAME} v${MAIL_ACCOUNT_SCRIPT_VERSION}`;
 
 const runtimeConfigPath = process.argv[2] || '';
 const statusEvents = [];
@@ -73,6 +80,13 @@ function publicStatusPayload(runtimeConfig, state, stage, message, data = {}) {
     requestedBrowserEngine,
     activeBrowserEngine,
     browserFallbackReason,
+    scriptName: MAIL_ACCOUNT_SCRIPT_NAME,
+    scriptVersion: MAIL_ACCOUNT_SCRIPT_VERSION,
+    scriptVersionLabel: MAIL_ACCOUNT_SCRIPT_VERSION_LABEL,
+    scriptVersions: {
+      mailAccount: MAIL_ACCOUNT_SCRIPT_VERSION,
+      browserLauncher: BROWSER_LAUNCHER_SCRIPT_VERSION || 1,
+    },
     livePreviewEnabled: runtimeConfig.livePreviewEnabled !== false,
     domDebugEnabled: runtimeConfig.domDebugEnabled !== false,
     finalUrl: data.finalUrl || null,
@@ -1237,6 +1251,59 @@ async function waitForProtonVerificationEmailInput(page, timeoutMs = 4000) {
   return input;
 }
 
+async function isProtonEmailVerificationTabSelected(pageOrFrame) {
+  return pageOrFrame.evaluate(() => {
+    const tab = document.querySelector('[data-testid="tab-header-e-mail-button"]');
+
+    if (!tab) {
+      return false;
+    }
+
+    const rect = tab.getBoundingClientRect();
+    const style = window.getComputedStyle(tab);
+
+    if (
+      rect.width <= 0
+      || rect.height <= 0
+      || style.visibility === 'hidden'
+      || style.display === 'none'
+    ) {
+      return false;
+    }
+
+    return tab.getAttribute('aria-selected') === 'true'
+      || Boolean(tab.closest('.tabs-list-item--selected'));
+  }).catch(() => false);
+}
+
+async function waitForProtonEmailVerificationTabReady(page, timeoutMs = 5000) {
+  const stopAt = Date.now() + timeoutMs;
+
+  while (Date.now() < stopAt) {
+    if (await findVisibleEmailInputIncludingFrames(page)) {
+      return true;
+    }
+
+    if (await isProtonEmailVerificationTabSelected(page)) {
+      return true;
+    }
+
+    for (const frame of page.frames()) {
+      if (frame === page.mainFrame()) {
+        continue;
+      }
+
+      if (await isProtonEmailVerificationTabSelected(frame)) {
+        return true;
+      }
+    }
+
+    await sleep(250);
+  }
+
+  return false;
+}
+
 async function protonEmailVerificationTabPoint(pageOrFrame) {
   return pageOrFrame.evaluate(() => {
     const allElementsDeep = (root = document) => {
@@ -1510,6 +1577,81 @@ async function waitForProtonHumanVerificationDialogIncludingFrames(page, timeout
   return null;
 }
 
+async function findProtonEmailVerificationTabHandle(pageOrFrame) {
+  const directHandle = await pageOrFrame.$('[data-testid="tab-header-e-mail-button"]').catch(() => null);
+
+  if (directHandle) {
+    const visible = await directHandle.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+
+      return rect.width > 0
+        && rect.height > 0
+        && style.visibility !== 'hidden'
+        && style.display !== 'none'
+        && !element.disabled;
+    }).catch(() => false);
+
+    if (visible) {
+      return directHandle;
+    }
+
+    await directHandle.dispose().catch(() => {});
+  }
+
+  return pageOrFrame.evaluateHandle(() => {
+    const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const visible = (element) => {
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+
+      return rect.width > 0
+        && rect.height > 0
+        && style.visibility !== 'hidden'
+        && style.display !== 'none'
+        && !element.disabled;
+    };
+    const textFor = (element) => normalize([
+      element.innerText,
+      element.textContent,
+      element.value,
+      element.getAttribute('aria-label'),
+      element.getAttribute('title'),
+      element.getAttribute('data-title'),
+    ].join(' '));
+    const candidate = Array.from(document.querySelectorAll('button, [role="tab"]'))
+      .find((element) => visible(element) && (
+        element.getAttribute('data-testid') === 'tab-header-e-mail-button'
+        || (
+          element.getAttribute('role') === 'tab'
+          && element.getAttribute('aria-controls')
+          && /^e-?mail$/.test(textFor(element))
+        )
+      ));
+
+    return candidate || null;
+  }).then((handle) => handle.asElement()).catch(() => null);
+}
+
+async function clickProtonEmailVerificationTabByHandle(pageOrFrame) {
+  const tabHandle = await findProtonEmailVerificationTabHandle(pageOrFrame);
+
+  if (!tabHandle) {
+    return false;
+  }
+
+  try {
+    await tabHandle.click({ delay: 80 });
+    await pauseStep();
+
+    return true;
+  } catch {
+    return false;
+  } finally {
+    await tabHandle.dispose().catch(() => {});
+  }
+}
+
 async function selectProtonEmailVerificationTab(page) {
   const labels = [
     'email',
@@ -1527,23 +1669,39 @@ async function selectProtonEmailVerificationTab(page) {
   let humanDialogVisible = Boolean(humanDialogContext);
 
   if (humanDialogContext) {
+    if (await clickProtonEmailVerificationTabByHandle(humanDialogContext)) {
+      if (await waitForProtonEmailVerificationTabReady(page)) {
+        return true;
+      }
+    }
+
     if (await clickProtonEmailVerificationTabInContext(humanDialogContext)) {
-      return Boolean(await waitForProtonVerificationEmailInput(page));
+      if (await waitForProtonEmailVerificationTabReady(page)) {
+        return true;
+      }
     }
 
     if (await clickProtonEmailVerificationTabByMouse(page, humanDialogContext)) {
-      return Boolean(await waitForProtonVerificationEmailInput(page));
+      if (await waitForProtonEmailVerificationTabReady(page)) {
+        return true;
+      }
+    }
+  }
+
+  if (await clickProtonEmailVerificationTabByHandle(page)) {
+    if (await waitForProtonEmailVerificationTabReady(page)) {
+      return true;
     }
   }
 
   if (await clickProtonEmailVerificationTabInContext(page)) {
-    if (await waitForProtonVerificationEmailInput(page)) {
+    if (await waitForProtonEmailVerificationTabReady(page)) {
       return true;
     }
   }
 
   if (humanDialogVisible && await clickProtonEmailVerificationTabByMouse(page)) {
-    return Boolean(await waitForProtonVerificationEmailInput(page));
+    return waitForProtonEmailVerificationTabReady(page);
   }
 
   for (const frame of page.frames()) {
@@ -1553,12 +1711,22 @@ async function selectProtonEmailVerificationTab(page) {
 
     humanDialogVisible = humanDialogVisible || await hasProtonHumanVerificationDialog(frame);
 
+    if (await clickProtonEmailVerificationTabByHandle(frame)) {
+      if (await waitForProtonEmailVerificationTabReady(page)) {
+        return true;
+      }
+    }
+
     if (await clickProtonEmailVerificationTabInContext(frame)) {
-      return Boolean(await waitForProtonVerificationEmailInput(page));
+      if (await waitForProtonEmailVerificationTabReady(page)) {
+        return true;
+      }
     }
 
     if (await hasProtonHumanVerificationDialog(frame) && await clickProtonEmailVerificationTabByMouse(page, frame)) {
-      return Boolean(await waitForProtonVerificationEmailInput(page));
+      if (await waitForProtonEmailVerificationTabReady(page)) {
+        return true;
+      }
     }
   }
 
@@ -2908,6 +3076,13 @@ async function main() {
       requestedBrowserEngine,
       activeBrowserEngine,
       browserFallbackReason,
+      scriptName: MAIL_ACCOUNT_SCRIPT_NAME,
+      scriptVersion: MAIL_ACCOUNT_SCRIPT_VERSION,
+      scriptVersionLabel: MAIL_ACCOUNT_SCRIPT_VERSION_LABEL,
+      scriptVersions: {
+        mailAccount: MAIL_ACCOUNT_SCRIPT_VERSION,
+        browserLauncher: BROWSER_LAUNCHER_SCRIPT_VERSION || 1,
+      },
       finishedAt: new Date().toISOString(),
     };
 
@@ -2941,6 +3116,13 @@ main().catch((error) => {
     requestedBrowserEngine,
     activeBrowserEngine,
     browserFallbackReason,
+    scriptName: MAIL_ACCOUNT_SCRIPT_NAME,
+    scriptVersion: MAIL_ACCOUNT_SCRIPT_VERSION,
+    scriptVersionLabel: MAIL_ACCOUNT_SCRIPT_VERSION_LABEL,
+    scriptVersions: {
+      mailAccount: MAIL_ACCOUNT_SCRIPT_VERSION,
+      browserLauncher: BROWSER_LAUNCHER_SCRIPT_VERSION || 1,
+    },
     finishedAt: new Date().toISOString(),
   };
 

@@ -15,6 +15,8 @@ class MailAccountRegistrationRunner
     public const SETTINGS_KEY = 'account_registration';
     public const PROVIDER_MODE_OBSERVED_MANUAL = 'observed_manual';
     public const PROVIDER_MODE_PROTON_USERNAME_CHECK = 'proton_username_check';
+    public const MAIL_ACCOUNT_SCRIPT_VERSION = 1;
+    public const BROWSER_LAUNCHER_SCRIPT_VERSION = 1;
 
     public function settings(): array
     {
@@ -167,6 +169,13 @@ class MailAccountRegistrationRunner
             'livePreviewRelativePath' => $this->publicScreenshotRelativePath($runId),
             'statusPath' => $statusPath,
             'resultPath' => $resultPath,
+            'scriptName' => 'mail_account.cjs',
+            'scriptVersion' => self::MAIL_ACCOUNT_SCRIPT_VERSION,
+            'scriptVersionLabel' => 'mail_account.cjs v'.self::MAIL_ACCOUNT_SCRIPT_VERSION,
+            'scriptVersions' => [
+                'mailAccount' => self::MAIL_ACCOUNT_SCRIPT_VERSION,
+                'browserLauncher' => self::BROWSER_LAUNCHER_SCRIPT_VERSION,
+            ],
             'provider' => [
                 'key' => $provider['key'],
                 'label' => $provider['label'],
@@ -190,6 +199,13 @@ class MailAccountRegistrationRunner
             'message' => 'Mail-Registrierung ist eingeplant.',
             'livePreviewEnabled' => (bool) $settings['live_preview_enabled'],
             'domDebugEnabled' => (bool) $settings['dom_debug_enabled'],
+            'scriptName' => 'mail_account.cjs',
+            'scriptVersion' => self::MAIL_ACCOUNT_SCRIPT_VERSION,
+            'scriptVersionLabel' => 'mail_account.cjs v'.self::MAIL_ACCOUNT_SCRIPT_VERSION,
+            'scriptVersions' => [
+                'mailAccount' => self::MAIL_ACCOUNT_SCRIPT_VERSION,
+                'browserLauncher' => self::BROWSER_LAUNCHER_SCRIPT_VERSION,
+            ],
             'at' => now()->toIso8601String(),
             'events' => [],
         ]);
@@ -214,6 +230,13 @@ class MailAccountRegistrationRunner
             $status['message'] = 'Node-Prozess wurde gestartet.';
             $status['livePreviewEnabled'] = (bool) $settings['live_preview_enabled'];
             $status['domDebugEnabled'] = (bool) $settings['dom_debug_enabled'];
+            $status['scriptName'] = 'mail_account.cjs';
+            $status['scriptVersion'] = self::MAIL_ACCOUNT_SCRIPT_VERSION;
+            $status['scriptVersionLabel'] = 'mail_account.cjs v'.self::MAIL_ACCOUNT_SCRIPT_VERSION;
+            $status['scriptVersions'] = [
+                'mailAccount' => self::MAIL_ACCOUNT_SCRIPT_VERSION,
+                'browserLauncher' => self::BROWSER_LAUNCHER_SCRIPT_VERSION,
+            ];
             $status['at'] = now()->toIso8601String();
             $this->writeJsonFile($statusPath, $status);
         } catch (\Throwable $exception) {
@@ -226,6 +249,13 @@ class MailAccountRegistrationRunner
                 'message' => $exception->getMessage(),
                 'livePreviewEnabled' => (bool) $settings['live_preview_enabled'],
                 'domDebugEnabled' => (bool) $settings['dom_debug_enabled'],
+                'scriptName' => 'mail_account.cjs',
+                'scriptVersion' => self::MAIL_ACCOUNT_SCRIPT_VERSION,
+                'scriptVersionLabel' => 'mail_account.cjs v'.self::MAIL_ACCOUNT_SCRIPT_VERSION,
+                'scriptVersions' => [
+                    'mailAccount' => self::MAIL_ACCOUNT_SCRIPT_VERSION,
+                    'browserLauncher' => self::BROWSER_LAUNCHER_SCRIPT_VERSION,
+                ],
                 'at' => now()->toIso8601String(),
                 'events' => [],
             ]);

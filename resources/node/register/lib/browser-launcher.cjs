@@ -4,6 +4,7 @@ const childProcess = require('child_process');
 const BROWSER_ENGINE_CHROME = 'chrome';
 const BROWSER_ENGINE_CLOAK = 'cloak';
 const BROWSER_ENGINE_CLOAK_WITH_FALLBACK = 'cloak-with-chrome-fallback';
+const BROWSER_LAUNCHER_SCRIPT_VERSION = 1;
 
 function normalizeBrowserEngine(value = '') {
   const normalized = String(value || '').trim().toLowerCase();
@@ -281,6 +282,7 @@ module.exports = {
   BROWSER_ENGINE_CHROME,
   BROWSER_ENGINE_CLOAK,
   BROWSER_ENGINE_CLOAK_WITH_FALLBACK,
+  BROWSER_LAUNCHER_SCRIPT_VERSION,
   isBrowserProfileLockError,
   launchConfiguredBrowser,
   normalizeBrowserEngine,
