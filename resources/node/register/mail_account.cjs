@@ -27,7 +27,7 @@ const STEP_DELAY_MS = 150;
 const TYPING_DELAY_MS = 150;
 const SUBMIT_DELAY_MS = 1500;
 const MAIL_ACCOUNT_SCRIPT_NAME = 'mail_account.cjs';
-const MAIL_ACCOUNT_SCRIPT_VERSION = 2;
+const MAIL_ACCOUNT_SCRIPT_VERSION = 3;
 const MAIL_ACCOUNT_SCRIPT_VERSION_LABEL = `${MAIL_ACCOUNT_SCRIPT_NAME} v${MAIL_ACCOUNT_SCRIPT_VERSION}`;
 const runtimeConfigPath = process.argv[2] || '';
 const statusEvents = [];
@@ -2761,11 +2761,16 @@ async function fillFirstMatchingInputInPageOrFrames(page, selectors, value, time
           continue;
         }
 
-        await fillInputValue(input, value);
+        let enteredValue = await fillInputValue(input, value).catch(() => '');
+
+        if (String(enteredValue || '') !== String(value ?? '')) {
+          enteredValue = await forceInputValue(input, value).catch(() => enteredValue);
+        }
+
         await input.dispose().catch(() => {});
         await pauseStep();
 
-        return true;
+        return String(enteredValue || '') === String(value ?? '');
       }
     }
 
@@ -2864,6 +2869,107 @@ async function fillWebmailPassword(page, mailbox) {
   return fillFirstMatchingInputInPageOrFrames(page, selectors, mailbox.password, 15000);
 }
 
+async function clickGmxWebmailNextInPageOrFrames(page, timeoutMs = 10000) {
+  const stopAt = Date.now() + Math.max(1000, Number(timeoutMs) || 10000);
+
+  while (Date.now() < stopAt) {
+    for (const frame of page.frames()) {
+      const result = await frame.evaluate(() => {
+        const visible = (element) => {
+          if (!element) {
+            return false;
+          }
+
+          const rect = element.getBoundingClientRect();
+          const style = window.getComputedStyle(element);
+
+          return rect.width > 0
+            && rect.height > 0
+            && style.visibility !== 'hidden'
+            && style.display !== 'none';
+        };
+        const input = Array.from(document.querySelectorAll([
+          '#email',
+          '#login-email',
+          'input[data-testid="input-username"]',
+          'input[name="username"]',
+          'input[type="email"]',
+          'input[autocomplete="username"]',
+        ].join(','))).find((candidate) => visible(candidate) && !candidate.disabled && !candidate.readOnly);
+        const button = Array.from(document.querySelectorAll([
+          'button[data-testid="button-next"]',
+          '#login-submit',
+          'button[type="submit"]',
+          'input[type="submit"]',
+        ].join(','))).find((candidate) => visible(candidate));
+
+        if (input) {
+          input.focus();
+          input.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Unidentified' }));
+          input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: input.value || '' }));
+          input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Unidentified' }));
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+
+        if (button && !button.disabled) {
+          button.scrollIntoView({ block: 'center', inline: 'center' });
+          button.focus?.({ preventScroll: true });
+          button.click();
+
+          return {
+            advanced: true,
+            method: 'button-click',
+            value: input?.value || '',
+            buttonDisabled: false,
+          };
+        }
+
+        const form = input?.form || button?.form || document.querySelector('form');
+        const value = String(input?.value || '').trim();
+        const valid = input ? input.checkValidity() : false;
+
+        if (form && value !== '' && valid) {
+          const event = new Event('submit', { bubbles: true, cancelable: true });
+          form.dispatchEvent(event);
+
+          try {
+            if (typeof form.requestSubmit === 'function') {
+              form.requestSubmit();
+            }
+          } catch {
+            // The dispatched submit event above is enough for React-style handlers.
+          }
+
+          return {
+            advanced: true,
+            method: 'form-submit-event',
+            value,
+            buttonDisabled: Boolean(button?.disabled),
+          };
+        }
+
+        return {
+          advanced: false,
+          method: 'waiting',
+          value,
+          valid,
+          buttonDisabled: Boolean(button?.disabled),
+        };
+      }).catch(() => ({ advanced: false }));
+
+      if (result?.advanced) {
+        await pauseStep();
+
+        return true;
+      }
+    }
+
+    await sleep(300);
+  }
+
+  return false;
+}
+
 async function clickWebmailLoginContinue(page, mailbox) {
   const labels = [
     'weiter',
@@ -2878,6 +2984,10 @@ async function clickWebmailLoginContinue(page, mailbox) {
   const selectors = mailbox.provider === 'gmx'
     ? '#login-submit, button[data-testid="button-next"], button[data-testid*="login" i], button, input[type="submit"], [role="button"]'
     : 'button, input[type="submit"], [role="button"], a';
+
+  if (mailbox.provider === 'gmx' && await clickGmxWebmailNextInPageOrFrames(page)) {
+    return true;
+  }
 
   return clickVisibleTextTargetInPageOrFrames(page, labels, selectors, true)
     || clickFirstMatchingButtonIncludingFrames(page, labels);
@@ -3159,6 +3269,7 @@ async function openVerificationWebmailPage(browser, runtimeConfig, primaryPage =
     await restorePrimaryPage();
   }
 
+  await page.bringToFront().catch(() => {});
   const usernameFilled = mailbox.username
     ? await fillWebmailUsername(page, mailbox).catch(() => false)
     : false;
@@ -3181,6 +3292,7 @@ async function openVerificationWebmailPage(browser, runtimeConfig, primaryPage =
     await restorePrimaryPage();
   }
 
+  await page.bringToFront().catch(() => {});
   const usernameAdvanced = usernameFilled
     ? await clickWebmailLoginContinue(page, mailbox).catch(() => false)
     : false;
@@ -3204,6 +3316,7 @@ async function openVerificationWebmailPage(browser, runtimeConfig, primaryPage =
     await restorePrimaryPage();
   }
 
+  await page.bringToFront().catch(() => {});
   const passwordFilled = mailbox.password
     ? await fillWebmailPassword(page, mailbox).catch(() => false)
     : false;
@@ -3225,6 +3338,7 @@ async function openVerificationWebmailPage(browser, runtimeConfig, primaryPage =
     await restorePrimaryPage();
   }
 
+  await page.bringToFront().catch(() => {});
   const passwordSubmitted = passwordFilled
     ? await clickWebmailLoginContinue(page, mailbox).catch(() => false)
     : false;

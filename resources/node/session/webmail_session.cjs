@@ -17,12 +17,14 @@ try {
 }
 
 const SCRIPT_NAME = process.env.WEBMAIL_SESSION_SCRIPT_NAME || 'webmail_session.cjs';
-const SCRIPT_VERSION = 1;
+const SCRIPT_VERSION = 3;
 const DEFAULT_VIEWPORT = { width: 1365, height: 900 };
 const LIVE_PREVIEW_MIN_INTERVAL_MS = 2500;
 const DOM_DEBUG_TEXT_LIMIT = 3000;
 const DOM_DEBUG_HTML_LIMIT = 6000;
+const BROWSER_DEBUG_EVENT_LIMIT = 120;
 const statusEvents = [];
+const browserDebugEvents = [];
 let lastLivePreviewAt = 0;
 let currentStatusPayload = null;
 let heartbeatTimer = null;
@@ -49,6 +51,95 @@ function ensureDirectory(directoryPath) {
 function writeJsonFile(filePath, payload) {
   ensureDirectory(path.dirname(filePath));
   fs.writeFileSync(filePath, JSON.stringify(payload, null, 2), 'utf8');
+}
+
+function compactDebugText(value = '', limit = 1200) {
+  const text = normalizeText(value);
+
+  return text.length > limit ? `${text.slice(0, limit)}... [truncated ${text.length - limit} chars]` : text;
+}
+
+function pushBrowserDebugEvent(event) {
+  browserDebugEvents.push({
+    at: new Date().toISOString(),
+    ...event,
+  });
+
+  if (browserDebugEvents.length > BROWSER_DEBUG_EVENT_LIMIT) {
+    browserDebugEvents.splice(0, browserDebugEvents.length - BROWSER_DEBUG_EVENT_LIMIT);
+  }
+}
+
+function recentBrowserDebugEvents(limit = BROWSER_DEBUG_EVENT_LIMIT) {
+  return browserDebugEvents.slice(-Math.max(1, Number(limit) || BROWSER_DEBUG_EVENT_LIMIT));
+}
+
+async function consoleMessageArgs(message) {
+  const handles = typeof message.args === 'function' ? message.args() : [];
+  const values = [];
+
+  for (const handle of handles.slice(0, 8)) {
+    try {
+      values.push(await handle.jsonValue());
+    } catch {
+      values.push(String(handle));
+    }
+  }
+
+  return values;
+}
+
+function installBrowserDebugListeners(page, label = 'webmail') {
+  if (!page || page.__followflowDebugListenersInstalled) {
+    return;
+  }
+
+  page.__followflowDebugListenersInstalled = true;
+
+  page.on('console', async (message) => {
+    pushBrowserDebugEvent({
+      source: label,
+      type: 'console',
+      level: typeof message.type === 'function' ? message.type() : '',
+      text: compactDebugText(typeof message.text === 'function' ? message.text() : ''),
+      location: typeof message.location === 'function' ? message.location() : null,
+      args: await consoleMessageArgs(message).catch(() => []),
+    });
+  });
+
+  page.on('pageerror', (error) => {
+    pushBrowserDebugEvent({
+      source: label,
+      type: 'pageerror',
+      message: compactDebugText(error?.message || String(error), 2000),
+      stack: compactDebugText(error?.stack || '', 3000),
+    });
+  });
+
+  page.on('requestfailed', (request) => {
+    pushBrowserDebugEvent({
+      source: label,
+      type: 'requestfailed',
+      method: typeof request.method === 'function' ? request.method() : '',
+      url: compactDebugText(typeof request.url === 'function' ? request.url() : '', 2000),
+      failure: typeof request.failure === 'function' ? request.failure() : null,
+    });
+  });
+
+  page.on('response', (response) => {
+    const status = typeof response.status === 'function' ? response.status() : 0;
+
+    if (status < 400) {
+      return;
+    }
+
+    pushBrowserDebugEvent({
+      source: label,
+      type: 'response',
+      status,
+      url: compactDebugText(typeof response.url === 'function' ? response.url() : '', 2000),
+    });
+  });
 }
 
 function publicStatusPayload(runtimeConfig, state, stage, message, data = {}) {
@@ -94,6 +185,7 @@ function publicStatusPayload(runtimeConfig, state, stage, message, data = {}) {
     finalUrl: data.finalUrl || null,
     title: data.title || null,
     debugDom: data.debugDom || null,
+    browserDebugEvents: data.browserDebugEvents || recentBrowserDebugEvents(),
     liveScreenshotPath: data.liveScreenshotPath || null,
     liveScreenshotAt: data.liveScreenshotAt || null,
     events: statusEvents.slice(-40),
@@ -108,6 +200,7 @@ function progress(runtimeConfig, stage, message, data = {}, state = 'running') {
     finalUrl: data.finalUrl || null,
     title: data.title || null,
     debugDom: data.debugDom || null,
+    browserDebugEvents: data.browserDebugEvents || recentBrowserDebugEvents(),
     liveScreenshotAt: data.liveScreenshotAt || null,
     browserProfilePath: data.browserProfilePath || runtimeConfig.browserProfilePath || null,
     previousBrowserProfilePath: data.previousBrowserProfilePath || runtimeConfig.previousBrowserProfilePath || null,
@@ -288,24 +381,50 @@ async function frameDomDebug(frame) {
   });
 }
 
+function safeFrameName(frame) {
+  try {
+    return frame?.name?.() || '';
+  } catch {
+    return '';
+  }
+}
+
+function safeFrameUrl(frame) {
+  try {
+    return frame?.url?.() || '';
+  } catch {
+    return '';
+  }
+}
+
 async function domDebugSnapshot(page) {
   if (!page) {
     return null;
   }
 
   const frames = [];
+  const pageUrl = (() => {
+    try {
+      return page.url();
+    } catch {
+      return '';
+    }
+  })();
 
   for (const frame of page.frames()) {
+    const name = safeFrameName(frame);
+    const url = safeFrameUrl(frame);
+
     try {
       frames.push({
-        name: frame.name() || '',
-        url: frame.url(),
+        name,
+        url,
         dom: await frameDomDebug(frame),
       });
     } catch (error) {
       frames.push({
-        name: frame.name() || '',
-        url: frame.url(),
+        name,
+        url,
         error: normalizeText(error?.message || String(error)),
       });
     }
@@ -313,6 +432,8 @@ async function domDebugSnapshot(page) {
 
   return {
     capturedAt: new Date().toISOString(),
+    url: pageUrl,
+    browserDebugEvents: recentBrowserDebugEvents(),
     frames,
   };
 }
@@ -386,79 +507,170 @@ async function collectSessionCookies(page, browser, urls = []) {
   return Array.from(cookieMap.values());
 }
 
+async function fillInputHandleValue(input, value, delay = 35) {
+  const nextValue = String(value ?? '');
+
+  await input.evaluate((element) => {
+    element.scrollIntoView({ block: 'center', inline: 'center' });
+    element.focus();
+
+    const prototype = element instanceof HTMLTextAreaElement
+      ? HTMLTextAreaElement.prototype
+      : HTMLInputElement.prototype;
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, 'value');
+
+    if (descriptor?.set) {
+      descriptor.set.call(element, '');
+    } else {
+      element.value = '';
+    }
+
+    element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward', data: '' }));
+    element.dispatchEvent(new Event('change', { bubbles: true }));
+  }).catch(() => {});
+
+  await input.click({ clickCount: 3 }).catch(() => {});
+  await input.type(nextValue, { delay }).catch(async () => {
+    await input.evaluate((element, typedValue) => {
+      const prototype = element instanceof HTMLTextAreaElement
+        ? HTMLTextAreaElement.prototype
+        : HTMLInputElement.prototype;
+      const descriptor = Object.getOwnPropertyDescriptor(prototype, 'value');
+
+      if (descriptor?.set) {
+        descriptor.set.call(element, typedValue);
+      } else {
+        element.value = typedValue;
+      }
+
+      element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: typedValue }));
+      element.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Unidentified' }));
+      element.dispatchEvent(new Event('change', { bubbles: true }));
+    }, nextValue);
+  });
+
+  await input.evaluate((element) => {
+    element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: element.value || '' }));
+    element.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Unidentified' }));
+    element.dispatchEvent(new Event('change', { bubbles: true }));
+  }).catch(() => {});
+
+  return input.evaluate((element) => element.value || '').catch(() => '');
+}
+
 async function fillFirstMatchingInput(page, selectors, value, delay = 35) {
-  for (const selector of selectors) {
-    const input = await page.$(selector).catch(() => null);
+  const frames = typeof page.frames === 'function' ? page.frames() : [page];
 
-    if (!input) {
-      continue;
+  for (const frame of frames) {
+    for (const selector of selectors) {
+      const input = await frame.$(selector).catch(() => null);
+
+      if (!input) {
+        continue;
+      }
+
+      const usable = await input.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+
+        return rect.width > 0
+          && rect.height > 0
+          && style.visibility !== 'hidden'
+          && style.display !== 'none'
+          && !element.disabled
+          && !element.readOnly;
+      }).catch(() => false);
+
+      if (!usable) {
+        await input.dispose().catch(() => {});
+        continue;
+      }
+
+      const enteredValue = await fillInputHandleValue(input, value, delay);
+      await input.dispose().catch(() => {});
+
+      if (String(enteredValue || '') === String(value ?? '')) {
+        return true;
+      }
     }
-
-    const usable = await input.evaluate((element) => {
-      const rect = element.getBoundingClientRect();
-      const style = window.getComputedStyle(element);
-
-      return rect.width > 0
-        && rect.height > 0
-        && style.visibility !== 'hidden'
-        && style.display !== 'none'
-        && !element.disabled
-        && !element.readOnly;
-    }).catch(() => false);
-
-    if (!usable) {
-      continue;
-    }
-
-    await input.click({ clickCount: 3 }).catch(() => {});
-    await input.type(value, { delay }).catch(async () => {
-      await input.evaluate((element, nextValue) => {
-        element.value = nextValue;
-        element.dispatchEvent(new Event('input', { bubbles: true }));
-        element.dispatchEvent(new Event('change', { bubbles: true }));
-      }, value);
-    });
-
-    return true;
   }
 
   return false;
 }
 
 async function clickSubmit(page) {
-  return page.evaluate(() => {
-    const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
-    const candidates = Array.from(document.querySelectorAll('button, input[type="submit"], [role="button"]'));
-    const target = candidates.find((element) => {
-      const rect = element.getBoundingClientRect();
-      const style = window.getComputedStyle(element);
-      const text = normalize([
-        element.innerText,
-        element.textContent,
-        element.value,
-        element.getAttribute('aria-label'),
-        element.getAttribute('title'),
-      ].join(' '));
+  const frames = typeof page.frames === 'function' ? page.frames() : [page];
 
-      return rect.width > 0
-        && rect.height > 0
-        && style.visibility !== 'hidden'
-        && style.display !== 'none'
-        && !element.disabled
-        && (
-          element.getAttribute('type') === 'submit'
-          || /(login|log in|sign in|anmelden|einloggen|weiter|continue|next)/.test(text)
-        );
-    });
+  for (const frame of frames) {
+    const clicked = await frame.evaluate(() => {
+      const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      const visible = (element) => {
+        if (!element) {
+          return false;
+        }
 
-    if (!target) {
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+
+        return rect.width > 0
+          && rect.height > 0
+          && style.visibility !== 'hidden'
+          && style.display !== 'none';
+      };
+      const candidates = Array.from(document.querySelectorAll('button, input[type="submit"], [role="button"]'));
+      const target = candidates.find((element) => {
+        const text = normalize([
+          element.innerText,
+          element.textContent,
+          element.value,
+          element.getAttribute('aria-label'),
+          element.getAttribute('title'),
+          element.getAttribute('data-testid'),
+        ].join(' '));
+
+        return visible(element)
+          && !element.disabled
+          && (
+            element.getAttribute('type') === 'submit'
+            || /(login|log in|sign in|anmelden|einloggen|weiter|continue|next|button-next)/.test(text)
+          );
+      });
+
+      if (target) {
+        target.scrollIntoView({ block: 'center', inline: 'center' });
+        target.focus?.({ preventScroll: true });
+        target.click();
+
+        return true;
+      }
+
+      const input = Array.from(document.querySelectorAll('#email, #login-email, input[data-testid="input-username"], input[name="username"], input[type="email"], input[autocomplete="username"]'))
+        .find((candidate) => visible(candidate) && String(candidate.value || '').trim() !== '' && candidate.checkValidity());
+      const form = input?.form || document.querySelector('form');
+
+      if (form && input) {
+        form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+
+        try {
+          if (typeof form.requestSubmit === 'function') {
+            form.requestSubmit();
+          }
+        } catch {
+          // The submit event is enough for React-style handlers.
+        }
+
+        return true;
+      }
+
       return false;
+    }).catch(() => false);
+
+    if (clicked) {
+      return true;
     }
+  }
 
-    target.click();
-
-    return true;
-  }).catch(() => false);
+  return false;
 }
 
 function webmailProviderKey(runtimeConfig) {
@@ -476,38 +688,50 @@ function webmailProviderKey(runtimeConfig) {
 }
 
 async function clickByText(page, patterns, selector = 'button, [role="button"], a, input[type="submit"]') {
-  return page.evaluate((patternValues, targetSelector) => {
-    const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
-    const patterns = patternValues.map((pattern) => new RegExp(pattern, 'i'));
-    const candidates = Array.from(document.querySelectorAll(targetSelector));
-    const target = candidates.find((element) => {
-      const rect = element.getBoundingClientRect();
-      const style = window.getComputedStyle(element);
-      const text = normalize([
-        element.innerText,
-        element.textContent,
-        element.value,
-        element.getAttribute('aria-label'),
-        element.getAttribute('title'),
-        element.getAttribute('data-testid'),
-      ].join(' '));
+  const frames = typeof page.frames === 'function' ? page.frames() : [page];
 
-      return rect.width > 0
-        && rect.height > 0
-        && style.visibility !== 'hidden'
-        && style.display !== 'none'
-        && !element.disabled
-        && patterns.some((pattern) => pattern.test(text));
-    });
+  for (const frame of frames) {
+    const clicked = await frame.evaluate((patternValues, targetSelector) => {
+      const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      const patterns = patternValues.map((pattern) => new RegExp(pattern, 'i'));
+      const candidates = Array.from(document.querySelectorAll(targetSelector));
+      const target = candidates.find((element) => {
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+        const text = normalize([
+          element.innerText,
+          element.textContent,
+          element.value,
+          element.getAttribute('aria-label'),
+          element.getAttribute('title'),
+          element.getAttribute('data-testid'),
+        ].join(' '));
 
-    if (!target) {
-      return false;
+        return rect.width > 0
+          && rect.height > 0
+          && style.visibility !== 'hidden'
+          && style.display !== 'none'
+          && !element.disabled
+          && patterns.some((pattern) => pattern.test(text));
+      });
+
+      if (!target) {
+        return false;
+      }
+
+      target.scrollIntoView({ block: 'center', inline: 'center' });
+      target.focus?.({ preventScroll: true });
+      target.click();
+
+      return true;
+    }, patterns, selector).catch(() => false);
+
+    if (clicked) {
+      return true;
     }
+  }
 
-    target.click();
-
-    return true;
-  }, patterns, selector).catch(() => false);
+  return false;
 }
 
 async function clickSelectorInPageOrFrames(page, selector, timeoutMs = 5000) {
@@ -612,11 +836,15 @@ async function attemptWebmailLogin(page, runtimeConfig) {
   }
 
   diagnostics.attempted = true;
+  diagnostics.username = username;
+
+  await page.bringToFront().catch(() => {});
 
   if (providerKey === 'gmx') {
     diagnostics.gmxStart = await prepareGmxLogin(page);
   }
 
+  await page.bringToFront().catch(() => {});
   diagnostics.usernameFilled = await fillFirstMatchingInput(page, [
     ...(providerKey === 'gmx' ? [
       '#login-email',
@@ -641,10 +869,12 @@ async function attemptWebmailLogin(page, runtimeConfig) {
 
   if (diagnostics.usernameFilled) {
     await sleep(500);
+    await page.bringToFront().catch(() => {});
     await clickSubmit(page);
     await sleep(1000);
   }
 
+  await page.bringToFront().catch(() => {});
   diagnostics.passwordFilled = await fillFirstMatchingInput(page, [
     ...(providerKey === 'gmx' ? [
       '#login-password',
@@ -661,14 +891,16 @@ async function attemptWebmailLogin(page, runtimeConfig) {
   ], password, typingDelay);
 
   if (diagnostics.passwordFilled) {
+    await page.bringToFront().catch(() => {});
     diagnostics.submitted = providerKey === 'gmx'
-      ? await clickByText(page, [
+      ? (await clickByText(page, [
         'login',
         'log in',
         'einloggen',
         'anmelden',
         'weiter',
       ], '#login-submit, button[data-testid="button-next"], button[data-testid*="login" i], button, input[type="submit"], [role="button"]')
+        || await clickSubmit(page))
       : await clickSubmit(page);
   }
 
@@ -779,6 +1011,7 @@ async function main() {
     });
 
     const page = await browser.newPage();
+    installBrowserDebugListeners(page, 'webmail');
     page.setDefaultNavigationTimeout(Math.max(30000, Number(runtimeConfig.navigationTimeoutMs || 120000)));
     await page.setViewport(DEFAULT_VIEWPORT);
     await page.goto(webmailUrl, {

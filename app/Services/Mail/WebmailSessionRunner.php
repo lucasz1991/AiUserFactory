@@ -41,7 +41,7 @@ class WebmailSessionRunner
             'livePreviewIntervalSeconds' => (int) ($runtime['livePreviewIntervalSeconds'] ?? 3),
             'livePreviewPollIntervalSeconds' => (int) ($runtime['livePreviewPollIntervalSeconds'] ?? 3),
             'scriptName' => basename($this->resolveNodeScriptPath($runtime['provider'])),
-            'scriptVersion' => 1,
+            'scriptVersion' => 3,
             'at' => now()->toIso8601String(),
             'events' => [],
         ]);
@@ -77,7 +77,7 @@ class WebmailSessionRunner
                 'livePreviewIntervalSeconds' => (int) ($runtime['livePreviewIntervalSeconds'] ?? 3),
                 'livePreviewPollIntervalSeconds' => (int) ($runtime['livePreviewPollIntervalSeconds'] ?? 3),
                 'scriptName' => basename($this->resolveNodeScriptPath($runtime['provider'])),
-                'scriptVersion' => 1,
+                'scriptVersion' => 3,
                 'at' => now()->toIso8601String(),
                 'events' => [],
             ]);
@@ -543,6 +543,16 @@ class WebmailSessionRunner
             if (is_array($event) && array_key_exists('debugDom', $event) && $event['debugDom'] !== null && $event['debugDom'] !== '') {
                 return $event['debugDom'];
             }
+        }
+
+        $browserDebugEvents = $status['browserDebugEvents'] ?? null;
+
+        if (is_array($browserDebugEvents) && $browserDebugEvents !== []) {
+            return [
+                'capturedAt' => now()->toIso8601String(),
+                'frames' => [],
+                'browserDebugEvents' => $browserDebugEvents,
+            ];
         }
 
         return null;

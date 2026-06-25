@@ -18,7 +18,7 @@ class MailAccountRegistrationRunner
     public const SETTINGS_KEY = 'account_registration';
     public const PROVIDER_MODE_OBSERVED_MANUAL = 'observed_manual';
     public const PROVIDER_MODE_PROTON_USERNAME_CHECK = 'proton_username_check';
-    public const MAIL_ACCOUNT_SCRIPT_VERSION = 2;
+    public const MAIL_ACCOUNT_SCRIPT_VERSION = 3;
     public const BROWSER_LAUNCHER_SCRIPT_VERSION = 2;
 
     public function settings(): array
