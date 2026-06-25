@@ -17,7 +17,7 @@ try {
 }
 
 const SCRIPT_NAME = process.env.WEBMAIL_SESSION_SCRIPT_NAME || 'webmail_session.cjs';
-const SCRIPT_VERSION = 3;
+const SCRIPT_VERSION = 4;
 const DEFAULT_VIEWPORT = { width: 1365, height: 900 };
 const LIVE_PREVIEW_MIN_INTERVAL_MS = 2500;
 const DOM_DEBUG_TEXT_LIMIT = 3000;
@@ -411,7 +411,15 @@ async function domDebugSnapshot(page) {
     }
   })();
 
-  for (const frame of page.frames()) {
+  const snapshotFrames = (() => {
+    try {
+      return page.frames();
+    } catch (error) {
+      return [];
+    }
+  })();
+
+  for (const frame of snapshotFrames) {
     const name = safeFrameName(frame);
     const url = safeFrameUrl(frame);
 
@@ -439,12 +447,29 @@ async function domDebugSnapshot(page) {
 }
 
 async function pageProgressData(page, runtimeConfig, livePreview = {}, browserData = {}) {
+  const debugDom = runtimeConfig.domDebugEnabled === false
+    ? null
+    : await domDebugSnapshot(page).catch((error) => ({
+      capturedAt: new Date().toISOString(),
+      url: (() => {
+        try {
+          return page?.url?.() || '';
+        } catch {
+          return '';
+        }
+      })(),
+      error: compactDebugText(error?.message || String(error), 2000),
+      browserDebugEvents: recentBrowserDebugEvents(),
+      frames: [],
+    }));
+
   return {
     ...livePreview,
     ...browserData,
     finalUrl: page?.url?.() || null,
     title: page ? await page.title().catch(() => '') : null,
-    debugDom: runtimeConfig.domDebugEnabled === false ? null : await domDebugSnapshot(page),
+    debugDom,
+    browserDebugEvents: recentBrowserDebugEvents(),
   };
 }
 
@@ -818,6 +843,71 @@ async function prepareGmxLogin(page) {
   return diagnostics;
 }
 
+async function recoverGmxConsentPageIfNeeded(page, runtimeConfig) {
+  const status = await page.evaluate(() => {
+    const text = String(document.body?.innerText || '').replace(/\s+/g, ' ').trim();
+
+    return {
+      url: window.location.href,
+      consentManagement: /\/consent-management\/?/i.test(window.location.href),
+      privacySettingsError: /einstellungen f(?:Ã¼|ü)r privatsph(?:Ã¤|ä)re|datenschutz nicht laden|seite neu laden/i.test(text),
+      text: text.slice(0, 800),
+    };
+  }).catch(() => ({
+    url: page.url(),
+    consentManagement: /\/consent-management\/?/i.test(page.url()),
+    privacySettingsError: false,
+    text: '',
+  }));
+
+  if (!status.consentManagement && !status.privacySettingsError) {
+    return {
+      recovered: false,
+      reason: 'not-needed',
+      status,
+    };
+  }
+
+  progress(runtimeConfig, 'webmail-gmx-consent-recovering', 'GMX-Consent-Seite meldet einen Ladefehler; Wiederherstellung wird versucht.', await pageProgressData(page, runtimeConfig, {}, {
+    gmxConsentStatus: status,
+  }));
+
+  const clickedReload = await clickByText(page, [
+    'seite neu laden',
+    'neu laden',
+    'reload',
+  ], 'button, input[type="submit"], [role="button"], a').catch(() => false);
+
+  if (clickedReload) {
+    await page.waitForNavigation({
+      waitUntil: 'domcontentloaded',
+      timeout: Math.max(10000, Number(runtimeConfig.navigationTimeoutMs || 30000)),
+    }).catch(() => {});
+    await sleep(1500);
+  }
+
+  const stillBlocked = await page.evaluate(() => {
+    const text = String(document.body?.innerText || '').replace(/\s+/g, ' ').trim();
+
+    return /\/consent-management\/?/i.test(window.location.href)
+      || /datenschutz nicht laden|seite neu laden/i.test(text);
+  }).catch(() => /\/consent-management\/?/i.test(page.url()));
+
+  if (stillBlocked) {
+    await page.goto('https://www.gmx.net', {
+      waitUntil: 'domcontentloaded',
+      timeout: Math.max(30000, Number(runtimeConfig.navigationTimeoutMs || 120000)),
+    }).catch(() => {});
+    await sleep(1500);
+  }
+
+  return {
+    recovered: true,
+    reason: clickedReload ? 'reload-clicked' : 'navigated-home',
+    status,
+  };
+}
+
 async function attemptWebmailLogin(page, runtimeConfig) {
   const username = normalizeText(runtimeConfig.username || runtimeConfig.email);
   const password = normalizeText(runtimeConfig.password);
@@ -841,6 +931,11 @@ async function attemptWebmailLogin(page, runtimeConfig) {
   await page.bringToFront().catch(() => {});
 
   if (providerKey === 'gmx') {
+    diagnostics.gmxConsentRecovery = await recoverGmxConsentPageIfNeeded(page, runtimeConfig).catch((error) => ({
+      recovered: false,
+      reason: 'error',
+      error: normalizeText(error?.message || String(error)),
+    }));
     diagnostics.gmxStart = await prepareGmxLogin(page);
   }
 
@@ -1131,6 +1226,12 @@ async function main() {
 
 main().catch((error) => {
   const runtimeConfig = process.argv[2] ? readJsonFile(process.argv[2], {}) : {};
+  const debugDom = {
+    capturedAt: new Date().toISOString(),
+    error: compactDebugText(error?.message || String(error), 2000),
+    browserDebugEvents: recentBrowserDebugEvents(),
+    frames: [],
+  };
   const result = {
     ok: false,
     statusMessage: 'Webmail-Session-Skript ist fehlgeschlagen.',
@@ -1142,12 +1243,17 @@ main().catch((error) => {
       browserLauncher: BROWSER_LAUNCHER_SCRIPT_VERSION || 1,
     },
     warnings: [normalizeText(error?.message || String(error))],
+    debugDom,
+    browserDebugEvents: recentBrowserDebugEvents(),
     notes: [],
     finishedAt: new Date().toISOString(),
   };
 
   try {
-    progress(runtimeConfig, 'failed', normalizeText(error?.message || String(error)), {}, 'failed');
+    progress(runtimeConfig, 'failed', normalizeText(error?.message || String(error)), {
+      debugDom,
+      browserDebugEvents: recentBrowserDebugEvents(),
+    }, 'failed');
     writeResult(runtimeConfig, result);
   } catch {
     console.log(JSON.stringify(result));

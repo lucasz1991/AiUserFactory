@@ -41,7 +41,7 @@ class WebmailSessionRunner
             'livePreviewIntervalSeconds' => (int) ($runtime['livePreviewIntervalSeconds'] ?? 3),
             'livePreviewPollIntervalSeconds' => (int) ($runtime['livePreviewPollIntervalSeconds'] ?? 3),
             'scriptName' => basename($this->resolveNodeScriptPath($runtime['provider'])),
-            'scriptVersion' => 3,
+            'scriptVersion' => 4,
             'at' => now()->toIso8601String(),
             'events' => [],
         ]);
@@ -77,7 +77,7 @@ class WebmailSessionRunner
                 'livePreviewIntervalSeconds' => (int) ($runtime['livePreviewIntervalSeconds'] ?? 3),
                 'livePreviewPollIntervalSeconds' => (int) ($runtime['livePreviewPollIntervalSeconds'] ?? 3),
                 'scriptName' => basename($this->resolveNodeScriptPath($runtime['provider'])),
-                'scriptVersion' => 3,
+                'scriptVersion' => 4,
                 'at' => now()->toIso8601String(),
                 'events' => [],
             ]);
