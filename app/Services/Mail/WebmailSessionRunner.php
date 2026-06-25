@@ -134,7 +134,9 @@ class WebmailSessionRunner
         $status['result'] = $result;
         $status['processHeartbeatStatus'] = $this->processHeartbeatStatus($status);
 
-        if (($status['processHeartbeatStatus']['stale'] ?? false) === true) {
+        if ($this->isBrowserProfileLockFailure($status)) {
+            $status = $this->queueSupervisorJobIfNeeded($runId, $status, true, 'Browser-Profil ist gesperrt; Supervisor startet den Webmail-Lauf mit neuem Profilordner neu.');
+        } elseif (($status['processHeartbeatStatus']['stale'] ?? false) === true) {
             $status = $this->queueSupervisorJobIfNeeded($runId, $status);
         } elseif (($status['windowStatus']['stale'] ?? false) === true && ($status['windowStatus']['hasScreenshot'] ?? false) === true) {
             $status = $this->queueSupervisorJobIfNeeded($runId, $status, true, 'Webmail-Fenster liefert keine aktuellen Screenshots mehr; Supervisor-Restart wird angefordert.');
@@ -489,6 +491,32 @@ class WebmailSessionRunner
         } catch (\Throwable) {
             return null;
         }
+    }
+
+    protected function isBrowserProfileLockFailure(array $status): bool
+    {
+        $state = Str::lower(trim((string) ($status['state'] ?? '')));
+        $stage = Str::lower(trim((string) ($status['stage'] ?? '')));
+        $message = Str::lower(trim((string) ($status['message'] ?? '')));
+
+        if ($state !== 'failed' && ! str_contains($stage, 'failed') && ! str_contains($message, 'failed to launch')) {
+            return false;
+        }
+
+        $events = is_array($status['events'] ?? null) ? $status['events'] : [];
+        $latestEvent = $events === [] ? null : end($events);
+        $text = Str::lower(json_encode([
+            'stage' => $status['stage'] ?? null,
+            'message' => $status['message'] ?? null,
+            'latestEvent' => is_array($latestEvent) ? $latestEvent : null,
+        ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?: '');
+
+        return str_contains($text, 'singletonlock')
+            || str_contains($text, 'processsingleton')
+            || str_contains($text, 'process singleton')
+            || str_contains($text, 'profile directory')
+            || str_contains($text, 'profile is in use')
+            || str_contains($text, 'user data directory');
     }
 
     protected function debugDomUrl(string $runId, array $status): ?string

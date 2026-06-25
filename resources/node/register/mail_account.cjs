@@ -3,7 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const {
   BROWSER_LAUNCHER_SCRIPT_VERSION,
-  launchConfiguredBrowser,
+  launchConfiguredBrowserWithProfileRetry,
   resolveBrowserEngine,
 } = require('./lib/browser-launcher.cjs');
 
@@ -90,6 +90,9 @@ function publicStatusPayload(runtimeConfig, state, stage, message, data = {}) {
     requestedBrowserEngine,
     activeBrowserEngine,
     browserFallbackReason,
+    browserProfilePath: runtimeConfig.browserProfilePath || null,
+    previousBrowserProfilePath: runtimeConfig.previousBrowserProfilePath || null,
+    browserProfileRetryCount: runtimeConfig.browserProfileRetryCount || 0,
     scriptName: MAIL_ACCOUNT_SCRIPT_NAME,
     scriptVersion: MAIL_ACCOUNT_SCRIPT_VERSION,
     scriptVersionLabel: MAIL_ACCOUNT_SCRIPT_VERSION_LABEL,
@@ -123,6 +126,9 @@ function progress(runtimeConfig, stage, message, data = {}, state = 'running') {
     debugDom: data.debugDom || null,
     registrationDebugDom: data.registrationDebugDom || data.debugDom || null,
     webmailDebugDom: data.webmailDebugDom || null,
+    browserProfilePath: data.browserProfilePath || runtimeConfig.browserProfilePath || null,
+    previousBrowserProfilePath: data.previousBrowserProfilePath || runtimeConfig.previousBrowserProfilePath || null,
+    profileLockError: data.profileLockError || null,
   };
 
   statusEvents.push(event);
@@ -2817,6 +2823,9 @@ async function fillWebmailUsername(page, mailbox) {
   const selectors = [
     ...(mailbox.provider === 'gmx' ? [
       '#login-email',
+      '#email',
+      'input#email',
+      'input[data-testid="input-username"]',
       'input[name="username"]',
       'input[name="login"]',
       'input[data-testid*="email" i]',
@@ -2840,6 +2849,9 @@ async function fillWebmailPassword(page, mailbox) {
   const selectors = [
     ...(mailbox.provider === 'gmx' ? [
       '#login-password',
+      '#password',
+      'input#password',
+      'input[data-testid="input-password"]',
       'input[name="password"]',
       'input[data-testid*="password" i]',
     ] : []),
@@ -2864,7 +2876,7 @@ async function clickWebmailLoginContinue(page, mailbox) {
     'einloggen',
   ];
   const selectors = mailbox.provider === 'gmx'
-    ? '#login-submit, button, input[type="submit"], [role="button"]'
+    ? '#login-submit, button[data-testid="button-next"], button[data-testid*="login" i], button, input[type="submit"], [role="button"]'
     : 'button, input[type="submit"], [role="button"], a';
 
   return clickVisibleTextTargetInPageOrFrames(page, labels, selectors, true)
@@ -4165,10 +4177,17 @@ async function main() {
   let page = null;
 
   try {
-    const launchResult = await launchConfiguredBrowser({
+    const launchResult = await launchConfiguredBrowserWithProfileRetry({
       puppeteer,
       runtimeConfig,
       launchOptions,
+      onProfileRetry: ({ previousProfilePath, nextProfilePath, error }) => {
+        progress(runtimeConfig, 'browser-profile-lock-retry', 'Browser-Profil war gesperrt; ein neuer Profilordner wird fuer diesen Run verwendet.', {
+          previousBrowserProfilePath: previousProfilePath,
+          browserProfilePath: nextProfilePath,
+          profileLockError: normalizeText(error?.message || String(error)).slice(0, 1200),
+        }, 'starting');
+      },
     });
 
     browser = launchResult.browser;

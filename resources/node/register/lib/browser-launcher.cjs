@@ -1,10 +1,11 @@
 const fs = require('fs');
+const path = require('path');
 const childProcess = require('child_process');
 
 const BROWSER_ENGINE_CHROME = 'chrome';
 const BROWSER_ENGINE_CLOAK = 'cloak';
 const BROWSER_ENGINE_CLOAK_WITH_FALLBACK = 'cloak-with-chrome-fallback';
-const BROWSER_LAUNCHER_SCRIPT_VERSION = 1;
+const BROWSER_LAUNCHER_SCRIPT_VERSION = 2;
 
 function normalizeBrowserEngine(value = '') {
   const normalized = String(value || '').trim().toLowerCase();
@@ -34,9 +35,65 @@ function resolveBrowserEngine(runtimeConfig = {}) {
 }
 
 function isBrowserProfileLockError(error) {
-  return /already running|processsingleton|userdatadir|user data dir|user data directory/i.test(
+  return /already running|processsingleton|process singleton|singletonlock|singletoncookie|singletonsocket|userdatadir|user data dir|user data directory|profile directory|profile is in use/i.test(
     String(error?.message || error || ''),
   );
+}
+
+function retryBrowserProfilePath(browserProfilePath = '') {
+  const profilePath = normalizeText(browserProfilePath);
+
+  if (!profilePath) {
+    return '';
+  }
+
+  return path.join(
+    path.dirname(profilePath),
+    `${path.basename(profilePath)}-retry-${Date.now()}-${process.pid}`,
+  );
+}
+
+async function launchConfiguredBrowserWithProfileRetry({
+  puppeteer,
+  runtimeConfig = {},
+  launchOptions = {},
+  onProfileRetry = null,
+}) {
+  try {
+    return await launchConfiguredBrowser({
+      puppeteer,
+      runtimeConfig,
+      launchOptions,
+    });
+  } catch (error) {
+    const previousProfilePath = normalizeText(launchOptions.userDataDir || runtimeConfig.browserProfilePath);
+
+    if (! previousProfilePath || ! isBrowserProfileLockError(error)) {
+      throw error;
+    }
+
+    const nextProfilePath = retryBrowserProfilePath(previousProfilePath);
+
+    runtimeConfig.previousBrowserProfilePath = previousProfilePath;
+    runtimeConfig.browserProfilePath = nextProfilePath;
+    runtimeConfig.browserProfileRetryCount = Number(runtimeConfig.browserProfileRetryCount || 0) + 1;
+    launchOptions.userDataDir = nextProfilePath;
+    fs.mkdirSync(nextProfilePath, { recursive: true });
+
+    if (typeof onProfileRetry === 'function') {
+      await onProfileRetry({
+        previousProfilePath,
+        nextProfilePath,
+        error,
+      });
+    }
+
+    return launchConfiguredBrowser({
+      puppeteer,
+      runtimeConfig,
+      launchOptions,
+    });
+  }
 }
 
 function buildCloakArgs(args = []) {
@@ -285,6 +342,7 @@ module.exports = {
   BROWSER_LAUNCHER_SCRIPT_VERSION,
   isBrowserProfileLockError,
   launchConfiguredBrowser,
+  launchConfiguredBrowserWithProfileRetry,
   normalizeBrowserEngine,
   resolveBrowserEngine,
 };
