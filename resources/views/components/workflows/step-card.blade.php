@@ -45,6 +45,9 @@
             <div x-sort:item="{{ $task['key'] ?? '' }}" wire:key="workflow-task-{{ $step->id }}-{{ $task['key'] ?? 'task' }}">
                 <x-workflows.task-card :task="$task">
                     <x-slot name="actions">
+                        <button type="button" wire:click="openEditTaskCard({{ $step->id }}, @js($task['key'] ?? ''))" class="rounded-md border border-blue-200 bg-white px-2 py-1 text-[11px] font-semibold text-blue-700 shadow-sm hover:bg-blue-50">
+                            Bearbeiten
+                        </button>
                         <button type="button" wire:click="removeTaskCard({{ $step->id }}, @js($task['key'] ?? ''))" wire:confirm="Step-Karte wirklich entfernen?" class="rounded-md border border-red-200 bg-white px-2 py-1 text-[11px] font-semibold text-red-700 shadow-sm hover:bg-red-50">
                             Entfernen
                         </button>

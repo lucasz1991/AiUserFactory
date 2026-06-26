@@ -72,6 +72,7 @@ class ManagedProcessInventory
                 'root_runtime_config_path' => $rootMetadata['runtime_config_path'] ?? null,
                 'status_path' => $runtimeContext['status_path'],
                 'process_identity' => $runtimeContext['process_identity'],
+                'workflow_context' => $runtimeContext['workflow_context'],
                 'subject_person_id' => $runtimeContext['person_id'],
                 'status_state' => $runtimeContext['status_state'],
                 'status_stage' => $runtimeContext['last_stage'],
@@ -106,6 +107,7 @@ class ManagedProcessInventory
                     'runtime_config_path' => $runtimeConfigPath,
                     'raw_executable' => $entry->executable ?? null,
                     'process_identity' => $runtimeContext['process_identity'],
+                    'workflow_context' => $runtimeContext['workflow_context'],
                     'subject_person_id' => $runtimeContext['person_id'],
                     'status_state' => $runtimeContext['status_state'],
                     'status_stage' => $runtimeContext['last_stage'],
@@ -442,6 +444,13 @@ POWERSHELL;
         }
 
         $identity = is_array($identity) ? $identity : [];
+        $workflowContext = data_get($status, 'workflow');
+
+        if (! is_array($workflowContext) || $workflowContext === []) {
+            $workflowContext = data_get($runtimeConfig, 'workflow');
+        }
+
+        $workflowContext = is_array($workflowContext) ? $workflowContext : [];
         $runId = trim((string) (data_get($identity, 'runId') ?: data_get($status, 'runId') ?: data_get($runtimeConfig, 'runId')));
         $runType = trim((string) (data_get($identity, 'runType') ?: $this->runTypeFromRuntimePath($runtimeConfigPath)));
         $role = trim((string) (data_get($identity, 'role') ?: $fallbackRole));
@@ -472,6 +481,7 @@ POWERSHELL;
             'runtime_config_path' => $runtimeConfigPath,
             'status_path' => $statusPath,
             'process_identity' => $identity ?: null,
+            'workflow_context' => $workflowContext ?: null,
             'person_id' => $personId > 0 ? $personId : null,
             'heartbeat_at' => $heartbeatAt,
             'heartbeat_age_seconds' => $heartbeatAt ? (int) $heartbeatAt->diffInSeconds(now()) : null,

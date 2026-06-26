@@ -5,6 +5,7 @@ namespace App\Livewire\Admin\Processes;
 use App\Jobs\SyncManagedProcessesJob;
 use App\Jobs\TerminateManagedProcessJob;
 use App\Models\ManagedProcess;
+use App\Models\WorkflowStepRun;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Schema;
 use Livewire\Component;
@@ -122,7 +123,7 @@ class ProcessMonitor extends Component
     {
         $canFilterByRunId = $this->runId && Schema::hasColumn('managed_processes', 'run_id');
 
-        return ManagedProcess::query()
+        $processes = ManagedProcess::query()
             ->whereIn('process_type', self::FACTORY_NODE_PROCESS_TYPES)
             ->when($canFilterByRunId, fn ($query) => $query->where('run_id', $this->runId))
             ->when(! $canFilterByRunId && $this->rootPid, fn ($query) => $query->where(function ($inner): void {
@@ -138,6 +139,59 @@ class ProcessMonitor extends Component
             ->orderBy('pid')
             ->limit($this->limit)
             ->get();
+
+        return $this->attachWorkflowPreview($processes);
+    }
+
+    protected function attachWorkflowPreview(Collection $processes): Collection
+    {
+        if ($processes->isEmpty()) {
+            return $processes;
+        }
+
+        $stepRunIds = $processes
+            ->map(fn (ManagedProcess $process): int => $this->workflowStepRunIdForProcess($process))
+            ->filter(fn (int $id): bool => $id > 0)
+            ->unique()
+            ->values();
+
+        if ($stepRunIds->isEmpty()) {
+            return $processes;
+        }
+
+        $stepRuns = WorkflowStepRun::query()
+            ->with([
+                'workflowStep',
+                'workflowRun.workflow.steps' => fn ($query) => $query->ordered(),
+                'workflowRun.stepRuns.workflowStep',
+            ])
+            ->whereIn('id', $stepRunIds)
+            ->get()
+            ->keyBy('id');
+
+        return $processes->map(function (ManagedProcess $process) use ($stepRuns): ManagedProcess {
+            $stepRun = $stepRuns->get($this->workflowStepRunIdForProcess($process));
+
+            if ($stepRun) {
+                $process->setRelation('workflowStepRunPreview', $stepRun);
+                $process->setRelation('workflowRunPreview', $stepRun->workflowRun);
+                $process->setAttribute('workflow_active_task_key', (string) data_get($stepRun->workflowRun?->context_json, 'next_task_key', ''));
+            }
+
+            return $process;
+        });
+    }
+
+    protected function workflowStepRunIdForProcess(ManagedProcess $process): int
+    {
+        return (int) (
+            data_get($process->metadata, 'process_identity.workflowStepRunId')
+            ?: data_get($process->metadata, 'processIdentity.workflowStepRunId')
+            ?: data_get($process->metadata, 'workflow_context.workflowStepRunId')
+            ?: data_get($process->metadata, 'workflow.workflowStepRunId')
+            ?: data_get($process->metadata, 'workflowStepRunId')
+            ?: 0
+        );
     }
 
     protected function buildProcessTree(Collection $processes): Collection

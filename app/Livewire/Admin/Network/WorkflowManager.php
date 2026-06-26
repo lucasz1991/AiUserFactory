@@ -51,6 +51,56 @@ class WorkflowManager extends Component
 
     public string $actionTypeFilter = 'all';
 
+    public bool $showWorkflowModal = false;
+
+    public bool $showRunModal = false;
+
+    public bool $showAddStepModal = false;
+
+    public bool $showAddTaskModal = false;
+
+    public bool $showActionLibraryModal = false;
+
+    public bool $showEditStepModal = false;
+
+    public bool $showEditTaskModal = false;
+
+    public ?int $editingStepId = null;
+
+    public string $editingStepName = '';
+
+    public string $editingStepDescription = '';
+
+    public bool $editingStepEnabled = true;
+
+    public int $editingStepWaitAfterSeconds = 0;
+
+    public string $editingStepSuccessTarget = '';
+
+    public string $editingStepPartialTarget = '';
+
+    public string $editingStepFailedTarget = '';
+
+    public ?int $editingTaskStepId = null;
+
+    public string $editingTaskKey = '';
+
+    public string $editingTaskCatalogKey = '';
+
+    public string $editingTaskTitle = '';
+
+    public string $editingTaskKind = 'browser';
+
+    public string $editingTaskDescription = '';
+
+    public int $editingTaskTimeoutSeconds = 0;
+
+    public string $editingTaskSuccessTarget = '';
+
+    public string $editingTaskPartialTarget = '';
+
+    public string $editingTaskFailedTarget = '';
+
     public function mount(Workflow $workflow): void
     {
         $this->selectedWorkflowId = $workflow->id;
@@ -113,6 +163,8 @@ class WorkflowManager extends Component
             'is_active' => (bool) $validated['workflowActive'],
         ])->save();
 
+        $this->showWorkflowModal = false;
+
         session()->flash('success', 'Workflow wurde gespeichert.');
     }
 
@@ -161,6 +213,7 @@ class WorkflowManager extends Component
         ]);
 
         $this->newStepName = '';
+        $this->showAddStepModal = false;
 
         session()->flash('success', 'Workflow-Liste wurde hinzugefuegt.');
     }
@@ -185,6 +238,8 @@ class WorkflowManager extends Component
             'is_enabled' => true,
             'config_json' => $catalog->workflowStepConfig($action),
         ]);
+
+        $this->showActionLibraryModal = false;
 
         session()->flash('success', 'Aktion wurde dem Workflow hinzugefuegt.');
     }
@@ -212,6 +267,66 @@ class WorkflowManager extends Component
         $this->normalizeStepPositions();
 
         session()->flash('success', 'Workflow-Liste wurde entfernt.');
+    }
+
+    public function openEditStep(int $stepId): void
+    {
+        $step = $this->stepForSelectedWorkflow($stepId);
+
+        if (! $step) {
+            return;
+        }
+
+        $config = is_array($step->config_json) ? $step->config_json : [];
+        $routes = is_array($config['routes'] ?? null) ? $config['routes'] : [];
+
+        $this->editingStepId = $step->id;
+        $this->editingStepName = $step->name;
+        $this->editingStepDescription = trim((string) ($config['description'] ?? $config['automation_summary'] ?? ''));
+        $this->editingStepEnabled = (bool) $step->is_enabled;
+        $this->editingStepWaitAfterSeconds = max(0, (int) $step->wait_after_seconds);
+        $this->editingStepSuccessTarget = $this->routeValueFromTarget($routes['success'] ?? null);
+        $this->editingStepPartialTarget = $this->routeValueFromTarget($routes['partial'] ?? null);
+        $this->editingStepFailedTarget = $this->routeValueFromTarget($routes['failed'] ?? null);
+        $this->showEditStepModal = true;
+    }
+
+    public function saveEditStep(): void
+    {
+        $step = $this->editingStepId ? $this->stepForSelectedWorkflow($this->editingStepId) : null;
+
+        if (! $step) {
+            return;
+        }
+
+        $validated = $this->validate([
+            'editingStepName' => ['required', 'string', 'max:160'],
+            'editingStepDescription' => ['nullable', 'string', 'max:1000'],
+            'editingStepEnabled' => ['boolean'],
+            'editingStepWaitAfterSeconds' => ['required', 'integer', 'min:0', 'max:3600'],
+            'editingStepSuccessTarget' => ['nullable', 'string', 'max:180'],
+            'editingStepPartialTarget' => ['nullable', 'string', 'max:180'],
+            'editingStepFailedTarget' => ['nullable', 'string', 'max:180'],
+        ]);
+
+        $config = is_array($step->config_json) ? $step->config_json : [];
+        $config['description'] = trim((string) ($validated['editingStepDescription'] ?? ''));
+        $routes = is_array($config['routes'] ?? null) ? $config['routes'] : [];
+        $routes = $this->setRoute($routes, 'success', (string) ($validated['editingStepSuccessTarget'] ?? ''));
+        $routes = $this->setRoute($routes, 'partial', (string) ($validated['editingStepPartialTarget'] ?? ''));
+        $routes = $this->setRoute($routes, 'failed', (string) ($validated['editingStepFailedTarget'] ?? ''));
+        $config['routes'] = $routes;
+
+        $step->forceFill([
+            'name' => trim($validated['editingStepName']),
+            'is_enabled' => (bool) $validated['editingStepEnabled'],
+            'wait_after_seconds' => (int) $validated['editingStepWaitAfterSeconds'],
+            'config_json' => $config,
+        ])->save();
+
+        $this->showEditStepModal = false;
+
+        session()->flash('success', 'Liste wurde gespeichert.');
     }
 
     public function reorderStep(mixed $item, mixed $position): void
@@ -303,8 +418,106 @@ class WorkflowManager extends Component
         $this->newTaskSuccessTarget = '';
         $this->newTaskPartialTarget = '';
         $this->newTaskFailedTarget = 'fail';
+        $this->showAddTaskModal = false;
 
         session()->flash('success', 'Step-Karte wurde hinzugefuegt.');
+    }
+
+    public function openEditTaskCard(int $stepId, string $taskKey): void
+    {
+        $step = $this->stepForSelectedWorkflow($stepId);
+
+        if (! $step) {
+            return;
+        }
+
+        $task = collect($step->task_cards)
+            ->first(fn (array $task): bool => (string) ($task['key'] ?? '') === $taskKey);
+
+        if (! $task) {
+            return;
+        }
+
+        $this->editingTaskStepId = $step->id;
+        $this->editingTaskKey = $taskKey;
+        $this->editingTaskCatalogKey = trim((string) ($task['task_key'] ?? '')) ?: 'browser.open_url';
+        $this->editingTaskTitle = (string) ($task['title'] ?? 'Task');
+        $this->editingTaskKind = (string) ($task['kind'] ?? 'browser');
+        $this->editingTaskDescription = (string) ($task['description'] ?? '');
+        $this->editingTaskTimeoutSeconds = max(0, (int) ($task['timeout_seconds'] ?? 0));
+        $this->editingTaskSuccessTarget = $this->routeValueFromTarget($task['next'] ?? null);
+        $this->editingTaskPartialTarget = $this->routeValueFromTarget($task['on_partial'] ?? null);
+        $this->editingTaskFailedTarget = $this->routeValueFromTarget($task['on_error'] ?? null);
+        $this->showEditTaskModal = true;
+    }
+
+    public function saveEditTaskCard(): void
+    {
+        $step = $this->editingTaskStepId ? $this->stepForSelectedWorkflow($this->editingTaskStepId) : null;
+
+        if (! $step) {
+            return;
+        }
+
+        $validated = $this->validate([
+            'editingTaskCatalogKey' => ['required', 'string', 'max:120'],
+            'editingTaskTitle' => ['required', 'string', 'max:160'],
+            'editingTaskKind' => ['required', 'string', 'in:browser,input,wait,data'],
+            'editingTaskDescription' => ['nullable', 'string', 'max:1000'],
+            'editingTaskTimeoutSeconds' => ['required', 'integer', 'min:0', 'max:3600'],
+            'editingTaskSuccessTarget' => ['nullable', 'string', 'max:180'],
+            'editingTaskPartialTarget' => ['nullable', 'string', 'max:180'],
+            'editingTaskFailedTarget' => ['nullable', 'string', 'max:180'],
+        ]);
+
+        $config = is_array($step->config_json) ? $step->config_json : [];
+        $tasks = collect(is_array($config['tasks'] ?? null) ? $config['tasks'] : []);
+
+        $config['tasks'] = $tasks
+            ->map(function (array $task) use ($validated): array {
+                if ((string) ($task['key'] ?? '') !== $this->editingTaskKey) {
+                    return $task;
+                }
+
+                $task = array_replace(
+                    $task,
+                    app(WorkflowTaskCatalog::class)->cardFromDefinition($validated['editingTaskCatalogKey'], [
+                        'key' => $this->editingTaskKey,
+                    ]),
+                    [
+                        'key' => $this->editingTaskKey,
+                        'task_key' => $validated['editingTaskCatalogKey'],
+                        'title' => trim($validated['editingTaskTitle']),
+                        'description' => trim((string) ($validated['editingTaskDescription'] ?? '')),
+                        'kind' => $validated['editingTaskKind'],
+                        'timeout_seconds' => (int) $validated['editingTaskTimeoutSeconds'],
+                    ],
+                );
+
+                foreach ([
+                    'next' => (string) ($validated['editingTaskSuccessTarget'] ?? ''),
+                    'on_partial' => (string) ($validated['editingTaskPartialTarget'] ?? ''),
+                    'on_error' => (string) ($validated['editingTaskFailedTarget'] ?? ''),
+                ] as $key => $value) {
+                    $route = $this->routeTargetFromValue($value);
+
+                    if ($route) {
+                        $task[$key] = $route;
+                    } else {
+                        unset($task[$key]);
+                    }
+                }
+
+                return $task;
+            })
+            ->values()
+            ->toArray();
+
+        $step->forceFill(['config_json' => $config])->save();
+
+        $this->showEditTaskModal = false;
+
+        session()->flash('success', 'Step-Karte wurde gespeichert.');
     }
 
     public function removeTaskCard(int $stepId, string $taskKey): void
@@ -373,6 +586,7 @@ class WorkflowManager extends Component
                 'started_from' => 'workflow-manager',
             ]);
 
+            $this->showRunModal = false;
             session()->flash('success', 'Workflow-Lauf wurde eingeplant: '.$run->run_uuid);
         } catch (\Throwable $exception) {
             session()->flash('success', 'Workflow konnte nicht gestartet werden: '.$exception->getMessage());
@@ -546,6 +760,49 @@ class WorkflowManager extends Component
         }
 
         return null;
+    }
+
+    protected function setRoute(array $routes, string $outcome, string $value): array
+    {
+        $route = $this->routeTargetFromValue($value);
+
+        if ($route) {
+            $routes[$outcome] = $route;
+        } else {
+            unset($routes[$outcome]);
+        }
+
+        return $routes;
+    }
+
+    protected function routeValueFromTarget(mixed $route): string
+    {
+        if (! is_array($route)) {
+            return '';
+        }
+
+        $type = trim((string) ($route['type'] ?? ''));
+        $step = trim((string) ($route['action_key'] ?? $route['step'] ?? ''));
+        $card = trim((string) ($route['card_key'] ?? $route['card'] ?? ''));
+
+        if ($type === 'end' || $step === 'end') {
+            return 'end';
+        }
+
+        if ($type === 'fail' || $step === 'fail') {
+            return 'fail';
+        }
+
+        if ($card !== '') {
+            $workflow = $this->selectedWorkflow();
+            $targetStep = $workflow
+                ? $workflow->steps()->where('action_key', $step)->first()
+                : null;
+
+            return $targetStep ? 'card:'.$targetStep->id.':'.$card : '';
+        }
+
+        return $step !== '' && $step !== 'next' ? 'step:'.$step : '';
     }
 
     protected function uniqueTaskKey(array $tasks, string $title): string
