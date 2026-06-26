@@ -32,6 +32,8 @@ class WorkflowTaskRunner
         File::ensureDirectoryExists($runDirectory);
         File::ensureDirectoryExists($publicRunDirectory);
 
+        $tasks = $this->runtimeTasks($step);
+
         $runtime = [
             'runId' => $runId,
             'workflow' => $runtimeContext,
@@ -41,7 +43,7 @@ class WorkflowTaskRunner
             'workflowStepRunId' => $stepRun->id,
             'workflowStepName' => $step->name,
             'workflowStepType' => $step->type,
-            'tasks' => $step->task_cards,
+            'tasks' => $tasks,
             'statusPath' => $statusPath,
             'resultPath' => $resultPath,
             'livePreviewEnabled' => true,
@@ -70,7 +72,7 @@ class WorkflowTaskRunner
             'livePreviewEnabled' => true,
             'livePreviewIntervalSeconds' => 3,
             'livePreviewPollIntervalSeconds' => 3,
-            'tasks' => $this->configuredTasks($step),
+            'tasks' => $this->configuredTasks($tasks),
             'events' => [],
             'browserWindows' => [],
             'at' => now()->toIso8601String(),
@@ -98,7 +100,7 @@ class WorkflowTaskRunner
                 'state' => 'failed',
                 'stage' => 'process-start-failed',
                 'message' => $exception->getMessage(),
-                'tasks' => $this->configuredTasks($step),
+                'tasks' => $this->configuredTasks($tasks),
                 'events' => [],
                 'browserWindows' => [],
                 'at' => now()->toIso8601String(),
@@ -159,12 +161,39 @@ class WorkflowTaskRunner
         return $this->readJsonFile($this->runDirectory($runId).DIRECTORY_SEPARATOR.'result.json');
     }
 
-    protected function configuredTasks(WorkflowStep $step): array
+    protected function configuredTasks(array $tasks): array
     {
-        return collect($step->task_cards)
+        return collect($tasks)
             ->map(fn (array $task): array => array_replace($task, ['status' => 'configured']))
             ->values()
             ->toArray();
+    }
+
+    protected function runtimeTasks(WorkflowStep $step): array
+    {
+        return collect($step->task_cards)
+            ->map(fn (array $task): array => $this->normalizeRuntimeTask($task))
+            ->values()
+            ->toArray();
+    }
+
+    protected function normalizeRuntimeTask(array $task): array
+    {
+        $script = match ((string) ($task['task_key'] ?? '')) {
+            'data.read_account_data' => 'node/workflows/tasks/data/read_account_data.cjs',
+            'data.resolve_person' => 'node/workflows/tasks/data/resolve_person.cjs',
+            'data.read_login_data' => 'node/workflows/tasks/data/read_login_data.cjs',
+            default => null,
+        };
+
+        if ($script === null) {
+            return $task;
+        }
+
+        $task['runner'] = 'node';
+        $task['node_script'] = $script;
+
+        return $task;
     }
 
     protected function runDirectory(string $runId): string

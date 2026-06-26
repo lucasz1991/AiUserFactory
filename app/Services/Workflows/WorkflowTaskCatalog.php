@@ -181,7 +181,8 @@ class WorkflowTaskCatalog
             'data.read_account_data' => [
                 'label' => 'Accountdaten lesen',
                 'kind' => 'data',
-                'runner' => 'php',
+                'runner' => 'node',
+                'node_script' => 'node/workflows/tasks/data/read_account_data.cjs',
                 'php_handler' => 'App\\Services\\Workflows\\Tasks\\ReadAccountDataTask@handle',
                 'timeout_seconds' => 15,
                 'description' => 'Extrahiert Accountdaten aus Workflow-, Persona- oder Node-Ergebnissen.',
@@ -196,7 +197,8 @@ class WorkflowTaskCatalog
             'data.resolve_person' => [
                 'label' => 'Person-Daten ermitteln',
                 'kind' => 'data',
-                'runner' => 'php',
+                'runner' => 'node',
+                'node_script' => 'node/workflows/tasks/data/resolve_person.cjs',
                 'php_handler' => 'App\\Services\\Workflows\\Tasks\\ResolvePersonDataTask@handle',
                 'timeout_seconds' => 15,
                 'description' => 'Liest Persona-Stammdaten und stellt sie als Payload fuer weitere Tasks bereit.',
@@ -211,7 +213,8 @@ class WorkflowTaskCatalog
             'data.read_login_data' => [
                 'label' => 'Login-Daten lesen',
                 'kind' => 'data',
-                'runner' => 'php',
+                'runner' => 'node',
+                'node_script' => 'node/workflows/tasks/data/read_login_data.cjs',
                 'php_handler' => 'App\\Services\\Workflows\\Tasks\\ReadLoginDataTask@handle',
                 'timeout_seconds' => 15,
                 'description' => 'Bereitet Provider, E-Mail, Benutzername, Passwort und Webmail-URL fuer Login-Tasks vor.',
