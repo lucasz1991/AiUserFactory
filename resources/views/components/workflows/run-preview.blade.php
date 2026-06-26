@@ -52,6 +52,7 @@
         return match ((string) $stepRun?->external_run_type) {
             'mail-registration' => app(\App\Services\Mail\MailAccountRegistrationRunner::class)->readRun($externalRunId) ?: [],
             'webmail-session' => app(\App\Services\Mail\WebmailSessionRunner::class)->readRun($externalRunId) ?: [],
+            'workflow-task' => app(\App\Services\Workflows\WorkflowTaskRunner::class)->readRun($externalRunId) ?: [],
             default => [],
         };
     };

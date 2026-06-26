@@ -23,6 +23,7 @@ class WorkflowExecutionService
     public function __construct(
         protected MailAccountRegistrationRunner $mailRegistration,
         protected WebmailSessionRunner $webmailSession,
+        protected WorkflowTaskRunner $workflowTasks,
     ) {
     }
 
@@ -221,8 +222,30 @@ class WorkflowExecutionService
             WorkflowStep::TYPE_MAIL_ACCOUNT_REGISTRATION => $this->startMailRegistrationStep($run, $step, $stepRun),
             WorkflowStep::TYPE_WEBMAIL_LOGIN => $this->startWebmailLoginStep($run, $step, $stepRun),
             WorkflowStep::TYPE_WAIT => $this->completeWaitStep($run, $step, $stepRun),
-            default => $this->completePlannedActionStep($run, $step, $stepRun),
+            default => $step->task_cards !== [] ? $this->startWorkflowTaskStep($run, $step, $stepRun) : $this->completePlannedActionStep($run, $step, $stepRun),
         };
+    }
+
+    protected function startWorkflowTaskStep(WorkflowRun $run, WorkflowStep $step, WorkflowStepRun $stepRun): string
+    {
+        $externalRun = $this->workflowTasks->start(
+            $run,
+            $step,
+            $stepRun,
+            $this->workflowRuntimeContext($run, $step, $stepRun),
+        );
+
+        $stepRun->forceFill([
+            'status' => 'waiting',
+            'external_run_type' => 'workflow-task',
+            'external_run_id' => $externalRun['runId'] ?? null,
+            'result_json' => $this->publicRunSnapshot($externalRun),
+            'logs_json' => $this->logsFromExternalStatus($externalRun),
+        ])->save();
+
+        $this->scheduleMonitor($stepRun, (int) ($externalRun['livePreviewPollIntervalSeconds'] ?? $externalRun['livePreviewIntervalSeconds'] ?? 3));
+
+        return 'waiting';
     }
 
     protected function startMailRegistrationStep(WorkflowRun $run, WorkflowStep $step, WorkflowStepRun $stepRun): string
@@ -671,6 +694,7 @@ class WorkflowExecutionService
         return match ($stepRun->external_run_type) {
             'mail-registration' => $this->mailRegistration->readRun($externalRunId),
             'webmail-session' => $this->webmailSession->readRun($externalRunId),
+            'workflow-task' => $this->workflowTasks->readRun($externalRunId),
             default => null,
         };
     }
@@ -684,6 +708,9 @@ class WorkflowExecutionService
             'webmail-session' => is_array($status['result'] ?? null)
                 ? $status['result']
                 : $this->webmailSession->readResult($externalRunId),
+            'workflow-task' => is_array($status['result'] ?? null)
+                ? $status['result']
+                : $this->workflowTasks->readResult($externalRunId),
             default => null,
         };
 
@@ -853,6 +880,8 @@ class WorkflowExecutionService
 
     protected function workflowRuntimeContext(WorkflowRun $run, WorkflowStep $step, WorkflowStepRun $stepRun): array
     {
+        $person = $this->personForRun($run, $step);
+
         return [
             'workflowRunId' => $run->id,
             'workflowRunUuid' => $run->run_uuid,
@@ -863,12 +892,24 @@ class WorkflowExecutionService
             'workflowStepName' => $step->name,
             'workflowStepType' => $step->type,
             'personId' => data_get($run->context_json, 'person_id'),
+            'person' => $person ? [
+                'id' => $person->id,
+                'displayName' => $person->display_name,
+                'firstName' => $person->person_first_name,
+                'lastName' => $person->person_last_name,
+                'email' => $person->person_email,
+                'phone' => $person->person_phone,
+                'country' => $person->person_country,
+                'city' => $person->person_city,
+                'timezone' => $person->person_timezone,
+                'loginUsername' => $person->login_username,
+            ] : null,
         ];
     }
 
     protected function scheduleMonitor(WorkflowStepRun $stepRun, int $delaySeconds = 10): void
     {
-        if (! in_array($stepRun->external_run_type, ['mail-registration', 'webmail-session'], true)) {
+        if (! in_array($stepRun->external_run_type, ['mail-registration', 'webmail-session', 'workflow-task'], true)) {
             return;
         }
 
