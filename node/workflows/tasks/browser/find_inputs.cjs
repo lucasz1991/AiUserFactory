@@ -1,5 +1,7 @@
 'use strict';
 
+const { captureTaskPreview } = require('../lib/preview.cjs');
+
 async function run(context = {}) {
   const page = context.page;
 
@@ -42,12 +44,12 @@ async function run(context = {}) {
       }));
   });
 
-  return {
+  return captureTaskPreview(context, {
     ok: inputs.length > 0,
     status: inputs.length > 0 ? 'success' : 'partial',
     statusMessage: inputs.length > 0 ? 'Input-Felder gefunden.' : 'Keine sichtbaren Input-Felder gefunden.',
     inputs,
-  };
+  });
 }
 
 module.exports = { key: 'browser.find_inputs', run };

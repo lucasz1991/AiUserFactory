@@ -1,5 +1,7 @@
 'use strict';
 
+const { captureTaskPreview, startTaskPreview } = require('../lib/preview.cjs');
+
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -27,15 +29,16 @@ async function run(context = {}) {
   const milliseconds = Math.round(seconds * 1000);
 
   if (milliseconds > 0) {
+    startTaskPreview(context);
     await wait(milliseconds);
   }
 
-  return {
+  return captureTaskPreview(context, {
     ok: true,
     status: 'success',
     statusMessage: seconds > 0 ? `Wartezeit abgeschlossen: ${seconds}s.` : 'Warte-Task ohne Verzoegerung abgeschlossen.',
     seconds,
-  };
+  });
 }
 
 module.exports = { key: 'wait.seconds', run };

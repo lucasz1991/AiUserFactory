@@ -6,12 +6,68 @@
 ])
 
 @php
+    $publicUrl = static function (?string $relativePath): ?string {
+        $relativePath = trim((string) $relativePath);
+
+        if ($relativePath === '') {
+            return null;
+        }
+
+        $absolutePath = storage_path('app/public/'.$relativePath);
+
+        if (! \Illuminate\Support\Facades\File::exists($absolutePath)) {
+            return \Illuminate\Support\Facades\Storage::disk('public')->url($relativePath);
+        }
+
+        return \Illuminate\Support\Facades\Storage::disk('public')->url($relativePath).'?v='.\Illuminate\Support\Facades\File::lastModified($absolutePath);
+    };
+
+    $windowStatus = static function (array $window, array $result): array {
+        $capturedAt = data_get($window, 'capturedAt');
+        $intervalSeconds = max(1, (int) data_get($result, 'livePreviewIntervalSeconds', data_get($result, 'livePreviewPollIntervalSeconds', 3)));
+
+        return [
+            'label' => data_get($window, 'label', 'Browser'),
+            'alive' => true,
+            'stale' => false,
+            'hasScreenshot' => (bool) (data_get($window, 'screenshotUrl') || data_get($window, 'livePreviewRelativePath')),
+            'heartbeatAt' => $capturedAt,
+            'ageSeconds' => null,
+            'statusText' => $capturedAt ? 'Lebenszeichen aktiv' : 'Screenshot bereit',
+            'state' => (string) data_get($result, 'status', 'running'),
+            'stage' => (string) data_get($result, 'statusMessage', ''),
+            'message' => (string) data_get($window, 'error', ''),
+            'livePreviewEnabled' => true,
+            'livePreviewIntervalSeconds' => $intervalSeconds,
+        ];
+    };
+
     $stepRuns = $workflowRun?->stepRuns ?? collect();
     $screenshotPanels = collect($stepRuns)
-        ->flatMap(function ($stepRun) {
+        ->flatMap(function ($stepRun) use ($publicUrl, $windowStatus) {
             $result = is_array($stepRun->result_json) ? $stepRun->result_json : [];
             $hasNamedWindows = is_array(data_get($result, 'registrationWindowStatus')) || is_array(data_get($result, 'webmailWindowStatus'));
             $panels = [];
+
+            foreach (data_get($result, 'browserWindows', []) as $window) {
+                if (! is_array($window)) {
+                    continue;
+                }
+
+                $image = data_get($window, 'screenshotUrl') ?: $publicUrl(data_get($window, 'livePreviewRelativePath'));
+
+                if (! $image && ! data_get($window, 'error')) {
+                    continue;
+                }
+
+                $panels[] = [
+                    'title' => data_get($window, 'label', 'Browserfenster'),
+                    'image' => $image,
+                    'window' => $windowStatus($window, $result),
+                    'dom' => data_get($window, 'debugDomUrl'),
+                    'step' => $stepRun->workflowStep?->name ?? 'Schritt',
+                ];
+            }
 
             foreach ([
                 ['title' => 'Browser', 'image' => $hasNamedWindows ? null : data_get($result, 'screenshotUrl'), 'window' => data_get($result, 'windowStatus'), 'dom' => data_get($result, 'debugDomUrl')],

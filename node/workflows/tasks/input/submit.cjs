@@ -1,5 +1,7 @@
 'use strict';
 
+const { captureTaskPreview } = require('../lib/preview.cjs');
+
 async function run(context = {}) {
   const page = context.page;
   const input = context.input || {};
@@ -27,7 +29,7 @@ async function run(context = {}) {
 
       if (locator && await locator.count() > 0) {
         await locator.click({ timeout });
-        return { ok: true, status: 'success', statusMessage: 'Submit wurde ausgeloest.', selector };
+        return captureTaskPreview(context, { ok: true, status: 'success', statusMessage: 'Submit wurde ausgeloest.', selector });
       }
     } catch (error) {
       // Try the next selector.

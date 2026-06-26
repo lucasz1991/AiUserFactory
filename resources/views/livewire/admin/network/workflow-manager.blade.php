@@ -94,6 +94,14 @@
                             Keine Listen. Nutze oben den Button "Liste".
                         </div>
                     @endforelse
+
+                    <button
+                        type="button"
+                        wire:click="$set('showAddStepModal', true)"
+                        class="flex min-h-[220px] w-[260px] shrink-0 items-start rounded-md border border-dashed border-white/45 bg-transparent p-3 text-left text-sm font-semibold text-blue-50 transition hover:border-white hover:bg-white/10 hover:text-white"
+                    >
+                        + Neue Liste rechts anlegen
+                    </button>
                 </div>
 
                 @if($showTaskPanel)

@@ -1,5 +1,7 @@
 'use strict';
 
+const { captureTaskPreview } = require('../lib/preview.cjs');
+
 function firstNonEmpty(...values) {
   for (const value of values) {
     const normalized = String(value ?? '').trim();
@@ -38,13 +40,13 @@ async function run(context = {}) {
       const clicked = await clickLocator(page.locator(selector), timeout);
 
       if (clicked) {
-        return {
+        return captureTaskPreview(context, {
           ok: true,
           status: 'success',
           statusMessage: 'Element wurde geklickt.',
           selector,
           url: typeof page.url === 'function' ? page.url() : null,
-        };
+        });
       }
     } catch (error) {
       if (text === '') {
@@ -64,13 +66,13 @@ async function run(context = {}) {
       const clicked = await clickLocator(page.getByText(text, { exact: false }), timeout);
 
       if (clicked) {
-        return {
+        return captureTaskPreview(context, {
           ok: true,
           status: 'success',
           statusMessage: 'Element wurde ueber Text geklickt.',
           text,
           url: typeof page.url === 'function' ? page.url() : null,
-        };
+        });
       }
     } catch (error) {
       return {

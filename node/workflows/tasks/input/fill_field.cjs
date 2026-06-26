@@ -1,5 +1,7 @@
 'use strict';
 
+const { captureTaskPreview } = require('../lib/preview.cjs');
+
 async function run(context = {}) {
   const page = context.page;
   const input = context.input || {};
@@ -33,12 +35,12 @@ async function run(context = {}) {
     try {
       if (locator && await locator.count() > 0) {
         await locator.fill(value, { timeout });
-        return { ok: true, status: 'success', statusMessage: 'Input-Feld wurde gefuellt.', selector };
+        return captureTaskPreview(context, { ok: true, status: 'success', statusMessage: 'Input-Feld wurde gefuellt.', selector });
       }
 
       if (typeof page.fill === 'function') {
         await page.fill(selector, value, { timeout });
-        return { ok: true, status: 'success', statusMessage: 'Input-Feld wurde gefuellt.', selector };
+        return captureTaskPreview(context, { ok: true, status: 'success', statusMessage: 'Input-Feld wurde gefuellt.', selector });
       }
     } catch (error) {
       // Try the next selector.

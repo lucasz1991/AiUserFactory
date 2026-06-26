@@ -1,5 +1,7 @@
 'use strict';
 
+const { captureTaskPreview } = require('../lib/preview.cjs');
+
 function firstNonEmpty(...values) {
   for (const value of values) {
     const normalized = String(value ?? '').trim();
@@ -61,7 +63,7 @@ async function run(context = {}) {
       const match = await trySelector(page, selector, timeout);
 
       if (match) {
-        return { ok: true, status: 'success', statusMessage: 'Element wurde gefunden.', element: match };
+        return captureTaskPreview(context, { ok: true, status: 'success', statusMessage: 'Element wurde gefunden.', element: match });
       }
     } catch (error) {
       if (text === '') {
@@ -83,12 +85,12 @@ async function run(context = {}) {
       if (await locator.count() > 0) {
         await locator.waitFor({ state: 'visible', timeout });
 
-        return {
+        return captureTaskPreview(context, {
           ok: true,
           status: 'success',
           statusMessage: 'Element wurde ueber Text gefunden.',
           element: await elementSnapshot(locator, `text=${text}`),
-        };
+        });
       }
     } catch (error) {
       return {
@@ -101,13 +103,13 @@ async function run(context = {}) {
     }
   }
 
-  return {
+  return captureTaskPreview(context, {
     ok: false,
     status: 'partial',
     statusMessage: 'Kein Element gefunden. Weiterleitung kann ueber Teilstatus oder Fehler erfolgen.',
     selector,
     text,
-  };
+  });
 }
 
 module.exports = { key: 'browser.find_element', run };

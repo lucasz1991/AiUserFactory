@@ -1,5 +1,7 @@
 'use strict';
 
+const { captureTaskPreview } = require('../lib/preview.cjs');
+
 async function run(context = {}) {
   const page = context.page;
   const input = context.input || {};
@@ -24,12 +26,12 @@ async function run(context = {}) {
     });
   }
 
-  return {
+  return captureTaskPreview(context, {
     ok: true,
     status: 'success',
     statusMessage: 'URL wurde geoeffnet.',
     url: typeof page.url === 'function' ? page.url() : url,
-  };
+  });
 }
 
 module.exports = { key: 'browser.open_url', run };

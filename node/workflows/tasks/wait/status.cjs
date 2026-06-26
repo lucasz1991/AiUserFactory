@@ -1,5 +1,7 @@
 'use strict';
 
+const { captureTaskPreview } = require('../lib/preview.cjs');
+
 async function run(context = {}) {
   const page = context.page;
   const input = context.input || {};
@@ -22,21 +24,21 @@ async function run(context = {}) {
     if (pattern !== '' && source.toLowerCase().includes(pattern)) {
       const status = String(rule.status || 'success');
 
-      return {
+      return captureTaskPreview(context, {
         ok: status !== 'failed',
         status,
         statusMessage: rule.message || `Status-Regel getroffen: ${pattern}`,
         matchedRule: rule,
-      };
+      });
     }
   }
 
-  return {
+  return captureTaskPreview(context, {
     ok: true,
     status: 'partial',
     statusMessage: 'Keine Statusregel getroffen; Weiterleitung kann ueber partial erfolgen.',
     snapshot,
-  };
+  });
 }
 
 module.exports = { key: 'wait.status', run };

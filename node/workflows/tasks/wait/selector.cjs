@@ -1,5 +1,7 @@
 'use strict';
 
+const { captureTaskPreview, startTaskPreview } = require('../lib/preview.cjs');
+
 async function run(context = {}) {
   const page = context.page;
   const input = context.input || {};
@@ -15,16 +17,17 @@ async function run(context = {}) {
   }
 
   try {
+    startTaskPreview(context);
     await page.waitForSelector(selector, { state: input.state || 'visible', timeout });
 
-    return { ok: true, status: 'success', statusMessage: 'Selector wurde gefunden.', selector };
+    return captureTaskPreview(context, { ok: true, status: 'success', statusMessage: 'Selector wurde gefunden.', selector });
   } catch (error) {
-    return {
+    return captureTaskPreview(context, {
       ok: false,
       status: 'timeout',
       statusMessage: `Selector wurde innerhalb des Timeouts nicht gefunden: ${selector}`,
       selector,
-    };
+    });
   }
 }
 

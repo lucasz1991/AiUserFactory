@@ -101,22 +101,4 @@
             @endif
         </div>
     @endif
-    @if(is_array($task['next'] ?? null) || is_array($task['on_error'] ?? null))
-        <div class="mt-3 grid gap-2 text-[11px] text-slate-500">
-            @if(is_array($task['next'] ?? null))
-                <div class="flex items-center gap-2 text-emerald-700">
-                    <span class="h-px flex-1 bg-emerald-300"></span>
-                    <span class="h-0 w-0 border-y-4 border-l-8 border-y-transparent border-l-emerald-400"></span>
-                    <span class="max-w-[160px] truncate font-semibold">{{ data_get($task, 'next.label', data_get($task, 'next.card', data_get($task, 'next.step', 'naechstes Ziel'))) }}</span>
-                </div>
-            @endif
-            @if(is_array($task['on_error'] ?? null))
-                <div class="flex items-center gap-2 text-red-700">
-                    <span class="h-px flex-1 bg-red-300"></span>
-                    <span class="h-0 w-0 border-y-4 border-l-8 border-y-transparent border-l-red-400"></span>
-                    <span class="max-w-[160px] truncate font-semibold">{{ data_get($task, 'on_error.label', data_get($task, 'on_error.card', data_get($task, 'on_error.step', 'Fehlerziel'))) }}</span>
-                </div>
-            @endif
-        </div>
-    @endif
 </div>
