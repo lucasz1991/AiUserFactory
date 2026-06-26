@@ -152,7 +152,12 @@ class WorkflowExecutionService
                 return;
             }
 
-            $this->scheduleMonitor($stepRun);
+            $stepRun->forceFill([
+                'status' => 'waiting',
+                'result_json' => $this->publicRunSnapshot($status),
+            ])->save();
+
+            $this->scheduleMonitor($stepRun, (int) ($status['livePreviewPollIntervalSeconds'] ?? $status['livePreviewIntervalSeconds'] ?? 10));
 
             return;
         }
@@ -236,7 +241,7 @@ class WorkflowExecutionService
             'result_json' => $this->publicRunSnapshot($externalRun),
         ])->save();
 
-        $this->scheduleMonitor($stepRun);
+        $this->scheduleMonitor($stepRun, (int) ($externalRun['livePreviewPollIntervalSeconds'] ?? $externalRun['livePreviewIntervalSeconds'] ?? 10));
 
         return 'waiting';
     }
@@ -257,7 +262,7 @@ class WorkflowExecutionService
             'result_json' => $this->publicRunSnapshot($externalRun),
         ])->save();
 
-        $this->scheduleMonitor($stepRun);
+        $this->scheduleMonitor($stepRun, (int) ($externalRun['livePreviewPollIntervalSeconds'] ?? $externalRun['livePreviewIntervalSeconds'] ?? 10));
 
         return 'waiting';
     }
@@ -857,13 +862,13 @@ class WorkflowExecutionService
         ];
     }
 
-    protected function scheduleMonitor(WorkflowStepRun $stepRun): void
+    protected function scheduleMonitor(WorkflowStepRun $stepRun, int $delaySeconds = 10): void
     {
         if (! in_array($stepRun->external_run_type, ['mail-registration', 'webmail-session'], true)) {
             return;
         }
 
-        MonitorWorkflowStepRunJob::dispatch($stepRun->id)->delay(now()->addSeconds(10));
+        MonitorWorkflowStepRunJob::dispatch($stepRun->id)->delay(now()->addSeconds(max(1, min(60, $delaySeconds))));
     }
 
     protected function normalizeContext(array $context): array

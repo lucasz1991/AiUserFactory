@@ -32,8 +32,11 @@ const MAIL_ACCOUNT_SCRIPT_VERSION_LABEL = `${MAIL_ACCOUNT_SCRIPT_NAME} v${MAIL_A
 const runtimeConfigPath = process.argv[2] || '';
 const statusEvents = [];
 const lastLivePreviewByPath = new Map();
+const activePreviewWindows = new Map();
 let currentStatusPayload = null;
 let heartbeatTimer = null;
+let livePreviewTimer = null;
+let livePreviewTickRunning = false;
 let heartbeatCounter = 0;
 let activeBrowserEngine = null;
 let requestedBrowserEngine = null;
@@ -109,6 +112,9 @@ function publicStatusPayload(runtimeConfig, state, stage, message, data = {}) {
     domDebugEnabled: runtimeConfig.domDebugEnabled !== false,
     registrationDebugDom: data.registrationDebugDom || data.debugDom || null,
     webmailDebugDom: data.webmailDebugDom || null,
+    browserWindows: Array.isArray(data.browserWindows)
+      ? data.browserWindows
+      : (Array.isArray(currentStatusPayload?.browserWindows) ? currentStatusPayload.browserWindows : []),
     finalUrl: data.finalUrl || null,
     title: data.title || null,
     liveScreenshotPath: data.liveScreenshotPath || null,
@@ -254,6 +260,144 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
 
 async function captureWebmailLivePreviewScreenshot(page, runtimeConfig = {}, force = false) {
   return captureScreenshotToPath(page, runtimeConfig, normalizeText(runtimeConfig.webmailLivePreviewPath), force);
+}
+
+function publicRelativePathForPreview(runtimeConfig = {}, kind = 'registration', index = 0) {
+  const registrationPath = normalizeText(runtimeConfig.livePreviewRelativePath);
+  const webmailPath = normalizeText(runtimeConfig.webmailLivePreviewRelativePath);
+
+  if (kind === 'registration' && registrationPath) {
+    return registrationPath;
+  }
+
+  if (kind === 'webmail' && webmailPath) {
+    return webmailPath;
+  }
+
+  if (!registrationPath) {
+    return '';
+  }
+
+  const ext = path.extname(registrationPath) || '.png';
+  const base = registrationPath.slice(0, -ext.length);
+
+  return `${base}-window-${index + 1}${ext}`;
+}
+
+function absolutePathForPreview(runtimeConfig = {}, kind = 'registration', index = 0) {
+  const registrationPath = normalizeText(runtimeConfig.livePreviewPath);
+  const webmailPath = normalizeText(runtimeConfig.webmailLivePreviewPath);
+
+  if (kind === 'registration' && registrationPath) {
+    return registrationPath;
+  }
+
+  if (kind === 'webmail' && webmailPath) {
+    return webmailPath;
+  }
+
+  if (!registrationPath) {
+    return '';
+  }
+
+  const ext = path.extname(registrationPath) || '.png';
+  const base = registrationPath.slice(0, -ext.length);
+
+  return `${base}-window-${index + 1}${ext}`;
+}
+
+function registerPreviewWindow(page, runtimeConfig = {}, label = 'Browserfenster', kind = 'registration') {
+  if (!page || typeof page.screenshot !== 'function') {
+    return;
+  }
+
+  const key = `${kind}:${activePreviewWindows.size + 1}`;
+
+  activePreviewWindows.set(key, {
+    key,
+    page,
+    label,
+    kind,
+    livePreviewPath: absolutePathForPreview(runtimeConfig, kind, activePreviewWindows.size),
+    livePreviewRelativePath: publicRelativePathForPreview(runtimeConfig, kind, activePreviewWindows.size),
+  });
+
+  startLivePreviewTimer(runtimeConfig);
+}
+
+async function captureRegisteredPreviewWindows(runtimeConfig = {}, force = false) {
+  const browserWindows = [];
+
+  for (const [key, windowConfig] of Array.from(activePreviewWindows.entries())) {
+    if (!windowConfig.page || (typeof windowConfig.page.isClosed === 'function' && windowConfig.page.isClosed())) {
+      activePreviewWindows.delete(key);
+      continue;
+    }
+
+    const screenshot = await captureScreenshotToPath(windowConfig.page, runtimeConfig, windowConfig.livePreviewPath, force);
+
+    browserWindows.push({
+      key,
+      label: windowConfig.label,
+      kind: windowConfig.kind,
+      livePreviewPath: windowConfig.livePreviewPath,
+      livePreviewRelativePath: windowConfig.livePreviewRelativePath,
+      liveScreenshotPath: screenshot.liveScreenshotPath || windowConfig.livePreviewPath,
+      liveScreenshotAt: screenshot.liveScreenshotAt || null,
+      error: screenshot.liveScreenshotError || null,
+    });
+  }
+
+  return browserWindows;
+}
+
+function startLivePreviewTimer(runtimeConfig = {}) {
+  const statusPath = normalizeText(runtimeConfig.statusPath);
+
+  if (!statusPath || livePreviewTimer || runtimeConfig.livePreviewEnabled === false) {
+    return;
+  }
+
+  const tick = async () => {
+    if (livePreviewTickRunning || !currentStatusPayload) {
+      return;
+    }
+
+    livePreviewTickRunning = true;
+
+    try {
+      const browserWindows = await captureRegisteredPreviewWindows(runtimeConfig, true);
+      const heartbeatAt = new Date().toISOString();
+
+      currentStatusPayload = {
+        ...currentStatusPayload,
+        at: heartbeatAt,
+        heartbeatAt,
+        browserWindows,
+        livePreviewIntervalSeconds: Math.max(1, Math.round(livePreviewIntervalMs(runtimeConfig) / 1000)),
+        livePreviewPollIntervalSeconds: Math.max(1, Math.round(livePreviewIntervalMs(runtimeConfig) / 1000)),
+      };
+
+      writeJsonFile(statusPath, currentStatusPayload);
+    } finally {
+      livePreviewTickRunning = false;
+    }
+  };
+
+  livePreviewTimer = setInterval(tick, livePreviewIntervalMs(runtimeConfig));
+
+  if (typeof livePreviewTimer.unref === 'function') {
+    livePreviewTimer.unref();
+  }
+
+  tick();
+}
+
+function stopLivePreviewTimer() {
+  if (livePreviewTimer) {
+    clearInterval(livePreviewTimer);
+    livePreviewTimer = null;
+  }
 }
 
 function truncateText(value, limit) {
@@ -3230,6 +3374,7 @@ async function openVerificationWebmailPage(browser, runtimeConfig, primaryPage =
   }
 
   const page = await browser.newPage();
+  registerPreviewWindow(page, runtimeConfig, 'Webmail', 'webmail');
   const restorePrimaryPage = async () => {
     if (primaryPage) {
       await primaryPage.bringToFront().catch(() => {});
@@ -4316,6 +4461,7 @@ async function main() {
     });
 
     page = await browser.newPage();
+    registerPreviewWindow(page, runtimeConfig, 'Registrierung', 'registration');
     page.setDefaultNavigationTimeout(Math.max(15000, Number(runtimeConfig.navigationTimeoutMs || 120000)));
     await page.setViewport(DEFAULT_VIEWPORT);
 
@@ -4377,6 +4523,7 @@ async function main() {
 
     writeResult(runtimeConfig, result);
   } finally {
+    stopLivePreviewTimer();
     stopProcessHeartbeat();
     if (browser) {
       await browser.close().catch(() => {});

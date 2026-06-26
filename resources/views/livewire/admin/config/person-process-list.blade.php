@@ -1,5 +1,5 @@
 <section
-    @if($autoRefresh) wire:poll.10s="syncProcesses(false)" @endif
+    @if($autoRefresh) wire:poll.5s="syncProcesses(false)" @endif
     class="space-y-4"
 >
     <div class="flex flex-wrap items-start justify-between gap-3">

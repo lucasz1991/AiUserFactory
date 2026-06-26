@@ -1,5 +1,5 @@
 <section
-    @if($autoRefresh) wire:poll.10s="syncProcesses(false)" @endif
+    @if($autoRefresh) wire:poll.5s="syncProcesses(false)" @endif
     class="{{ $compact ? 'rounded-lg border border-gray-200 bg-white p-4 shadow-sm' : 'space-y-6' }}"
 >
     @if($showHeader)

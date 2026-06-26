@@ -146,7 +146,7 @@
         </x-admin.panel>
 
         <x-admin.panel title="Ausfuehrungs-Tasks">
-            <div wire:poll.10s>
+            <div wire:poll.3s>
                 <x-workflows.run-list :runs="$runs" />
             </div>
         </x-admin.panel>

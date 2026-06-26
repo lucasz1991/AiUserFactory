@@ -47,6 +47,7 @@
         ->flatMap(function ($stepRun) use ($publicUrl, $windowStatus) {
             $result = is_array($stepRun->result_json) ? $stepRun->result_json : [];
             $hasNamedWindows = is_array(data_get($result, 'registrationWindowStatus')) || is_array(data_get($result, 'webmailWindowStatus'));
+            $hasBrowserWindows = false;
             $panels = [];
 
             foreach (data_get($result, 'browserWindows', []) as $window) {
@@ -67,6 +68,11 @@
                     'dom' => data_get($window, 'debugDomUrl'),
                     'step' => $stepRun->workflowStep?->name ?? 'Schritt',
                 ];
+                $hasBrowserWindows = true;
+            }
+
+            if ($hasBrowserWindows) {
+                return $panels;
             }
 
             foreach ([

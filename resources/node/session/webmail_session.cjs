@@ -26,8 +26,11 @@ const BROWSER_DEBUG_EVENT_LIMIT = 120;
 const statusEvents = [];
 const browserDebugEvents = [];
 let lastLivePreviewAt = 0;
+const activePreviewWindows = new Map();
 let currentStatusPayload = null;
 let heartbeatTimer = null;
+let livePreviewTimer = null;
+let livePreviewTickRunning = false;
 let heartbeatCounter = 0;
 
 function normalizeText(value) {
@@ -187,6 +190,9 @@ function publicStatusPayload(runtimeConfig, state, stage, message, data = {}) {
     title: data.title || null,
     debugDom: data.debugDom || null,
     browserDebugEvents: data.browserDebugEvents || recentBrowserDebugEvents(),
+    browserWindows: Array.isArray(data.browserWindows)
+      ? data.browserWindows
+      : (Array.isArray(currentStatusPayload?.browserWindows) ? currentStatusPayload.browserWindows : []),
     liveScreenshotPath: data.liveScreenshotPath || null,
     liveScreenshotAt: data.liveScreenshotAt || null,
     events: statusEvents.slice(-40),
@@ -307,6 +313,126 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
     return {
       liveScreenshotError: normalizeText(error?.message || String(error)),
     };
+  }
+}
+
+function publicRelativePathForPreview(runtimeConfig = {}, index = 0) {
+  const relativePath = normalizeText(runtimeConfig.livePreviewRelativePath);
+
+  if (!relativePath || index === 0) {
+    return relativePath;
+  }
+
+  const ext = path.extname(relativePath) || '.png';
+  const base = relativePath.slice(0, -ext.length);
+
+  return `${base}-window-${index + 1}${ext}`;
+}
+
+function absolutePathForPreview(runtimeConfig = {}, index = 0) {
+  const livePreviewPath = normalizeText(runtimeConfig.livePreviewPath);
+
+  if (!livePreviewPath || index === 0) {
+    return livePreviewPath;
+  }
+
+  const ext = path.extname(livePreviewPath) || '.png';
+  const base = livePreviewPath.slice(0, -ext.length);
+
+  return `${base}-window-${index + 1}${ext}`;
+}
+
+function registerPreviewWindow(page, runtimeConfig = {}, label = 'Webmail') {
+  if (!page || typeof page.screenshot !== 'function') {
+    return;
+  }
+
+  const key = `webmail:${activePreviewWindows.size + 1}`;
+
+  activePreviewWindows.set(key, {
+    key,
+    page,
+    label,
+    livePreviewPath: absolutePathForPreview(runtimeConfig, activePreviewWindows.size),
+    livePreviewRelativePath: publicRelativePathForPreview(runtimeConfig, activePreviewWindows.size),
+  });
+
+  startLivePreviewTimer(runtimeConfig);
+}
+
+async function captureRegisteredPreviewWindows(runtimeConfig = {}, force = false) {
+  const browserWindows = [];
+
+  for (const [key, windowConfig] of Array.from(activePreviewWindows.entries())) {
+    if (!windowConfig.page || (typeof windowConfig.page.isClosed === 'function' && windowConfig.page.isClosed())) {
+      activePreviewWindows.delete(key);
+      continue;
+    }
+
+    const screenshot = await captureLivePreviewScreenshot(windowConfig.page, {
+      ...runtimeConfig,
+      livePreviewPath: windowConfig.livePreviewPath,
+    }, force);
+
+    browserWindows.push({
+      key,
+      label: windowConfig.label,
+      livePreviewPath: windowConfig.livePreviewPath,
+      livePreviewRelativePath: windowConfig.livePreviewRelativePath,
+      liveScreenshotPath: screenshot.liveScreenshotPath || windowConfig.livePreviewPath,
+      liveScreenshotAt: screenshot.liveScreenshotAt || null,
+      error: screenshot.liveScreenshotError || null,
+    });
+  }
+
+  return browserWindows;
+}
+
+function startLivePreviewTimer(runtimeConfig = {}) {
+  if (!runtimeConfig.statusPath || livePreviewTimer || runtimeConfig.livePreviewEnabled === false) {
+    return;
+  }
+
+  const tick = async () => {
+    if (livePreviewTickRunning || !currentStatusPayload) {
+      return;
+    }
+
+    livePreviewTickRunning = true;
+
+    try {
+      const browserWindows = await captureRegisteredPreviewWindows(runtimeConfig, true);
+      const heartbeatAt = new Date().toISOString();
+      const seconds = Math.max(1, Math.round(livePreviewIntervalMs(runtimeConfig) / 1000));
+
+      currentStatusPayload = {
+        ...currentStatusPayload,
+        at: heartbeatAt,
+        heartbeatAt,
+        browserWindows,
+        livePreviewIntervalSeconds: seconds,
+        livePreviewPollIntervalSeconds: seconds,
+      };
+
+      writeJsonFile(runtimeConfig.statusPath, currentStatusPayload);
+    } finally {
+      livePreviewTickRunning = false;
+    }
+  };
+
+  livePreviewTimer = setInterval(tick, livePreviewIntervalMs(runtimeConfig));
+
+  if (typeof livePreviewTimer.unref === 'function') {
+    livePreviewTimer.unref();
+  }
+
+  tick();
+}
+
+function stopLivePreviewTimer() {
+  if (livePreviewTimer) {
+    clearInterval(livePreviewTimer);
+    livePreviewTimer = null;
   }
 }
 
@@ -1107,6 +1233,7 @@ async function main() {
     });
 
     const page = await browser.newPage();
+    registerPreviewWindow(page, runtimeConfig, 'Webmail');
     installBrowserDebugListeners(page, 'webmail');
     page.setDefaultNavigationTimeout(Math.max(30000, Number(runtimeConfig.navigationTimeoutMs || 120000)));
     await page.setViewport(DEFAULT_VIEWPORT);
@@ -1219,6 +1346,7 @@ async function main() {
 
     writeResult(runtimeConfig, result);
   } finally {
+    stopLivePreviewTimer();
     stopProcessHeartbeat();
     if (browser) {
       await browser.close().catch(() => {});
