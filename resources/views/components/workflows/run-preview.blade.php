@@ -151,7 +151,7 @@
                 ->keyBy(fn ($task) => (string) data_get($task, 'key'));
             $templateTasks = collect($step?->task_cards ?? []);
             $tasks = $templateTasks
-                ->map(function (array $task) use ($resultTasks, $stepRun, $result) {
+                ->map(function (array $task) use ($resultTasks, $stepRun, $result, $taskStatusLabel) {
                     $taskKey = (string) ($task['key'] ?? '');
                     $resultTask = $resultTasks->get($taskKey);
                     $status = $taskStatusLabel($resultTask, $stepRun, $result);
