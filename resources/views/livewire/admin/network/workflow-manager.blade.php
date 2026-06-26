@@ -73,6 +73,7 @@
                     focusedTask: '',
                     routeLines: [],
                     routeOverlay: { width: 0, height: 0 },
+                    routeSvgMarkup: '',
                     init() {
                         this.$nextTick(() => this.refreshRouteLines());
                         setTimeout(() => this.refreshRouteLines(), 150);
@@ -225,6 +226,14 @@
                             height: surface.scrollHeight,
                         };
                         this.routeLines = lines;
+                        this.routeSvgMarkup = lines.map((line, index) => {
+                            const color = line.type === 'failed' ? '#fca5a5' : '#bbf7d0';
+                            const marker = line.type === 'failed' ? 'url(#workflow-arrow-red)' : 'url(#workflow-arrow-green)';
+                            const dash = line.type === 'failed' ? ' stroke-dasharray=&quot;6 5&quot;' : '';
+                            const path = String(line.path || '').replace(/&/g, '&amp;').replace(/&quot;/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+                            return `<path d=&quot;${path}&quot; fill=&quot;none&quot; stroke-width=&quot;3&quot; stroke-linecap=&quot;round&quot; stroke=&quot;${color}&quot;${dash} marker-end=&quot;${marker}&quot;></path>`;
+                        }).join('');
                     },
                 }"
                 x-init="refreshRouteLines()"
@@ -247,17 +256,7 @@
                             <path d="M0,0 L0,6 L8,3 z" fill="#fca5a5"></path>
                         </marker>
                     </defs>
-                    <template x-for="(line, index) in routeLines" x-bind:key="index">
-                        <path
-                            x-bind:d="line.path"
-                            fill="none"
-                            stroke-width="3"
-                            stroke-linecap="round"
-                            x-bind:stroke="line.type === 'failed' ? '#fca5a5' : '#bbf7d0'"
-                            x-bind:stroke-dasharray="line.type === 'failed' ? '6 5' : '0'"
-                            x-bind:marker-end="line.type === 'failed' ? 'url(#workflow-arrow-red)' : 'url(#workflow-arrow-green)'"
-                        ></path>
-                    </template>
+                    <g x-html="routeSvgMarkup"></g>
                 </svg>
 
                 <div class="relative z-10 mb-4 flex items-center justify-between gap-3">

@@ -117,7 +117,7 @@
                     $failedTarget = $routeNode(is_array($task['on_error'] ?? null) ? $task['on_error'] : null);
                 @endphp
                 <div
-                    x-sort:item="{{ $step->id }}::{{ $task['key'] ?? '' }}"
+                    x-sort:item="@js($step->id.'::'.($task['key'] ?? ''))"
                     data-workflow-task-node="{{ $sourceNode }}"
                     data-workflow-step-action="{{ $step->action_key }}"
                     data-route-success="{{ $successTarget }}"
