@@ -156,6 +156,7 @@ function publicStatusPayload(runtimeConfig, state, stage, message, data = {}) {
 
   return {
     runId: runtimeConfig.runId || null,
+    workflow: runtimeConfig.workflow || null,
     processKey: processIdentity.processKey || runtimeConfig.processKey || null,
     processIdentity: Object.keys(processIdentity).length > 0 ? processIdentity : null,
     providerKey: webmailProviderKey(runtimeConfig),
@@ -1187,6 +1188,7 @@ async function main() {
         ? 'Webmail-Portal wurde erreicht; Sessiondaten wurden gespeichert.'
         : 'Webmail-Sessiondaten wurden gespeichert.',
       runId: runtimeConfig.runId || null,
+      workflow: runtimeConfig.workflow || null,
       scriptName: SCRIPT_NAME,
       scriptVersion: SCRIPT_VERSION,
       scriptVersions: {
@@ -1236,6 +1238,7 @@ main().catch((error) => {
     ok: false,
     statusMessage: 'Webmail-Session-Skript ist fehlgeschlagen.',
     runId: runtimeConfig.runId || null,
+    workflow: runtimeConfig.workflow || null,
     scriptName: SCRIPT_NAME,
     scriptVersion: SCRIPT_VERSION,
     scriptVersions: {

@@ -75,6 +75,7 @@ function publicStatusPayload(runtimeConfig, state, stage, message, data = {}) {
 
   return {
     runId: runtimeConfig.runId || null,
+    workflow: runtimeConfig.workflow || null,
     processKey: processIdentity.processKey || runtimeConfig.processKey || null,
     processIdentity: Object.keys(processIdentity).length > 0 ? processIdentity : null,
     providerKey: runtimeConfig.provider?.key || null,
@@ -4332,6 +4333,7 @@ async function main() {
         ? (providerResult.statusMessage || 'Mail-Registrierung wurde als abgeschlossen erkannt.')
         : (providerResult.statusMessage || 'Beobachtung beendet. Eine automatische Registrierung wurde nicht bestaetigt.'),
       runId: runtimeConfig.runId || null,
+      workflow: runtimeConfig.workflow || null,
       providerKey: provider.key || null,
       providerLabel: provider.label || null,
       providerMode: provider.mode,
@@ -4390,6 +4392,7 @@ main().catch((error) => {
     statusLevel: 'error',
     statusMessage: 'Mail-Registrierung konnte nicht ausgefuehrt werden.',
     runId: runtimeConfig.runId || null,
+    workflow: runtimeConfig.workflow || null,
     providerKey: runtimeConfig.provider?.key || null,
     providerLabel: runtimeConfig.provider?.label || null,
     error: message,

@@ -15,9 +15,10 @@ class WebmailSessionRunner
     public const PROVIDER_PROTON = 'proton';
     public const PROVIDER_GMX = 'gmx';
 
-    public function start(array $account, string $scope = 'webmail'): array
+    public function start(array $account, string $scope = 'webmail', array $workflowContext = []): array
     {
         $runtime = $this->runtimeConfig($account, $scope);
+        $runtime['workflow'] = $this->normalizeWorkflowContext($workflowContext);
         $runId = $runtime['runId'];
         $runDirectory = $this->runDirectory($runId);
         $statusPath = $runtime['statusPath'];
@@ -31,6 +32,7 @@ class WebmailSessionRunner
 
         $this->writeJsonFile($statusPath, [
             'runId' => $runId,
+            'workflow' => $runtime['workflow'],
             'processKey' => $runtime['processIdentity']['processKey'] ?? null,
             'processIdentity' => $runtime['processIdentity'] ?? null,
             'providerKey' => $runtime['provider'],
@@ -67,6 +69,7 @@ class WebmailSessionRunner
         } catch (\Throwable $exception) {
             $this->writeJsonFile($statusPath, [
                 'runId' => $runId,
+                'workflow' => $runtime['workflow'],
                 'processKey' => $runtime['processIdentity']['processKey'] ?? null,
                 'processIdentity' => $runtime['processIdentity'] ?? null,
                 'providerKey' => $runtime['provider'],
@@ -312,6 +315,24 @@ class WebmailSessionRunner
             'postLoginWaitMs' => max(500, (int) ($account['postLoginWaitMs'] ?? 2500)),
             'typingDelayMs' => max(0, (int) ($account['typingDelayMs'] ?? 35)),
         ];
+    }
+
+    protected function normalizeWorkflowContext(array $workflowContext): ?array
+    {
+        if ($workflowContext === []) {
+            return null;
+        }
+
+        return array_filter([
+            'workflowRunId' => $workflowContext['workflowRunId'] ?? null,
+            'workflowRunUuid' => $workflowContext['workflowRunUuid'] ?? null,
+            'workflowName' => $workflowContext['workflowName'] ?? null,
+            'workflowSlug' => $workflowContext['workflowSlug'] ?? null,
+            'workflowStepId' => $workflowContext['workflowStepId'] ?? null,
+            'workflowStepRunId' => $workflowContext['workflowStepRunId'] ?? null,
+            'workflowStepName' => $workflowContext['workflowStepName'] ?? null,
+            'workflowStepType' => $workflowContext['workflowStepType'] ?? null,
+        ], fn (mixed $value): bool => $value !== null && $value !== '');
     }
 
     protected function finalizeRunResult(string $runId, array $result): array

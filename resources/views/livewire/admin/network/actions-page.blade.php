@@ -7,6 +7,9 @@
             </p>
         </div>
         <div class="flex flex-wrap gap-3">
+            <a href="{{ route('network.workflows') }}" class="rounded-md border border-blue-200 bg-white px-4 py-2 text-sm font-semibold text-blue-700 shadow-sm hover:bg-blue-50">
+                Workflows
+            </a>
             <button type="button" wire:click="planNetworkNow" wire:loading.attr="disabled" wire:target="planNetworkNow" class="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 disabled:opacity-60">
                 <span wire:loading.remove wire:target="planNetworkNow">Alle planen</span>
                 <span wire:loading wire:target="planNetworkNow">Plane...</span>

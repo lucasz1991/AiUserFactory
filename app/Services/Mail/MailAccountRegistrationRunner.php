@@ -125,7 +125,7 @@ class MailAccountRegistrationRunner
         ];
     }
 
-    public function start(array $subject = [], ?string $providerKey = null): array
+    public function start(array $subject = [], ?string $providerKey = null, array $workflowContext = []): array
     {
         $settings = $this->settings();
         $provider = $this->resolveProvider($settings, $providerKey);
@@ -154,6 +154,7 @@ class MailAccountRegistrationRunner
         $webmailLivePreviewPath = $publicRunDirectory.DIRECTORY_SEPARATOR.'live-webmail.png';
         $normalizedSubject = $this->normalizeSubject($subject);
         $verificationMailbox = is_array($settings['verification_mailbox'] ?? null) ? $settings['verification_mailbox'] : [];
+        $workflowContext = $this->normalizeWorkflowContext($workflowContext);
 
         if (
             ($verificationMailbox['enabled'] ?? false)
@@ -165,6 +166,7 @@ class MailAccountRegistrationRunner
 
         $runtimeConfig = [
             'runId' => $runId,
+            'workflow' => $workflowContext,
             'processIdentity' => $this->processIdentity($runId, 'main', $normalizedSubject['personId'] ?? null),
             'processHeartbeatIntervalSeconds' => max(5, (int) $settings['live_preview_interval_seconds']),
             'supervisor' => [
@@ -216,6 +218,7 @@ class MailAccountRegistrationRunner
 
         $this->writeJsonFile($statusPath, [
             'runId' => $runId,
+            'workflow' => $workflowContext,
             'processKey' => $this->processIdentity($runId, 'main', $normalizedSubject['personId'] ?? null)['processKey'],
             'processIdentity' => $this->processIdentity($runId, 'main', $normalizedSubject['personId'] ?? null),
             'providerKey' => $provider['key'],
@@ -276,6 +279,7 @@ class MailAccountRegistrationRunner
         } catch (\Throwable $exception) {
             $this->writeJsonFile($statusPath, [
                 'runId' => $runId,
+                'workflow' => $workflowContext,
                 'processKey' => $this->processIdentity($runId, 'main', $normalizedSubject['personId'] ?? null)['processKey'],
                 'processIdentity' => $this->processIdentity($runId, 'main', $normalizedSubject['personId'] ?? null),
                 'providerKey' => $provider['key'],
@@ -805,6 +809,24 @@ class MailAccountRegistrationRunner
             'country' => trim((string) ($subject['country'] ?? '')),
             'timezone' => trim((string) ($subject['timezone'] ?? '')),
         ];
+    }
+
+    protected function normalizeWorkflowContext(array $workflowContext): ?array
+    {
+        if ($workflowContext === []) {
+            return null;
+        }
+
+        return array_filter([
+            'workflowRunId' => $workflowContext['workflowRunId'] ?? null,
+            'workflowRunUuid' => $workflowContext['workflowRunUuid'] ?? null,
+            'workflowName' => $workflowContext['workflowName'] ?? null,
+            'workflowSlug' => $workflowContext['workflowSlug'] ?? null,
+            'workflowStepId' => $workflowContext['workflowStepId'] ?? null,
+            'workflowStepRunId' => $workflowContext['workflowStepRunId'] ?? null,
+            'workflowStepName' => $workflowContext['workflowStepName'] ?? null,
+            'workflowStepType' => $workflowContext['workflowStepType'] ?? null,
+        ], fn (mixed $value): bool => $value !== null && $value !== '');
     }
 
     protected function resultSummary(?array $result): ?array

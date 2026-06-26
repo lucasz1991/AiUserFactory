@@ -44,6 +44,11 @@
                                 <span>Aktionen</span>
                             </a>
                         </li>
+                        <li>
+                            <a href="{{ route('network.workflows') }}" class="pl-[52.8px] pr-6 py-[6.4px] block text-[13.5px] font-medium transition-all duration-150 ease-linear {{ request()->routeIs('network.workflows') ? 'text-blue-600' : 'text-gray-600 hover:text-blue-500' }}">
+                                <span>Workflows</span>
+                            </a>
+                        </li>
                     </ul>
                 </li>
 
