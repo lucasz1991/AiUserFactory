@@ -145,7 +145,7 @@
                             @foreach($visibleTaskDefinitions as $taskDefinition)
                                 <div
                                     draggable="true"
-                                    x-on:dragstart="$event.dataTransfer.setData('text/plain', @js($taskDefinition['key'])); $event.dataTransfer.effectAllowed = 'copy'"
+                                    x-on:dragstart="$event.dataTransfer.setData('application/x-workflow-task-catalog', @js($taskDefinition['key'])); $event.dataTransfer.setData('text/plain', @js($taskDefinition['key'])); $event.dataTransfer.effectAllowed = 'copy'"
                                     class="cursor-grab rounded-md border border-slate-200 bg-white p-3 shadow-sm transition hover:border-blue-300 hover:shadow-md active:cursor-grabbing"
                                 >
                                     <div class="flex items-start justify-between gap-3">

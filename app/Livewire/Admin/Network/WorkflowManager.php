@@ -9,6 +9,7 @@ use App\Models\WorkflowStep;
 use App\Services\Workflows\PersonaActionWorkflowCatalog;
 use App\Services\Workflows\WorkflowExecutionService;
 use App\Services\Workflows\WorkflowTaskCatalog;
+use App\Services\Workflows\WorkflowTaskOrderingService;
 use Illuminate\Support\Str;
 use Livewire\Component;
 
@@ -51,6 +52,8 @@ class WorkflowManager extends Component
     public string $newTaskSuccessTarget = '';
 
     public string $newTaskFailedTarget = 'fail';
+
+    public ?int $newTaskInsertPosition = null;
 
     public string $runPersonId = '';
 
@@ -375,33 +378,17 @@ class WorkflowManager extends Component
             return;
         }
 
-        $stepId = (int) $item;
-        $targetPosition = max(0, (int) $position);
-        $steps = $workflow->steps()->ordered()->get();
-        $moving = $steps->firstWhere('id', $stepId);
-
-        if (! $moving) {
-            return;
-        }
-
-        $ordered = $steps
-            ->reject(fn (WorkflowStep $step): bool => $step->id === $stepId)
-            ->values();
-
-        $ordered->splice(min($targetPosition, $ordered->count()), 0, [$moving]);
-
-        foreach ($ordered->values() as $index => $step) {
-            $step->forceFill(['position' => ($index + 1) * 10])->save();
-        }
+        app(WorkflowTaskOrderingService::class)->sortSteps($workflow, (int) $item, (int) $position);
     }
 
-    public function prepareTaskFromCatalog(int $stepId, string $taskKey): void
+    public function prepareTaskFromCatalog(int $stepId, string $taskKey, ?int $position = null): void
     {
         if (! $this->stepForSelectedWorkflow($stepId) || ! app(WorkflowTaskCatalog::class)->task($taskKey)) {
             return;
         }
 
         $this->newTaskListId = (string) $stepId;
+        $this->newTaskInsertPosition = $position;
         $this->newTaskCatalogKey = $taskKey;
         $this->newTaskElementSelector = '';
         $this->newTaskInputSelector = '';
@@ -500,9 +487,11 @@ class WorkflowManager extends Component
             $task['on_error'] = $failedRoute;
         }
 
-        $tasks[] = $task;
-        $config['tasks'] = array_values($tasks);
-        $step->forceFill(['config_json' => $config])->save();
+        if ($this->newTaskInsertPosition !== null) {
+            app(WorkflowTaskOrderingService::class)->insertTask($step, $task, $this->newTaskInsertPosition);
+        } else {
+            app(WorkflowTaskOrderingService::class)->appendTask($step, $task);
+        }
 
         $this->newTaskTitle = '';
         $this->newTaskDescription = '';
@@ -513,6 +502,7 @@ class WorkflowManager extends Component
         $this->newTaskFailurePayload = '';
         $this->newTaskSuccessTarget = '';
         $this->newTaskFailedTarget = 'fail';
+        $this->newTaskInsertPosition = null;
         $this->showAddTaskModal = false;
 
         session()->flash('success', 'Step-Karte wurde hinzugefuegt.');
@@ -661,43 +651,36 @@ class WorkflowManager extends Component
             return;
         }
 
-        $config = is_array($step->config_json) ? $step->config_json : [];
-        $tasks = collect(is_array($config['tasks'] ?? null) ? $config['tasks'] : [])
-            ->reject(fn (array $task): bool => (string) ($task['key'] ?? '') === $taskKey)
-            ->values()
-            ->toArray();
-
-        $config['tasks'] = $tasks;
-        $step->forceFill(['config_json' => $config])->save();
+        app(WorkflowTaskOrderingService::class)->removeTask($step, $taskKey);
 
         session()->flash('success', 'Step-Karte wurde entfernt.');
     }
 
     public function reorderTaskCard(int $stepId, mixed $item, mixed $position): void
     {
+        $workflow = $this->selectedWorkflow();
         $step = $this->stepForSelectedWorkflow($stepId);
 
-        if (! $step) {
+        if (! $workflow || ! $step) {
             return;
         }
 
-        $taskKey = (string) $item;
-        $targetPosition = max(0, (int) $position);
-        $config = is_array($step->config_json) ? $step->config_json : [];
-        $tasks = collect(is_array($config['tasks'] ?? null) ? $config['tasks'] : []);
-        $moving = $tasks->first(fn (array $task): bool => (string) ($task['key'] ?? '') === $taskKey);
+        $itemValue = (string) $item;
+        $sourceStepId = null;
+        $taskKey = $itemValue;
 
-        if (! $moving) {
-            return;
+        if (str_contains($itemValue, '::')) {
+            [$sourceStepId, $taskKey] = explode('::', $itemValue, 2);
+            $sourceStepId = (int) $sourceStepId;
         }
 
-        $ordered = $tasks
-            ->reject(fn (array $task): bool => (string) ($task['key'] ?? '') === $taskKey)
-            ->values();
-
-        $ordered->splice(min($targetPosition, $ordered->count()), 0, [$moving]);
-        $config['tasks'] = $ordered->values()->toArray();
-        $step->forceFill(['config_json' => $config])->save();
+        app(WorkflowTaskOrderingService::class)->moveTask(
+            $workflow,
+            $step,
+            $taskKey,
+            (int) $position,
+            $sourceStepId ?: null,
+        );
     }
 
     public function runWorkflow(): void

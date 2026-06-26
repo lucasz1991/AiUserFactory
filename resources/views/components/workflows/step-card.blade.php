@@ -39,36 +39,63 @@
     </div>
 
     <div
-        x-data
-        x-sort="$wire.reorderTaskCard({{ $step->id }}, $item, $position)"
+        x-data="{
+            dropPosition(event) {
+                const items = Array.from(this.$refs.taskSortList.querySelectorAll('[data-task-sort-item]'));
+                const pointerY = event.clientY;
+                const index = items.findIndex((item) => {
+                    const rect = item.getBoundingClientRect();
+
+                    return (rect.top + (rect.height / 2)) > pointerY;
+                });
+
+                return index === -1 ? items.length : index;
+            },
+        }"
         x-on:dragover.prevent="$event.dataTransfer.dropEffect = 'copy'"
-        x-on:drop.prevent="const key = $event.dataTransfer.getData('text/plain'); if (key) { $wire.prepareTaskFromCatalog({{ $step->id }}, key); }"
+        x-on:drop.prevent="
+            const catalogKey = $event.dataTransfer.getData('application/x-workflow-task-catalog') || $event.dataTransfer.getData('text/plain');
+            const existingTaskKey = $event.dataTransfer.getData('application/x-workflow-task-key');
+
+            if (catalogKey && ! existingTaskKey) {
+                $wire.prepareTaskFromCatalog({{ $step->id }}, catalogKey, dropPosition($event));
+            }
+        "
         class="flex-1 space-y-0 px-2 pb-3"
     >
-        @foreach($step->task_cards as $task)
-            @if(! $loop->first)
-                <div class="ml-4 h-4 w-px bg-white/45"></div>
-            @endif
-            <div
-                x-sort:item="{{ $task['key'] ?? '' }}"
-                x-on:click.stop="focusedTask = @js($step->id.'::'.($task['key'] ?? ''))"
-                x-on:dblclick.stop="$wire.openEditTaskCard({{ $step->id }}, @js($task['key'] ?? ''))"
-                x-bind:class="focusedTask === @js($step->id.'::'.($task['key'] ?? '')) ? 'ring-2 ring-white ring-offset-2 ring-offset-[#0079bf]' : ''"
-                class="rounded-md"
-                wire:key="workflow-task-{{ $step->id }}-{{ $task['key'] ?? 'task' }}"
-            >
-                <x-workflows.task-card :task="$task">
-                    <x-slot name="actions">
-                        <button type="button" wire:click="openEditTaskCard({{ $step->id }}, @js($task['key'] ?? ''))" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-100">
-                            Bearbeiten
-                        </button>
-                        <button type="button" wire:click="removeTaskCard({{ $step->id }}, @js($task['key'] ?? ''))" wire:confirm="Step-Karte wirklich entfernen?" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-red-700 hover:bg-red-50">
-                            Entfernen
-                        </button>
-                    </x-slot>
-                </x-workflows.task-card>
-            </div>
-        @endforeach
+        <div
+            x-ref="taskSortList"
+            x-sort="$wire.reorderTaskCard({{ $step->id }}, $item, $position)"
+            x-sort:group="workflow-tasks"
+            class="space-y-0"
+        >
+            @foreach($step->task_cards as $task)
+                <div
+                    x-sort:item="{{ $step->id }}::{{ $task['key'] ?? '' }}"
+                    data-task-sort-item
+                    x-on:dragstart="$event.dataTransfer.setData('application/x-workflow-task-key', @js($task['key'] ?? ''))"
+                    x-on:click.stop="focusedTask = @js($step->id.'::'.($task['key'] ?? ''))"
+                    x-on:dblclick.stop="$wire.openEditTaskCard({{ $step->id }}, @js($task['key'] ?? ''))"
+                    x-bind:class="focusedTask === @js($step->id.'::'.($task['key'] ?? '')) ? 'ring-2 ring-white ring-offset-2 ring-offset-[#0079bf]' : ''"
+                    class="rounded-md"
+                    wire:key="workflow-task-{{ $step->id }}-{{ $task['key'] ?? 'task' }}"
+                >
+                    @if(! $loop->first)
+                        <div class="ml-4 h-4 w-px bg-white/45"></div>
+                    @endif
+                    <x-workflows.task-card :task="$task">
+                        <x-slot name="actions">
+                            <button type="button" wire:click="openEditTaskCard({{ $step->id }}, @js($task['key'] ?? ''))" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-100">
+                                Bearbeiten
+                            </button>
+                            <button type="button" wire:click="removeTaskCard({{ $step->id }}, @js($task['key'] ?? ''))" wire:confirm="Step-Karte wirklich entfernen?" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-red-700 hover:bg-red-50">
+                                Entfernen
+                            </button>
+                        </x-slot>
+                    </x-workflows.task-card>
+                </div>
+            @endforeach
+        </div>
 
         @if($step->task_cards === [])
             <x-workflows.task-card :task="[
