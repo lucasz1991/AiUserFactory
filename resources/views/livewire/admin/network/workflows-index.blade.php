@@ -48,7 +48,7 @@
             </nav>
         </div>
 
-        <div class="overflow-hidden">
+        <div class="overflow-visible">
             <table class="w-full table-fixed divide-y divide-slate-200">
                 <thead class="bg-slate-50">
                     <tr>

@@ -8,7 +8,7 @@
         : 'border-transparent bg-transparent opacity-70';
 @endphp
 
-<div {{ $attributes->merge(['class' => 'flex max-h-[760px] min-h-[260px] w-[310px] shrink-0 flex-col rounded-md border '.$enabledClass]) }}>
+<div {{ $attributes->merge(['class' => 'flex min-h-[260px] w-[270px] shrink-0 flex-col rounded-md border '.$enabledClass]) }}>
     <div class="px-2 pb-2 pt-1">
         <div class="flex items-start justify-between gap-3">
             <div class="min-w-0">
@@ -43,9 +43,12 @@
         x-sort="$wire.reorderTaskCard({{ $step->id }}, $item, $position)"
         x-on:dragover.prevent="$event.dataTransfer.dropEffect = 'copy'"
         x-on:drop.prevent="const key = $event.dataTransfer.getData('text/plain'); if (key) { $wire.prepareTaskFromCatalog({{ $step->id }}, key); }"
-        class="flex-1 space-y-3 overflow-auto px-2 pb-3"
+        class="flex-1 space-y-0 px-2 pb-3"
     >
         @foreach($step->task_cards as $task)
+            @if(! $loop->first)
+                <div class="ml-4 h-4 w-px bg-white/45"></div>
+            @endif
             <div
                 x-sort:item="{{ $task['key'] ?? '' }}"
                 x-on:click.stop="focusedTask = @js($step->id.'::'.($task['key'] ?? ''))"
@@ -75,7 +78,11 @@
             ]" />
         @endif
 
-        <button type="button" wire:click="$set('showTaskPanel', true)" class="block w-full rounded-md border border-dashed border-white/45 bg-transparent px-3 py-3 text-left text-sm font-semibold text-blue-50 transition hover:border-white hover:bg-white/10 hover:text-white">
+        @if($step->task_cards !== [])
+            <div class="ml-4 h-4 w-px bg-white/45"></div>
+        @endif
+
+        <button type="button" wire:click="$set('showTaskPanel', true)" class="block w-full rounded-md border border-dashed border-white/45 bg-transparent px-3 py-2 text-left text-sm font-semibold text-blue-50 transition hover:border-white hover:bg-white/10 hover:text-white">
             + Task am Listenende
         </button>
     </div>

@@ -19,7 +19,7 @@
                         Workflow
                     </button>
                     <button type="button" wire:click="$set('showRunModal', true)" class="rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">
-                        Starten
+                        Testen
                     </button>
                     <button type="button" wire:click="$set('showAddStepModal', true)" class="rounded-md border border-blue-200 bg-white px-3 py-2 text-sm font-semibold text-blue-700 shadow-sm hover:bg-blue-50">
                         Liste
@@ -62,7 +62,7 @@
         <x-admin.panel title="Board">
             <div
                 x-data="{ focusedTask: '' }"
-                class="relative overflow-hidden rounded-md border border-[#075985] bg-[#0079bf] p-4 shadow-sm"
+                class="relative max-h-[calc(100vh-220px)] overflow-auto rounded-md border border-[#075985] bg-[#0079bf] p-4 shadow-sm"
             >
                 <div class="mb-4 flex items-center justify-between gap-3">
                     <div class="min-w-0">
@@ -74,21 +74,29 @@
                     </button>
                 </div>
 
-                <div x-sort="$wire.reorderStep($item, $position)" class="flex min-h-[560px] gap-4 overflow-x-auto pb-2">
+                <div x-sort="$wire.reorderStep($item, $position)" class="flex min-h-[560px] items-start gap-0 pb-2">
                     @forelse($steps as $step)
-                        <x-workflows.step-card :step="$step" x-sort:item="{{ $step->id }}" wire:key="workflow-step-{{ $step->id }}">
-                            <x-slot name="actions">
-                                <button type="button" wire:click="openEditStep({{ $step->id }})" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-100">
-                                    Bearbeiten
-                                </button>
-                                <button type="button" wire:click="toggleStep({{ $step->id }})" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-100">
-                                    {{ $step->is_enabled ? 'Pausieren' : 'Aktivieren' }}
-                                </button>
-                                <button type="button" wire:click="removeStep({{ $step->id }})" wire:confirm="Liste samt Tasks wirklich entfernen?" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-red-700 hover:bg-red-50">
-                                    Entfernen
-                                </button>
-                            </x-slot>
-                        </x-workflows.step-card>
+                        <div class="flex items-start" x-sort:item="{{ $step->id }}" wire:key="workflow-step-wrap-{{ $step->id }}">
+                            <x-workflows.step-card :step="$step" wire:key="workflow-step-{{ $step->id }}">
+                                <x-slot name="actions">
+                                    <button type="button" wire:click="openEditStep({{ $step->id }})" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-100">
+                                        Bearbeiten
+                                    </button>
+                                    <button type="button" wire:click="toggleStep({{ $step->id }})" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-100">
+                                        {{ $step->is_enabled ? 'Pausieren' : 'Aktivieren' }}
+                                    </button>
+                                    <button type="button" wire:click="removeStep({{ $step->id }})" wire:confirm="Liste samt Tasks wirklich entfernen?" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-red-700 hover:bg-red-50">
+                                        Entfernen
+                                    </button>
+                                </x-slot>
+                            </x-workflows.step-card>
+                            @if(! $loop->last)
+                                <div class="flex h-24 w-10 shrink-0 items-center px-2">
+                                    <div class="h-px flex-1 bg-white/50"></div>
+                                    <div class="h-0 w-0 border-y-4 border-l-8 border-y-transparent border-l-white/70"></div>
+                                </div>
+                            @endif
+                        </div>
                     @empty
                         <div class="rounded-md border border-dashed border-white/40 bg-white/90 p-6 text-center text-sm text-slate-600">
                             Keine Listen. Nutze oben den Button "Liste".
@@ -168,7 +176,7 @@
         </x-dialog-modal>
 
         <x-dialog-modal wire:model="showRunModal" maxWidth="xl">
-            <x-slot name="title">Workflow starten</x-slot>
+            <x-slot name="title">Workflow testen</x-slot>
             <x-slot name="content">
                 <div>
                     <label for="workflow-run-person" class="block text-sm font-medium text-gray-700">Person</label>
@@ -183,7 +191,7 @@
             </x-slot>
             <x-slot name="footer">
                 <button type="button" x-on:click="$dispatch('close')" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">Abbrechen</button>
-                <button type="button" wire:click="runWorkflow" wire:loading.attr="disabled" class="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 disabled:opacity-60">Starten</button>
+                <button type="button" wire:click="runWorkflow" wire:loading.attr="disabled" class="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 disabled:opacity-60">Testen</button>
             </x-slot>
         </x-dialog-modal>
 
