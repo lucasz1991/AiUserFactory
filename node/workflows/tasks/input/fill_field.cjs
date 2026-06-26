@@ -3,9 +3,13 @@
 async function run(context = {}) {
   const page = context.page;
   const input = context.input || {};
-  const value = String(input.value ?? input.text ?? '').trim();
+  const value = String(input.value ?? input.inputValue ?? input.input_value ?? input.text ?? '').trim();
   const timeout = Number(input.timeoutMs || context.timeoutMs || 60000);
   const selectors = []
+    .concat(input.inputSelector || [])
+    .concat(input.input_selector || [])
+    .concat(input.elementSelector || [])
+    .concat(input.element_selector || [])
     .concat(input.selector || [])
     .concat(input.selectors || [])
     .concat(input.name ? [`input[name="${input.name}"]`, `textarea[name="${input.name}"]`] : [])

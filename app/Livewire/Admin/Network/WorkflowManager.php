@@ -21,23 +21,29 @@ class WorkflowManager extends Component
 
     public bool $workflowActive = true;
 
-    public string $newStepType = WorkflowStep::TYPE_PLANNED_ACTION;
+    public string $newStepType = WorkflowStep::TYPE_PREPARATION;
 
     public string $newStepName = '';
 
-    public string $newStepProvider = 'proton';
-
-    public int $newStepWaitSeconds = 30;
-
     public string $newTaskListId = '';
 
-    public string $newTaskCatalogKey = 'browser.open_url';
+    public string $newTaskCatalogKey = 'data.resolve_person';
 
     public string $newTaskTitle = '';
 
-    public string $newTaskKind = 'browser';
+    public string $newTaskKind = 'data';
 
     public string $newTaskDescription = '';
+
+    public string $newTaskElementSelector = '';
+
+    public string $newTaskInputSelector = '';
+
+    public string $newTaskInputValue = '';
+
+    public string $newTaskSuccessPayload = '';
+
+    public string $newTaskFailurePayload = '';
 
     public string $newTaskSuccessTarget = '';
 
@@ -92,6 +98,16 @@ class WorkflowManager extends Component
     public string $editingTaskKind = 'browser';
 
     public string $editingTaskDescription = '';
+
+    public string $editingTaskElementSelector = '';
+
+    public string $editingTaskInputSelector = '';
+
+    public string $editingTaskInputValue = '';
+
+    public string $editingTaskSuccessPayload = '';
+
+    public string $editingTaskFailurePayload = '';
 
     public int $editingTaskTimeoutSeconds = 0;
 
@@ -192,10 +208,8 @@ class WorkflowManager extends Component
         }
 
         $validated = $this->validate([
-            'newStepType' => ['required', 'string', 'in:mail_account_registration,webmail_login,planned_action,wait'],
+            'newStepType' => ['required', 'string', 'in:preparation,data_processing,browser_control,interaction,decision,cleanup'],
             'newStepName' => ['nullable', 'string', 'max:160'],
-            'newStepProvider' => ['required', 'string', 'in:proton,gmx'],
-            'newStepWaitSeconds' => ['required', 'integer', 'min:0', 'max:3600'],
         ]);
 
         $type = $validated['newStepType'];
@@ -209,7 +223,7 @@ class WorkflowManager extends Component
             'position' => $position,
             'is_enabled' => true,
             'config_json' => $this->stepConfig($type, $validated),
-            'wait_after_seconds' => $type === WorkflowStep::TYPE_WAIT ? 0 : 0,
+            'wait_after_seconds' => 0,
         ]);
 
         $this->newStepName = '';
@@ -371,6 +385,11 @@ class WorkflowManager extends Component
             'newTaskTitle' => ['required', 'string', 'max:160'],
             'newTaskKind' => ['required', 'string', 'in:browser,input,wait,data'],
             'newTaskDescription' => ['nullable', 'string', 'max:1000'],
+            'newTaskElementSelector' => ['nullable', 'string', 'max:1000'],
+            'newTaskInputSelector' => ['nullable', 'string', 'max:1000'],
+            'newTaskInputValue' => ['nullable', 'string', 'max:2000'],
+            'newTaskSuccessPayload' => ['nullable', 'string', 'max:4000'],
+            'newTaskFailurePayload' => ['nullable', 'string', 'max:4000'],
             'newTaskSuccessTarget' => ['nullable', 'string', 'max:180'],
             'newTaskPartialTarget' => ['nullable', 'string', 'max:180'],
             'newTaskFailedTarget' => ['nullable', 'string', 'max:180'],
@@ -390,8 +409,24 @@ class WorkflowManager extends Component
             'title' => trim($validated['newTaskTitle']),
             'description' => trim((string) ($validated['newTaskDescription'] ?? '')),
             'kind' => $validated['newTaskKind'],
+            'selector' => trim((string) ($validated['newTaskElementSelector'] ?? '')),
+            'element_selector' => trim((string) ($validated['newTaskElementSelector'] ?? '')),
+            'input_selector' => trim((string) ($validated['newTaskInputSelector'] ?? '')),
+            'input' => trim((string) ($validated['newTaskInputValue'] ?? '')),
+            'value' => trim((string) ($validated['newTaskInputValue'] ?? '')),
             'status' => 'configured',
         ]);
+
+        $successPayload = $this->payloadFromInput((string) ($validated['newTaskSuccessPayload'] ?? ''));
+        $failurePayload = $this->payloadFromInput((string) ($validated['newTaskFailurePayload'] ?? ''));
+
+        if ($successPayload !== null) {
+            $task['success_payload'] = $successPayload;
+        }
+
+        if ($failurePayload !== null) {
+            $task['failure_payload'] = $failurePayload;
+        }
 
         $successRoute = $this->routeTargetFromValue((string) ($validated['newTaskSuccessTarget'] ?? ''));
         $partialRoute = $this->routeTargetFromValue((string) ($validated['newTaskPartialTarget'] ?? ''));
@@ -415,6 +450,11 @@ class WorkflowManager extends Component
 
         $this->newTaskTitle = '';
         $this->newTaskDescription = '';
+        $this->newTaskElementSelector = '';
+        $this->newTaskInputSelector = '';
+        $this->newTaskInputValue = '';
+        $this->newTaskSuccessPayload = '';
+        $this->newTaskFailurePayload = '';
         $this->newTaskSuccessTarget = '';
         $this->newTaskPartialTarget = '';
         $this->newTaskFailedTarget = 'fail';
@@ -444,6 +484,11 @@ class WorkflowManager extends Component
         $this->editingTaskTitle = (string) ($task['title'] ?? 'Task');
         $this->editingTaskKind = (string) ($task['kind'] ?? 'browser');
         $this->editingTaskDescription = (string) ($task['description'] ?? '');
+        $this->editingTaskElementSelector = (string) ($task['element_selector'] ?? $task['selector'] ?? '');
+        $this->editingTaskInputSelector = (string) ($task['input_selector'] ?? '');
+        $this->editingTaskInputValue = (string) ($task['value'] ?? $task['input'] ?? '');
+        $this->editingTaskSuccessPayload = $this->payloadToString($task['success_payload'] ?? null);
+        $this->editingTaskFailurePayload = $this->payloadToString($task['failure_payload'] ?? null);
         $this->editingTaskTimeoutSeconds = max(0, (int) ($task['timeout_seconds'] ?? 0));
         $this->editingTaskSuccessTarget = $this->routeValueFromTarget($task['next'] ?? null);
         $this->editingTaskPartialTarget = $this->routeValueFromTarget($task['on_partial'] ?? null);
@@ -464,6 +509,11 @@ class WorkflowManager extends Component
             'editingTaskTitle' => ['required', 'string', 'max:160'],
             'editingTaskKind' => ['required', 'string', 'in:browser,input,wait,data'],
             'editingTaskDescription' => ['nullable', 'string', 'max:1000'],
+            'editingTaskElementSelector' => ['nullable', 'string', 'max:1000'],
+            'editingTaskInputSelector' => ['nullable', 'string', 'max:1000'],
+            'editingTaskInputValue' => ['nullable', 'string', 'max:2000'],
+            'editingTaskSuccessPayload' => ['nullable', 'string', 'max:4000'],
+            'editingTaskFailurePayload' => ['nullable', 'string', 'max:4000'],
             'editingTaskTimeoutSeconds' => ['required', 'integer', 'min:0', 'max:3600'],
             'editingTaskSuccessTarget' => ['nullable', 'string', 'max:180'],
             'editingTaskPartialTarget' => ['nullable', 'string', 'max:180'],
@@ -490,9 +540,27 @@ class WorkflowManager extends Component
                         'title' => trim($validated['editingTaskTitle']),
                         'description' => trim((string) ($validated['editingTaskDescription'] ?? '')),
                         'kind' => $validated['editingTaskKind'],
+                        'selector' => trim((string) ($validated['editingTaskElementSelector'] ?? '')),
+                        'element_selector' => trim((string) ($validated['editingTaskElementSelector'] ?? '')),
+                        'input_selector' => trim((string) ($validated['editingTaskInputSelector'] ?? '')),
+                        'input' => trim((string) ($validated['editingTaskInputValue'] ?? '')),
+                        'value' => trim((string) ($validated['editingTaskInputValue'] ?? '')),
                         'timeout_seconds' => (int) $validated['editingTaskTimeoutSeconds'],
                     ],
                 );
+
+                foreach ([
+                    'success_payload' => (string) ($validated['editingTaskSuccessPayload'] ?? ''),
+                    'failure_payload' => (string) ($validated['editingTaskFailurePayload'] ?? ''),
+                ] as $key => $value) {
+                    $payload = $this->payloadFromInput($value);
+
+                    if ($payload !== null) {
+                        $task[$key] = $payload;
+                    } else {
+                        unset($task[$key]);
+                    }
+                }
 
                 foreach ([
                     'next' => (string) ($validated['editingTaskSuccessTarget'] ?? ''),
@@ -616,16 +684,50 @@ class WorkflowManager extends Component
         return match ($type) {
             WorkflowStep::TYPE_MAIL_ACCOUNT_REGISTRATION => 'E-Mail-Postfach registrieren',
             WorkflowStep::TYPE_WEBMAIL_LOGIN => 'Webmailportal Login speichern',
-            WorkflowStep::TYPE_WAIT => 'Warten',
-            default => 'Geplante Aktion',
+            WorkflowStep::TYPE_DATA_PROCESSING => 'Daten verarbeiten',
+            WorkflowStep::TYPE_BROWSER_CONTROL => 'Browsersteuerung',
+            WorkflowStep::TYPE_INTERACTION => 'Interaktion',
+            WorkflowStep::TYPE_DECISION => 'Status pruefen',
+            WorkflowStep::TYPE_CLEANUP => 'Abschluss',
+            default => 'Vorbereitung',
         };
     }
 
     protected function stepConfig(string $type, array $validated): array
     {
         return match ($type) {
+            WorkflowStep::TYPE_PREPARATION => $this->genericStepConfig(
+                'Vorbereitung',
+                'Person- und Kontextdaten fuer die folgenden Aufgaben ermitteln.',
+                'data.resolve_person',
+            ),
+            WorkflowStep::TYPE_DATA_PROCESSING => $this->genericStepConfig(
+                'Daten verarbeiten',
+                'Daten aus vorherigen Tasks lesen, normalisieren oder speichern.',
+                'data.read_account_data',
+            ),
+            WorkflowStep::TYPE_BROWSER_CONTROL => $this->genericStepConfig(
+                'Browsersteuerung',
+                'Browserfenster oeffnen, URL aufrufen oder Browserfenster schliessen.',
+                'browser.open',
+            ),
+            WorkflowStep::TYPE_INTERACTION => $this->genericStepConfig(
+                'Interaktion',
+                'Elemente ermitteln, Eingabefelder fuellen oder Buttons und Links klicken.',
+                'browser.find_element',
+            ),
+            WorkflowStep::TYPE_DECISION => $this->genericStepConfig(
+                'Status pruefen',
+                'Statusregeln auswerten und je nach Ergebnis weiterleiten.',
+                'wait.status',
+            ),
+            WorkflowStep::TYPE_CLEANUP => $this->genericStepConfig(
+                'Abschluss',
+                'Abschlussarbeiten ausfuehren und Browser/Runtime-Kontext sauber beenden.',
+                'browser.close',
+            ),
             WorkflowStep::TYPE_MAIL_ACCOUNT_REGISTRATION => [
-                'provider_key' => $validated['newStepProvider'],
+                'provider_key' => 'standard',
                 'allow_partial' => false,
                 'timeout_seconds' => 1800,
                 'tasks' => [
@@ -645,7 +747,7 @@ class WorkflowManager extends Component
                 ],
             ],
             WorkflowStep::TYPE_WEBMAIL_LOGIN => [
-                'provider' => $validated['newStepProvider'],
+                'provider' => 'standard',
                 'use_person_email_account' => true,
                 'allow_partial' => false,
                 'timeout_seconds' => 900,
@@ -667,8 +769,8 @@ class WorkflowManager extends Component
                 ],
             ],
             WorkflowStep::TYPE_WAIT => [
-                'seconds' => (int) $validated['newStepWaitSeconds'],
-                'timeout_seconds' => max(60, (int) $validated['newStepWaitSeconds'] + 60),
+                'seconds' => 0,
+                'timeout_seconds' => 60,
                 'routes' => [
                     'success' => ['type' => 'step', 'step' => 'next', 'label' => 'Naechste Liste'],
                 ],
@@ -695,6 +797,30 @@ class WorkflowManager extends Component
                 ],
             ],
         };
+    }
+
+    protected function genericStepConfig(string $label, string $description, string $defaultTaskKey): array
+    {
+        return [
+            'source' => 'workflow-board',
+            'label' => $label,
+            'description' => $description,
+            'tasks' => [
+                app(WorkflowTaskCatalog::class)->cardFromDefinition($defaultTaskKey, [
+                    'key' => Str::slug($label) ?: 'task',
+                    'title' => $label,
+                    'description' => $description,
+                    'next' => ['step' => 'next', 'label' => 'Naechste Liste'],
+                    'on_error' => ['step' => 'fail', 'label' => 'Fehlerroute'],
+                ]),
+            ],
+            'routes' => [
+                'success' => ['type' => 'step', 'step' => 'next', 'label' => 'Naechste Liste'],
+                'partial' => ['type' => 'end', 'label' => 'Manuelle Pruefung'],
+                'failed' => ['type' => 'fail', 'label' => 'Fehlerroute'],
+                'timeout' => ['type' => 'fail', 'label' => 'Timeout'],
+            ],
+        ];
     }
 
     protected function routeTargetFromValue(string $value): ?array
@@ -803,6 +929,36 @@ class WorkflowManager extends Component
         }
 
         return $step !== '' && $step !== 'next' ? 'step:'.$step : '';
+    }
+
+    protected function payloadFromInput(string $value): mixed
+    {
+        $value = trim($value);
+
+        if ($value === '') {
+            return null;
+        }
+
+        $decoded = json_decode($value, true);
+
+        if (json_last_error() === JSON_ERROR_NONE) {
+            return $decoded;
+        }
+
+        return ['value' => $value];
+    }
+
+    protected function payloadToString(mixed $payload): string
+    {
+        if ($payload === null || $payload === '') {
+            return '';
+        }
+
+        if (is_scalar($payload)) {
+            return (string) $payload;
+        }
+
+        return json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?: '';
     }
 
     protected function uniqueTaskKey(array $tasks, string $title): string

@@ -16,6 +16,24 @@
         'wait' => 'Warten',
         'data' => 'Daten',
     ];
+    $elementSelector = trim((string) ($task['element_selector'] ?? $task['selector'] ?? ''));
+    $inputSelector = trim((string) ($task['input_selector'] ?? ''));
+    $inputValue = trim((string) ($task['value'] ?? $task['input'] ?? ''));
+    $compactPayload = static function (mixed $payload): string {
+        if ($payload === null || $payload === '') {
+            return '';
+        }
+
+        if (is_array($payload)) {
+            $encoded = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+
+            return \Illuminate\Support\Str::limit((string) $encoded, 120);
+        }
+
+        return \Illuminate\Support\Str::limit((string) $payload, 120);
+    };
+    $successPayload = $compactPayload($task['success_payload'] ?? null);
+    $failurePayload = $compactPayload($task['failure_payload'] ?? null);
 @endphp
 
 <div {{ $attributes->merge(['class' => 'rounded-md border border-slate-200 bg-white p-3 shadow-sm']) }}>
@@ -28,13 +46,26 @@
     @if(($task['description'] ?? '') !== '')
         <p class="mt-2 text-xs leading-5 text-slate-500">{{ $task['description'] }}</p>
     @endif
-    @if(($task['selector'] ?? '') !== '' || ($task['input'] ?? '') !== '')
+    @if($elementSelector !== '' || $inputSelector !== '' || $inputValue !== '')
         <div class="mt-3 space-y-1 rounded-md bg-slate-50 p-2 text-[11px] text-slate-500">
-            @if(($task['selector'] ?? '') !== '')
-                <div class="truncate">Selector: {{ $task['selector'] }}</div>
+            @if($elementSelector !== '')
+                <div class="truncate">Element: {{ $elementSelector }}</div>
             @endif
-            @if(($task['input'] ?? '') !== '')
-                <div class="truncate">Input: {{ $task['input'] }}</div>
+            @if($inputSelector !== '')
+                <div class="truncate">Input-Selector: {{ $inputSelector }}</div>
+            @endif
+            @if($inputValue !== '')
+                <div class="truncate">Input-Wert: {{ $inputValue }}</div>
+            @endif
+        </div>
+    @endif
+    @if($successPayload !== '' || $failurePayload !== '')
+        <div class="mt-3 space-y-1 rounded-md bg-slate-50 p-2 text-[11px] text-slate-500">
+            @if($successPayload !== '')
+                <div class="truncate text-emerald-700">Erfolgsdaten: {{ $successPayload }}</div>
+            @endif
+            @if($failurePayload !== '')
+                <div class="truncate text-red-700">Fehlerdaten: {{ $failurePayload }}</div>
             @endif
         </div>
     @endif

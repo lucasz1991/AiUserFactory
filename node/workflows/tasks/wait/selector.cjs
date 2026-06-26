@@ -3,7 +3,7 @@
 async function run(context = {}) {
   const page = context.page;
   const input = context.input || {};
-  const selector = String(input.selector || '').trim();
+  const selector = String(input.elementSelector || input.element_selector || input.inputSelector || input.input_selector || input.selector || '').trim();
   const timeout = Number(input.timeoutMs || context.timeoutMs || 90000);
 
   if (!page || typeof page.waitForSelector !== 'function') {

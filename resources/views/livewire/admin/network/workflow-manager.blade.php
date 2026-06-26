@@ -150,28 +150,18 @@
                     <div>
                         <label for="workflow-new-step-type" class="block text-sm font-medium text-gray-700">Aufgabentyp</label>
                         <select id="workflow-new-step-type" wire:model.live="newStepType" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
-                            <option value="planned_action">Geplante Aktion</option>
-                            <option value="mail_account_registration">E-Mail registrieren</option>
-                            <option value="webmail_login">Webmail Login</option>
-                            <option value="wait">Warten</option>
+                            <option value="preparation">Vorbereitung</option>
+                            <option value="data_processing">Daten verarbeiten</option>
+                            <option value="browser_control">Browsersteuerung</option>
+                            <option value="interaction">Interaktion</option>
+                            <option value="decision">Status pruefen</option>
+                            <option value="cleanup">Abschluss</option>
                         </select>
                     </div>
                     <div>
                         <label for="workflow-new-step-name" class="block text-sm font-medium text-gray-700">Listenname</label>
                         <input id="workflow-new-step-name" type="text" wire:model.defer="newStepName" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
                         @error('newStepName') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
-                    </div>
-                    <div>
-                        <label for="workflow-new-step-provider" class="block text-sm font-medium text-gray-700">Provider</label>
-                        <select id="workflow-new-step-provider" wire:model.defer="newStepProvider" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
-                            <option value="proton">Proton</option>
-                            <option value="gmx">GMX</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label for="workflow-new-step-wait" class="block text-sm font-medium text-gray-700">Wartezeit</label>
-                        <input id="workflow-new-step-wait" type="number" min="0" max="3600" wire:model.defer="newStepWaitSeconds" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
-                        @error('newStepWaitSeconds') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
                     </div>
                 </div>
             </x-slot>

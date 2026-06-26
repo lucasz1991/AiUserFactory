@@ -16,6 +16,12 @@ class WorkflowStep extends Model
     public const TYPE_WEBMAIL_LOGIN = 'webmail_login';
     public const TYPE_PLANNED_ACTION = 'planned_action';
     public const TYPE_WAIT = 'wait';
+    public const TYPE_PREPARATION = 'preparation';
+    public const TYPE_DATA_PROCESSING = 'data_processing';
+    public const TYPE_BROWSER_CONTROL = 'browser_control';
+    public const TYPE_INTERACTION = 'interaction';
+    public const TYPE_DECISION = 'decision';
+    public const TYPE_CLEANUP = 'cleanup';
     public const TYPE_BROWSER_TASK = 'browser_task';
     public const TYPE_DATA_TASK = 'data_task';
 
@@ -61,6 +67,12 @@ class WorkflowStep extends Model
             self::TYPE_WEBMAIL_LOGIN => 'Webmail Login',
             self::TYPE_PLANNED_ACTION => 'Geplante Aktion',
             self::TYPE_WAIT => 'Warten',
+            self::TYPE_PREPARATION => 'Vorbereitung',
+            self::TYPE_DATA_PROCESSING => 'Daten verarbeiten',
+            self::TYPE_BROWSER_CONTROL => 'Browsersteuerung',
+            self::TYPE_INTERACTION => 'Interaktion',
+            self::TYPE_DECISION => 'Status pruefen',
+            self::TYPE_CLEANUP => 'Abschluss',
             self::TYPE_BROWSER_TASK => 'Browser Task',
             self::TYPE_DATA_TASK => 'Daten Task',
             default => (string) str($this->type)->replace('_', ' ')->title(),
@@ -87,7 +99,7 @@ class WorkflowStep extends Model
             return max(0, (int) ($config['seconds'] ?? $this->wait_after_seconds)).' Sekunden';
         }
 
-        return '';
+        return trim((string) ($config['description'] ?? $config['label'] ?? 'Konfigurierbare Prozess-Aufgabe'));
     }
 
     public function getTaskCardsAttribute(): array
@@ -113,7 +125,12 @@ class WorkflowStep extends Model
                     'timeout_seconds' => max(0, (int) ($task['timeout_seconds'] ?? 0)),
                     'status' => trim((string) ($task['status'] ?? 'template')),
                     'selector' => trim((string) ($task['selector'] ?? '')),
+                    'element_selector' => trim((string) ($task['element_selector'] ?? $task['selector'] ?? '')),
+                    'input_selector' => trim((string) ($task['input_selector'] ?? '')),
                     'input' => trim((string) ($task['input'] ?? '')),
+                    'value' => trim((string) ($task['value'] ?? '')),
+                    'success_payload' => $task['success_payload'] ?? null,
+                    'failure_payload' => $task['failure_payload'] ?? null,
                     'next' => is_array($task['next'] ?? null) ? $task['next'] : null,
                     'on_partial' => is_array($task['on_partial'] ?? null) ? $task['on_partial'] : null,
                     'on_error' => is_array($task['on_error'] ?? null) ? $task['on_error'] : null,

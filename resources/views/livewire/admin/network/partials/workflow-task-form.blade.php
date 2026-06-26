@@ -61,6 +61,37 @@
     </div>
 
     <div class="grid gap-4 md:grid-cols-3">
+        <div>
+            <label class="block text-sm font-medium text-gray-700">Element-Selector</label>
+            <input type="text" wire:model.defer="{{ $prefix }}ElementSelector" placeholder="button[type=submit], #login, text=Weiter" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+            @error($prefix.'ElementSelector') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+        </div>
+        <div>
+            <label class="block text-sm font-medium text-gray-700">Input-Selector</label>
+            <input type="text" wire:model.defer="{{ $prefix }}InputSelector" placeholder="input[name=email]" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+            @error($prefix.'InputSelector') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+        </div>
+        <div>
+            <label class="block text-sm font-medium text-gray-700">Input-Wert / Quelle</label>
+            <input type="text" wire:model.defer="{{ $prefix }}InputValue" placeholder="person.email oder fester Wert" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+            @error($prefix.'InputValue') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+        </div>
+    </div>
+
+    <div class="grid gap-4 md:grid-cols-2">
+        <div>
+            <label class="block text-sm font-medium text-gray-700">Daten bei Erfolg</label>
+            <textarea rows="3" wire:model.defer="{{ $prefix }}SuccessPayload" placeholder='{"email":"{{ "person.email" }}"} oder Textwert' class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"></textarea>
+            @error($prefix.'SuccessPayload') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+        </div>
+        <div>
+            <label class="block text-sm font-medium text-gray-700">Daten bei Fehler</label>
+            <textarea rows="3" wire:model.defer="{{ $prefix }}FailurePayload" placeholder='{"reason":"element_not_found"} oder Textwert' class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"></textarea>
+            @error($prefix.'FailurePayload') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+        </div>
+    </div>
+
+    <div class="grid gap-4 md:grid-cols-3">
         @foreach([
             $prefix.'SuccessTarget' => 'Bei Erfolg',
             $prefix.'PartialTarget' => 'Bei Teilstatus',

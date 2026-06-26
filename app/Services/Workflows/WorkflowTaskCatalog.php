@@ -11,7 +11,7 @@ class WorkflowTaskCatalog
     {
         return [
             'browser.open' => [
-                'label' => 'Browser starten',
+                'label' => 'Browserfenster oeffnen',
                 'kind' => 'browser',
                 'runner' => 'node',
                 'node_script' => 'node/workflows/tasks/browser/open.cjs',
@@ -33,6 +33,22 @@ class WorkflowTaskCatalog
                 'node_script' => 'node/workflows/tasks/browser/find_inputs.cjs',
                 'timeout_seconds' => 45,
                 'description' => 'Sammelt sichtbare Eingabefelder mit Name, Label, Placeholder und Selector-Kandidaten.',
+            ],
+            'browser.find_element' => [
+                'label' => 'Element ermitteln',
+                'kind' => 'browser',
+                'runner' => 'node',
+                'node_script' => 'node/workflows/tasks/browser/find_element.cjs',
+                'timeout_seconds' => 45,
+                'description' => 'Sucht ein Element per Selector, Text oder Rolle und liefert Treffer-Metadaten.',
+            ],
+            'browser.click' => [
+                'label' => 'Button/Link klicken',
+                'kind' => 'browser',
+                'runner' => 'node',
+                'node_script' => 'node/workflows/tasks/browser/click.cjs',
+                'timeout_seconds' => 60,
+                'description' => 'Klickt ein Element per Selector oder Text und gibt den Folgezustand weiter.',
             ],
             'input.fill_field' => [
                 'label' => 'Input-Feld fuellen',
@@ -58,6 +74,14 @@ class WorkflowTaskCatalog
                 'timeout_seconds' => 90,
                 'description' => 'Wartet auf ein sichtbares Element und liefert je nach Treffer einen Status.',
             ],
+            'wait.seconds' => [
+                'label' => 'Warten',
+                'kind' => 'wait',
+                'runner' => 'node',
+                'node_script' => 'node/workflows/tasks/wait/seconds.cjs',
+                'timeout_seconds' => 120,
+                'description' => 'Wartet eine definierte Zeit und leitet danach weiter.',
+            ],
             'wait.status' => [
                 'label' => 'Status auswerten',
                 'kind' => 'wait',
@@ -73,6 +97,14 @@ class WorkflowTaskCatalog
                 'php_handler' => 'App\\Services\\Workflows\\Tasks\\ReadAccountDataTask@handle',
                 'timeout_seconds' => 15,
                 'description' => 'Extrahiert Accountdaten aus Workflow-, Persona- oder Node-Ergebnissen.',
+            ],
+            'data.resolve_person' => [
+                'label' => 'Person-Daten ermitteln',
+                'kind' => 'data',
+                'runner' => 'php',
+                'php_handler' => 'App\\Services\\Workflows\\Tasks\\ResolvePersonDataTask@handle',
+                'timeout_seconds' => 15,
+                'description' => 'Liest Persona-Stammdaten und stellt sie als Payload fuer weitere Tasks bereit.',
             ],
             'data.read_login_data' => [
                 'label' => 'Login-Daten lesen',
@@ -99,7 +131,7 @@ class WorkflowTaskCatalog
                 'description' => 'Speichert verschluesselte Cookies/Storage aus einem Webmail-Session-Ergebnis.',
             ],
             'browser.close' => [
-                'label' => 'Browser beenden',
+                'label' => 'Browserfenster schliessen',
                 'kind' => 'browser',
                 'runner' => 'node',
                 'node_script' => 'node/workflows/tasks/browser/close.cjs',
@@ -155,7 +187,7 @@ class WorkflowTaskCatalog
             'timeout_seconds' => max(0, (int) ($overrides['timeout_seconds'] ?? $definition['timeout_seconds'] ?? 60)),
         ];
 
-        foreach (['node_script', 'php_handler', 'selector', 'input', 'next', 'on_partial', 'on_error', 'status_routes'] as $key) {
+        foreach (['node_script', 'php_handler', 'selector', 'element_selector', 'input_selector', 'input', 'value', 'success_payload', 'failure_payload', 'next', 'on_partial', 'on_error', 'status_routes'] as $key) {
             $value = Arr::get($overrides, $key, Arr::get($definition, $key));
 
             if ($value !== null && $value !== '') {
