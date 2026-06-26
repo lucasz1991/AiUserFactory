@@ -8,6 +8,7 @@ use App\Livewire\Admin\Config\PersonDetail;
 use App\Livewire\Admin\Config\SettingsPage;
 use App\Livewire\Admin\Network\ActionsPage;
 use App\Livewire\Admin\Network\WorkflowManager;
+use App\Livewire\Admin\Network\WorkflowsIndex;
 use App\Livewire\Admin\Processes\ProcessMonitor;
 use App\Http\Controllers\Admin\ClientController\DashboardController as ClientControllerDashboardController;
 use App\Http\Controllers\Admin\ClientController\NodeController as ClientControllerNodeController;
@@ -33,7 +34,8 @@ Route::middleware(['auth:sanctum', config('jetstream.auth_session')])->group(fun
         Route::get('/personen', AdminConfig::class)->name('persons.index');
         Route::get('/personen/{profileId}', PersonDetail::class)->name('persons.show');
         Route::get('/netzwerk/aktionen', ActionsPage::class)->name('network.actions');
-        Route::get('/netzwerk/workflows', WorkflowManager::class)->name('network.workflows');
+        Route::get('/netzwerk/workflows', WorkflowsIndex::class)->name('network.workflows');
+        Route::get('/netzwerk/workflows/{workflow}', WorkflowManager::class)->name('network.workflows.manage');
         Route::get('/prozesse', ProcessMonitor::class)->name('processes.index');
         Route::get('/einstellungen/{tab?}', SettingsPage::class)->name('admin.settings');
 

@@ -7,7 +7,7 @@ use App\Models\Workflow;
 use App\Models\WorkflowStep;
 use App\Services\Workflows\PersonaActionWorkflowCatalog;
 use App\Services\Workflows\WorkflowExecutionService;
-use App\Services\Workflows\WorkflowTemplateService;
+use App\Services\Workflows\WorkflowTaskCatalog;
 use Illuminate\Support\Str;
 use Livewire\Component;
 
@@ -21,10 +21,6 @@ class WorkflowManager extends Component
 
     public bool $workflowActive = true;
 
-    public string $newWorkflowName = '';
-
-    public string $newWorkflowDescription = '';
-
     public string $newStepType = WorkflowStep::TYPE_PLANNED_ACTION;
 
     public string $newStepName = '';
@@ -35,6 +31,8 @@ class WorkflowManager extends Component
 
     public string $newTaskListId = '';
 
+    public string $newTaskCatalogKey = 'browser.open_url';
+
     public string $newTaskTitle = '';
 
     public string $newTaskKind = 'browser';
@@ -42,6 +40,8 @@ class WorkflowManager extends Component
     public string $newTaskDescription = '';
 
     public string $newTaskSuccessTarget = '';
+
+    public string $newTaskPartialTarget = '';
 
     public string $newTaskFailedTarget = 'fail';
 
@@ -51,28 +51,16 @@ class WorkflowManager extends Component
 
     public string $actionTypeFilter = 'all';
 
-    public function mount(): void
+    public function mount(Workflow $workflow): void
     {
-        if (! Workflow::query()->exists()) {
-            app(WorkflowTemplateService::class)->ensureDefaults();
-        }
-
-        $this->selectedWorkflowId = Workflow::query()
-            ->orderBy('category')
-            ->orderBy('name')
-            ->value('id');
-
+        $this->selectedWorkflowId = $workflow->id;
         $this->loadWorkflowForm();
     }
 
     public function render()
     {
         $catalog = app(PersonaActionWorkflowCatalog::class);
-        $workflows = Workflow::query()
-            ->withCount(['steps', 'runs'])
-            ->orderBy('category')
-            ->orderBy('name')
-            ->get();
+        $taskCatalog = app(WorkflowTaskCatalog::class);
         $selectedWorkflow = $this->selectedWorkflow();
         $steps = $selectedWorkflow
             ? $selectedWorkflow->steps()->ordered()->get()
@@ -89,53 +77,20 @@ class WorkflowManager extends Component
         $actions = array_slice($catalog->actions($catalogPersons, $this->actionPersonFilter, $this->actionTypeFilter), 0, 30);
 
         return view('livewire.admin.network.workflow-manager', [
-            'workflows' => $workflows,
             'selectedWorkflow' => $selectedWorkflow,
             'steps' => $steps,
             'runs' => $runs,
             'persons' => $persons,
             'personOptions' => $catalog->personOptions($catalogPersons),
             'actions' => $actions,
+            'taskDefinitions' => $taskCatalog->options(),
             'summary' => [
-                'workflows' => $workflows->count(),
-                'active_workflows' => $workflows->where('is_active', true)->count(),
-                'steps' => $steps->count(),
-                'runs' => $runs->count(),
+                'actions' => $steps->filter(fn (WorkflowStep $step): bool => $step->type !== WorkflowStep::TYPE_WAIT)->count(),
+                'lists' => $steps->count(),
+                'task_cards' => $steps->sum(fn (WorkflowStep $step): int => count($step->task_cards)),
+                'runs' => $selectedWorkflow?->runs()->count() ?? 0,
             ],
         ])->layout('layouts.master');
-    }
-
-    public function selectWorkflow(int $workflowId): void
-    {
-        $this->selectedWorkflowId = $workflowId;
-        $this->loadWorkflowForm();
-    }
-
-    public function createWorkflow(): void
-    {
-        $validated = $this->validate([
-            'newWorkflowName' => ['required', 'string', 'max:160'],
-            'newWorkflowDescription' => ['nullable', 'string', 'max:1000'],
-        ]);
-
-        $workflow = Workflow::query()->create([
-            'name' => trim($validated['newWorkflowName']),
-            'slug' => $this->uniqueSlug($validated['newWorkflowName']),
-            'description' => trim((string) ($validated['newWorkflowDescription'] ?? '')),
-            'category' => 'custom',
-            'is_active' => true,
-            'trigger_type' => 'manual',
-            'settings_json' => [
-                'created_from' => 'workflow-manager',
-            ],
-        ]);
-
-        $this->newWorkflowName = '';
-        $this->newWorkflowDescription = '';
-        $this->selectedWorkflowId = $workflow->id;
-        $this->loadWorkflowForm();
-
-        session()->flash('success', 'Workflow wurde erstellt.');
     }
 
     public function saveWorkflow(): void
@@ -170,10 +125,10 @@ class WorkflowManager extends Component
         }
 
         $workflow->delete();
-        $this->selectedWorkflowId = Workflow::query()->orderBy('name')->value('id');
-        $this->loadWorkflowForm();
 
-        session()->flash('success', 'Workflow wurde geloescht.');
+        session()->flash('success', 'Workflow wurde geloescht. Du kannst ihn jetzt per Seeder neu erzeugen.');
+
+        $this->redirectRoute('network.workflows');
     }
 
     public function addStep(): void
@@ -297,10 +252,12 @@ class WorkflowManager extends Component
 
         $validated = $this->validate([
             'newTaskListId' => ['required', 'integer'],
+            'newTaskCatalogKey' => ['required', 'string', 'max:120'],
             'newTaskTitle' => ['required', 'string', 'max:160'],
             'newTaskKind' => ['required', 'string', 'in:browser,input,wait,data'],
             'newTaskDescription' => ['nullable', 'string', 'max:1000'],
             'newTaskSuccessTarget' => ['nullable', 'string', 'max:180'],
+            'newTaskPartialTarget' => ['nullable', 'string', 'max:180'],
             'newTaskFailedTarget' => ['nullable', 'string', 'max:180'],
         ]);
 
@@ -313,19 +270,24 @@ class WorkflowManager extends Component
         $config = is_array($step->config_json) ? $step->config_json : [];
         $tasks = is_array($config['tasks'] ?? null) ? $config['tasks'] : [];
         $key = $this->uniqueTaskKey($tasks, $validated['newTaskTitle']);
-        $task = [
+        $task = app(WorkflowTaskCatalog::class)->cardFromDefinition($validated['newTaskCatalogKey'], [
             'key' => $key,
             'title' => trim($validated['newTaskTitle']),
             'description' => trim((string) ($validated['newTaskDescription'] ?? '')),
             'kind' => $validated['newTaskKind'],
             'status' => 'configured',
-        ];
+        ]);
 
         $successRoute = $this->routeTargetFromValue((string) ($validated['newTaskSuccessTarget'] ?? ''));
+        $partialRoute = $this->routeTargetFromValue((string) ($validated['newTaskPartialTarget'] ?? ''));
         $failedRoute = $this->routeTargetFromValue((string) ($validated['newTaskFailedTarget'] ?? ''));
 
         if ($successRoute) {
             $task['next'] = $successRoute;
+        }
+
+        if ($partialRoute) {
+            $task['on_partial'] = $partialRoute;
         }
 
         if ($failedRoute) {
@@ -339,6 +301,7 @@ class WorkflowManager extends Component
         $this->newTaskTitle = '';
         $this->newTaskDescription = '';
         $this->newTaskSuccessTarget = '';
+        $this->newTaskPartialTarget = '';
         $this->newTaskFailedTarget = 'fail';
 
         session()->flash('success', 'Step-Karte wurde hinzugefuegt.');
@@ -434,19 +397,6 @@ class WorkflowManager extends Component
         $this->workflowActive = (bool) ($workflow?->is_active ?? true);
     }
 
-    protected function uniqueSlug(string $name): string
-    {
-        $base = Str::slug($name) ?: 'workflow';
-        $slug = $base;
-        $counter = 2;
-
-        while (Workflow::query()->where('slug', $slug)->exists()) {
-            $slug = $base.'-'.$counter++;
-        }
-
-        return $slug;
-    }
-
     protected function defaultStepName(string $type): string
     {
         return match ($type) {
@@ -463,28 +413,71 @@ class WorkflowManager extends Component
             WorkflowStep::TYPE_MAIL_ACCOUNT_REGISTRATION => [
                 'provider_key' => $validated['newStepProvider'],
                 'allow_partial' => false,
+                'timeout_seconds' => 1800,
+                'tasks' => [
+                    app(WorkflowTaskCatalog::class)->cardFromDefinition('browser.open', ['key' => 'open-browser']),
+                    app(WorkflowTaskCatalog::class)->cardFromDefinition('browser.open_url', ['key' => 'open-registration-url', 'title' => 'Registrierungsseite aufrufen']),
+                    app(WorkflowTaskCatalog::class)->cardFromDefinition('browser.find_inputs', ['key' => 'find-registration-inputs', 'title' => 'Input-Felder suchen']),
+                    app(WorkflowTaskCatalog::class)->cardFromDefinition('input.fill_field', ['key' => 'fill-registration-inputs', 'title' => 'Formularfelder fuellen']),
+                    app(WorkflowTaskCatalog::class)->cardFromDefinition('wait.status', ['key' => 'check-registration-status', 'title' => 'Registrierungsstatus auswerten']),
+                    app(WorkflowTaskCatalog::class)->cardFromDefinition('data.persist_mail_account', ['key' => 'persist-account-data', 'title' => 'Accountdaten speichern']),
+                    app(WorkflowTaskCatalog::class)->cardFromDefinition('browser.close', ['key' => 'close-browser']),
+                ],
+                'routes' => [
+                    'success' => ['type' => 'step', 'step' => 'next', 'label' => 'Naechste Liste'],
+                    'partial' => ['type' => 'end', 'label' => 'Manuelle Pruefung'],
+                    'failed' => ['type' => 'fail', 'label' => 'Registrierung fehlgeschlagen'],
+                    'timeout' => ['type' => 'fail', 'label' => 'Registrierung Timeout'],
+                ],
             ],
             WorkflowStep::TYPE_WEBMAIL_LOGIN => [
                 'provider' => $validated['newStepProvider'],
                 'use_person_email_account' => true,
                 'allow_partial' => false,
+                'timeout_seconds' => 900,
+                'tasks' => [
+                    app(WorkflowTaskCatalog::class)->cardFromDefinition('data.read_login_data', ['key' => 'read-login-data']),
+                    app(WorkflowTaskCatalog::class)->cardFromDefinition('browser.open', ['key' => 'open-browser']),
+                    app(WorkflowTaskCatalog::class)->cardFromDefinition('browser.open_url', ['key' => 'open-webmail-url', 'title' => 'Webmailportal aufrufen']),
+                    app(WorkflowTaskCatalog::class)->cardFromDefinition('browser.find_inputs', ['key' => 'find-login-inputs', 'title' => 'Loginfelder suchen']),
+                    app(WorkflowTaskCatalog::class)->cardFromDefinition('input.fill_field', ['key' => 'fill-username', 'title' => 'Benutzername fuellen']),
+                    app(WorkflowTaskCatalog::class)->cardFromDefinition('input.fill_field', ['key' => 'fill-password', 'title' => 'Passwort fuellen']),
+                    app(WorkflowTaskCatalog::class)->cardFromDefinition('wait.selector', ['key' => 'wait-mailbox', 'title' => 'Postfach erkennen']),
+                    app(WorkflowTaskCatalog::class)->cardFromDefinition('data.persist_webmail_session', ['key' => 'save-session']),
+                    app(WorkflowTaskCatalog::class)->cardFromDefinition('browser.close', ['key' => 'close-browser']),
+                ],
+                'routes' => [
+                    'success' => ['type' => 'end', 'label' => 'Workflow abschliessen'],
+                    'failed' => ['type' => 'fail', 'label' => 'Webmail Login fehlgeschlagen'],
+                    'timeout' => ['type' => 'fail', 'label' => 'Webmail Login Timeout'],
+                ],
             ],
             WorkflowStep::TYPE_WAIT => [
                 'seconds' => (int) $validated['newStepWaitSeconds'],
+                'timeout_seconds' => max(60, (int) $validated['newStepWaitSeconds'] + 60),
+                'routes' => [
+                    'success' => ['type' => 'step', 'step' => 'next', 'label' => 'Naechste Liste'],
+                ],
             ],
             default => [
                 'source' => 'manual',
                 'label' => trim($validated['newStepName'] ?? '') ?: 'Geplante Aktion',
                 'tasks' => [
-                    [
+                    app(WorkflowTaskCatalog::class)->cardFromDefinition('wait.status', [
                         'key' => 'aktion-ausfuehren',
                         'title' => 'Aktion ausfuehren',
                         'description' => 'Geplante Aktion als Workflow-Task verarbeiten.',
                         'kind' => 'data',
                         'status' => 'configured',
                         'next' => ['step' => 'next', 'label' => 'Naechste Liste'],
+                        'on_partial' => ['step' => 'end', 'label' => 'Manuelle Pruefung'],
                         'on_error' => ['step' => 'fail', 'label' => 'Fehlerroute'],
-                    ],
+                    ]),
+                ],
+                'routes' => [
+                    'success' => ['type' => 'step', 'step' => 'next', 'label' => 'Naechste Liste'],
+                    'partial' => ['type' => 'end', 'label' => 'Manuelle Pruefung'],
+                    'failed' => ['type' => 'fail', 'label' => 'Fehlerroute'],
                 ],
             ],
         };
@@ -499,11 +492,11 @@ class WorkflowManager extends Component
         }
 
         if ($value === 'end') {
-            return ['step' => 'end', 'label' => 'Workflow abschliessen'];
+            return ['type' => 'end', 'step' => 'end', 'label' => 'Workflow abschliessen'];
         }
 
         if ($value === 'fail') {
-            return ['step' => 'fail', 'label' => 'Fehlerroute'];
+            return ['type' => 'fail', 'step' => 'fail', 'label' => 'Fehlerroute'];
         }
 
         if (str_starts_with($value, 'step:')) {
@@ -518,6 +511,8 @@ class WorkflowManager extends Component
             }
 
             return [
+                'type' => 'step',
+                'action_key' => $target->action_key,
                 'step' => $target->action_key,
                 'label' => $target->name,
             ];
@@ -541,7 +536,10 @@ class WorkflowManager extends Component
             }
 
             return [
+                'type' => 'card',
+                'action_key' => $targetStep->action_key,
                 'step' => $targetStep->action_key,
+                'card_key' => $taskKey,
                 'card' => $taskKey,
                 'label' => $targetStep->name.' / '.(string) ($targetTask['title'] ?? $taskKey),
             ];

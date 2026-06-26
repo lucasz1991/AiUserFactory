@@ -2,6 +2,7 @@
 
 namespace App\Console;
 
+use App\Jobs\ExpireWorkflowRunsJob;
 use App\Jobs\SyncManagedProcessesJob;
 use App\Jobs\SuperviseManagedProcessesJob;
 use App\Services\Simulation\NetworkActivityPlanningSettings;
@@ -21,6 +22,12 @@ class Kernel extends ConsoleKernel
                 ->everyMinute()
                 ->withoutOverlapping(5);
             $schedule->job(new SuperviseManagedProcessesJob)
+                ->everyMinute()
+                ->withoutOverlapping(5);
+        }
+
+        if (Schema::hasTable('workflow_step_runs')) {
+            $schedule->job(new ExpireWorkflowRunsJob)
                 ->everyMinute()
                 ->withoutOverlapping(5);
         }

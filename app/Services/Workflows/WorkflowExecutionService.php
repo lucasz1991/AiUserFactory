@@ -11,6 +11,8 @@ use App\Models\WorkflowStep;
 use App\Models\WorkflowStepRun;
 use App\Services\Mail\MailAccountRegistrationRunner;
 use App\Services\Mail\WebmailSessionRunner;
+use App\Services\Workflows\Tasks\PersistMailAccountTask;
+use App\Services\Workflows\Tasks\PersistWebmailSessionTask;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
@@ -127,6 +129,12 @@ class WorkflowExecutionService
             return;
         }
 
+        if ($this->stepRunTimedOut($stepRun)) {
+            $this->expireStepRun($stepRun);
+
+            return;
+        }
+
         $status = $this->readExternalStatus($stepRun);
 
         if (! is_array($status)) {
@@ -138,6 +146,12 @@ class WorkflowExecutionService
         }
 
         if ($this->externalStillRunning($status)) {
+            if ($this->stepRunTimedOut($stepRun)) {
+                $this->expireStepRun($stepRun);
+
+                return;
+            }
+
             $this->scheduleMonitor($stepRun);
 
             return;
@@ -172,6 +186,22 @@ class WorkflowExecutionService
         $outcome = $this->resultOutcome($result);
         $this->completeStepRun($stepRun, $result, 'completed');
         $this->continueAfterStep($stepRun->workflowRun, $stepRun, $result, $outcome, max(0, (int) $stepRun->workflowStep->wait_after_seconds));
+    }
+
+    public function expireTimedOutRuns(): void
+    {
+        WorkflowStepRun::query()
+            ->with(['workflowRun.workflow.steps', 'workflowStep'])
+            ->whereIn('status', ['running', 'waiting'])
+            ->whereNotNull('started_at')
+            ->orderBy('started_at')
+            ->limit(100)
+            ->get()
+            ->each(function (WorkflowStepRun $stepRun): void {
+                if ($this->stepRunTimedOut($stepRun)) {
+                    $this->expireStepRun($stepRun);
+                }
+            });
     }
 
     protected function executeStep(WorkflowRun $run, WorkflowStep $step, WorkflowStepRun $stepRun): string
@@ -304,6 +334,35 @@ class WorkflowExecutionService
         ])->save();
     }
 
+    protected function expireStepRun(WorkflowStepRun $stepRun): void
+    {
+        if (! in_array($stepRun->status, ['running', 'waiting'], true)) {
+            return;
+        }
+
+        $timeoutSeconds = $this->stepTimeoutSeconds($stepRun->workflowStep);
+        $message = 'Workflow-Schritt hat das Timeout von '.$timeoutSeconds.' Sekunden ueberschritten.';
+        $result = [
+            'ok' => false,
+            'status' => 'timeout',
+            'statusLevel' => 'timeout',
+            'statusMessage' => $message,
+            'timedOutAt' => now()->toIso8601String(),
+            'timeoutSeconds' => $timeoutSeconds,
+        ];
+        $outcome = $this->hasRouteForOutcome($stepRun->workflowStep, 'timeout') ? 'timeout' : 'failed';
+
+        if ($this->hasRouteForOutcome($stepRun->workflowStep, $outcome)) {
+            $this->completeStepRun($stepRun, $result, 'timeout');
+            $this->continueAfterStep($stepRun->workflowRun, $stepRun, $result, $outcome);
+
+            return;
+        }
+
+        $this->failStepRun($stepRun, $message, $result);
+        $this->failRun($stepRun->workflowRun, $message);
+    }
+
     protected function completeRun(WorkflowRun $run): void
     {
         $run = $this->loadRun($run->id);
@@ -374,6 +433,11 @@ class WorkflowExecutionService
             ?: $this->linearRouteAfterStep($run, $stepRun->workflowStep, $outcome);
         $routeType = (string) ($route['type'] ?? 'step');
 
+        if ($routeType === 'step' && trim((string) ($route['action_key'] ?? $route['step'] ?? '')) === 'next') {
+            $route = $this->linearRouteAfterStep($run, $stepRun->workflowStep, $outcome);
+            $routeType = (string) ($route['type'] ?? 'step');
+        }
+
         $this->recordRoute($run, $stepRun, $outcome, $route);
         $run->refresh();
 
@@ -430,7 +494,7 @@ class WorkflowExecutionService
         $routes = $step->routes;
         $route = $routes[$outcome] ?? $routes['default'] ?? null;
 
-        return is_array($route) ? $route : null;
+        return is_array($route) ? $this->normalizeRoute($step, $route) : null;
     }
 
     protected function hasRouteForOutcome(WorkflowStep $step, string $outcome): bool
@@ -470,8 +534,43 @@ class WorkflowExecutionService
         ];
     }
 
+    protected function normalizeRoute(WorkflowStep $sourceStep, array $route): array
+    {
+        $type = trim((string) ($route['type'] ?? ''));
+        $step = trim((string) ($route['action_key'] ?? $route['step'] ?? ''));
+        $card = trim((string) ($route['card_key'] ?? $route['card'] ?? ''));
+
+        if ($type === '') {
+            $type = $card !== '' ? 'card' : 'step';
+        }
+
+        if (in_array($step, ['end', 'fail'], true)) {
+            $type = $step;
+        }
+
+        if ($type === 'card') {
+            $route['action_key'] = $step !== '' && ! in_array($step, ['end', 'fail', 'next'], true)
+                ? $step
+                : $sourceStep->action_key;
+            $route['step'] = $route['action_key'];
+            $route['card_key'] = $card;
+            $route['card'] = $card;
+        } elseif ($type === 'step' && $step !== '') {
+            $route['action_key'] = $step;
+            $route['step'] = $step;
+        }
+
+        $route['type'] = $type;
+
+        return $route;
+    }
+
     protected function resultOutcome(array $result): string
     {
+        if (strtolower(trim((string) ($result['status'] ?? $result['statusLevel'] ?? ''))) === 'timeout') {
+            return 'timeout';
+        }
+
         if (! (bool) ($result['ok'] ?? false)) {
             return 'failed';
         }
@@ -483,6 +582,48 @@ class WorkflowExecutionService
         }
 
         return 'success';
+    }
+
+    protected function stepRunTimedOut(WorkflowStepRun $stepRun): bool
+    {
+        if (! ($stepRun->started_at instanceof Carbon)) {
+            return false;
+        }
+
+        $timeoutSeconds = $this->stepTimeoutSeconds($stepRun->workflowStep);
+
+        if ($timeoutSeconds <= 0) {
+            return false;
+        }
+
+        return $stepRun->started_at->copy()->addSeconds($timeoutSeconds)->lte(now());
+    }
+
+    protected function stepTimeoutSeconds(WorkflowStep $step): int
+    {
+        $configured = (int) data_get($step->config_json, 'timeout_seconds', 0);
+
+        if ($configured > 0) {
+            return $configured;
+        }
+
+        $taskTimeouts = collect($step->task_cards)
+            ->map(fn (array $task): int => (int) ($task['timeout_seconds'] ?? 0))
+            ->filter(fn (int $seconds): bool => $seconds > 0);
+
+        if ($taskTimeouts->isNotEmpty()) {
+            return min(3600, max(60, $taskTimeouts->sum() + 60));
+        }
+
+        if ($step->type === WorkflowStep::TYPE_WAIT) {
+            return max(60, (int) data_get($step->config_json, 'seconds', 0) + 60);
+        }
+
+        return match ($step->type) {
+            WorkflowStep::TYPE_MAIL_ACCOUNT_REGISTRATION => 1800,
+            WorkflowStep::TYPE_WEBMAIL_LOGIN => 900,
+            default => 300,
+        };
     }
 
     protected function recordRoute(WorkflowRun $run, WorkflowStepRun $stepRun, string $outcome, array $route): void
@@ -590,31 +731,7 @@ class WorkflowExecutionService
             return;
         }
 
-        $metadata = is_array($person->metadata) ? $person->metadata : [];
-        $emailAccount = is_array($metadata['email_account'] ?? null) ? $metadata['email_account'] : [];
-        $email = $this->nullableString($account['email'] ?? $emailAccount['email'] ?? $person->person_email);
-        $password = trim((string) ($account['password'] ?? ''));
-
-        $emailAccount = array_replace($emailAccount, [
-            'email' => $email,
-            'provider' => $this->normalizeProvider($account['provider'] ?? $emailAccount['provider'] ?? 'proton'),
-            'username' => $this->nullableString($account['username'] ?? $email ?? null),
-            'recovery_email' => $this->nullableString($account['recoveryEmail'] ?? $emailAccount['recovery_email'] ?? null),
-            'webmail_url' => $this->nullableString($account['webmailUrl'] ?? $emailAccount['webmail_url'] ?? null)
-                ?: $this->defaultWebmailUrl($this->normalizeProvider($account['provider'] ?? 'proton')),
-            'updated_at' => now()->toIso8601String(),
-        ]);
-
-        if ($password !== '') {
-            $emailAccount['password_encrypted'] = Crypt::encryptString($password);
-        }
-
-        $metadata['email_account'] = $emailAccount;
-
-        $person->forceFill([
-            'person_email' => $email,
-            'metadata' => $metadata,
-        ])->save();
+        app(PersistMailAccountTask::class)->handle($person, $account);
     }
 
     protected function applyWebmailSessionResult(WorkflowRun $run, array $result): void
@@ -626,26 +743,7 @@ class WorkflowExecutionService
             return;
         }
 
-        $metadata = is_array($person->metadata) ? $person->metadata : [];
-        $emailAccount = is_array($metadata['email_account'] ?? null) ? $metadata['email_account'] : [];
-        $summary = is_array($result['sessionSummary'] ?? null) ? $result['sessionSummary'] : [];
-
-        $emailAccount['webmail_session'] = [
-            'payload_encrypted' => $encryptedPayload,
-            'payload_hash' => (string) ($result['sessionPayloadHash'] ?? ''),
-            'captured_at' => (string) ($summary['capturedAt'] ?? now()->toIso8601String()),
-            'final_url' => $summary['finalUrl'] ?? ($result['finalUrl'] ?? null),
-            'origin' => $summary['origin'] ?? null,
-            'cookie_count' => (int) ($summary['cookieCount'] ?? ($result['cookieCount'] ?? 0)),
-            'script_name' => (string) ($result['scriptName'] ?? 'webmail_session.cjs'),
-            'script_version' => (int) ($result['scriptVersion'] ?? 1),
-            'updated_at' => now()->toIso8601String(),
-        ];
-        $metadata['email_account'] = $emailAccount;
-
-        $person->forceFill([
-            'metadata' => $metadata,
-        ])->save();
+        app(PersistWebmailSessionTask::class)->handle($person, $result);
     }
 
     protected function mailRegistrationSubject(WorkflowRun $run, WorkflowStep $step): array

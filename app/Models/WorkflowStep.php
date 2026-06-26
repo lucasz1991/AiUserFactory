@@ -106,11 +106,18 @@ class WorkflowStep extends Model
                     'title' => trim((string) ($task['title'] ?? $task['label'] ?? 'Task')),
                     'description' => trim((string) ($task['description'] ?? '')),
                     'kind' => trim((string) ($task['kind'] ?? 'browser')),
+                    'task_key' => trim((string) ($task['task_key'] ?? '')),
+                    'runner' => trim((string) ($task['runner'] ?? '')),
+                    'node_script' => trim((string) ($task['node_script'] ?? '')),
+                    'php_handler' => trim((string) ($task['php_handler'] ?? '')),
+                    'timeout_seconds' => max(0, (int) ($task['timeout_seconds'] ?? 0)),
                     'status' => trim((string) ($task['status'] ?? 'template')),
                     'selector' => trim((string) ($task['selector'] ?? '')),
                     'input' => trim((string) ($task['input'] ?? '')),
                     'next' => is_array($task['next'] ?? null) ? $task['next'] : null,
+                    'on_partial' => is_array($task['on_partial'] ?? null) ? $task['on_partial'] : null,
                     'on_error' => is_array($task['on_error'] ?? null) ? $task['on_error'] : null,
+                    'status_routes' => is_array($task['status_routes'] ?? null) ? $task['status_routes'] : [],
                 ];
             })
             ->values()

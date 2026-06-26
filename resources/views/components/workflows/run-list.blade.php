@@ -43,6 +43,19 @@
                                                 <span class="truncate font-semibold">{{ data_get($task, 'title', 'Task') }}</span>
                                                 <span class="shrink-0 text-slate-400">{{ data_get($task, 'status', '-') }}</span>
                                             </div>
+                                            @if(data_get($task, 'runner') || data_get($task, 'node_script') || data_get($task, 'php_handler') || data_get($task, 'timeout_seconds'))
+                                                <div class="mt-1 truncate text-slate-400">
+                                                    {{ data_get($task, 'runner', '-') }}
+                                                    @if(data_get($task, 'node_script'))
+                                                        - {{ data_get($task, 'node_script') }}
+                                                    @elseif(data_get($task, 'php_handler'))
+                                                        - {{ data_get($task, 'php_handler') }}
+                                                    @endif
+                                                    @if((int) data_get($task, 'timeout_seconds', 0) > 0)
+                                                        - {{ (int) data_get($task, 'timeout_seconds') }}s
+                                                    @endif
+                                                </div>
+                                            @endif
                                         </div>
                                     @endforeach
                                 </div>

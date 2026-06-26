@@ -26,6 +26,7 @@ class WorkflowTemplateService
             'config_json' => [
                 'provider_key' => 'proton',
                 'allow_partial' => false,
+                'timeout_seconds' => 1800,
                 'automation_summary' => 'Browserflow: oeffnen, Felder fuellen, Verifikation abwarten, Accountdaten lesen.',
                 'tasks' => $this->mailRegistrationTasks(),
                 'routes' => [
@@ -42,6 +43,10 @@ class WorkflowTemplateService
                         'type' => 'fail',
                         'label' => 'Registrierung fehlgeschlagen',
                     ],
+                    'timeout' => [
+                        'type' => 'fail',
+                        'label' => 'Registrierung Timeout',
+                    ],
                 ],
             ],
         ]);
@@ -55,6 +60,7 @@ class WorkflowTemplateService
                 'provider' => 'proton',
                 'use_person_email_account' => true,
                 'allow_partial' => false,
+                'timeout_seconds' => 900,
                 'automation_summary' => 'Login aus gespeicherten Accountdaten, Session-Cookies lesen und speichern.',
                 'tasks' => $this->webmailLoginTasks(),
                 'routes' => [
@@ -65,6 +71,10 @@ class WorkflowTemplateService
                     'failed' => [
                         'type' => 'fail',
                         'label' => 'Webmail-Session fehlgeschlagen',
+                    ],
+                    'timeout' => [
+                        'type' => 'fail',
+                        'label' => 'Webmail-Session Timeout',
                     ],
                 ],
             ],
@@ -87,6 +97,7 @@ class WorkflowTemplateService
                 'provider' => 'proton',
                 'use_person_email_account' => true,
                 'allow_partial' => false,
+                'timeout_seconds' => 900,
                 'automation_summary' => 'Browser oeffnen, Loginfelder fuellen, Postfach erkennen, Session speichern, beenden.',
                 'tasks' => $this->webmailLoginTasks(),
                 'routes' => [
@@ -97,6 +108,10 @@ class WorkflowTemplateService
                     'failed' => [
                         'type' => 'fail',
                         'label' => 'Login fehlgeschlagen',
+                    ],
+                    'timeout' => [
+                        'type' => 'fail',
+                        'label' => 'Login Timeout',
                     ],
                 ],
             ],
@@ -198,7 +213,7 @@ class WorkflowTemplateService
 
     protected function mailRegistrationTasks(): array
     {
-        return [
+        return $this->hydrateTaskScripts([
             [
                 'key' => 'open-browser',
                 'title' => 'Browser starten',
@@ -282,12 +297,22 @@ class WorkflowTemplateService
                 'status' => 'automated',
                 'next' => ['step' => 'registration-webmail-session', 'label' => 'Naechste Liste'],
             ],
-        ];
+        ], [
+            'open-browser' => 'browser.open',
+            'open-registration-url' => 'browser.open_url',
+            'fill-username' => 'input.fill_field',
+            'check-availability' => 'wait.status',
+            'fill-password' => 'input.fill_field',
+            'wait-verification' => 'wait.status',
+            'read-account-data' => 'data.read_account_data',
+            'persist-account-data' => 'data.persist_mail_account',
+            'close-browser' => 'browser.close',
+        ]);
     }
 
     protected function webmailLoginTasks(): array
     {
-        return [
+        return $this->hydrateTaskScripts([
             [
                 'key' => 'read-login-data',
                 'title' => 'Login-Daten lesen',
@@ -362,6 +387,38 @@ class WorkflowTemplateService
                 'status' => 'automated',
                 'next' => ['step' => 'end', 'label' => 'Workflow abschliessen'],
             ],
-        ];
+        ], [
+            'read-login-data' => 'data.read_login_data',
+            'open-browser' => 'browser.open',
+            'open-webmail-url' => 'browser.open_url',
+            'fill-username' => 'input.fill_field',
+            'fill-password' => 'input.fill_field',
+            'wait-mailbox' => 'wait.selector',
+            'save-session' => 'data.persist_webmail_session',
+            'close-browser' => 'browser.close',
+        ]);
+    }
+
+    protected function hydrateTaskScripts(array $tasks, array $definitionMap): array
+    {
+        $catalog = app(WorkflowTaskCatalog::class);
+
+        return collect($tasks)
+            ->map(function (array $task) use ($catalog, $definitionMap): array {
+                $key = (string) ($task['key'] ?? '');
+                $definitionKey = $definitionMap[$key] ?? ($task['task_key'] ?? null);
+
+                if (! $definitionKey) {
+                    return $task;
+                }
+
+                return array_replace(
+                    $catalog->cardFromDefinition($definitionKey, ['key' => $key]),
+                    $task,
+                    ['task_key' => $definitionKey],
+                );
+            })
+            ->values()
+            ->toArray();
     }
 }

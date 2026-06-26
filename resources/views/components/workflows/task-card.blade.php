@@ -38,11 +38,32 @@
             @endif
         </div>
     @endif
-    @if(is_array($task['next'] ?? null) || is_array($task['on_error'] ?? null))
+    @if(($task['runner'] ?? '') !== '' || ($task['node_script'] ?? '') !== '' || ($task['php_handler'] ?? '') !== '' || (int) ($task['timeout_seconds'] ?? 0) > 0)
+        <div class="mt-3 space-y-1 rounded-md bg-slate-50 p-2 text-[11px] text-slate-500">
+            @if(($task['runner'] ?? '') !== '')
+                <div class="truncate">Runner: {{ $task['runner'] }}</div>
+            @endif
+            @if(($task['node_script'] ?? '') !== '')
+                <div class="truncate">Node: {{ $task['node_script'] }}</div>
+            @endif
+            @if(($task['php_handler'] ?? '') !== '')
+                <div class="truncate">PHP: {{ $task['php_handler'] }}</div>
+            @endif
+            @if((int) ($task['timeout_seconds'] ?? 0) > 0)
+                <div class="truncate">Timeout: {{ (int) $task['timeout_seconds'] }}s</div>
+            @endif
+        </div>
+    @endif
+    @if(is_array($task['next'] ?? null) || is_array($task['on_partial'] ?? null) || is_array($task['on_error'] ?? null))
         <div class="mt-3 grid gap-1 text-[11px] text-slate-500">
             @if(is_array($task['next'] ?? null))
                 <div class="rounded border border-emerald-100 bg-emerald-50 px-2 py-1 text-emerald-700">
                     Weiter: {{ data_get($task, 'next.label', data_get($task, 'next.card', data_get($task, 'next.step', 'naechstes Ziel'))) }}
+                </div>
+            @endif
+            @if(is_array($task['on_partial'] ?? null))
+                <div class="rounded border border-amber-100 bg-amber-50 px-2 py-1 text-amber-700">
+                    Teilstatus: {{ data_get($task, 'on_partial.label', data_get($task, 'on_partial.card', data_get($task, 'on_partial.step', 'Teilstatus-Ziel'))) }}
                 </div>
             @endif
             @if(is_array($task['on_error'] ?? null))
