@@ -82,7 +82,13 @@ class WorkflowExecutionService
             return;
         }
 
-        $step = $this->nextStepForRun($run);
+        try {
+            $step = $this->nextStepForRun($run);
+        } catch (\Throwable $exception) {
+            $this->failRun($run, $exception->getMessage());
+
+            return;
+        }
 
         if (! $step) {
             $this->completeRun($run);

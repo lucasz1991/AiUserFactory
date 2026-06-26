@@ -33,6 +33,18 @@ class WorkflowManager extends Component
 
     public int $newStepWaitSeconds = 30;
 
+    public string $newTaskListId = '';
+
+    public string $newTaskTitle = '';
+
+    public string $newTaskKind = 'browser';
+
+    public string $newTaskDescription = '';
+
+    public string $newTaskSuccessTarget = '';
+
+    public string $newTaskFailedTarget = 'fail';
+
     public string $runPersonId = '';
 
     public string $actionPersonFilter = '';
@@ -195,7 +207,7 @@ class WorkflowManager extends Component
 
         $this->newStepName = '';
 
-        session()->flash('success', 'Workflow-Schritt wurde hinzugefuegt.');
+        session()->flash('success', 'Workflow-Liste wurde hinzugefuegt.');
     }
 
     public function addActionStep(string $actionId): void
@@ -244,7 +256,7 @@ class WorkflowManager extends Component
         $step->delete();
         $this->normalizeStepPositions();
 
-        session()->flash('success', 'Workflow-Schritt wurde entfernt.');
+        session()->flash('success', 'Workflow-Liste wurde entfernt.');
     }
 
     public function reorderStep(mixed $item, mixed $position): void
@@ -273,6 +285,110 @@ class WorkflowManager extends Component
         foreach ($ordered->values() as $index => $step) {
             $step->forceFill(['position' => ($index + 1) * 10])->save();
         }
+    }
+
+    public function addTaskCard(): void
+    {
+        $workflow = $this->selectedWorkflow();
+
+        if (! $workflow) {
+            return;
+        }
+
+        $validated = $this->validate([
+            'newTaskListId' => ['required', 'integer'],
+            'newTaskTitle' => ['required', 'string', 'max:160'],
+            'newTaskKind' => ['required', 'string', 'in:browser,input,wait,data'],
+            'newTaskDescription' => ['nullable', 'string', 'max:1000'],
+            'newTaskSuccessTarget' => ['nullable', 'string', 'max:180'],
+            'newTaskFailedTarget' => ['nullable', 'string', 'max:180'],
+        ]);
+
+        $step = $this->stepForSelectedWorkflow((int) $validated['newTaskListId']);
+
+        if (! $step) {
+            return;
+        }
+
+        $config = is_array($step->config_json) ? $step->config_json : [];
+        $tasks = is_array($config['tasks'] ?? null) ? $config['tasks'] : [];
+        $key = $this->uniqueTaskKey($tasks, $validated['newTaskTitle']);
+        $task = [
+            'key' => $key,
+            'title' => trim($validated['newTaskTitle']),
+            'description' => trim((string) ($validated['newTaskDescription'] ?? '')),
+            'kind' => $validated['newTaskKind'],
+            'status' => 'configured',
+        ];
+
+        $successRoute = $this->routeTargetFromValue((string) ($validated['newTaskSuccessTarget'] ?? ''));
+        $failedRoute = $this->routeTargetFromValue((string) ($validated['newTaskFailedTarget'] ?? ''));
+
+        if ($successRoute) {
+            $task['next'] = $successRoute;
+        }
+
+        if ($failedRoute) {
+            $task['on_error'] = $failedRoute;
+        }
+
+        $tasks[] = $task;
+        $config['tasks'] = array_values($tasks);
+        $step->forceFill(['config_json' => $config])->save();
+
+        $this->newTaskTitle = '';
+        $this->newTaskDescription = '';
+        $this->newTaskSuccessTarget = '';
+        $this->newTaskFailedTarget = 'fail';
+
+        session()->flash('success', 'Step-Karte wurde hinzugefuegt.');
+    }
+
+    public function removeTaskCard(int $stepId, string $taskKey): void
+    {
+        $step = $this->stepForSelectedWorkflow($stepId);
+
+        if (! $step) {
+            return;
+        }
+
+        $config = is_array($step->config_json) ? $step->config_json : [];
+        $tasks = collect(is_array($config['tasks'] ?? null) ? $config['tasks'] : [])
+            ->reject(fn (array $task): bool => (string) ($task['key'] ?? '') === $taskKey)
+            ->values()
+            ->toArray();
+
+        $config['tasks'] = $tasks;
+        $step->forceFill(['config_json' => $config])->save();
+
+        session()->flash('success', 'Step-Karte wurde entfernt.');
+    }
+
+    public function reorderTaskCard(int $stepId, mixed $item, mixed $position): void
+    {
+        $step = $this->stepForSelectedWorkflow($stepId);
+
+        if (! $step) {
+            return;
+        }
+
+        $taskKey = (string) $item;
+        $targetPosition = max(0, (int) $position);
+        $config = is_array($step->config_json) ? $step->config_json : [];
+        $tasks = collect(is_array($config['tasks'] ?? null) ? $config['tasks'] : []);
+        $moving = $tasks->first(fn (array $task): bool => (string) ($task['key'] ?? '') === $taskKey);
+
+        if (! $moving) {
+            return;
+        }
+
+        $ordered = $tasks
+            ->reject(fn (array $task): bool => (string) ($task['key'] ?? '') === $taskKey)
+            ->values();
+
+        $ordered->splice(min($targetPosition, $ordered->count()), 0, [$moving]);
+        $config['tasks'] = $ordered->values()->toArray();
+        $step->forceFill(['config_json' => $config])->save();
     }
 
     public function runWorkflow(): void
@@ -359,8 +475,96 @@ class WorkflowManager extends Component
             default => [
                 'source' => 'manual',
                 'label' => trim($validated['newStepName'] ?? '') ?: 'Geplante Aktion',
+                'tasks' => [
+                    [
+                        'key' => 'aktion-ausfuehren',
+                        'title' => 'Aktion ausfuehren',
+                        'description' => 'Geplante Aktion als Workflow-Task verarbeiten.',
+                        'kind' => 'data',
+                        'status' => 'configured',
+                        'next' => ['step' => 'next', 'label' => 'Naechste Liste'],
+                        'on_error' => ['step' => 'fail', 'label' => 'Fehlerroute'],
+                    ],
+                ],
             ],
         };
+    }
+
+    protected function routeTargetFromValue(string $value): ?array
+    {
+        $value = trim($value);
+
+        if ($value === '') {
+            return null;
+        }
+
+        if ($value === 'end') {
+            return ['step' => 'end', 'label' => 'Workflow abschliessen'];
+        }
+
+        if ($value === 'fail') {
+            return ['step' => 'fail', 'label' => 'Fehlerroute'];
+        }
+
+        if (str_starts_with($value, 'step:')) {
+            $actionKey = trim(substr($value, 5));
+            $workflow = $this->selectedWorkflow();
+            $target = $workflow
+                ? $workflow->steps()->where('action_key', $actionKey)->first()
+                : null;
+
+            if (! $target) {
+                return null;
+            }
+
+            return [
+                'step' => $target->action_key,
+                'label' => $target->name,
+            ];
+        }
+
+        if (str_starts_with($value, 'card:')) {
+            $parts = explode(':', $value, 3);
+            $stepId = (int) ($parts[1] ?? 0);
+            $taskKey = trim((string) ($parts[2] ?? ''));
+            $targetStep = $this->stepForSelectedWorkflow($stepId);
+
+            if (! $targetStep || $taskKey === '') {
+                return null;
+            }
+
+            $targetTask = collect($targetStep->task_cards)
+                ->first(fn (array $task): bool => (string) ($task['key'] ?? '') === $taskKey);
+
+            if (! $targetTask) {
+                return null;
+            }
+
+            return [
+                'step' => $targetStep->action_key,
+                'card' => $taskKey,
+                'label' => $targetStep->name.' / '.(string) ($targetTask['title'] ?? $taskKey),
+            ];
+        }
+
+        return null;
+    }
+
+    protected function uniqueTaskKey(array $tasks, string $title): string
+    {
+        $base = Str::slug($title) ?: 'task';
+        $existing = collect($tasks)
+            ->map(fn (array $task): string => (string) ($task['key'] ?? ''))
+            ->filter()
+            ->all();
+        $key = $base;
+        $counter = 2;
+
+        while (in_array($key, $existing, true)) {
+            $key = $base.'-'.$counter++;
+        }
+
+        return $key;
     }
 
     protected function stepForSelectedWorkflow(int $stepId): ?WorkflowStep

@@ -25,7 +25,7 @@
     <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <x-admin.stat label="Workflows" :value="$summary['workflows']" tone="slate" />
         <x-admin.stat label="Aktiv" :value="$summary['active_workflows']" tone="emerald" />
-        <x-admin.stat label="Schritte" :value="$summary['steps']" tone="blue" />
+        <x-admin.stat label="Listen" :value="$summary['steps']" tone="blue" />
         <x-admin.stat label="Laeufe" :value="$summary['runs']" tone="amber" />
     </div>
 
@@ -36,7 +36,7 @@
                     @forelse($workflows as $workflow)
                         <button type="button" wire:click="selectWorkflow({{ $workflow->id }})" class="block w-full rounded-md border px-3 py-3 text-left text-sm transition {{ $selectedWorkflowId === $workflow->id ? 'border-blue-300 bg-blue-50 text-blue-900' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50' }}">
                             <span class="block font-semibold">{{ $workflow->name }}</span>
-                            <span class="mt-1 block text-xs text-slate-500">{{ $workflow->steps_count }} Schritte · {{ $workflow->runs_count }} Laeufe</span>
+                            <span class="mt-1 block text-xs text-slate-500">{{ $workflow->steps_count }} Listen · {{ $workflow->runs_count }} Laeufe</span>
                         </button>
                     @empty
                         <div class="rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
@@ -121,10 +121,10 @@
                     </div>
                 </x-admin.panel>
 
-                <x-admin.panel title="Schritt hinzufuegen">
+                <x-admin.panel title="Liste hinzufuegen">
                     <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
                         <div>
-                            <label for="workflow-new-step-type" class="block text-sm font-medium text-gray-700">Typ</label>
+                            <label for="workflow-new-step-type" class="block text-sm font-medium text-gray-700">Aktion</label>
                             <select id="workflow-new-step-type" wire:model.live="newStepType" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
                                 <option value="planned_action">Geplante Aktion</option>
                                 <option value="mail_account_registration">E-Mail registrieren</option>
@@ -133,7 +133,7 @@
                             </select>
                         </div>
                         <div class="xl:col-span-2">
-                            <label for="workflow-new-step-name" class="block text-sm font-medium text-gray-700">Name</label>
+                            <label for="workflow-new-step-name" class="block text-sm font-medium text-gray-700">Listenname</label>
                             <input id="workflow-new-step-name" type="text" wire:model.defer="newStepName" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
                             @error('newStepName') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
                         </div>
@@ -159,6 +159,77 @@
                     </div>
                 </x-admin.panel>
 
+                <x-admin.panel title="Step-Karte hinzufuegen">
+                    <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+                        <div>
+                            <label for="workflow-new-task-list" class="block text-sm font-medium text-gray-700">Liste</label>
+                            <select id="workflow-new-task-list" wire:model.defer="newTaskListId" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                                <option value="">Bitte waehlen</option>
+                                @foreach($steps as $step)
+                                    <option value="{{ $step->id }}">{{ $step->name }}</option>
+                                @endforeach
+                            </select>
+                            @error('newTaskListId') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                        </div>
+                        <div class="xl:col-span-2">
+                            <label for="workflow-new-task-title" class="block text-sm font-medium text-gray-700">Karte</label>
+                            <input id="workflow-new-task-title" type="text" wire:model.defer="newTaskTitle" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                            @error('newTaskTitle') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                        </div>
+                        <div>
+                            <label for="workflow-new-task-kind" class="block text-sm font-medium text-gray-700">Typ</label>
+                            <select id="workflow-new-task-kind" wire:model.defer="newTaskKind" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                                <option value="browser">Browser</option>
+                                <option value="input">Input</option>
+                                <option value="wait">Warten</option>
+                                <option value="data">Daten</option>
+                            </select>
+                            @error('newTaskKind') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                        </div>
+                        <div>
+                            <label for="workflow-new-task-success" class="block text-sm font-medium text-gray-700">Bei Erfolg</label>
+                            <select id="workflow-new-task-success" wire:model.defer="newTaskSuccessTarget" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                                <option value="">Naechste Karte</option>
+                                <option value="end">Workflow beenden</option>
+                                <option value="fail">Fehlerroute</option>
+                                @foreach($steps as $targetStep)
+                                    <option value="step:{{ $targetStep->action_key }}">{{ $targetStep->name }}</option>
+                                    @foreach($targetStep->task_cards as $targetTask)
+                                        <option value="card:{{ $targetStep->id }}:{{ $targetTask['key'] ?? '' }}">Karte: {{ $targetStep->name }} / {{ $targetTask['title'] ?? 'Task' }}</option>
+                                    @endforeach
+                                @endforeach
+                            </select>
+                            @error('newTaskSuccessTarget') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                        </div>
+                        <div>
+                            <label for="workflow-new-task-failed" class="block text-sm font-medium text-gray-700">Bei Fehler</label>
+                            <select id="workflow-new-task-failed" wire:model.defer="newTaskFailedTarget" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                                <option value="">Keine Route</option>
+                                <option value="fail">Fehlerroute</option>
+                                <option value="end">Workflow beenden</option>
+                                @foreach($steps as $targetStep)
+                                    <option value="step:{{ $targetStep->action_key }}">{{ $targetStep->name }}</option>
+                                    @foreach($targetStep->task_cards as $targetTask)
+                                        <option value="card:{{ $targetStep->id }}:{{ $targetTask['key'] ?? '' }}">Karte: {{ $targetStep->name }} / {{ $targetTask['title'] ?? 'Task' }}</option>
+                                    @endforeach
+                                @endforeach
+                            </select>
+                            @error('newTaskFailedTarget') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                        </div>
+                        <div class="md:col-span-2 xl:col-span-6">
+                            <label for="workflow-new-task-description" class="block text-sm font-medium text-gray-700">Beschreibung</label>
+                            <textarea id="workflow-new-task-description" rows="2" wire:model.defer="newTaskDescription" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"></textarea>
+                            @error('newTaskDescription') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                        </div>
+                    </div>
+
+                    <div class="mt-4 flex justify-end">
+                        <button type="button" wire:click="addTaskCard" class="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">
+                            Karte hinzufuegen
+                        </button>
+                    </div>
+                </x-admin.panel>
+
                 <x-admin.panel title="Board">
                     <div x-data x-sort="$wire.reorderStep($item, $position)" class="flex gap-4 overflow-x-auto pb-2">
                         @forelse($steps as $step)
@@ -174,7 +245,7 @@
                             </x-workflows.step-card>
                         @empty
                             <div class="rounded-md border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-sm text-slate-500">
-                                Keine Schritte.
+                                Keine Listen.
                             </div>
                         @endforelse
                     </div>

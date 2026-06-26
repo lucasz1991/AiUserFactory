@@ -52,4 +52,9 @@
             @endif
         </div>
     @endif
+    @isset($actions)
+        <div class="mt-3 flex justify-end">
+            {{ $actions }}
+        </div>
+    @endisset
 </div>
