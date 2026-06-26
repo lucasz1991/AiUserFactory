@@ -4,46 +4,6 @@
 
 @php
     $browserWindow = trim((string) data_get($task, 'browser_window_name', data_get($task, 'browser_window', '')));
-    $successRoute = is_array(data_get($task, 'next')) ? data_get($task, 'next') : null;
-    $failedRoute = is_array(data_get($task, 'on_error')) ? data_get($task, 'on_error') : null;
-    $routeLabel = static function (?array $route, string $fallback): string {
-        if (! $route) {
-            return '';
-        }
-
-        $label = trim((string) data_get($route, 'reason', data_get($route, 'label', '')));
-
-        if ($label !== '') {
-            return $label;
-        }
-
-        $step = trim((string) data_get($route, 'step', data_get($route, 'action_key', '')));
-        $card = trim((string) data_get($route, 'card', data_get($route, 'card_key', '')));
-
-        if ($card !== '') {
-            return 'Karte: '.$card;
-        }
-
-        return $step !== '' ? $step : $fallback;
-    };
-    $routeTarget = static function (?array $route): string {
-        if (! $route) {
-            return '';
-        }
-
-        $step = trim((string) data_get($route, 'step', data_get($route, 'action_key', '')));
-        $card = trim((string) data_get($route, 'card', data_get($route, 'card_key', '')));
-
-        if ($card !== '') {
-            return ' -> '.$card;
-        }
-
-        if ($step !== '') {
-            return ' -> '.$step;
-        }
-
-        return '';
-    };
 @endphp
 
 <div {{ $attributes->merge(['class' => 'rounded-md border border-slate-200 bg-white px-3 py-2 shadow-sm transition hover:border-slate-300 hover:shadow-md']) }}>
@@ -68,23 +28,6 @@
     @if($browserWindow !== '')
         <div class="mt-2 inline-flex max-w-full items-center rounded border border-sky-100 bg-sky-50 px-2 py-0.5 text-[11px] font-semibold text-sky-800">
             <span class="truncate">Fenster: {{ $browserWindow }}</span>
-        </div>
-    @endif
-    @if($successRoute || $failedRoute)
-        <div class="mt-2 space-y-1">
-            @if($successRoute)
-                <div class="flex min-w-0 items-center gap-1 text-[11px] font-semibold text-emerald-700" title="{{ $routeLabel($successRoute, 'Erfolg') }}{{ $routeTarget($successRoute) }}">
-                    <span class="shrink-0">Erfolg -></span>
-                    <span class="truncate rounded bg-emerald-50 px-1.5 py-0.5">{{ $routeLabel($successRoute, 'Erfolg') }}{{ $routeTarget($successRoute) }}</span>
-                </div>
-            @endif
-            @if($failedRoute)
-                @php($failedAttempts = max(0, (int) data_get($failedRoute, 'max_attempts', 0)))
-                <div class="flex min-w-0 items-center gap-1 text-[11px] font-semibold text-red-700" title="{{ $routeLabel($failedRoute, 'Fehler') }}{{ $routeTarget($failedRoute) }}">
-                    <span class="shrink-0">Fehler -></span>
-                    <span class="truncate rounded bg-red-50 px-1.5 py-0.5">{{ $routeLabel($failedRoute, 'Fehler') }}{{ $routeTarget($failedRoute) }}@if($failedAttempts > 0) - {{ $failedAttempts }}x @endif</span>
-                </div>
-            @endif
         </div>
     @endif
 </div>

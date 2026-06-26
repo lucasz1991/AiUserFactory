@@ -130,19 +130,53 @@
 
                             const sourceRect = source.getBoundingClientRect();
                             const targetRect = targetElement.getBoundingClientRect();
-                            const startX = sourceRect.right - surfaceRect.left + surface.scrollLeft;
-                            const startY = sourceRect.top + (sourceRect.height / 2) - surfaceRect.top + surface.scrollTop;
+                            const sourceStep = source.dataset.workflowStepAction || '';
+                            const targetStep = targetElement.dataset.workflowStepAction || '';
+                            const sourceCenterX = sourceRect.left + (sourceRect.width / 2) - surfaceRect.left + surface.scrollLeft;
+                            const sourceCenterY = sourceRect.top + (sourceRect.height / 2) - surfaceRect.top + surface.scrollTop;
+                            const targetCenterX = targetRect.left + (targetRect.width / 2) - surfaceRect.left + surface.scrollLeft;
+                            const targetCenterY = targetRect.top + (targetRect.height / 2) - surfaceRect.top + surface.scrollTop;
+                            const sourceRight = sourceRect.right - surfaceRect.left + surface.scrollLeft;
+                            const sourceLeft = sourceRect.left - surfaceRect.left + surface.scrollLeft;
+                            const sourceTop = sourceRect.top - surfaceRect.top + surface.scrollTop;
+                            const sourceBottom = sourceRect.bottom - surfaceRect.top + surface.scrollTop;
+                            const targetLeft = targetRect.left - surfaceRect.left + surface.scrollLeft;
+                            const targetRight = targetRect.right - surfaceRect.left + surface.scrollLeft;
+                            const targetTop = targetRect.top - surfaceRect.top + surface.scrollTop;
+                            const targetBottom = targetRect.bottom - surfaceRect.top + surface.scrollTop;
+
                             if (source === targetElement) {
-                                const loopEndY = sourceRect.top + (sourceRect.height * 0.78) - surfaceRect.top + surface.scrollTop;
-                                const loopPath = `M ${startX} ${startY} C ${startX + 70} ${startY}, ${startX + 70} ${loopEndY}, ${startX} ${loopEndY}`;
+                                const loopX = sourceRight + 34;
+                                const loopEndY = sourceTop + (sourceRect.height * 0.78);
+                                const loopPath = `M ${sourceRight} ${sourceCenterY} L ${loopX} ${sourceCenterY} L ${loopX} ${loopEndY} L ${sourceRight} ${loopEndY}`;
 
                                 return { path: loopPath, type };
                             }
 
-                            const endX = targetRect.left - surfaceRect.left + surface.scrollLeft;
-                            const endY = targetRect.top + (targetRect.height / 2) - surfaceRect.top + surface.scrollTop;
-                            const control = Math.max(42, Math.abs(endX - startX) / 2);
-                            const path = `M ${startX} ${startY} C ${startX + control} ${startY}, ${endX - control} ${endY}, ${endX} ${endY}`;
+                            if (sourceStep === targetStep) {
+                                if (targetTop >= sourceBottom) {
+                                    const gapY = sourceBottom + Math.max(8, (targetTop - sourceBottom) / 2);
+                                    const path = `M ${sourceCenterX} ${sourceBottom} L ${sourceCenterX} ${gapY} L ${targetCenterX} ${gapY} L ${targetCenterX} ${targetTop}`;
+
+                                    return { path, type };
+                                }
+
+                                const sideX = Math.max(sourceRight, targetRight) + 28;
+                                const path = `M ${sourceRight} ${sourceCenterY} L ${sideX} ${sourceCenterY} L ${sideX} ${targetCenterY} L ${targetRight} ${targetCenterY}`;
+
+                                return { path, type };
+                            }
+
+                            if (targetLeft >= sourceRight) {
+                                const gapX = sourceRight + Math.max(16, (targetLeft - sourceRight) / 2);
+                                const path = `M ${sourceRight} ${sourceCenterY} L ${gapX} ${sourceCenterY} L ${gapX} ${targetCenterY} L ${targetLeft} ${targetCenterY}`;
+
+                                return { path, type };
+                            }
+
+                            const sideX = Math.max(sourceRight, targetRight) + 42;
+                            const entryX = targetLeft < sourceLeft ? targetRight : targetLeft;
+                            const path = `M ${sourceRight} ${sourceCenterY} L ${sideX} ${sourceCenterY} L ${sideX} ${targetCenterY} L ${entryX} ${targetCenterY}`;
 
                             return { path, type };
                         };
