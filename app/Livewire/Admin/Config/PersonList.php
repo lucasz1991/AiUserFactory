@@ -46,6 +46,8 @@ class PersonList extends Component
 
     public bool $showRuntimeSettingsModal = false;
 
+    public bool $showAiSuggestionPickerModal = false;
+
     public string $editingProfileId = '';
 
     public string $newProfileLabel = '';
@@ -697,6 +699,20 @@ class PersonList extends Component
         $this->normalizeSortState();
     }
 
+    public function sortBy(string $field): void
+    {
+        if (! in_array($field, ['name', 'label', 'active', 'instagram', 'mail', 'process', 'base'], true)) {
+            return;
+        }
+
+        if ($this->sortField === $field) {
+            $this->sortDirection = $this->sortDirection === 'asc' ? 'desc' : 'asc';
+        } else {
+            $this->sortField = $field;
+            $this->sortDirection = 'asc';
+        }
+    }
+
     public function resetListFilters(): void
     {
         $this->personSearch = '';
@@ -736,6 +752,16 @@ class PersonList extends Component
     public function clearProfileSelection(): void
     {
         $this->selectedProfileIds = [];
+    }
+
+    public function openAiSuggestionPicker(): void
+    {
+        $this->showAiSuggestionPickerModal = true;
+    }
+
+    public function closeAiSuggestionPicker(): void
+    {
+        $this->showAiSuggestionPickerModal = false;
     }
 
     public function bulkActivateSelected(): void
@@ -876,6 +902,7 @@ class PersonList extends Component
             $this->dispatch('showAlert', 'AI-Vorschlaege werden einzeln erstellt. Es wird die erste Auswahl geoeffnet.', 'warning');
         }
 
+        $this->showAiSuggestionPickerModal = false;
         $this->openAiSuggestion($selectedIds[0]);
     }
 

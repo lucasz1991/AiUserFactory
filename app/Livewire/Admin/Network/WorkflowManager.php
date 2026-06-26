@@ -47,8 +47,6 @@ class WorkflowManager extends Component
 
     public string $newTaskSuccessTarget = '';
 
-    public string $newTaskPartialTarget = '';
-
     public string $newTaskFailedTarget = 'fail';
 
     public string $runPersonId = '';
@@ -65,11 +63,15 @@ class WorkflowManager extends Component
 
     public bool $showAddTaskModal = false;
 
+    public bool $showTaskPanel = false;
+
     public bool $showActionLibraryModal = false;
 
     public bool $showEditStepModal = false;
 
     public bool $showEditTaskModal = false;
+
+    public string $activeTaskGroup = 'browser';
 
     public ?int $editingStepId = null;
 
@@ -82,8 +84,6 @@ class WorkflowManager extends Component
     public int $editingStepWaitAfterSeconds = 0;
 
     public string $editingStepSuccessTarget = '';
-
-    public string $editingStepPartialTarget = '';
 
     public string $editingStepFailedTarget = '';
 
@@ -113,8 +113,6 @@ class WorkflowManager extends Component
 
     public string $editingTaskSuccessTarget = '';
 
-    public string $editingTaskPartialTarget = '';
-
     public string $editingTaskFailedTarget = '';
 
     public function mount(Workflow $workflow): void
@@ -141,6 +139,20 @@ class WorkflowManager extends Component
             ->get();
         $catalogPersons = $catalog->persons();
         $actions = array_slice($catalog->actions($catalogPersons, $this->actionPersonFilter, $this->actionTypeFilter), 0, 30);
+        $taskDefinitions = collect($taskCatalog->options());
+        $taskGroups = $taskDefinitions
+            ->pluck('kind')
+            ->unique()
+            ->sortBy(function (string $kind): int {
+                $index = array_search($kind, ['browser', 'input', 'wait', 'data'], true);
+
+                return $index === false ? 99 : $index;
+            })
+            ->values();
+
+        if (! $taskGroups->contains($this->activeTaskGroup)) {
+            $this->activeTaskGroup = (string) ($taskGroups->first() ?? 'browser');
+        }
 
         return view('livewire.admin.network.workflow-manager', [
             'selectedWorkflow' => $selectedWorkflow,
@@ -149,7 +161,13 @@ class WorkflowManager extends Component
             'persons' => $persons,
             'personOptions' => $catalog->personOptions($catalogPersons),
             'actions' => $actions,
-            'taskDefinitions' => $taskCatalog->options(),
+            'taskDefinitions' => $taskDefinitions->values()->toArray(),
+            'taskGroups' => $taskGroups->values()->toArray(),
+            'taskGroupLabels' => $this->taskGroupLabels(),
+            'visibleTaskDefinitions' => $taskDefinitions
+                ->where('kind', $this->activeTaskGroup)
+                ->values()
+                ->toArray(),
             'summary' => [
                 'actions' => $steps->filter(fn (WorkflowStep $step): bool => $step->type !== WorkflowStep::TYPE_WAIT)->count(),
                 'lists' => $steps->count(),
@@ -300,7 +318,6 @@ class WorkflowManager extends Component
         $this->editingStepEnabled = (bool) $step->is_enabled;
         $this->editingStepWaitAfterSeconds = max(0, (int) $step->wait_after_seconds);
         $this->editingStepSuccessTarget = $this->routeValueFromTarget($routes['success'] ?? null);
-        $this->editingStepPartialTarget = $this->routeValueFromTarget($routes['partial'] ?? null);
         $this->editingStepFailedTarget = $this->routeValueFromTarget($routes['failed'] ?? null);
         $this->showEditStepModal = true;
     }
@@ -319,7 +336,6 @@ class WorkflowManager extends Component
             'editingStepEnabled' => ['boolean'],
             'editingStepWaitAfterSeconds' => ['required', 'integer', 'min:0', 'max:3600'],
             'editingStepSuccessTarget' => ['nullable', 'string', 'max:180'],
-            'editingStepPartialTarget' => ['nullable', 'string', 'max:180'],
             'editingStepFailedTarget' => ['nullable', 'string', 'max:180'],
         ]);
 
@@ -327,8 +343,8 @@ class WorkflowManager extends Component
         $config['description'] = trim((string) ($validated['editingStepDescription'] ?? ''));
         $routes = is_array($config['routes'] ?? null) ? $config['routes'] : [];
         $routes = $this->setRoute($routes, 'success', (string) ($validated['editingStepSuccessTarget'] ?? ''));
-        $routes = $this->setRoute($routes, 'partial', (string) ($validated['editingStepPartialTarget'] ?? ''));
         $routes = $this->setRoute($routes, 'failed', (string) ($validated['editingStepFailedTarget'] ?? ''));
+        unset($routes['partial']);
         $config['routes'] = $routes;
 
         $step->forceFill([
@@ -371,6 +387,36 @@ class WorkflowManager extends Component
         }
     }
 
+    public function prepareTaskFromCatalog(int $stepId, string $taskKey): void
+    {
+        if (! $this->stepForSelectedWorkflow($stepId) || ! app(WorkflowTaskCatalog::class)->task($taskKey)) {
+            return;
+        }
+
+        $this->newTaskListId = (string) $stepId;
+        $this->newTaskCatalogKey = $taskKey;
+        $this->newTaskElementSelector = '';
+        $this->newTaskInputSelector = '';
+        $this->newTaskInputValue = '';
+        $this->newTaskSuccessPayload = '';
+        $this->newTaskFailurePayload = '';
+        $this->newTaskSuccessTarget = '';
+        $this->newTaskFailedTarget = 'fail';
+        $this->applyTaskDefinitionToForm('newTask', $taskKey, true);
+        $this->showAddTaskModal = true;
+        $this->showTaskPanel = false;
+    }
+
+    public function updatedNewTaskCatalogKey(string $taskKey): void
+    {
+        $this->applyTaskDefinitionToForm('newTask', $taskKey, false);
+    }
+
+    public function updatedEditingTaskCatalogKey(string $taskKey): void
+    {
+        $this->applyTaskDefinitionToForm('editingTask', $taskKey, false);
+    }
+
     public function addTaskCard(): void
     {
         $workflow = $this->selectedWorkflow();
@@ -391,9 +437,14 @@ class WorkflowManager extends Component
             'newTaskSuccessPayload' => ['nullable', 'string', 'max:4000'],
             'newTaskFailurePayload' => ['nullable', 'string', 'max:4000'],
             'newTaskSuccessTarget' => ['nullable', 'string', 'max:180'],
-            'newTaskPartialTarget' => ['nullable', 'string', 'max:180'],
             'newTaskFailedTarget' => ['nullable', 'string', 'max:180'],
         ]);
+
+        $formConfig = $this->taskFormConfig($validated['newTaskCatalogKey']);
+
+        if (! $this->validateTaskFieldRequirements('newTask', $formConfig)) {
+            return;
+        }
 
         $step = $this->stepForSelectedWorkflow((int) $validated['newTaskListId']);
 
@@ -404,16 +455,18 @@ class WorkflowManager extends Component
         $config = is_array($step->config_json) ? $step->config_json : [];
         $tasks = is_array($config['tasks'] ?? null) ? $config['tasks'] : [];
         $key = $this->uniqueTaskKey($tasks, $validated['newTaskTitle']);
+        $selector = trim((string) ($validated['newTaskElementSelector'] ?? ''));
+        $value = trim((string) ($validated['newTaskInputValue'] ?? ''));
         $task = app(WorkflowTaskCatalog::class)->cardFromDefinition($validated['newTaskCatalogKey'], [
             'key' => $key,
             'title' => trim($validated['newTaskTitle']),
             'description' => trim((string) ($validated['newTaskDescription'] ?? '')),
             'kind' => $validated['newTaskKind'],
-            'selector' => trim((string) ($validated['newTaskElementSelector'] ?? '')),
-            'element_selector' => trim((string) ($validated['newTaskElementSelector'] ?? '')),
-            'input_selector' => trim((string) ($validated['newTaskInputSelector'] ?? '')),
-            'input' => trim((string) ($validated['newTaskInputValue'] ?? '')),
-            'value' => trim((string) ($validated['newTaskInputValue'] ?? '')),
+            'selector' => $selector,
+            'element_selector' => $selector,
+            'input' => $value,
+            'value' => $value,
+            'url' => ($formConfig['url'] ?? false) ? $value : null,
             'status' => 'configured',
         ]);
 
@@ -429,15 +482,10 @@ class WorkflowManager extends Component
         }
 
         $successRoute = $this->routeTargetFromValue((string) ($validated['newTaskSuccessTarget'] ?? ''));
-        $partialRoute = $this->routeTargetFromValue((string) ($validated['newTaskPartialTarget'] ?? ''));
         $failedRoute = $this->routeTargetFromValue((string) ($validated['newTaskFailedTarget'] ?? ''));
 
         if ($successRoute) {
             $task['next'] = $successRoute;
-        }
-
-        if ($partialRoute) {
-            $task['on_partial'] = $partialRoute;
         }
 
         if ($failedRoute) {
@@ -456,7 +504,6 @@ class WorkflowManager extends Component
         $this->newTaskSuccessPayload = '';
         $this->newTaskFailurePayload = '';
         $this->newTaskSuccessTarget = '';
-        $this->newTaskPartialTarget = '';
         $this->newTaskFailedTarget = 'fail';
         $this->showAddTaskModal = false;
 
@@ -486,13 +533,13 @@ class WorkflowManager extends Component
         $this->editingTaskDescription = (string) ($task['description'] ?? '');
         $this->editingTaskElementSelector = (string) ($task['element_selector'] ?? $task['selector'] ?? '');
         $this->editingTaskInputSelector = (string) ($task['input_selector'] ?? '');
-        $this->editingTaskInputValue = (string) ($task['value'] ?? $task['input'] ?? '');
+        $this->editingTaskInputValue = (string) ($task['url'] ?? $task['value'] ?? $task['input'] ?? '');
         $this->editingTaskSuccessPayload = $this->payloadToString($task['success_payload'] ?? null);
         $this->editingTaskFailurePayload = $this->payloadToString($task['failure_payload'] ?? null);
         $this->editingTaskTimeoutSeconds = max(0, (int) ($task['timeout_seconds'] ?? 0));
         $this->editingTaskSuccessTarget = $this->routeValueFromTarget($task['next'] ?? null);
-        $this->editingTaskPartialTarget = $this->routeValueFromTarget($task['on_partial'] ?? null);
         $this->editingTaskFailedTarget = $this->routeValueFromTarget($task['on_error'] ?? null);
+        $this->applyTaskDefinitionToForm('editingTask', $this->editingTaskCatalogKey, false);
         $this->showEditTaskModal = true;
     }
 
@@ -516,9 +563,14 @@ class WorkflowManager extends Component
             'editingTaskFailurePayload' => ['nullable', 'string', 'max:4000'],
             'editingTaskTimeoutSeconds' => ['required', 'integer', 'min:0', 'max:3600'],
             'editingTaskSuccessTarget' => ['nullable', 'string', 'max:180'],
-            'editingTaskPartialTarget' => ['nullable', 'string', 'max:180'],
             'editingTaskFailedTarget' => ['nullable', 'string', 'max:180'],
         ]);
+
+        $formConfig = $this->taskFormConfig($validated['editingTaskCatalogKey']);
+
+        if (! $this->validateTaskFieldRequirements('editingTask', $formConfig)) {
+            return;
+        }
 
         $config = is_array($step->config_json) ? $step->config_json : [];
         $tasks = collect(is_array($config['tasks'] ?? null) ? $config['tasks'] : []);
@@ -529,6 +581,9 @@ class WorkflowManager extends Component
                     return $task;
                 }
 
+                $formConfig = $this->taskFormConfig($validated['editingTaskCatalogKey']);
+                $selector = trim((string) ($validated['editingTaskElementSelector'] ?? ''));
+                $value = trim((string) ($validated['editingTaskInputValue'] ?? ''));
                 $task = array_replace(
                     $task,
                     app(WorkflowTaskCatalog::class)->cardFromDefinition($validated['editingTaskCatalogKey'], [
@@ -540,11 +595,12 @@ class WorkflowManager extends Component
                         'title' => trim($validated['editingTaskTitle']),
                         'description' => trim((string) ($validated['editingTaskDescription'] ?? '')),
                         'kind' => $validated['editingTaskKind'],
-                        'selector' => trim((string) ($validated['editingTaskElementSelector'] ?? '')),
-                        'element_selector' => trim((string) ($validated['editingTaskElementSelector'] ?? '')),
-                        'input_selector' => trim((string) ($validated['editingTaskInputSelector'] ?? '')),
-                        'input' => trim((string) ($validated['editingTaskInputValue'] ?? '')),
-                        'value' => trim((string) ($validated['editingTaskInputValue'] ?? '')),
+                        'selector' => $selector,
+                        'element_selector' => $selector,
+                        'input_selector' => '',
+                        'input' => $value,
+                        'value' => $value,
+                        'url' => ($formConfig['url'] ?? false) ? $value : null,
                         'timeout_seconds' => (int) $validated['editingTaskTimeoutSeconds'],
                     ],
                 );
@@ -564,7 +620,6 @@ class WorkflowManager extends Component
 
                 foreach ([
                     'next' => (string) ($validated['editingTaskSuccessTarget'] ?? ''),
-                    'on_partial' => (string) ($validated['editingTaskPartialTarget'] ?? ''),
                     'on_error' => (string) ($validated['editingTaskFailedTarget'] ?? ''),
                 ] as $key => $value) {
                     $route = $this->routeTargetFromValue($value);
@@ -575,6 +630,8 @@ class WorkflowManager extends Component
                         unset($task[$key]);
                     }
                 }
+
+                unset($task['on_partial']);
 
                 return $task;
             })
@@ -786,13 +843,11 @@ class WorkflowManager extends Component
                         'kind' => 'data',
                         'status' => 'configured',
                         'next' => ['step' => 'next', 'label' => 'Naechste Liste'],
-                        'on_partial' => ['step' => 'end', 'label' => 'Manuelle Pruefung'],
                         'on_error' => ['step' => 'fail', 'label' => 'Fehlerroute'],
                     ]),
                 ],
                 'routes' => [
                     'success' => ['type' => 'step', 'step' => 'next', 'label' => 'Naechste Liste'],
-                    'partial' => ['type' => 'end', 'label' => 'Manuelle Pruefung'],
                     'failed' => ['type' => 'fail', 'label' => 'Fehlerroute'],
                 ],
             ],
@@ -816,11 +871,105 @@ class WorkflowManager extends Component
             ],
             'routes' => [
                 'success' => ['type' => 'step', 'step' => 'next', 'label' => 'Naechste Liste'],
-                'partial' => ['type' => 'end', 'label' => 'Manuelle Pruefung'],
                 'failed' => ['type' => 'fail', 'label' => 'Fehlerroute'],
                 'timeout' => ['type' => 'fail', 'label' => 'Timeout'],
             ],
         ];
+    }
+
+    protected function applyTaskDefinitionToForm(string $prefix, string $taskKey, bool $replaceTitle): void
+    {
+        $definition = app(WorkflowTaskCatalog::class)->task($taskKey);
+
+        if (! $definition) {
+            return;
+        }
+
+        $titleProperty = $prefix.'Title';
+        $kindProperty = $prefix.'Kind';
+        $descriptionProperty = $prefix.'Description';
+        $selectorProperty = $prefix.'ElementSelector';
+        $inputSelectorProperty = $prefix.'InputSelector';
+        $valueProperty = $prefix.'InputValue';
+        $successPayloadProperty = $prefix.'SuccessPayload';
+        $failurePayloadProperty = $prefix.'FailurePayload';
+        $formConfig = $this->taskFormConfig($taskKey);
+
+        if ($replaceTitle || trim((string) $this->{$titleProperty}) === '') {
+            $this->{$titleProperty} = (string) ($definition['label'] ?? 'Task');
+        }
+
+        $this->{$kindProperty} = (string) ($definition['kind'] ?? 'data');
+
+        if ($replaceTitle || trim((string) $this->{$descriptionProperty}) === '') {
+            $this->{$descriptionProperty} = (string) ($definition['description'] ?? '');
+        }
+
+        if (! ($formConfig['selector'] ?? false)) {
+            $this->{$selectorProperty} = '';
+            $this->{$inputSelectorProperty} = '';
+        }
+
+        if (! ($formConfig['value'] ?? false) && ! ($formConfig['url'] ?? false)) {
+            $this->{$valueProperty} = '';
+        }
+
+        if (! ($formConfig['success_payload'] ?? false)) {
+            $this->{$successPayloadProperty} = '';
+        }
+
+        if (! ($formConfig['failure_payload'] ?? false)) {
+            $this->{$failurePayloadProperty} = '';
+        }
+    }
+
+    protected function taskFormConfig(string $taskKey): array
+    {
+        $definition = app(WorkflowTaskCatalog::class)->task($taskKey) ?? [];
+        $form = is_array($definition['form'] ?? null) ? $definition['form'] : [];
+
+        return array_replace([
+            'selector' => false,
+            'selector_label' => 'Selector',
+            'selector_placeholder' => 'button[type=submit], input[name=email], text=Weiter',
+            'value' => false,
+            'value_label' => 'Wert',
+            'value_placeholder' => 'person.email oder fester Wert',
+            'url' => false,
+            'url_label' => 'URL',
+            'url_placeholder' => 'https://example.test',
+            'success_payload' => false,
+            'failure_payload' => false,
+        ], $form);
+    }
+
+    protected function taskGroupLabels(): array
+    {
+        return [
+            'browser' => 'Browser',
+            'input' => 'Eingaben',
+            'wait' => 'Warten & Status',
+            'data' => 'Daten',
+        ];
+    }
+
+    protected function validateTaskFieldRequirements(string $prefix, array $formConfig): bool
+    {
+        $valid = true;
+        $selectorProperty = $prefix.'ElementSelector';
+        $valueProperty = $prefix.'InputValue';
+
+        if (($formConfig['selector'] ?? false) && trim((string) $this->{$selectorProperty}) === '') {
+            $this->addError($selectorProperty, 'Bitte einen Selector angeben.');
+            $valid = false;
+        }
+
+        if ((($formConfig['value'] ?? false) || ($formConfig['url'] ?? false)) && trim((string) $this->{$valueProperty}) === '') {
+            $this->addError($valueProperty, ($formConfig['url'] ?? false) ? 'Bitte eine URL angeben.' : 'Bitte einen Wert oder eine Datenquelle angeben.');
+            $valid = false;
+        }
+
+        return $valid;
     }
 
     protected function routeTargetFromValue(string $value): ?array

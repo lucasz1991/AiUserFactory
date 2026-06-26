@@ -24,8 +24,8 @@
                     <button type="button" wire:click="$set('showAddStepModal', true)" class="rounded-md border border-blue-200 bg-white px-3 py-2 text-sm font-semibold text-blue-700 shadow-sm hover:bg-blue-50">
                         Liste
                     </button>
-                    <button type="button" wire:click="$set('showAddTaskModal', true)" class="rounded-md border border-emerald-200 bg-white px-3 py-2 text-sm font-semibold text-emerald-700 shadow-sm hover:bg-emerald-50">
-                        Karte
+                    <button type="button" wire:click="$set('showTaskPanel', true)" class="rounded-md border border-emerald-200 bg-white px-3 py-2 text-sm font-semibold text-emerald-700 shadow-sm hover:bg-emerald-50">
+                        Tasks
                     </button>
                     <button type="button" wire:click="$set('showActionLibraryModal', true)" class="rounded-md border border-amber-200 bg-white px-3 py-2 text-sm font-semibold text-amber-700 shadow-sm hover:bg-amber-50">
                         Aktionen
@@ -66,28 +66,80 @@
         @endif
 
         <x-admin.panel title="Board">
-            <div class="rounded-md border border-slate-200 bg-slate-100 p-4">
-                <div x-data x-sort="$wire.reorderStep($item, $position)" class="flex min-h-[560px] gap-4 overflow-x-auto pb-2">
+            <div
+                x-data="{ focusedTask: '' }"
+                class="relative overflow-hidden rounded-md border border-[#075985] bg-[#0079bf] p-4 shadow-sm"
+            >
+                <div class="mb-4 flex items-center justify-between gap-3">
+                    <div class="min-w-0">
+                        <p class="text-sm font-semibold text-white">{{ $selectedWorkflow->name }}</p>
+                        <p class="text-xs text-blue-100">Tasks aus dem rechten Panel auf eine Liste ziehen.</p>
+                    </div>
+                    <button type="button" wire:click="$set('showTaskPanel', true)" class="rounded-md bg-white/95 px-3 py-2 text-sm font-semibold text-slate-800 shadow-sm hover:bg-white">
+                        Task-Bibliothek
+                    </button>
+                </div>
+
+                <div x-sort="$wire.reorderStep($item, $position)" class="flex min-h-[560px] gap-4 overflow-x-auto pb-2">
                     @forelse($steps as $step)
                         <x-workflows.step-card :step="$step" x-sort:item="{{ $step->id }}" wire:key="workflow-step-{{ $step->id }}">
                             <x-slot name="actions">
-                                <button type="button" wire:click="openEditStep({{ $step->id }})" class="rounded-md border border-blue-200 bg-white px-3 py-1.5 text-xs font-semibold text-blue-700 shadow-sm hover:bg-blue-50">
+                                <button type="button" wire:click="openEditStep({{ $step->id }})" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-100">
                                     Bearbeiten
                                 </button>
-                                <button type="button" wire:click="toggleStep({{ $step->id }})" class="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
+                                <button type="button" wire:click="toggleStep({{ $step->id }})" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-100">
                                     {{ $step->is_enabled ? 'Pausieren' : 'Aktivieren' }}
                                 </button>
-                                <button type="button" wire:click="removeStep({{ $step->id }})" wire:confirm="Liste samt Tasks wirklich entfernen?" class="rounded-md border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 shadow-sm hover:bg-red-50">
+                                <button type="button" wire:click="removeStep({{ $step->id }})" wire:confirm="Liste samt Tasks wirklich entfernen?" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-red-700 hover:bg-red-50">
                                     Entfernen
                                 </button>
                             </x-slot>
                         </x-workflows.step-card>
                     @empty
-                        <div class="rounded-md border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500">
+                        <div class="rounded-md border border-dashed border-white/40 bg-white/90 p-6 text-center text-sm text-slate-600">
                             Keine Listen. Nutze oben den Button "Liste".
                         </div>
                     @endforelse
                 </div>
+
+                @if($showTaskPanel)
+                    <div class="fixed inset-y-0 right-0 z-40 flex w-full max-w-sm flex-col border-l border-slate-200 bg-white shadow-2xl">
+                        <div class="flex items-start justify-between gap-3 border-b border-slate-200 p-4">
+                            <div>
+                                <h2 class="text-base font-semibold text-slate-900">Task-Bibliothek</h2>
+                                <p class="mt-1 text-xs text-slate-500">Task auf eine Liste ziehen, danach oeffnet sich das Formular.</p>
+                            </div>
+                            <button type="button" wire:click="$set('showTaskPanel', false)" class="flex h-8 w-8 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-900">
+                                x
+                            </button>
+                        </div>
+                        <div class="border-b border-slate-200 px-4">
+                            <nav class="-mb-px flex gap-4 overflow-x-auto" aria-label="Task Gruppen">
+                                @foreach($taskGroups as $taskGroup)
+                                    <button type="button" wire:click="$set('activeTaskGroup', @js($taskGroup))" class="whitespace-nowrap border-b-2 py-3 text-sm font-semibold {{ $activeTaskGroup === $taskGroup ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700' }}">
+                                        {{ $taskGroupLabels[$taskGroup] ?? $taskGroup }}
+                                        <span class="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{{ collect($taskDefinitions)->where('kind', $taskGroup)->count() }}</span>
+                                    </button>
+                                @endforeach
+                            </nav>
+                        </div>
+                        <div class="flex-1 space-y-3 overflow-y-auto p-4">
+                            @foreach($visibleTaskDefinitions as $taskDefinition)
+                                <div
+                                    draggable="true"
+                                    x-on:dragstart="$event.dataTransfer.setData('text/plain', @js($taskDefinition['key'])); $event.dataTransfer.effectAllowed = 'copy'"
+                                    class="cursor-grab rounded-md border border-slate-200 bg-white p-3 shadow-sm transition hover:border-blue-300 hover:shadow-md active:cursor-grabbing"
+                                >
+                                    <div class="flex items-start justify-between gap-3">
+                                        <p class="text-sm font-semibold text-slate-900">{{ $taskDefinition['label'] }}</p>
+                                        <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">{{ $taskDefinition['kind'] }}</span>
+                                    </div>
+                                    <p class="mt-2 line-clamp-2 text-xs leading-5 text-slate-500">{{ $taskDefinition['description'] }}</p>
+                                </div>
+                            @endforeach
+                        </div>
+                    </div>
+                @endif
             </div>
         </x-admin.panel>
 
@@ -194,10 +246,9 @@
                             <input id="workflow-edit-step-wait" type="number" min="0" max="3600" wire:model.defer="editingStepWaitAfterSeconds" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
                         </div>
                     </div>
-                    <div class="grid gap-4 md:grid-cols-3">
+                    <div class="grid gap-4 md:grid-cols-2">
                         @foreach([
                             'editingStepSuccessTarget' => 'Bei Erfolg',
-                            'editingStepPartialTarget' => 'Bei Teilstatus',
                             'editingStepFailedTarget' => 'Bei Fehler',
                         ] as $model => $label)
                             <div>

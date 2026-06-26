@@ -21,13 +21,16 @@
             'partial' => 'bg-sky-50 text-sky-700 ring-sky-200',
             default => 'bg-slate-100 text-slate-500 ring-slate-200',
         };
+        $sortIcon = fn ($field) => $sortField === $field
+            ? ($sortDirection === 'asc' ? 'fa-chevron-up' : 'fa-chevron-down')
+            : 'fa-chevron-right';
     @endphp
 
     <div class="rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
         <div class="flex flex-wrap items-center justify-between gap-3">
             <div class="min-w-0">
                 <h2 class="text-base font-semibold text-slate-900">Personen</h2>
-                <p class="text-xs text-slate-500">{{ $visiblePersonsCount }} sichtbar · {{ $selectedCount }} ausgewaehlt</p>
+                <p class="text-xs text-slate-500">{{ $visiblePersonsCount }} sichtbar - {{ $selectedCount }} ausgewaehlt</p>
             </div>
             <div class="grid flex-1 grid-cols-2 gap-2 sm:grid-cols-4 lg:max-w-5xl lg:grid-cols-7">
                 <div class="rounded-md bg-slate-50 px-2.5 py-1.5 ring-1 ring-slate-200"><p class="text-[10px] font-semibold uppercase text-slate-400">Gesamt</p><p class="text-sm font-semibold text-slate-900">{{ $totalPersonsCount }}</p></div>
@@ -39,17 +42,17 @@
                 <div class="rounded-md bg-slate-50 px-2.5 py-1.5 ring-1 ring-slate-200"><p class="text-[10px] font-semibold uppercase text-slate-400">Base</p><p class="text-sm font-semibold text-slate-900">{{ $baseSyncedPersonsCount }}/{{ $totalPersonsCount }}</p></div>
             </div>
             <div class="flex shrink-0 items-center gap-2">
-                <button type="button" title="AI-Vorschlaege fuer Auswahl" wire:click="openAiSuggestionForSelected" class="inline-flex h-9 w-9 items-center justify-center rounded-md border border-purple-200 bg-white text-purple-700 shadow-sm hover:bg-purple-50">
+                <button type="button" title="AI-Vorschlaege" wire:click="openAiSuggestionPicker" class="inline-flex h-9 w-9 items-center justify-center rounded-md border border-purple-200 bg-white text-purple-700 shadow-sm hover:bg-purple-50">
                     <span class="sr-only">AI-Vorschlaege</span>
-                    <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor" aria-hidden="true"><path d="M12 3 9.8 8.8 4 11l5.8 2.2L12 19l2.2-5.8L20 11l-5.8-2.2z"></path></svg>
+                    <i class="fas fa-magic text-sm" aria-hidden="true"></i>
                 </button>
                 <button type="button" title="Timeouts" wire:click="openRuntimeSettingsModal" class="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-700 shadow-sm hover:bg-slate-50">
                     <span class="sr-only">Timeouts</span>
-                    <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor" aria-hidden="true"><path d="M12 6v6l4 2"></path><circle cx="12" cy="12" r="9"></circle></svg>
+                    <i class="far fa-clock text-sm" aria-hidden="true"></i>
                 </button>
                 <button type="button" title="Person hinzufuegen" wire:click="openCreateProfileModal" class="inline-flex h-9 w-9 items-center justify-center rounded-md bg-slate-900 text-white shadow-sm hover:bg-slate-800">
                     <span class="sr-only">Person hinzufuegen</span>
-                    <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+                    <i class="fas fa-plus text-sm" aria-hidden="true"></i>
                 </button>
             </div>
         </div>
@@ -64,58 +67,80 @@
     <div class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
         <div class="border-b border-slate-200 px-4 py-3">
             <div class="grid gap-3 xl:grid-cols-[minmax(260px,1fr)_auto]">
-                <div class="grid gap-2 md:grid-cols-[minmax(220px,1fr)_160px_180px_160px_120px]">
+                <div class="grid gap-2 md:grid-cols-[minmax(220px,1fr)_auto]">
                     <input type="search" wire:model.live.debounce.300ms="personSearch" placeholder="Suchen..." class="h-9 rounded-md border-slate-300 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
-                    <select wire:model.live="statusFilter" class="h-9 rounded-md border-slate-300 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
-                        <option value="all">Alle Status</option>
-                        <option value="active">Aktiv</option>
-                        <option value="inactive">Inaktiv</option>
-                        <option value="blocked">Gesperrt</option>
-                        <option value="primary">Standard</option>
-                        <option value="process">Prozess laeuft</option>
-                    </select>
-                    <select wire:model.live="accountFilter" class="h-9 rounded-md border-slate-300 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
-                        <option value="all">Alle Accounts</option>
-                        <option value="instagram_ready">Instagram bereit</option>
-                        <option value="instagram_missing">Instagram fehlt</option>
-                        <option value="mail_ready">Mail bereit</option>
-                        <option value="mail_missing">Mail fehlt</option>
-                        <option value="base_synced">Base synchron</option>
-                        <option value="base_pending">Base offen</option>
-                        <option value="base_failed">Base Fehler</option>
-                    </select>
-                    <select wire:model.live="sortField" class="h-9 rounded-md border-slate-300 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
-                        <option value="name">Name</option>
-                        <option value="label">Profil</option>
-                        <option value="active">Aktivitaet</option>
-                        <option value="instagram">Instagram</option>
-                        <option value="mail">Mail</option>
-                        <option value="process">Prozess</option>
-                        <option value="base">Base</option>
-                    </select>
-                    <select wire:model.live="sortDirection" class="h-9 rounded-md border-slate-300 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
-                        <option value="asc">Aufsteigend</option>
-                        <option value="desc">Absteigend</option>
-                    </select>
+                    <div class="relative" x-data="{ open: false }" x-on:click.outside="open = false">
+                        <button type="button" x-on:click="open = !open" class="inline-flex h-9 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
+                            <i class="fas fa-filter text-xs" aria-hidden="true"></i>
+                            Filter
+                            <i class="fas fa-chevron-down text-[10px]" aria-hidden="true"></i>
+                        </button>
+                        <div x-cloak x-show="open" x-transition class="absolute right-0 z-30 mt-2 w-72 rounded-md border border-slate-200 bg-white p-3 shadow-lg">
+                            <div class="space-y-3">
+                                <div>
+                                    <label class="block text-xs font-semibold uppercase tracking-wide text-slate-500">Status</label>
+                                    <select wire:model.live="statusFilter" class="mt-1 h-9 w-full rounded-md border-slate-300 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                                        <option value="all">Alle Status</option>
+                                        <option value="active">Aktiv</option>
+                                        <option value="inactive">Inaktiv</option>
+                                        <option value="blocked">Gesperrt</option>
+                                        <option value="primary">Standard</option>
+                                        <option value="process">Prozess laeuft</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-semibold uppercase tracking-wide text-slate-500">Accounts</label>
+                                    <select wire:model.live="accountFilter" class="mt-1 h-9 w-full rounded-md border-slate-300 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                                        <option value="all">Alle Accounts</option>
+                                        <option value="instagram_ready">Instagram bereit</option>
+                                        <option value="instagram_missing">Instagram fehlt</option>
+                                        <option value="mail_ready">Mail bereit</option>
+                                        <option value="mail_missing">Mail fehlt</option>
+                                        <option value="base_synced">Base synchron</option>
+                                        <option value="base_pending">Base offen</option>
+                                        <option value="base_failed">Base Fehler</option>
+                                    </select>
+                                </div>
+                                <button type="button" wire:click="resetListFilters" class="w-full rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100">
+                                    Filter zuruecksetzen
+                                </button>
+                            </div>
+                        </div>
+                    </div>
                 </div>
                 <div class="flex flex-wrap items-center justify-end gap-2">
                     <button type="button" wire:click="{{ $allVisibleSelected ? 'clearProfileSelection' : 'selectAllVisibleProfiles' }}" class="h-9 rounded-md border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
                         {{ $allVisibleSelected ? 'Auswahl leeren' : 'Alle sichtbar' }}
                     </button>
-                    <button type="button" wire:click="bulkActivateSelected" @disabled($selectedCount === 0) class="h-9 rounded-md border border-emerald-200 bg-white px-3 text-xs font-semibold text-emerald-700 shadow-sm hover:bg-emerald-50 disabled:opacity-40">Aktivieren</button>
-                    <button type="button" wire:click="bulkDeactivateSelected" @disabled($selectedCount === 0) class="h-9 rounded-md border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-40">Deaktivieren</button>
-                    <button type="button" wire:click="bulkSyncSelectedToBase" @disabled($selectedCount === 0) class="h-9 rounded-md border border-blue-200 bg-white px-3 text-xs font-semibold text-blue-700 shadow-sm hover:bg-blue-50 disabled:opacity-40">Base</button>
-                    <button type="button" wire:click="bulkDeleteSelected" wire:confirm="Ausgewaehlte Personen wirklich loeschen?" @disabled($selectedCount === 0) class="h-9 rounded-md border border-red-200 bg-white px-3 text-xs font-semibold text-red-700 shadow-sm hover:bg-red-50 disabled:opacity-40">Loeschen</button>
-                    <button type="button" wire:click="resetListFilters" class="h-9 rounded-md border border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-600 hover:bg-slate-100">Reset</button>
+                    <div class="relative" x-data="{ open: false }" x-on:click.outside="open = false">
+                        <button type="button" x-on:click="open = !open" @disabled($selectedCount === 0) class="inline-flex h-9 items-center gap-2 rounded-md bg-slate-900 px-3 text-xs font-semibold text-white shadow-sm hover:bg-slate-800 disabled:opacity-40">
+                            <i class="fas fa-layer-group text-xs" aria-hidden="true"></i>
+                            Aktionen
+                            <span class="rounded bg-white/15 px-1.5 py-0.5">{{ $selectedCount }}</span>
+                            <i class="fas fa-chevron-down text-[10px]" aria-hidden="true"></i>
+                        </button>
+                        <div x-cloak x-show="open" x-transition class="absolute right-0 z-30 mt-2 w-56 overflow-hidden rounded-md border border-slate-200 bg-white py-1 text-sm shadow-lg">
+                            <button type="button" wire:click="bulkActivateSelected" class="block w-full px-3 py-2 text-left text-emerald-700 hover:bg-emerald-50"><i class="far fa-check-circle mr-2" aria-hidden="true"></i>Aktivieren</button>
+                            <button type="button" wire:click="bulkDeactivateSelected" class="block w-full px-3 py-2 text-left text-slate-700 hover:bg-slate-50"><i class="far fa-pause-circle mr-2" aria-hidden="true"></i>Deaktivieren</button>
+                            <button type="button" wire:click="bulkSyncSelectedToBase" class="block w-full px-3 py-2 text-left text-blue-700 hover:bg-blue-50"><i class="fas fa-database mr-2" aria-hidden="true"></i>An Base senden</button>
+                            <button type="button" wire:click="bulkDeleteSelected" wire:confirm="Ausgewaehlte Personen wirklich loeschen?" class="block w-full px-3 py-2 text-left text-red-700 hover:bg-red-50"><i class="far fa-trash-alt mr-2" aria-hidden="true"></i>Loeschen</button>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
 
         <div class="hidden grid-cols-12 gap-4 border-b border-slate-200 bg-slate-50 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500 lg:grid">
             <div class="col-span-1">Auswahl</div>
-            <div class="col-span-4">Person</div>
-            <div class="col-span-4">Status</div>
-            <div class="col-span-2">Meta</div>
+            <button type="button" wire:click="sortBy('name')" class="col-span-4 inline-flex items-center gap-1 text-left font-semibold uppercase tracking-wide hover:text-slate-800">
+                Person <i class="fas {{ $sortIcon('name') }} text-[10px]" aria-hidden="true"></i>
+            </button>
+            <button type="button" wire:click="sortBy('instagram')" class="col-span-3 inline-flex items-center gap-1 text-left font-semibold uppercase tracking-wide hover:text-slate-800">
+                Accounts <i class="fas {{ $sortIcon('instagram') }} text-[10px]" aria-hidden="true"></i>
+            </button>
+            <button type="button" wire:click="sortBy('active')" class="col-span-3 inline-flex items-center gap-1 text-left font-semibold uppercase tracking-wide hover:text-slate-800">
+                Status <i class="fas {{ $sortIcon('active') }} text-[10px]" aria-hidden="true"></i>
+            </button>
             <div class="col-span-1 text-right">Aktionen</div>
         </div>
 
@@ -206,67 +231,50 @@
                         </div>
                     </div>
 
-                    <div class="flex min-w-0 flex-wrap items-center gap-2 lg:col-span-4">
-                            <span title="{{ data_get($instagramStatus, 'label') }} - {{ data_get($instagramStatus, 'detail') }}{{ data_get($instagramStatus, 'synced_at_label') ? ' - Cookies: '.data_get($instagramStatus, 'synced_at_label') : '' }}" class="inline-flex h-9 w-9 items-center justify-center rounded-md ring-1 {{ $statusIconClass(data_get($instagramStatus, 'level')) }}">
-                                <span class="sr-only">{{ data_get($instagramStatus, 'label') }}</span>
-                                <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.7" stroke="currentColor" aria-hidden="true">
-                                    <rect width="16" height="16" x="4" y="4" rx="4"></rect>
-                                    <circle cx="12" cy="12" r="3"></circle>
-                                    <path d="M16.5 7.5h.01"></path>
-                                </svg>
-                            </span>
+                    <div class="flex min-w-0 flex-wrap items-center gap-2 lg:col-span-3">
+                        <span title="{{ data_get($instagramStatus, 'label') }} - {{ data_get($instagramStatus, 'detail') }}{{ data_get($instagramStatus, 'synced_at_label') ? ' - Cookies: '.data_get($instagramStatus, 'synced_at_label') : '' }}" class="inline-flex h-9 w-9 items-center justify-center rounded-md ring-1 {{ $statusIconClass(data_get($instagramStatus, 'level')) }}">
+                            <span class="sr-only">{{ data_get($instagramStatus, 'label') }}</span>
+                            <i class="fab fa-instagram text-sm" aria-hidden="true"></i>
+                        </span>
 
-                            <span title="{{ data_get($mailStatus, 'label') }} - {{ data_get($mailStatus, 'detail') }}{{ data_get($mailStatus, 'has_webmail_session') ? ' - Webmail-Session vorhanden' : '' }}" class="inline-flex h-9 w-9 items-center justify-center rounded-md ring-1 {{ $statusIconClass(data_get($mailStatus, 'level')) }}">
-                                <span class="sr-only">{{ data_get($mailStatus, 'label') }}</span>
-                                <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.7" stroke="currentColor" aria-hidden="true">
-                                    <path d="M4 6h16v12H4z"></path>
-                                    <path d="m4 7 8 6 8-6"></path>
-                                </svg>
-                            </span>
+                        <span title="{{ data_get($mailStatus, 'label') }} - {{ data_get($mailStatus, 'detail') }}{{ data_get($mailStatus, 'has_webmail_session') ? ' - Webmail-Session vorhanden' : '' }}" class="inline-flex h-9 w-9 items-center justify-center rounded-md ring-1 {{ $statusIconClass(data_get($mailStatus, 'level')) }}">
+                            <span class="sr-only">{{ data_get($mailStatus, 'label') }}</span>
+                            <i class="far fa-envelope text-sm" aria-hidden="true"></i>
+                        </span>
 
-                            <span title="{{ data_get($processStatus, 'label') }} - {{ data_get($processStatus, 'detail') }}" class="inline-flex h-9 w-9 items-center justify-center rounded-md ring-1 {{ $statusIconClass(data_get($processStatus, 'level')) }}">
-                                <span class="sr-only">{{ data_get($processStatus, 'label') }}</span>
-                                <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.7" stroke="currentColor" aria-hidden="true">
-                                    <path d="M8 5v14l11-7z"></path>
-                                    <path d="M4 5v14"></path>
-                                </svg>
-                            </span>
+                        <span title="{{ data_get($processStatus, 'label') }} - {{ data_get($processStatus, 'detail') }}" class="inline-flex h-9 w-9 items-center justify-center rounded-md ring-1 {{ $statusIconClass(data_get($processStatus, 'level')) }}">
+                            <span class="sr-only">{{ data_get($processStatus, 'label') }}</span>
+                            <i class="fas fa-play text-xs" aria-hidden="true"></i>
+                        </span>
 
-                            <span title="{{ data_get($baseStatus, 'label') }} - {{ data_get($baseStatus, 'detail') }}" class="inline-flex h-9 w-9 items-center justify-center rounded-md ring-1 {{ $statusIconClass(data_get($baseStatus, 'level')) }}">
-                                <span class="sr-only">{{ data_get($baseStatus, 'label') }}</span>
-                                <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.7" stroke="currentColor" aria-hidden="true">
-                                    <ellipse cx="12" cy="5" rx="7" ry="3"></ellipse>
-                                    <path d="M5 5v6c0 1.7 3.1 3 7 3s7-1.3 7-3V5"></path>
-                                    <path d="M5 11v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"></path>
-                                </svg>
-                            </span>
+                        <span title="{{ data_get($baseStatus, 'label') }} - {{ data_get($baseStatus, 'detail') }}" class="inline-flex h-9 w-9 items-center justify-center rounded-md ring-1 {{ $statusIconClass(data_get($baseStatus, 'level')) }}">
+                            <span class="sr-only">{{ data_get($baseStatus, 'label') }}</span>
+                            <i class="fas fa-database text-xs" aria-hidden="true"></i>
+                        </span>
 
                         <span title="{{ $profile['is_active'] ? 'Analyse aktiv' : 'Analyse inaktiv' }}" class="inline-flex h-9 w-9 items-center justify-center rounded-md ring-1 {{ $profile['is_active'] ? 'bg-emerald-50 text-emerald-700 ring-emerald-200' : 'bg-slate-100 text-slate-500 ring-slate-200' }}">
                             <span class="sr-only">{{ $profile['is_active'] ? 'Aktiv' : 'Inaktiv' }}</span>
-                            <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.7" stroke="currentColor" aria-hidden="true">
-                                <path d="M9 12.75 11.25 15 15 9.75"></path><circle cx="12" cy="12" r="9"></circle>
-                            </svg>
+                            <i class="far fa-check-circle text-sm" aria-hidden="true"></i>
                         </span>
 
                         @if($profile['is_scrape_blocked'])
                             <span title="Gesperrt bis {{ $profile['scrape_blocked_until_label'] ?? 'unbekannt' }}" class="inline-flex h-9 w-9 items-center justify-center rounded-md bg-amber-100 text-amber-800 ring-1 ring-amber-300">
                                 <span class="sr-only">Gesperrt</span>
-                                <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.7" stroke="currentColor" aria-hidden="true"><path d="M16 10V7a4 4 0 0 0-8 0v3"></path><rect x="5" y="10" width="14" height="10" rx="2"></rect></svg>
+                                <i class="fas fa-lock text-xs" aria-hidden="true"></i>
                             </span>
                         @endif
                     </div>
 
-                    <div class="min-w-0 text-xs text-slate-500 lg:col-span-2">
-                        <p class="truncate">{{ $profile['login_username'] !== '' ? '@'.$profile['login_username'] : 'Kein Instagram' }}</p>
-                        <p class="mt-1 truncate">{{ $profile['person_email'] !== '' ? $profile['person_email'] : 'Keine Mail' }}</p>
-                        <p class="mt-1 truncate">Bot: {{ $botLabel }} · Base: {{ $baseLabel }}</p>
+                    <div class="flex min-w-0 flex-wrap items-center gap-2 text-xs text-slate-500 lg:col-span-3">
+                        <span title="Bot: {{ $botLabel }}" class="rounded-full bg-slate-100 px-2 py-1 font-semibold text-slate-600 ring-1 ring-slate-200">Bot {{ $botLabel }}</span>
+                        <span title="Base: {{ $baseLabel }}" class="rounded-full {{ $baseClass }} px-2 py-1 font-semibold">Base {{ $baseLabel }}</span>
                     </div>
 
                     <div class="flex items-start justify-end lg:col-span-1" data-row-control>
                         <div class="relative" x-data="{ open: false }" x-on:click.outside="open = false">
                             <button type="button" title="Aktionen" x-on:click.stop="open = !open" class="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 shadow-sm hover:bg-slate-50">
                                 <span class="sr-only">Aktionen</span>
-                                <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor" aria-hidden="true"><path d="M12 6.75h.01M12 12h.01M12 17.25h.01"></path></svg>
+                                <i class="fas fa-ellipsis-v text-sm" aria-hidden="true"></i>
                             </button>
                             <div x-cloak x-show="open" x-transition class="absolute right-0 z-20 mt-2 w-48 overflow-hidden rounded-md border border-slate-200 bg-white py-1 text-sm shadow-lg">
                                 <a href="{{ route('persons.show', ['profileId' => $profile['id']]) }}" class="block px-3 py-2 text-slate-700 hover:bg-slate-50">Profil oeffnen</a>
@@ -629,6 +637,34 @@
                 </button>
                 <button type="button" wire:click="saveRuntimeSettings" class="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
                     Einstellungen speichern
+                </button>
+            </div>
+        </x-slot>
+    </x-dialog-modal>
+
+    <x-dialog-modal wire:model="showAiSuggestionPickerModal" maxWidth="md">
+        <x-slot name="title">
+            AI-Vorschlag
+        </x-slot>
+
+        <x-slot name="content">
+            <div class="space-y-4 text-sm text-slate-600">
+                <p>
+                    Oeffnet den AI-Assistenten fuer die aktuelle Auswahl. Bei mehreren ausgewaehlten Personen wird die erste Person geoeffnet.
+                </p>
+                <div class="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-500 ring-1 ring-slate-200">
+                    {{ $selectedCount }} {{ $selectedCount === 1 ? 'Person ausgewaehlt' : 'Personen ausgewaehlt' }}
+                </div>
+            </div>
+        </x-slot>
+
+        <x-slot name="footer">
+            <div class="flex justify-end gap-3">
+                <button type="button" wire:click="closeAiSuggestionPicker" class="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                    Abbrechen
+                </button>
+                <button type="button" wire:click="openAiSuggestionForSelected" class="rounded-md bg-purple-600 px-4 py-2 text-sm font-semibold text-white hover:bg-purple-700">
+                    <i class="fas fa-magic mr-2" aria-hidden="true"></i>Oeffnen
                 </button>
             </div>
         </x-slot>

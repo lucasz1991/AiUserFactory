@@ -19,6 +19,7 @@
     $elementSelector = trim((string) ($task['element_selector'] ?? $task['selector'] ?? ''));
     $inputSelector = trim((string) ($task['input_selector'] ?? ''));
     $inputValue = trim((string) ($task['value'] ?? $task['input'] ?? ''));
+    $url = trim((string) ($task['url'] ?? ''));
     $compactPayload = static function (mixed $payload): string {
         if ($payload === null || $payload === '') {
             return '';
@@ -36,20 +37,35 @@
     $failurePayload = $compactPayload($task['failure_payload'] ?? null);
 @endphp
 
-<div {{ $attributes->merge(['class' => 'rounded-md border border-slate-200 bg-white p-3 shadow-sm']) }}>
+<div {{ $attributes->merge(['class' => 'rounded-md border border-slate-200 bg-white p-3 shadow-sm transition hover:border-slate-300 hover:shadow-md']) }}>
     <div class="flex items-start justify-between gap-2">
-        <p class="min-w-0 text-sm font-semibold text-slate-900">{{ $task['title'] ?? 'Task' }}</p>
-        <span class="shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 {{ $kindClasses[$kind] ?? $kindClasses['browser'] }}">
-            {{ $kindLabels[$kind] ?? $kind }}
-        </span>
+        <div class="min-w-0">
+            <p class="min-w-0 text-sm font-semibold text-slate-900">{{ $task['title'] ?? 'Task' }}</p>
+            <span class="mt-1 inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 {{ $kindClasses[$kind] ?? $kindClasses['browser'] }}">
+                {{ $kindLabels[$kind] ?? $kind }}
+            </span>
+        </div>
+        @isset($actions)
+            <div class="relative shrink-0" x-data="{ open: false }">
+                <button type="button" x-on:click.stop="open = ! open" class="flex h-7 w-7 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-900">
+                    ...
+                </button>
+                <div x-cloak x-show="open" x-transition x-on:click.stop x-on:click.outside="open = false" class="absolute right-0 z-30 mt-1 w-36 rounded-md border border-slate-200 bg-white p-1 shadow-lg">
+                    {{ $actions }}
+                </div>
+            </div>
+        @endisset
     </div>
     @if(($task['description'] ?? '') !== '')
         <p class="mt-2 text-xs leading-5 text-slate-500">{{ $task['description'] }}</p>
     @endif
-    @if($elementSelector !== '' || $inputSelector !== '' || $inputValue !== '')
+    @if($url !== '' || $elementSelector !== '' || $inputSelector !== '' || $inputValue !== '')
         <div class="mt-3 space-y-1 rounded-md bg-slate-50 p-2 text-[11px] text-slate-500">
+            @if($url !== '')
+                <div class="truncate">URL: {{ $url }}</div>
+            @endif
             @if($elementSelector !== '')
-                <div class="truncate">Element: {{ $elementSelector }}</div>
+                <div class="truncate">Selector: {{ $elementSelector }}</div>
             @endif
             @if($inputSelector !== '')
                 <div class="truncate">Input-Selector: {{ $inputSelector }}</div>
@@ -85,28 +101,22 @@
             @endif
         </div>
     @endif
-    @if(is_array($task['next'] ?? null) || is_array($task['on_partial'] ?? null) || is_array($task['on_error'] ?? null))
-        <div class="mt-3 grid gap-1 text-[11px] text-slate-500">
+    @if(is_array($task['next'] ?? null) || is_array($task['on_error'] ?? null))
+        <div class="mt-3 grid gap-2 text-[11px] text-slate-500">
             @if(is_array($task['next'] ?? null))
-                <div class="rounded border border-emerald-100 bg-emerald-50 px-2 py-1 text-emerald-700">
-                    Weiter: {{ data_get($task, 'next.label', data_get($task, 'next.card', data_get($task, 'next.step', 'naechstes Ziel'))) }}
-                </div>
-            @endif
-            @if(is_array($task['on_partial'] ?? null))
-                <div class="rounded border border-amber-100 bg-amber-50 px-2 py-1 text-amber-700">
-                    Teilstatus: {{ data_get($task, 'on_partial.label', data_get($task, 'on_partial.card', data_get($task, 'on_partial.step', 'Teilstatus-Ziel'))) }}
+                <div class="flex items-center gap-2 text-emerald-700">
+                    <span class="h-px flex-1 bg-emerald-300"></span>
+                    <span class="h-0 w-0 border-y-4 border-l-8 border-y-transparent border-l-emerald-400"></span>
+                    <span class="max-w-[160px] truncate font-semibold">{{ data_get($task, 'next.label', data_get($task, 'next.card', data_get($task, 'next.step', 'naechstes Ziel'))) }}</span>
                 </div>
             @endif
             @if(is_array($task['on_error'] ?? null))
-                <div class="rounded border border-red-100 bg-red-50 px-2 py-1 text-red-700">
-                    Fehler: {{ data_get($task, 'on_error.label', data_get($task, 'on_error.card', data_get($task, 'on_error.step', 'Fehlerziel'))) }}
+                <div class="flex items-center gap-2 text-red-700">
+                    <span class="h-px flex-1 bg-red-300"></span>
+                    <span class="h-0 w-0 border-y-4 border-l-8 border-y-transparent border-l-red-400"></span>
+                    <span class="max-w-[160px] truncate font-semibold">{{ data_get($task, 'on_error.label', data_get($task, 'on_error.card', data_get($task, 'on_error.step', 'Fehlerziel'))) }}</span>
                 </div>
             @endif
         </div>
     @endif
-    @isset($actions)
-        <div class="mt-3 flex justify-end">
-            {{ $actions }}
-        </div>
-    @endisset
 </div>

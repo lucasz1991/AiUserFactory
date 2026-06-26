@@ -3,7 +3,7 @@
 async function run(context = {}) {
   const page = context.page;
   const input = context.input || {};
-  const url = String(input.url || input.webmailUrl || input.registrationUrl || '').trim();
+  const url = String(input.url || input.value || input.inputValue || input.webmailUrl || input.registrationUrl || '').trim();
   const waitUntil = input.waitUntil || 'domcontentloaded';
   const timeout = Number(input.timeoutMs || context.timeoutMs || 120000);
 

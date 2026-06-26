@@ -129,6 +129,7 @@ class WorkflowStep extends Model
                     'input_selector' => trim((string) ($task['input_selector'] ?? '')),
                     'input' => trim((string) ($task['input'] ?? '')),
                     'value' => trim((string) ($task['value'] ?? '')),
+                    'url' => trim((string) ($task['url'] ?? '')),
                     'success_payload' => $task['success_payload'] ?? null,
                     'failure_payload' => $task['failure_payload'] ?? null,
                     'next' => is_array($task['next'] ?? null) ? $task['next'] : null,
