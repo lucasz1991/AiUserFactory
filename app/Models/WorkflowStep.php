@@ -113,10 +113,14 @@ class WorkflowStep extends Model
         return collect($tasks)
             ->filter(fn (mixed $task): bool => is_array($task))
             ->map(function (array $task, int $index): array {
+                $order = max(0, (int) ($task['order_id'] ?? $task['position'] ?? (($index + 1) * 10)));
+
                 return [
                     'key' => trim((string) ($task['key'] ?? 'task-'.$this->id.'-'.$index)),
                     'title' => trim((string) ($task['title'] ?? $task['label'] ?? 'Task')),
                     'description' => trim((string) ($task['description'] ?? '')),
+                    'order_id' => $order,
+                    'position' => $order,
                     'kind' => trim((string) ($task['kind'] ?? 'browser')),
                     'task_key' => trim((string) ($task['task_key'] ?? '')),
                     'runner' => trim((string) ($task['runner'] ?? '')),

@@ -41,7 +41,14 @@ class WorkflowTaskOrderingService
         $targetPosition = max(0, $targetPosition);
 
         if ((int) $sourceStep->id === (int) $targetStep->id) {
-            $tasks = collect($this->tasks($targetStep))
+            $allTasks = collect($this->tasks($targetStep))->values();
+            $originalPosition = $allTasks->search(fn (array $task): bool => (string) ($task['key'] ?? '') === $taskKey);
+
+            if ($originalPosition !== false && $targetPosition > $originalPosition) {
+                $targetPosition--;
+            }
+
+            $tasks = $allTasks
                 ->reject(fn (array $task): bool => (string) ($task['key'] ?? '') === $taskKey)
                 ->values();
 
@@ -123,8 +130,23 @@ class WorkflowTaskOrderingService
     protected function saveTasks(WorkflowStep $step, array $tasks): void
     {
         $config = is_array($step->config_json) ? $step->config_json : [];
-        $config['tasks'] = array_values($tasks);
+        $config['tasks'] = $this->normalizeTaskOrder($tasks);
 
         $step->forceFill(['config_json' => $config])->save();
+    }
+
+    protected function normalizeTaskOrder(array $tasks): array
+    {
+        return collect($tasks)
+            ->values()
+            ->map(function (array $task, int $index): array {
+                $order = ($index + 1) * 10;
+
+                $task['order_id'] = $order;
+                $task['position'] = $order;
+
+                return $task;
+            })
+            ->toArray();
     }
 }

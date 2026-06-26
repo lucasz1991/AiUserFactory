@@ -683,6 +683,24 @@ class WorkflowManager extends Component
         );
     }
 
+    public function moveTaskCard(int $targetStepId, mixed $sourceStepId, string $taskKey, mixed $position): void
+    {
+        $workflow = $this->selectedWorkflow();
+        $targetStep = $this->stepForSelectedWorkflow($targetStepId);
+
+        if (! $workflow || ! $targetStep) {
+            return;
+        }
+
+        app(WorkflowTaskOrderingService::class)->moveTask(
+            $workflow,
+            $targetStep,
+            $taskKey,
+            (int) $position,
+            ((int) $sourceStepId) ?: null,
+        );
+    }
+
     public function runWorkflow(): void
     {
         $execution = app(WorkflowExecutionService::class);
