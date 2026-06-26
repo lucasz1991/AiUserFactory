@@ -906,6 +906,7 @@ class WorkflowManager extends Component
                     app(WorkflowTaskCatalog::class)->cardFromDefinition('browser.find_inputs', ['key' => 'find-registration-inputs', 'title' => 'Input-Felder suchen']),
                     app(WorkflowTaskCatalog::class)->cardFromDefinition('mail.generate_address', ['key' => 'generate-mail-address']),
                     app(WorkflowTaskCatalog::class)->cardFromDefinition('mail.check_address_availability', ['key' => 'check-mail-address']),
+                    app(WorkflowTaskCatalog::class)->cardFromDefinition('mail.generate_password', ['key' => 'generate-password']),
                     app(WorkflowTaskCatalog::class)->cardFromDefinition('input.fill_field', ['key' => 'fill-registration-inputs', 'title' => 'Weitere Formularfelder fuellen']),
                     app(WorkflowTaskCatalog::class)->cardFromDefinition('input.submit', ['key' => 'submit-registration-form', 'title' => 'Registrierung absenden']),
                     app(WorkflowTaskCatalog::class)->cardFromDefinition('wait.status', ['key' => 'check-registration-status', 'title' => 'Registrierungsstatus auswerten']),

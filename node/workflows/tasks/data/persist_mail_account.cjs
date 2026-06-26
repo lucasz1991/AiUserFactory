@@ -2,11 +2,12 @@
 
 function publicAccount(account = {}) {
   const copy = { ...account };
+  const hasPassword = Boolean(copy.password || copy.password_encrypted || copy.hasPassword === true);
 
   delete copy.password;
   delete copy.password_encrypted;
 
-  if (copy.password) {
+  if (hasPassword) {
     copy.hasPassword = true;
   }
 

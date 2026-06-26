@@ -229,6 +229,23 @@ class WorkflowTaskCatalog
                     'failure_payload' => true,
                 ],
             ],
+            'mail.generate_password' => [
+                'label' => 'Wunschpasswort generieren',
+                'kind' => 'input',
+                'runner' => 'node',
+                'node_script' => 'node/workflows/tasks/mail/generate_password.cjs',
+                'timeout_seconds' => 45,
+                'description' => 'Generiert ein neues Passwort, traegt es in Passwortfelder ein und stellt new_password bereit.',
+                'form' => [
+                    'selector' => true,
+                    'selector_label' => 'Passwort-Selector',
+                    'selector_placeholder' => 'input[type=password]',
+                    'value' => false,
+                    'url' => false,
+                    'success_payload' => true,
+                    'failure_payload' => true,
+                ],
+            ],
             'data.read_account_data' => [
                 'label' => 'Accountdaten lesen',
                 'kind' => 'data',

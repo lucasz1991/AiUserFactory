@@ -86,14 +86,17 @@ function cleanForJson(value, depth = 0) {
   return String(value);
 }
 
-function publicAccount(account = null) {
+function publicAccount(account = null, includePassword = false) {
   if (!account || typeof account !== 'object') {
     return null;
   }
 
   const copy = { ...account };
 
-  delete copy.password;
+  if (!includePassword) {
+    delete copy.password;
+  }
+
   delete copy.password_encrypted;
 
   if (account.password || account.password_encrypted || account.hasPassword === true) {
@@ -175,7 +178,9 @@ function valueFromPath(source, keyPath) {
 function resolveString(value, context = {}) {
   const normalized = String(value ?? '').trim();
 
-  if (!normalized.includes('.') || normalized.includes('://')) {
+  const directRuntimeKeys = ['new_password', 'new_mail_username', 'new_mail_address'];
+
+  if ((!normalized.includes('.') && !directRuntimeKeys.includes(normalized)) || normalized.includes('://')) {
     return value;
   }
 
@@ -186,11 +191,14 @@ function resolveString(value, context = {}) {
     person: context.person || workflow.person || null,
     account: context.account || context.lastResult?.account || workflow.account || null,
     email_account: context.account || context.lastResult?.account || workflow.email_account || null,
+    new_password: context.new_password || context.account?.password || context.lastResult?.new_password || '',
+    new_mail_username: context.account?.username || context.lastResult?.account?.username || '',
+    new_mail_address: context.account?.email || context.lastResult?.account?.email || '',
   };
   const resolved = valueFromPath(lookupRoot, normalized);
 
   if (resolved === undefined || resolved === null || resolved === '') {
-    return /^(person|account|email_account|workflow)\./.test(normalized) ? '' : value;
+    return /^(person|account|email_account|workflow)\./.test(normalized) || /^(new_password|new_mail_username|new_mail_address)$/.test(normalized) ? '' : value;
   }
 
   return resolved;
@@ -619,7 +627,8 @@ async function run() {
         status,
         statusMessage: result.statusMessage || `Task fehlgeschlagen: ${taskLabel}`,
         failedTaskKey: task.key,
-        account: publicAccount(context.account),
+        account: publicAccount(context.account, true),
+        new_password: context.new_password || context.account?.password || null,
         tasks: taskResults,
         browserWindows: lastBrowserWindows,
         events,
@@ -642,7 +651,8 @@ async function run() {
     ok: true,
     status: 'success',
     statusMessage: 'Workflow-Tasks wurden ausgefuehrt.',
-    account: publicAccount(context.account),
+    account: publicAccount(context.account, true),
+    new_password: context.new_password || context.account?.password || null,
     tasks: taskResults,
     browserWindows: lastBrowserWindows,
     events,

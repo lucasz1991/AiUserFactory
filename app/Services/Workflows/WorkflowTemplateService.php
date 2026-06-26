@@ -263,7 +263,7 @@ class WorkflowTemplateService
             [
                 'key' => 'fill-password',
                 'title' => 'Passwort generieren und fuellen',
-                'description' => 'Passwort erzeugen, Passwort- und Bestaetigungsfeld fuellen und absenden.',
+                'description' => 'Wunschpasswort erzeugen, als new_password bereitstellen und Passwortfelder fuellen.',
                 'kind' => 'input',
                 'status' => 'automated',
                 'selector' => 'input[type=password]',
@@ -311,7 +311,7 @@ class WorkflowTemplateService
             'find-registration-inputs' => 'browser.find_inputs',
             'generate-mail-address' => 'mail.generate_address',
             'check-availability' => 'mail.check_address_availability',
-            'fill-password' => 'input.fill_field',
+            'fill-password' => 'mail.generate_password',
             'wait-verification' => 'wait.status',
             'read-account-data' => 'data.read_account_data',
             'persist-account-data' => 'data.persist_mail_account',
