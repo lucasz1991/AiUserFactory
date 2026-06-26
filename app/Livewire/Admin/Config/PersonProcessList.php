@@ -4,6 +4,8 @@ namespace App\Livewire\Admin\Config;
 
 use App\Jobs\SyncManagedProcessesJob;
 use App\Models\ManagedProcess;
+use App\Models\WorkflowRun;
+use App\Models\WorkflowStepRun;
 use App\Services\Mail\MailAccountRegistrationRunner;
 use App\Services\Mail\WebmailSessionRunner;
 use Illuminate\Support\Collection;
@@ -27,6 +29,10 @@ class PersonProcessList extends Component
     public ?string $previewRunType = null;
 
     public array $previewStatus = [];
+
+    public bool $showWorkflowPreviewModal = false;
+
+    public ?int $previewWorkflowRunId = null;
 
     public ?string $notice = null;
 
@@ -85,6 +91,21 @@ class PersonProcessList extends Component
         $this->showPreviewModal = false;
     }
 
+    public function openWorkflowPreview(int $workflowRunId): void
+    {
+        if ($workflowRunId <= 0) {
+            return;
+        }
+
+        $this->previewWorkflowRunId = $workflowRunId;
+        $this->showWorkflowPreviewModal = true;
+    }
+
+    public function closeWorkflowPreview(): void
+    {
+        $this->showWorkflowPreviewModal = false;
+    }
+
     public function syncProcesses(bool $showNotice = true): void
     {
         if (! Schema::hasTable('managed_processes')) {
@@ -110,11 +131,14 @@ class PersonProcessList extends Component
         return view('livewire.admin.config.person-process-list', [
             'tableReady' => $tableReady,
             'processes' => $processes,
+            'previewWorkflowRun' => $this->previewWorkflowRun(),
             'stats' => [
-                'total' => $rootProcesses->count(),
-                'running' => $rootProcesses->whereIn('status', ['running', 'terminate_requested', 'kill_requested'])->count(),
+                'total' => $rootProcesses->count() + $this->personWorkflowRuns()->count(),
+                'running' => $rootProcesses->whereIn('status', ['running', 'terminate_requested', 'kill_requested'])->count()
+                    + $this->personWorkflowRuns()->whereIn('status', ['queued', 'running', 'waiting'])->count(),
                 'stale' => $rootProcesses->filter(fn (ManagedProcess $process): bool => $this->isStale($process))->count(),
-                'exited' => $rootProcesses->whereIn('status', ['exited', 'terminated', 'killed', 'restarted'])->count(),
+                'exited' => $rootProcesses->whereIn('status', ['exited', 'terminated', 'killed', 'restarted'])->count()
+                    + $this->personWorkflowRuns()->whereIn('status', ['completed', 'failed', 'cancelled'])->count(),
                 'children' => $allPersonProcesses->where('is_root', false)->count(),
             ],
         ]);
@@ -122,7 +146,7 @@ class PersonProcessList extends Component
 
     protected function loadProcesses(): Collection
     {
-        return $this->basePersonProcessQuery()
+        $processes = $this->basePersonProcessQuery()
             ->when(! $this->showChildProcesses, fn ($query) => $query->where('is_root', true))
             ->when($this->filter === 'running', fn ($query) => $query->whereIn('status', ['running', 'terminate_requested', 'kill_requested']))
             ->when($this->filter === 'exited', fn ($query) => $query->whereIn('status', ['exited', 'terminated', 'killed', 'restarted']))
@@ -132,15 +156,161 @@ class PersonProcessList extends Component
             ->limit(100)
             ->get()
             ->when($this->filter === 'stale', fn (Collection $processes): Collection => $processes->filter(fn (ManagedProcess $process): bool => $this->isStale($process))->values());
+
+        $processes = $this->attachWorkflowPreview($processes);
+
+        if ($this->filter === 'stale') {
+            return $processes;
+        }
+
+        return $this->withWorkflowRunProcesses($processes);
     }
 
     protected function basePersonProcessQuery()
     {
+        $workflowRunIds = $this->personWorkflowRuns()->pluck('id')->values();
+
         return ManagedProcess::query()
-            ->where(function ($query): void {
+            ->where(function ($query) use ($workflowRunIds): void {
                 $query->where('metadata->subject_person_id', $this->personId)
                     ->orWhere('metadata->person_id', $this->personId);
+
+                if ($workflowRunIds->isNotEmpty()) {
+                    $query->orWhereIn('metadata->workflow_context->workflowRunId', $workflowRunIds)
+                        ->orWhereIn('metadata->process_identity->workflowRunId', $workflowRunIds);
+                }
             });
+    }
+
+    protected function personWorkflowRuns(): Collection
+    {
+        return WorkflowRun::query()
+            ->with([
+                'currentStep',
+                'workflow.steps' => fn ($query) => $query->ordered(),
+                'stepRuns.workflowStep',
+            ])
+            ->where('context_json->person_id', $this->personId)
+            ->latest('id')
+            ->limit(50)
+            ->get();
+    }
+
+    protected function previewWorkflowRun(): ?WorkflowRun
+    {
+        if (! $this->previewWorkflowRunId) {
+            return null;
+        }
+
+        return WorkflowRun::query()
+            ->with([
+                'currentStep',
+                'workflow.steps' => fn ($query) => $query->ordered(),
+                'stepRuns.workflowStep',
+            ])
+            ->find($this->previewWorkflowRunId);
+    }
+
+    protected function attachWorkflowPreview(Collection $processes): Collection
+    {
+        if ($processes->isEmpty()) {
+            return $processes;
+        }
+
+        $stepRunIds = $processes
+            ->map(fn (ManagedProcess $process): int => $this->workflowStepRunIdForProcess($process))
+            ->filter(fn (int $id): bool => $id > 0)
+            ->unique()
+            ->values();
+
+        if ($stepRunIds->isEmpty()) {
+            return $processes;
+        }
+
+        $stepRuns = WorkflowStepRun::query()
+            ->with([
+                'workflowStep',
+                'workflowRun.currentStep',
+                'workflowRun.workflow.steps' => fn ($query) => $query->ordered(),
+                'workflowRun.stepRuns.workflowStep',
+            ])
+            ->whereIn('id', $stepRunIds)
+            ->get()
+            ->keyBy('id');
+
+        return $processes->map(function (ManagedProcess $process) use ($stepRuns): ManagedProcess {
+            $stepRun = $stepRuns->get($this->workflowStepRunIdForProcess($process));
+
+            if ($stepRun) {
+                $process->setRelation('workflowStepRunPreview', $stepRun);
+                $process->setRelation('workflowRunPreview', $stepRun->workflowRun);
+                $process->setAttribute('workflow_active_task_key', (string) data_get($stepRun->workflowRun?->context_json, 'next_task_key', ''));
+            }
+
+            return $process;
+        });
+    }
+
+    protected function withWorkflowRunProcesses(Collection $processes): Collection
+    {
+        $virtualProcesses = $this->personWorkflowRuns()
+            ->when($this->filter === 'running', fn (Collection $runs): Collection => $runs->whereIn('status', ['queued', 'running', 'waiting'])->values())
+            ->when($this->filter === 'exited', fn (Collection $runs): Collection => $runs->whereIn('status', ['completed', 'failed', 'cancelled'])->values())
+            ->map(function (WorkflowRun $run): ManagedProcess {
+                $status = in_array($run->status, ['queued', 'running', 'waiting'], true) ? 'running' : 'exited';
+                $process = new ManagedProcess();
+                $process->exists = false;
+                $process->forceFill([
+                    'id' => -$run->id,
+                    'pid' => -$run->id,
+                    'parent_pid' => null,
+                    'family_root_pid' => -$run->id,
+                    'process_key' => 'workflow:'.$run->id,
+                    'run_id' => $run->run_uuid,
+                    'run_type' => 'workflow',
+                    'process_role' => 'workflow-run',
+                    'process_type' => 'workflow-run',
+                    'script_name' => $run->workflow?->name,
+                    'short_command' => $run->workflow?->description ?: $run->workflow?->slug,
+                    'status' => $status,
+                    'is_managed' => false,
+                    'is_root' => true,
+                    'is_idle_suspect' => false,
+                    'elapsed_seconds' => $run->started_at ? max(0, $run->started_at->diffInSeconds(now())) : 0,
+                    'started_at' => $run->started_at ?? $run->queued_at,
+                    'detected_at' => $run->queued_at,
+                    'last_seen_at' => $run->updated_at,
+                    'heartbeat_at' => $run->updated_at,
+                    'last_stage' => $run->currentStep?->name,
+                    'last_message' => $run->error_message,
+                    'metadata' => [
+                        'workflow_run_db_id' => $run->id,
+                        'subject_person_id' => $this->personId,
+                    ],
+                ]);
+                $process->setRelation('workflowRunPreview', $run);
+                $process->setRelation('workflowStepRunPreview', $run->stepRuns->first(fn ($stepRun) => in_array($stepRun->status, ['running', 'waiting'], true)) ?: $run->stepRuns->last());
+                $process->setAttribute('workflow_active_task_key', (string) data_get($run->context_json, 'next_task_key', ''));
+
+                return $process;
+            });
+
+        return $virtualProcesses
+            ->concat($processes)
+            ->unique(fn (ManagedProcess $process): string => $process->process_type.':'.$process->pid)
+            ->values();
+    }
+
+    protected function workflowStepRunIdForProcess(ManagedProcess $process): int
+    {
+        return (int) (
+            data_get($process->metadata, 'process_identity.workflowStepRunId')
+            ?: data_get($process->metadata, 'processIdentity.workflowStepRunId')
+            ?: data_get($process->metadata, 'workflow_context.workflowStepRunId')
+            ?: data_get($process->metadata, 'workflow.workflowStepRunId')
+            ?: data_get($process->metadata, 'workflowStepRunId')
+            ?: 0
+        );
     }
 
     protected function isStale(ManagedProcess $process): bool

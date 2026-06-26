@@ -59,12 +59,6 @@
             <x-admin.stat label="Laeufe" :value="$summary['runs']" tone="emerald" />
         </div>
 
-        @if($runs->first())
-            <x-admin.panel title="Workflow-Minimap" :description="'Letzter Lauf: #'.$runs->first()->id">
-                <x-workflows.minimap :workflow-run="$runs->first()" />
-            </x-admin.panel>
-        @endif
-
         <x-admin.panel title="Board">
             <div
                 x-data="{ focusedTask: '' }"
@@ -152,22 +146,12 @@
         <x-dialog-modal wire:model="showWorkflowModal" maxWidth="2xl">
             <x-slot name="title">Workflow bearbeiten</x-slot>
             <x-slot name="content">
-                <div class="space-y-4">
-                    <div>
-                        <label for="workflow-name" class="block text-sm font-medium text-gray-700">Name</label>
-                        <input id="workflow-name" type="text" wire:model.defer="workflowName" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
-                        @error('workflowName') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
-                    </div>
-                    <div>
-                        <label for="workflow-description" class="block text-sm font-medium text-gray-700">Beschreibung</label>
-                        <textarea id="workflow-description" rows="4" wire:model.defer="workflowDescription" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"></textarea>
-                        @error('workflowDescription') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
-                    </div>
-                    <label class="flex items-center gap-3 rounded-md border border-gray-200 bg-gray-50 p-3 text-sm font-medium text-gray-700">
-                        <input type="checkbox" wire:model.defer="workflowActive" class="rounded border-gray-300 text-slate-900 shadow-sm focus:ring-slate-900">
-                        Aktiv
-                    </label>
-                </div>
+                <x-workflows.workflow-form
+                    name-model="workflowName"
+                    group-model="workflowGroup"
+                    description-model="workflowDescription"
+                    active-model="workflowActive"
+                />
             </x-slot>
             <x-slot name="footer">
                 <button type="button" x-on:click="$dispatch('close')" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">Abbrechen</button>

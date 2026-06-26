@@ -19,6 +19,8 @@ class WorkflowManager extends Component
 
     public string $workflowDescription = '';
 
+    public string $workflowGroup = 'custom';
+
     public bool $workflowActive = true;
 
     public string $newStepType = WorkflowStep::TYPE_PREPARATION;
@@ -188,12 +190,14 @@ class WorkflowManager extends Component
         $validated = $this->validate([
             'workflowName' => ['required', 'string', 'max:160'],
             'workflowDescription' => ['nullable', 'string', 'max:1000'],
+            'workflowGroup' => ['required', 'string', 'max:80'],
             'workflowActive' => ['boolean'],
         ]);
 
         $workflow->forceFill([
             'name' => trim($validated['workflowName']),
             'description' => trim((string) ($validated['workflowDescription'] ?? '')),
+            'category' => $this->normalizeGroup($validated['workflowGroup']),
             'is_active' => (bool) $validated['workflowActive'],
         ])->save();
 
@@ -733,7 +737,15 @@ class WorkflowManager extends Component
 
         $this->workflowName = (string) ($workflow?->name ?? '');
         $this->workflowDescription = (string) ($workflow?->description ?? '');
+        $this->workflowGroup = trim((string) ($workflow?->category ?? 'custom')) ?: 'custom';
         $this->workflowActive = (bool) ($workflow?->is_active ?? true);
+    }
+
+    protected function normalizeGroup(string $group): string
+    {
+        $group = Str::slug($group, '_');
+
+        return $group !== '' ? $group : 'custom';
     }
 
     protected function defaultStepName(string $type): string

@@ -332,6 +332,7 @@ class WebmailSessionRunner
             'workflowStepRunId' => $workflowContext['workflowStepRunId'] ?? null,
             'workflowStepName' => $workflowContext['workflowStepName'] ?? null,
             'workflowStepType' => $workflowContext['workflowStepType'] ?? null,
+            'personId' => $workflowContext['personId'] ?? null,
         ], fn (mixed $value): bool => $value !== null && $value !== '');
     }
 

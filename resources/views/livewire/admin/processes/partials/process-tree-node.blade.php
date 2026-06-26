@@ -5,6 +5,7 @@
     $defaultOpen = (bool) ($defaultOpen ?? false);
     $workflowRunPreview = $process->relationLoaded('workflowRunPreview') ? $process->getRelation('workflowRunPreview') : null;
     $workflowStepRunPreview = $process->relationLoaded('workflowStepRunPreview') ? $process->getRelation('workflowStepRunPreview') : null;
+    $isWorkflowProcess = $process->process_type === 'workflow-run';
 @endphp
 
 <div x-data="{ workflowPreviewOpen: false }" class="border-t border-slate-200 first:border-t-0">
@@ -15,8 +16,8 @@
                     {{ $hasChildren ? '+' : '-' }}
                 </span>
                 <div>
-                    <div class="font-semibold text-slate-900">PID {{ $process->pid }}</div>
-                    <div class="text-xs text-slate-500">PPID {{ $process->parent_pid ?: '-' }}</div>
+                    <div class="font-semibold text-slate-900">{{ $isWorkflowProcess ? 'Workflow #'.abs((int) $process->pid) : 'PID '.$process->pid }}</div>
+                    <div class="text-xs text-slate-500">{{ $isWorkflowProcess ? 'Root-Prozess' : 'PPID '.($process->parent_pid ?: '-') }}</div>
                     @if($process->run_id)
                         <div class="mt-1 max-w-32 truncate text-xs text-blue-700">{{ $process->run_id }}</div>
                     @endif
@@ -75,7 +76,7 @@
                         Workflow
                     </button>
                 @endif
-                @if($process->isRunning())
+                @if(! $isWorkflowProcess && $process->isRunning())
                     <button type="button" wire:click="terminate({{ $process->id }}, false)" wire:confirm="Prozess {{ $process->pid }} beenden?" class="rounded border border-amber-300 px-2 py-1 text-xs font-semibold text-amber-700 hover:bg-amber-50">
                         Beenden
                     </button>
@@ -114,7 +115,7 @@
                         <div>
                             <h3 class="text-lg font-semibold text-gray-900">Workflow-Vorschau</h3>
                             <p class="mt-1 text-sm text-gray-500">
-                                Prozess PID {{ $process->pid }} - {{ $process->process_type }}
+                                {{ $isWorkflowProcess ? 'Workflow-Prozess' : 'Prozess PID '.$process->pid }} - {{ $process->process_type }}
                             </p>
                         </div>
                         <button type="button" x-on:click="workflowPreviewOpen = false" class="rounded-md p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-600">
@@ -125,8 +126,9 @@
                         </button>
                     </div>
                     <div class="min-h-0 flex-1 overflow-y-auto p-6">
-                        <x-workflows.minimap
+                        <x-workflows.run-preview
                             :workflow-run="$workflowRunPreview"
+                            :process="$isWorkflowProcess ? null : $process"
                             :active-step-id="$workflowStepRunPreview?->workflow_step_id"
                             :active-task-key="$process->workflow_active_task_key"
                         />

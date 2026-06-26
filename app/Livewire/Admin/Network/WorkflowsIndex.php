@@ -16,6 +16,20 @@ class WorkflowsIndex extends Component
 
     public string $newWorkflowGroup = 'custom';
 
+    public bool $showCreateWorkflowModal = false;
+
+    public bool $showEditWorkflowModal = false;
+
+    public ?int $editingWorkflowId = null;
+
+    public string $editingWorkflowName = '';
+
+    public string $editingWorkflowDescription = '';
+
+    public string $editingWorkflowGroup = 'custom';
+
+    public bool $editingWorkflowActive = true;
+
     public function render()
     {
         $workflows = Workflow::query()
@@ -72,11 +86,60 @@ class WorkflowsIndex extends Component
         $this->newWorkflowName = '';
         $this->newWorkflowDescription = '';
         $this->newWorkflowGroup = 'custom';
+        $this->showCreateWorkflowModal = false;
         $this->activeGroup = $group;
 
         session()->flash('success', 'Workflow wurde erstellt.');
 
         $this->redirectRoute('network.workflows.manage', ['workflow' => $workflow->id]);
+    }
+
+    public function openEditWorkflow(int $workflowId): void
+    {
+        $workflow = Workflow::query()->find($workflowId);
+
+        if (! $workflow) {
+            return;
+        }
+
+        $this->editingWorkflowId = $workflow->id;
+        $this->editingWorkflowName = $workflow->name;
+        $this->editingWorkflowDescription = (string) $workflow->description;
+        $this->editingWorkflowGroup = trim((string) $workflow->category) ?: 'custom';
+        $this->editingWorkflowActive = (bool) $workflow->is_active;
+        $this->showEditWorkflowModal = true;
+    }
+
+    public function saveEditWorkflow(): void
+    {
+        $workflow = $this->editingWorkflowId
+            ? Workflow::query()->find($this->editingWorkflowId)
+            : null;
+
+        if (! $workflow) {
+            return;
+        }
+
+        $validated = $this->validate([
+            'editingWorkflowName' => ['required', 'string', 'max:160'],
+            'editingWorkflowDescription' => ['nullable', 'string', 'max:1000'],
+            'editingWorkflowGroup' => ['required', 'string', 'max:80'],
+            'editingWorkflowActive' => ['boolean'],
+        ]);
+
+        $group = $this->normalizeGroup($validated['editingWorkflowGroup']);
+
+        $workflow->forceFill([
+            'name' => trim($validated['editingWorkflowName']),
+            'description' => trim((string) ($validated['editingWorkflowDescription'] ?? '')),
+            'category' => $group,
+            'is_active' => (bool) $validated['editingWorkflowActive'],
+        ])->save();
+
+        $this->activeGroup = $group;
+        $this->showEditWorkflowModal = false;
+
+        session()->flash('success', 'Workflow wurde gespeichert.');
     }
 
     public function deleteWorkflow(int $workflowId): void

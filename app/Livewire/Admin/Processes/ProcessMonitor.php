@@ -5,6 +5,7 @@ namespace App\Livewire\Admin\Processes;
 use App\Jobs\SyncManagedProcessesJob;
 use App\Jobs\TerminateManagedProcessJob;
 use App\Models\ManagedProcess;
+use App\Models\WorkflowRun;
 use App\Models\WorkflowStepRun;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Schema;
@@ -140,7 +141,9 @@ class ProcessMonitor extends Component
             ->limit($this->limit)
             ->get();
 
-        return $this->attachWorkflowPreview($processes);
+        $processes = $this->attachWorkflowPreview($processes);
+
+        return $this->withWorkflowRunProcesses($processes);
     }
 
     protected function attachWorkflowPreview(Collection $processes): Collection
@@ -182,6 +185,77 @@ class ProcessMonitor extends Component
         });
     }
 
+    protected function withWorkflowRunProcesses(Collection $processes): Collection
+    {
+        $workflowRunIds = $processes
+            ->map(fn (ManagedProcess $process): int => $process->relationLoaded('workflowRunPreview') ? (int) $process->getRelation('workflowRunPreview')?->id : 0)
+            ->filter(fn (int $id): bool => $id > 0);
+
+        if (($this->runId || $this->rootPid) && $workflowRunIds->isEmpty()) {
+            return $processes;
+        }
+
+        $runs = WorkflowRun::query()
+            ->with([
+                'currentStep',
+                'workflow.steps' => fn ($query) => $query->ordered(),
+                'stepRuns.workflowStep',
+            ])
+            ->when($this->runId || $this->rootPid, fn ($query) => $query->whereIn('id', $workflowRunIds->values()))
+            ->when($this->filter === 'running', fn ($query) => $query->whereIn('status', ['queued', 'running', 'waiting']))
+            ->when($this->filter === 'exited', fn ($query) => $query->whereIn('status', ['completed', 'failed', 'cancelled']))
+            ->when($this->filter === 'idle', fn ($query) => $query->whereRaw('1 = 0'))
+            ->latest('id')
+            ->limit($this->limit)
+            ->get();
+
+        $virtualProcesses = $runs->map(function (WorkflowRun $run): ManagedProcess {
+            $status = in_array($run->status, ['queued', 'running', 'waiting'], true) ? 'running' : 'exited';
+            $process = new ManagedProcess();
+            $process->exists = false;
+            $process->forceFill([
+                'id' => -$run->id,
+                'pid' => -$run->id,
+                'parent_pid' => null,
+                'family_root_pid' => -$run->id,
+                'process_key' => 'workflow:'.$run->id,
+                'run_id' => $run->run_uuid,
+                'run_type' => 'workflow',
+                'process_role' => 'workflow-run',
+                'process_type' => 'workflow-run',
+                'script_name' => $run->workflow?->name,
+                'short_command' => $run->workflow?->description ?: $run->workflow?->slug,
+                'status' => $status,
+                'is_managed' => false,
+                'is_root' => true,
+                'is_idle_suspect' => false,
+                'cpu_percent' => null,
+                'memory_mb' => null,
+                'elapsed_seconds' => $run->started_at ? max(0, $run->started_at->diffInSeconds(now())) : 0,
+                'started_at' => $run->started_at ?? $run->queued_at,
+                'detected_at' => $run->queued_at,
+                'last_seen_at' => $run->updated_at,
+                'heartbeat_at' => $run->updated_at,
+                'last_stage' => $run->currentStep?->name,
+                'last_message' => $run->error_message,
+                'metadata' => [
+                    'workflow_run_db_id' => $run->id,
+                    'subject_person_id' => data_get($run->context_json, 'person_id'),
+                ],
+            ]);
+            $process->setRelation('workflowRunPreview', $run);
+            $process->setRelation('workflowStepRunPreview', $run->stepRuns->first(fn ($stepRun) => in_array($stepRun->status, ['running', 'waiting'], true)) ?: $run->stepRuns->last());
+            $process->setAttribute('workflow_active_task_key', (string) data_get($run->context_json, 'next_task_key', ''));
+
+            return $process;
+        });
+
+        return $virtualProcesses
+            ->concat($processes)
+            ->unique(fn (ManagedProcess $process): string => $process->process_type.':'.$process->pid)
+            ->values();
+    }
+
     protected function workflowStepRunIdForProcess(ManagedProcess $process): int
     {
         return (int) (
@@ -211,7 +285,23 @@ class ProcessMonitor extends Component
         foreach ($nodesByPid as $pid => $node) {
             $parentPid = (int) ($node->parent_pid ?? 0);
 
+            if (! $nodesByPid->has($parentPid)) {
+                $workflowRunId = $node->relationLoaded('workflowRunPreview')
+                    ? (int) $node->getRelation('workflowRunPreview')?->id
+                    : 0;
+
+                if ($workflowRunId > 0 && (int) $node->pid !== -$workflowRunId && $nodesByPid->has(-$workflowRunId)) {
+                    $parentPid = -$workflowRunId;
+                }
+            }
+
             if ($parentPid > 0 && $parentPid !== $pid && $nodesByPid->has($parentPid)) {
+                $nodesByPid->get($parentPid)->children->push($node);
+
+                continue;
+            }
+
+            if ($parentPid < 0 && $parentPid !== $pid && $nodesByPid->has($parentPid)) {
                 $nodesByPid->get($parentPid)->children->push($node);
 
                 continue;
@@ -236,11 +326,30 @@ class ProcessMonitor extends Component
             ];
         }
 
+        $workflowStats = $this->workflowStats();
+
         return [
-            'total' => $this->baseStatsQuery()->count(),
-            'running' => $this->baseStatsQuery()->whereIn('status', ['running', 'terminate_requested', 'kill_requested'])->count(),
+            'total' => $this->baseStatsQuery()->count() + $workflowStats['total'],
+            'running' => $this->baseStatsQuery()->whereIn('status', ['running', 'terminate_requested', 'kill_requested'])->count() + $workflowStats['running'],
             'idle' => $this->baseStatsQuery()->where('is_idle_suspect', true)->where('status', 'running')->count(),
-            'exited' => $this->baseStatsQuery()->whereIn('status', ['exited', 'terminated', 'killed'])->count(),
+            'exited' => $this->baseStatsQuery()->whereIn('status', ['exited', 'terminated', 'killed'])->count() + $workflowStats['exited'],
+        ];
+    }
+
+    protected function workflowStats(): array
+    {
+        if ($this->runId || $this->rootPid || ! Schema::hasTable('workflow_runs')) {
+            return [
+                'total' => 0,
+                'running' => 0,
+                'exited' => 0,
+            ];
+        }
+
+        return [
+            'total' => WorkflowRun::query()->count(),
+            'running' => WorkflowRun::query()->whereIn('status', ['queued', 'running', 'waiting'])->count(),
+            'exited' => WorkflowRun::query()->whereIn('status', ['completed', 'failed', 'cancelled'])->count(),
         ];
     }
 

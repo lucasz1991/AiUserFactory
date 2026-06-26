@@ -853,6 +853,7 @@ class WorkflowExecutionService
             'workflowStepRunId' => $stepRun->id,
             'workflowStepName' => $step->name,
             'workflowStepType' => $step->type,
+            'personId' => data_get($run->context_json, 'person_id'),
         ];
     }
 

@@ -30,7 +30,7 @@
     @else
         <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <div class="rounded-lg border border-slate-200 bg-white p-4">
-                <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Node-Scripte</p>
+                <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Prozesse</p>
                 <p class="mt-2 text-2xl font-semibold text-slate-900">{{ $stats['total'] }}</p>
             </div>
             <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-4">
@@ -74,15 +74,17 @@
                     <tbody class="divide-y divide-slate-100">
                         @forelse($processes as $process)
                             @php
+                                $isWorkflowProcess = $process->process_type === 'workflow-run';
+                                $workflowRunPreview = $process->relationLoaded('workflowRunPreview') ? $process->getRelation('workflowRunPreview') : null;
                                 $heartbeatAge = $process->heartbeat_at ? (int) $process->heartbeat_at->diffInSeconds(now()) : null;
-                                $isStale = $process->isRunning() && ($heartbeatAge === null || $heartbeatAge > 30);
+                                $isStale = ! $isWorkflowProcess && $process->isRunning() && ($heartbeatAge === null || $heartbeatAge > 30);
                             @endphp
                             <tr class="{{ $isStale ? 'bg-amber-50/70' : '' }}">
                                 <td class="whitespace-nowrap px-4 py-3">
-                                    <div class="font-semibold text-slate-900">PID {{ $process->pid }}</div>
-                                    <div class="text-xs text-slate-500">PPID {{ $process->parent_pid ?: '-' }}</div>
+                                    <div class="font-semibold text-slate-900">{{ $isWorkflowProcess ? 'Workflow #'.abs((int) $process->pid) : 'PID '.$process->pid }}</div>
+                                    <div class="text-xs text-slate-500">{{ $isWorkflowProcess ? 'Root-Prozess' : 'PPID '.($process->parent_pid ?: '-') }}</div>
                                     <div class="mt-1 text-xs {{ $process->is_root ? 'font-semibold text-blue-700' : 'text-slate-500' }}">
-                                        {{ $process->is_root ? 'Node-Root' : 'Browser-Kind' }} · {{ $process->process_type }}
+                                        {{ $isWorkflowProcess ? 'Workflow' : ($process->is_root ? 'Node-Root' : 'Browser-Kind') }} · {{ $process->process_type }}
                                     </div>
                                 </td>
                                 <td class="px-4 py-3">
@@ -98,7 +100,10 @@
                                     @endif
                                 </td>
                                 <td class="whitespace-nowrap px-4 py-3 text-xs text-slate-600">
-                                    @if($process->heartbeat_at)
+                                    @if($isWorkflowProcess)
+                                        <div class="font-semibold text-blue-700">Workflow-Lauf</div>
+                                        <div>{{ optional($process->last_seen_at)->format('d.m.Y H:i:s') ?: '-' }}</div>
+                                    @elseif($process->heartbeat_at)
                                         <div class="font-semibold {{ $isStale ? 'text-amber-700' : 'text-emerald-700' }}">
                                             {{ $isStale ? 'Stale' : 'Aktiv' }}
                                         </div>
@@ -117,7 +122,15 @@
                                     <div class="mt-1 text-xs text-slate-400">zuletzt gesehen: {{ optional($process->last_seen_at)->format('d.m.Y H:i:s') ?: '-' }}</div>
                                 </td>
                                 <td class="whitespace-nowrap px-4 py-3 text-right">
-                                    @if($process->is_root && $process->run_id && in_array($process->run_type, ['mail-registration', 'webmail-session'], true))
+                                    @if($isWorkflowProcess && (int) data_get($process->metadata, 'workflow_run_db_id') > 0)
+                                        <button type="button" wire:click="openWorkflowPreview({{ (int) data_get($process->metadata, 'workflow_run_db_id') }})" class="rounded border border-blue-200 bg-white px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-50">
+                                            Vorschau
+                                        </button>
+                                    @elseif($workflowRunPreview)
+                                        <button type="button" wire:click="openWorkflowPreview({{ $workflowRunPreview->id }})" class="rounded border border-blue-200 bg-white px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-50">
+                                            Workflow
+                                        </button>
+                                    @elseif($process->is_root && $process->run_id && in_array($process->run_type, ['mail-registration', 'webmail-session'], true))
                                         <button type="button" wire:click="openPreview('{{ $process->run_id }}', '{{ $process->run_type }}')" class="rounded border border-blue-200 bg-white px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-50">
                                             Vorschau
                                         </button>
@@ -247,6 +260,28 @@
 
         <x-slot name="footer">
             <button type="button" wire:click="closePreview" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">
+                Schliessen
+            </button>
+        </x-slot>
+    </x-dialog-modal>
+
+    <x-dialog-modal wire:model="showWorkflowPreviewModal" maxWidth="6xl">
+        <x-slot name="title">
+            Workflow-Vorschau
+        </x-slot>
+
+        <x-slot name="content">
+            @if($previewWorkflowRun)
+                <x-workflows.run-preview :workflow-run="$previewWorkflowRun" />
+            @else
+                <div class="rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
+                    Dieser Workflow-Lauf wurde nicht gefunden.
+                </div>
+            @endif
+        </x-slot>
+
+        <x-slot name="footer">
+            <button type="button" wire:click="closeWorkflowPreview" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">
                 Schliessen
             </button>
         </x-slot>
