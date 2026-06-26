@@ -196,7 +196,7 @@
                 x-init="refreshRouteLines()"
                 x-on:scroll.debounce.100ms="refreshRouteLines()"
                 x-ref="routeSurface"
-                class="relative max-h-[calc(100vh-220px)] overflow-auto rounded-md border border-blue-200 bg-blue-100 p-4 shadow-sm"
+                class="relative max-h-[calc(100vh-220px)] overflow-auto rounded-md border border-blue-600 bg-blue-400 p-4 shadow-sm"
             >
                 <svg
                     class="pointer-events-none absolute left-0 top-0 z-30"
