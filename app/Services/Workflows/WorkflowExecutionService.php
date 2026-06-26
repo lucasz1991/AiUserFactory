@@ -881,6 +881,21 @@ class WorkflowExecutionService
     protected function workflowRuntimeContext(WorkflowRun $run, WorkflowStep $step, WorkflowStepRun $stepRun): array
     {
         $person = $this->personForRun($run, $step);
+        $emailAccount = $person && is_array(data_get($person->metadata, 'email_account'))
+            ? data_get($person->metadata, 'email_account')
+            : [];
+        $accountEmail = trim((string) ($emailAccount['email'] ?? $person?->person_email ?? ''));
+        $accountUsername = trim((string) ($emailAccount['username'] ?? $accountEmail));
+        $accountProvider = (string) ($emailAccount['provider'] ?? 'proton');
+        $accountPassword = (string) ($this->decryptString($emailAccount['password_encrypted'] ?? null) ?? '');
+        $accountPayload = [
+            'provider' => $accountProvider,
+            'email' => $accountEmail,
+            'username' => $accountUsername,
+            'password' => $accountPassword,
+            'webmailUrl' => trim((string) ($emailAccount['webmail_url'] ?? '')) ?: $this->defaultWebmailUrl($accountProvider),
+            'hasPassword' => $accountPassword !== '',
+        ];
 
         return [
             'workflowRunId' => $run->id,
@@ -892,6 +907,8 @@ class WorkflowExecutionService
             'workflowStepName' => $step->name,
             'workflowStepType' => $step->type,
             'personId' => data_get($run->context_json, 'person_id'),
+            'account' => $person ? $accountPayload : null,
+            'email_account' => $person ? $accountPayload : null,
             'person' => $person ? [
                 'id' => $person->id,
                 'displayName' => $person->display_name,
@@ -903,6 +920,7 @@ class WorkflowExecutionService
                 'city' => $person->person_city,
                 'timezone' => $person->person_timezone,
                 'loginUsername' => $person->login_username,
+                'emailAccount' => $accountPayload,
             ] : null,
         ];
     }

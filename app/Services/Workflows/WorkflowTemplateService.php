@@ -358,6 +358,7 @@ class WorkflowTemplateService
                 'kind' => 'input',
                 'status' => 'automated',
                 'selector' => 'input[type=password]',
+                'input' => 'account.password',
                 'next' => ['card' => 'wait-mailbox', 'label' => 'Postfach erkennen'],
                 'on_error' => ['step' => 'fail', 'label' => 'Passwortfeld nicht gefunden'],
             ],

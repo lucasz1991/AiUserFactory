@@ -155,29 +155,37 @@ function valueFromPath(source, keyPath) {
   return current;
 }
 
-function resolveString(value) {
+function resolveString(value, context = {}) {
   const normalized = String(value ?? '').trim();
 
   if (!normalized.includes('.') || normalized.includes('://')) {
     return value;
   }
 
-  const resolved = valueFromPath(runtime.workflow || {}, normalized);
+  const workflow = runtime.workflow || {};
+  const lookupRoot = {
+    ...workflow,
+    workflow,
+    person: context.person || workflow.person || null,
+    account: context.account || context.lastResult?.account || workflow.account || null,
+    email_account: context.account || context.lastResult?.account || workflow.email_account || null,
+  };
+  const resolved = valueFromPath(lookupRoot, normalized);
 
   if (resolved === undefined || resolved === null || resolved === '') {
-    return /^(person|account|workflow)\./.test(normalized) ? '' : value;
+    return /^(person|account|email_account|workflow)\./.test(normalized) ? '' : value;
   }
 
   return resolved;
 }
 
-function taskInput(task) {
+function taskInput(task, context = {}) {
   const input = {
     ...task,
-    value: resolveString(task.value ?? task.input ?? ''),
-    inputValue: resolveString(task.input ?? task.value ?? ''),
-    input_value: resolveString(task.input ?? task.value ?? ''),
-    url: resolveString(task.url ?? task.value ?? task.input ?? ''),
+    value: resolveString(task.value ?? task.input ?? '', context),
+    inputValue: resolveString(task.input ?? task.value ?? '', context),
+    input_value: resolveString(task.input ?? task.value ?? '', context),
+    url: resolveString(task.url ?? task.value ?? task.input ?? '', context),
     selector: task.selector || task.element_selector || task.input_selector || '',
     elementSelector: task.element_selector || task.selector || '',
     element_selector: task.element_selector || task.selector || '',
@@ -190,6 +198,127 @@ function taskInput(task) {
   }
 
   return input;
+}
+
+function runtimePerson() {
+  return runtime.workflow && typeof runtime.workflow === 'object' && runtime.workflow.person
+    ? runtime.workflow.person
+    : null;
+}
+
+async function runDataTask(task, context = {}) {
+  const person = runtimePerson();
+  const account = person && typeof person === 'object' && person.emailAccount
+    ? person.emailAccount
+    : runtime.workflow?.account || runtime.workflow?.email_account || null;
+  const password = String(account?.password || '').trim();
+  const hasPassword = account?.hasPassword === true || password !== '';
+  const publicAccount = account ? {
+    provider: account.provider || 'proton',
+    email: String(account.email || person?.email || '').trim(),
+    username: String(account.username || account.email || person?.email || '').trim(),
+    password,
+    webmailUrl: account.webmailUrl || '',
+  } : null;
+  const taskKey = String(task.task_key || '').trim();
+  const handler = String(task.php_handler || '').trim();
+
+  if (taskKey === 'data.resolve_person' || handler.includes('ResolvePersonDataTask')) {
+    if (!person) {
+      return {
+        ok: false,
+        status: 'failed',
+        statusMessage: 'Keine Person fuer den Workflow-Task gefunden. Bitte den Test mit einer Person starten.',
+      };
+    }
+
+    context.person = person;
+
+    return {
+      ok: true,
+      status: 'success',
+      statusMessage: 'Person-Daten wurden ermittelt.',
+      person,
+    };
+  }
+
+  if (taskKey === 'data.read_login_data' || handler.includes('ReadLoginDataTask')) {
+    if (!person) {
+      return {
+        ok: false,
+        status: 'failed',
+        statusMessage: 'Keine Person fuer Login-Daten gefunden. Bitte den Test mit einer Person starten.',
+      };
+    }
+
+    const email = String(publicAccount?.email || person.email || '').trim();
+    const username = String(publicAccount?.username || email).trim();
+
+    if (!email || !username || !hasPassword) {
+      return {
+        ok: false,
+        status: 'failed',
+        statusMessage: 'Login-Daten sind unvollstaendig.',
+        account: {
+          provider: publicAccount?.provider || 'proton',
+          email,
+          username,
+          webmailUrl: publicAccount?.webmailUrl || '',
+          hasPassword,
+        },
+      };
+    }
+
+    context.person = person;
+    context.account = {
+      provider: publicAccount?.provider || 'proton',
+      email,
+      username,
+      password,
+      webmailUrl: publicAccount?.webmailUrl || '',
+    };
+
+    return {
+      ok: true,
+      status: 'success',
+      statusMessage: 'Login-Daten wurden vorbereitet.',
+      person,
+      account: {
+        provider: context.account.provider,
+        email: context.account.email,
+        username: context.account.username,
+        webmailUrl: context.account.webmailUrl,
+        hasPassword: true,
+      },
+    };
+  }
+
+  if (taskKey === 'data.read_account_data' || handler.includes('ReadAccountDataTask')) {
+    const resultAccount = context.account || context.lastResult?.account || account || null;
+
+    if (!resultAccount) {
+      return {
+        ok: false,
+        status: 'failed',
+        statusMessage: 'Keine Accountdaten im Ergebnis gefunden.',
+      };
+    }
+
+    context.account = resultAccount;
+
+    return {
+      ok: true,
+      status: 'success',
+      statusMessage: 'Accountdaten wurden gelesen.',
+      account: resultAccount,
+    };
+  }
+
+  return {
+    ok: false,
+    status: 'failed',
+    statusMessage: `PHP-Task wird vom Workflow-Runner noch nicht unterstuetzt: ${taskKey || handler || '-'}`,
+  };
 }
 
 async function loadBrowser() {
@@ -403,40 +532,44 @@ async function run() {
     let result;
 
     try {
-      if (task.runner !== 'node') {
+      if (task.runner === 'php') {
+        result = await runDataTask(task, context);
+      } else if (task.runner !== 'node') {
         throw new Error(`Runner wird vom Node-Orchestrator nicht unterstuetzt: ${task.runner || '-'}`);
-      }
+      } else {
 
-      if (!task.node_script) {
-        throw new Error('Task hat kein node_script.');
-      }
+        if (!task.node_script) {
+          throw new Error('Task hat kein node_script.');
+        }
 
-      const scriptPath = path.resolve(basePath, task.node_script);
-      const module = require(scriptPath);
+        const scriptPath = path.resolve(basePath, task.node_script);
+        const module = require(scriptPath);
 
-      if (!module || typeof module.run !== 'function') {
-        throw new Error(`Task-Script exportiert keine run()-Funktion: ${task.node_script}`);
-      }
+        if (!module || typeof module.run !== 'function') {
+          throw new Error(`Task-Script exportiert keine run()-Funktion: ${task.node_script}`);
+        }
 
-      if (task.kind !== 'data') {
-        await ensurePage(context);
-        startPreviewLoop(context);
-      }
+        if (task.kind !== 'data') {
+          await ensurePage(context);
+          startPreviewLoop(context);
+        }
 
-      context.browser = browser;
-      context.page = page;
-      context.input = taskInput(task);
-      context.timeoutMs = Math.max(1000, Number(task.timeout_seconds || 60) * 1000);
-
-      result = await module.run(context);
-
-      if (result && result.page) {
-        page = patchPuppeteerPage(result.page);
+        context.browser = browser;
         context.page = page;
-        context.pages = Array.from(new Set([...(context.pages || []), page]));
+        context.input = taskInput(task, context);
+        context.timeoutMs = Math.max(1000, Number(task.timeout_seconds || 60) * 1000);
+
+        result = await module.run(context);
+
+        if (result && result.page) {
+          page = patchPuppeteerPage(result.page);
+          context.page = page;
+          context.pages = Array.from(new Set([...(context.pages || []), page]));
+        }
       }
 
       result = cleanForJson(result || {});
+      context.lastResult = result;
     } catch (error) {
       result = {
         ok: false,
