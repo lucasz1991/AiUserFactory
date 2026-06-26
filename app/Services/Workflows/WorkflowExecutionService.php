@@ -782,9 +782,8 @@ class WorkflowExecutionService
             'webmail-session' => is_array($status['result'] ?? null)
                 ? $status['result']
                 : $this->webmailSession->readResult($externalRunId),
-            'workflow-task' => is_array($status['result'] ?? null)
-                ? $status['result']
-                : $this->workflowTasks->readResult($externalRunId),
+            'workflow-task' => $this->workflowTasks->readResult($externalRunId)
+                ?: (is_array($status['result'] ?? null) ? $status['result'] : null),
             default => null,
         };
 
