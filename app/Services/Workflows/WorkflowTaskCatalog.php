@@ -391,7 +391,14 @@ class WorkflowTaskCatalog
             'timeout_seconds' => max(0, (int) ($overrides['timeout_seconds'] ?? $definition['timeout_seconds'] ?? 60)),
         ];
 
-        foreach (['node_script', 'php_handler', 'selector', 'element_selector', 'input_selector', 'input', 'value', 'url', 'success_payload', 'failure_payload', 'next', 'on_partial', 'on_error', 'status_routes'] as $key) {
+        $usesBrowserWindow = in_array((string) ($definition['kind'] ?? ''), ['browser', 'input', 'wait'], true)
+            && (string) ($definition['task_key'] ?? $taskKey) !== 'wait.seconds';
+
+        if ($usesBrowserWindow && ! array_key_exists('browser_window', $definition)) {
+            $definition['browser_window'] = 'main';
+        }
+
+        foreach (['node_script', 'php_handler', 'browser_window', 'browser_window_name', 'selector', 'element_selector', 'input_selector', 'input', 'value', 'url', 'success_payload', 'failure_payload', 'next', 'on_partial', 'on_error', 'status_routes'] as $key) {
             $value = Arr::get($overrides, $key, Arr::get($definition, $key));
 
             if ($value !== null && $value !== '') {

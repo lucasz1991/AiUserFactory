@@ -1,11 +1,23 @@
-const fs = require('fs');
-const path = require('path');
-const crypto = require('crypto');
+const {
+  generateAccountPassword,
+  generateUsernameCandidates,
+  trimUsernameCandidate,
+  usernameFromSubject,
+} = require('./lib/account-values.cjs');
 const {
   BROWSER_LAUNCHER_SCRIPT_VERSION,
   launchConfiguredBrowserWithProfileRetry,
   resolveBrowserEngine,
 } = require('./lib/browser-launcher.cjs');
+const { createLivePreviewController } = require('./lib/live-preview.cjs');
+const {
+  ensureDirectory,
+  normalizeText,
+  readJsonFile,
+  sleep,
+  truncateText,
+  writeJsonFile,
+} = require('./lib/runtime-utils.cjs');
 
 let puppeteer = null;
 
@@ -17,7 +29,6 @@ try {
   puppeteer = require('puppeteer');
 }
 
-const LIVE_PREVIEW_MIN_INTERVAL_MS = 2500;
 const DEFAULT_VIEWPORT = { width: 1365, height: 900 };
 const PROVIDER_MODE_OBSERVED_MANUAL = 'observed_manual';
 const PROVIDER_MODE_PROTON_USERNAME_CHECK = 'proton_username_check';
@@ -31,46 +42,24 @@ const MAIL_ACCOUNT_SCRIPT_VERSION = 3;
 const MAIL_ACCOUNT_SCRIPT_VERSION_LABEL = `${MAIL_ACCOUNT_SCRIPT_NAME} v${MAIL_ACCOUNT_SCRIPT_VERSION}`;
 const runtimeConfigPath = process.argv[2] || '';
 const statusEvents = [];
-const lastLivePreviewByPath = new Map();
-const activePreviewWindows = new Map();
 let currentStatusPayload = null;
 let heartbeatTimer = null;
-let livePreviewTimer = null;
-let livePreviewTickRunning = false;
 let heartbeatCounter = 0;
 let activeBrowserEngine = null;
 let requestedBrowserEngine = null;
 let browserFallbackReason = null;
-
-function normalizeText(value) {
-  return String(value || '').trim();
-}
-
-function ensureDirectory(directoryPath) {
-  if (!directoryPath) {
-    return directoryPath;
-  }
-
-  fs.mkdirSync(directoryPath, { recursive: true });
-
-  return directoryPath;
-}
-
-function readJsonFile(filePath, fallback = {}) {
-  try {
-    const raw = fs.readFileSync(filePath, 'utf8');
-    return JSON.parse(raw);
-  } catch {
-    return fallback;
-  }
-}
-
-function writeJsonFile(filePath, payload) {
-  ensureDirectory(path.dirname(filePath));
-  const temporaryPath = `${filePath}.${process.pid}.tmp`;
-  fs.writeFileSync(temporaryPath, JSON.stringify(payload, null, 2), 'utf8');
-  fs.renameSync(temporaryPath, filePath);
-}
+const {
+  livePreviewIntervalMs,
+  captureLivePreviewScreenshot,
+  captureWebmailLivePreviewScreenshot,
+  registerPreviewWindow,
+  stopLivePreviewTimer,
+} = createLivePreviewController({
+  getCurrentStatusPayload: () => currentStatusPayload,
+  setCurrentStatusPayload: (payload) => {
+    currentStatusPayload = payload;
+  },
+});
 
 function publicStatusPayload(runtimeConfig, state, stage, message, data = {}) {
   const processIdentity = runtimeConfig.processIdentity || {};
@@ -159,10 +148,6 @@ function progress(runtimeConfig, stage, message, data = {}, state = 'running') {
   })}\n`);
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
-}
-
 async function pauseStep() {
   await sleep(STEP_DELAY_MS);
 }
@@ -203,207 +188,6 @@ function stopProcessHeartbeat() {
     clearInterval(heartbeatTimer);
     heartbeatTimer = null;
   }
-}
-
-function livePreviewIntervalMs(runtimeConfig = {}) {
-  const configuredMs = Number(runtimeConfig.livePreviewIntervalMs);
-  const configuredSeconds = Number(runtimeConfig.livePreviewIntervalSeconds);
-
-  if (Number.isFinite(configuredMs) && configuredMs > 0) {
-    return Math.max(500, configuredMs);
-  }
-
-  if (Number.isFinite(configuredSeconds) && configuredSeconds > 0) {
-    return Math.max(500, configuredSeconds * 1000);
-  }
-
-  return LIVE_PREVIEW_MIN_INTERVAL_MS;
-}
-
-async function captureScreenshotToPath(page, runtimeConfig = {}, livePreviewPath = '', force = false) {
-  if (!page || !livePreviewPath || runtimeConfig.livePreviewEnabled === false) {
-    return {};
-  }
-
-  const now = Date.now();
-  const lastLivePreviewAt = lastLivePreviewByPath.get(livePreviewPath) || 0;
-
-  if (!force && now - lastLivePreviewAt < livePreviewIntervalMs(runtimeConfig)) {
-    return {};
-  }
-
-  try {
-    await page.bringToFront().catch(() => {});
-    ensureDirectory(path.dirname(livePreviewPath));
-    await page.screenshot({
-      path: livePreviewPath,
-      fullPage: false,
-      type: 'png',
-    });
-
-    lastLivePreviewByPath.set(livePreviewPath, now);
-
-    return {
-      liveScreenshotPath: livePreviewPath,
-      liveScreenshotAt: new Date(now).toISOString(),
-    };
-  } catch (error) {
-    return {
-      liveScreenshotError: normalizeText(error?.message || String(error)),
-    };
-  }
-}
-
-async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = false) {
-  return captureScreenshotToPath(page, runtimeConfig, normalizeText(runtimeConfig.livePreviewPath), force);
-}
-
-async function captureWebmailLivePreviewScreenshot(page, runtimeConfig = {}, force = false) {
-  return captureScreenshotToPath(page, runtimeConfig, normalizeText(runtimeConfig.webmailLivePreviewPath), force);
-}
-
-function publicRelativePathForPreview(runtimeConfig = {}, kind = 'registration', index = 0) {
-  const registrationPath = normalizeText(runtimeConfig.livePreviewRelativePath);
-  const webmailPath = normalizeText(runtimeConfig.webmailLivePreviewRelativePath);
-
-  if (kind === 'registration' && registrationPath) {
-    return registrationPath;
-  }
-
-  if (kind === 'webmail' && webmailPath) {
-    return webmailPath;
-  }
-
-  if (!registrationPath) {
-    return '';
-  }
-
-  const ext = path.extname(registrationPath) || '.png';
-  const base = registrationPath.slice(0, -ext.length);
-
-  return `${base}-window-${index + 1}${ext}`;
-}
-
-function absolutePathForPreview(runtimeConfig = {}, kind = 'registration', index = 0) {
-  const registrationPath = normalizeText(runtimeConfig.livePreviewPath);
-  const webmailPath = normalizeText(runtimeConfig.webmailLivePreviewPath);
-
-  if (kind === 'registration' && registrationPath) {
-    return registrationPath;
-  }
-
-  if (kind === 'webmail' && webmailPath) {
-    return webmailPath;
-  }
-
-  if (!registrationPath) {
-    return '';
-  }
-
-  const ext = path.extname(registrationPath) || '.png';
-  const base = registrationPath.slice(0, -ext.length);
-
-  return `${base}-window-${index + 1}${ext}`;
-}
-
-function registerPreviewWindow(page, runtimeConfig = {}, label = 'Browserfenster', kind = 'registration') {
-  if (!page || typeof page.screenshot !== 'function') {
-    return;
-  }
-
-  const key = `${kind}:${activePreviewWindows.size + 1}`;
-
-  activePreviewWindows.set(key, {
-    key,
-    page,
-    label,
-    kind,
-    livePreviewPath: absolutePathForPreview(runtimeConfig, kind, activePreviewWindows.size),
-    livePreviewRelativePath: publicRelativePathForPreview(runtimeConfig, kind, activePreviewWindows.size),
-  });
-
-  startLivePreviewTimer(runtimeConfig);
-}
-
-async function captureRegisteredPreviewWindows(runtimeConfig = {}, force = false) {
-  const browserWindows = [];
-
-  for (const [key, windowConfig] of Array.from(activePreviewWindows.entries())) {
-    if (!windowConfig.page || (typeof windowConfig.page.isClosed === 'function' && windowConfig.page.isClosed())) {
-      activePreviewWindows.delete(key);
-      continue;
-    }
-
-    const screenshot = await captureScreenshotToPath(windowConfig.page, runtimeConfig, windowConfig.livePreviewPath, force);
-
-    browserWindows.push({
-      key,
-      label: windowConfig.label,
-      kind: windowConfig.kind,
-      livePreviewPath: windowConfig.livePreviewPath,
-      livePreviewRelativePath: windowConfig.livePreviewRelativePath,
-      liveScreenshotPath: screenshot.liveScreenshotPath || windowConfig.livePreviewPath,
-      liveScreenshotAt: screenshot.liveScreenshotAt || null,
-      error: screenshot.liveScreenshotError || null,
-    });
-  }
-
-  return browserWindows;
-}
-
-function startLivePreviewTimer(runtimeConfig = {}) {
-  const statusPath = normalizeText(runtimeConfig.statusPath);
-
-  if (!statusPath || livePreviewTimer || runtimeConfig.livePreviewEnabled === false) {
-    return;
-  }
-
-  const tick = async () => {
-    if (livePreviewTickRunning || !currentStatusPayload) {
-      return;
-    }
-
-    livePreviewTickRunning = true;
-
-    try {
-      const browserWindows = await captureRegisteredPreviewWindows(runtimeConfig, true);
-      const heartbeatAt = new Date().toISOString();
-
-      currentStatusPayload = {
-        ...currentStatusPayload,
-        at: heartbeatAt,
-        heartbeatAt,
-        browserWindows,
-        livePreviewIntervalSeconds: Math.max(1, Math.round(livePreviewIntervalMs(runtimeConfig) / 1000)),
-        livePreviewPollIntervalSeconds: Math.max(1, Math.round(livePreviewIntervalMs(runtimeConfig) / 1000)),
-      };
-
-      writeJsonFile(statusPath, currentStatusPayload);
-    } finally {
-      livePreviewTickRunning = false;
-    }
-  };
-
-  livePreviewTimer = setInterval(tick, livePreviewIntervalMs(runtimeConfig));
-
-  if (typeof livePreviewTimer.unref === 'function') {
-    livePreviewTimer.unref();
-  }
-
-  tick();
-}
-
-function stopLivePreviewTimer() {
-  if (livePreviewTimer) {
-    clearInterval(livePreviewTimer);
-    livePreviewTimer = null;
-  }
-}
-
-function truncateText(value, limit) {
-  const text = normalizeText(value);
-
-  return text.length > limit ? `${text.slice(0, limit)}... [truncated ${text.length - limit} chars]` : text;
 }
 
 async function frameDomDebug(frame) {
@@ -604,107 +388,6 @@ async function detectManualCompletion(page, provider) {
     completed: false,
     reason: null,
   };
-}
-
-function usernameFromSubject(runtimeConfig) {
-  const subject = runtimeConfig.subject || {};
-  const accountUsername = normalizeText(subject.accountUsername || subject.account_username);
-  const desiredEmail = normalizeText(subject.desiredEmail || subject.desired_email);
-  const source = accountUsername || desiredEmail;
-  const localPart = source.includes('@') ? source.split('@')[0] : source;
-
-  return localPart
-    .toLowerCase()
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9._-]+/g, '-')
-    .replace(/^[._-]+|[._-]+$/g, '')
-    .replace(/[._-]{2,}/g, '-')
-    .slice(0, 64);
-}
-
-function uniqueValues(values) {
-  return Array.from(new Set(values.filter((value) => normalizeText(value) !== '')));
-}
-
-function trimUsernameCandidate(value) {
-  return normalizeText(value)
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, '-')
-    .replace(/^[._-]+|[._-]+$/g, '')
-    .replace(/[._-]{2,}/g, '-')
-    .slice(0, 64);
-}
-
-function generateUsernameCandidates(baseUsername, maxAttempts = 12) {
-  const base = trimUsernameCandidate(baseUsername);
-  const requestedAttempts = Number(maxAttempts);
-  const targetAttempts = Number.isFinite(requestedAttempts)
-    ? Math.max(1, Math.min(50, Math.floor(requestedAttempts)))
-    : 12;
-
-  if (!base) {
-    return [];
-  }
-
-  const candidates = [base];
-  const trailingNumber = base.match(/^(.*?)(\d{1,6})$/);
-
-  if (trailingNumber) {
-    const prefix = trailingNumber[1] || base;
-    const currentNumber = Number(trailingNumber[2]);
-    const width = trailingNumber[2].length;
-
-    for (let offset = 1; candidates.length < targetAttempts && offset <= targetAttempts * 2; offset += 1) {
-      candidates.push(trimUsernameCandidate(`${prefix}${String(currentNumber + offset).padStart(width, '0')}`));
-    }
-  }
-
-  for (let suffix = 1; candidates.length < targetAttempts && suffix <= targetAttempts * 2; suffix += 1) {
-    candidates.push(trimUsernameCandidate(`${base}${suffix}`));
-  }
-
-  while (candidates.length < targetAttempts) {
-    candidates.push(trimUsernameCandidate(`${base}${crypto.randomInt(10, 99999)}`));
-  }
-
-  return uniqueValues(candidates).slice(0, targetAttempts);
-}
-
-function randomCharacter(characters) {
-  return characters[crypto.randomInt(0, characters.length)];
-}
-
-function shuffleString(value) {
-  const characters = value.split('');
-
-  for (let index = characters.length - 1; index > 0; index -= 1) {
-    const swapIndex = crypto.randomInt(0, index + 1);
-    [characters[index], characters[swapIndex]] = [characters[swapIndex], characters[index]];
-  }
-
-  return characters.join('');
-}
-
-function generateAccountPassword(length = 24) {
-  const requestedLength = Number(length);
-  const targetLength = Number.isFinite(requestedLength)
-    ? Math.max(16, Math.floor(requestedLength))
-    : 24;
-  const categories = [
-    'abcdefghijkmnopqrstuvwxyz',
-    'ABCDEFGHJKLMNPQRSTUVWXYZ',
-    '23456789',
-    '!@#$%^&*_-+=?',
-  ];
-  const characters = categories.map(randomCharacter);
-  const allCharacters = categories.join('');
-
-  while (characters.length < targetLength) {
-    characters.push(randomCharacter(allCharacters));
-  }
-
-  return shuffleString(characters.join(''));
 }
 
 async function findVisibleInput(pageOrFrame, selectors) {

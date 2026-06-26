@@ -46,6 +46,8 @@ class WorkflowManager extends Component
 
     public string $newTaskInputValue = '';
 
+    public string $newTaskBrowserWindow = 'main';
+
     public string $newTaskSuccessPayload = '';
 
     public string $newTaskFailurePayload = '';
@@ -115,6 +117,8 @@ class WorkflowManager extends Component
     public string $editingTaskInputSelector = '';
 
     public string $editingTaskInputValue = '';
+
+    public string $editingTaskBrowserWindow = 'main';
 
     public string $editingTaskSuccessPayload = '';
 
@@ -402,6 +406,7 @@ class WorkflowManager extends Component
         $this->newTaskElementSelector = '';
         $this->newTaskInputSelector = '';
         $this->newTaskInputValue = '';
+        $this->newTaskBrowserWindow = 'main';
         $this->newTaskSuccessPayload = '';
         $this->newTaskFailurePayload = '';
         $this->newTaskSuccessTarget = '';
@@ -438,6 +443,7 @@ class WorkflowManager extends Component
             'newTaskElementSelector' => ['nullable', 'string', 'max:1000'],
             'newTaskInputSelector' => ['nullable', 'string', 'max:1000'],
             'newTaskInputValue' => ['nullable', 'string', 'max:2000'],
+            'newTaskBrowserWindow' => ['nullable', 'string', 'max:80'],
             'newTaskSuccessPayload' => ['nullable', 'string', 'max:4000'],
             'newTaskFailurePayload' => ['nullable', 'string', 'max:4000'],
             'newTaskSuccessTarget' => ['nullable', 'string', 'max:180'],
@@ -461,11 +467,14 @@ class WorkflowManager extends Component
         $key = $this->uniqueTaskKey($tasks, $validated['newTaskTitle']);
         $selector = trim((string) ($validated['newTaskElementSelector'] ?? ''));
         $value = trim((string) ($validated['newTaskInputValue'] ?? ''));
+        $browserWindow = $this->normalizeBrowserWindowName((string) ($validated['newTaskBrowserWindow'] ?? ''));
         $task = app(WorkflowTaskCatalog::class)->cardFromDefinition($validated['newTaskCatalogKey'], [
             'key' => $key,
             'title' => trim($validated['newTaskTitle']),
             'description' => trim((string) ($validated['newTaskDescription'] ?? '')),
             'kind' => $validated['newTaskKind'],
+            'browser_window' => ($formConfig['browser_window'] ?? false) ? $browserWindow : null,
+            'browser_window_name' => ($formConfig['browser_window'] ?? false) ? $browserWindow : null,
             'selector' => $selector,
             'element_selector' => $selector,
             'input' => $value,
@@ -507,6 +516,7 @@ class WorkflowManager extends Component
         $this->newTaskElementSelector = '';
         $this->newTaskInputSelector = '';
         $this->newTaskInputValue = '';
+        $this->newTaskBrowserWindow = 'main';
         $this->newTaskSuccessPayload = '';
         $this->newTaskFailurePayload = '';
         $this->newTaskSuccessTarget = '';
@@ -541,6 +551,7 @@ class WorkflowManager extends Component
         $this->editingTaskElementSelector = (string) ($task['element_selector'] ?? $task['selector'] ?? '');
         $this->editingTaskInputSelector = (string) ($task['input_selector'] ?? '');
         $this->editingTaskInputValue = (string) ($task['url'] ?? $task['value'] ?? $task['input'] ?? '');
+        $this->editingTaskBrowserWindow = $this->normalizeBrowserWindowName((string) ($task['browser_window_name'] ?? $task['browser_window'] ?? 'main'));
         $this->editingTaskSuccessPayload = $this->payloadToString($task['success_payload'] ?? null);
         $this->editingTaskFailurePayload = $this->payloadToString($task['failure_payload'] ?? null);
         $this->editingTaskTimeoutSeconds = max(0, (int) ($task['timeout_seconds'] ?? 0));
@@ -566,6 +577,7 @@ class WorkflowManager extends Component
             'editingTaskElementSelector' => ['nullable', 'string', 'max:1000'],
             'editingTaskInputSelector' => ['nullable', 'string', 'max:1000'],
             'editingTaskInputValue' => ['nullable', 'string', 'max:2000'],
+            'editingTaskBrowserWindow' => ['nullable', 'string', 'max:80'],
             'editingTaskSuccessPayload' => ['nullable', 'string', 'max:4000'],
             'editingTaskFailurePayload' => ['nullable', 'string', 'max:4000'],
             'editingTaskTimeoutSeconds' => ['required', 'integer', 'min:0', 'max:3600'],
@@ -591,6 +603,7 @@ class WorkflowManager extends Component
                 $formConfig = $this->taskFormConfig($validated['editingTaskCatalogKey']);
                 $selector = trim((string) ($validated['editingTaskElementSelector'] ?? ''));
                 $value = trim((string) ($validated['editingTaskInputValue'] ?? ''));
+                $browserWindow = $this->normalizeBrowserWindowName((string) ($validated['editingTaskBrowserWindow'] ?? ''));
                 $task = array_replace(
                     $task,
                     app(WorkflowTaskCatalog::class)->cardFromDefinition($validated['editingTaskCatalogKey'], [
@@ -602,6 +615,8 @@ class WorkflowManager extends Component
                         'title' => trim($validated['editingTaskTitle']),
                         'description' => trim((string) ($validated['editingTaskDescription'] ?? '')),
                         'kind' => $validated['editingTaskKind'],
+                        'browser_window' => ($formConfig['browser_window'] ?? false) ? $browserWindow : null,
+                        'browser_window_name' => ($formConfig['browser_window'] ?? false) ? $browserWindow : null,
                         'selector' => $selector,
                         'element_selector' => $selector,
                         'input_selector' => '',
@@ -636,6 +651,10 @@ class WorkflowManager extends Component
                     } else {
                         unset($task[$key]);
                     }
+                }
+
+                if (! ($formConfig['browser_window'] ?? false)) {
+                    unset($task['browser_window'], $task['browser_window_name']);
                 }
 
                 unset($task['on_partial']);
@@ -1008,6 +1027,7 @@ class WorkflowManager extends Component
         $selectorProperty = $prefix.'ElementSelector';
         $inputSelectorProperty = $prefix.'InputSelector';
         $valueProperty = $prefix.'InputValue';
+        $browserWindowProperty = $prefix.'BrowserWindow';
         $successPayloadProperty = $prefix.'SuccessPayload';
         $failurePayloadProperty = $prefix.'FailurePayload';
         $formConfig = $this->taskFormConfig($taskKey);
@@ -1031,6 +1051,12 @@ class WorkflowManager extends Component
             $this->{$valueProperty} = '';
         }
 
+        if ($formConfig['browser_window'] ?? false) {
+            $this->{$browserWindowProperty} = $this->normalizeBrowserWindowName((string) $this->{$browserWindowProperty});
+        } else {
+            $this->{$browserWindowProperty} = '';
+        }
+
         if (! ($formConfig['success_payload'] ?? false)) {
             $this->{$successPayloadProperty} = '';
         }
@@ -1044,8 +1070,13 @@ class WorkflowManager extends Component
     {
         $definition = app(WorkflowTaskCatalog::class)->task($taskKey) ?? [];
         $form = is_array($definition['form'] ?? null) ? $definition['form'] : [];
+        $usesBrowserWindow = in_array((string) ($definition['kind'] ?? ''), ['browser', 'input', 'wait'], true)
+            && $taskKey !== 'wait.seconds';
 
         return array_replace([
+            'browser_window' => $usesBrowserWindow,
+            'browser_window_label' => $taskKey === 'browser.open' ? 'Fenstername' : 'Browserfenster',
+            'browser_window_placeholder' => $taskKey === 'browser.open' ? 'main, registrierung, webmail' : 'Fenster auswaehlen',
             'selector' => false,
             'selector_label' => 'Selector',
             'selector_placeholder' => 'button[type=submit], input[name=email], text=Weiter',
@@ -1075,6 +1106,12 @@ class WorkflowManager extends Component
         $valid = true;
         $selectorProperty = $prefix.'ElementSelector';
         $valueProperty = $prefix.'InputValue';
+        $browserWindowProperty = $prefix.'BrowserWindow';
+
+        if (($formConfig['browser_window'] ?? false) && trim((string) $this->{$browserWindowProperty}) === '') {
+            $this->addError($browserWindowProperty, 'Bitte ein Browserfenster angeben.');
+            $valid = false;
+        }
 
         if (($formConfig['selector'] ?? false) && trim((string) $this->{$selectorProperty}) === '') {
             $this->addError($selectorProperty, 'Bitte einen Selector angeben.');
@@ -1087,6 +1124,16 @@ class WorkflowManager extends Component
         }
 
         return $valid;
+    }
+
+    protected function normalizeBrowserWindowName(string $value): string
+    {
+        $name = trim($value);
+        $name = preg_replace('/\s+/', '-', $name) ?? '';
+        $name = preg_replace('/[^A-Za-z0-9._-]+/', '', $name) ?? '';
+        $name = strtolower(substr($name, 0, 80));
+
+        return $name !== '' ? $name : 'main';
     }
 
     protected function routeTargetFromValue(string $value): ?array

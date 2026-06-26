@@ -3,7 +3,11 @@
     $prefix = $isEdit ? 'editingTask' : 'newTask';
     $catalogKey = $isEdit ? $editingTaskCatalogKey : $newTaskCatalogKey;
     $selectedDefinition = collect($taskDefinitions)->firstWhere('key', $catalogKey) ?? [];
+    $usesBrowserWindow = in_array($selectedDefinition['kind'] ?? '', ['browser', 'input', 'wait'], true) && $catalogKey !== 'wait.seconds';
     $form = array_replace([
+        'browser_window' => $usesBrowserWindow,
+        'browser_window_label' => $catalogKey === 'browser.open' ? 'Fenstername' : 'Browserfenster',
+        'browser_window_placeholder' => $catalogKey === 'browser.open' ? 'main, registrierung, webmail' : 'Fenster auswaehlen',
         'selector' => false,
         'selector_label' => 'Selector',
         'selector_placeholder' => 'button[type=submit], input[name=email], text=Weiter',
@@ -16,6 +20,15 @@
         'success_payload' => false,
         'failure_payload' => false,
     ], is_array($selectedDefinition['form'] ?? null) ? $selectedDefinition['form'] : []);
+    $currentBrowserWindow = $isEdit ? ($editingTaskBrowserWindow ?? 'main') : ($newTaskBrowserWindow ?? 'main');
+    $browserWindowOptions = collect(['main'])
+        ->merge(collect($steps)->flatMap(fn ($step) => collect($step->task_cards ?? [])
+            ->map(fn ($task) => trim((string) data_get($task, 'browser_window_name', data_get($task, 'browser_window', ''))))))
+        ->merge([$currentBrowserWindow])
+        ->filter()
+        ->unique()
+        ->values();
+    $browserWindowDatalistId = 'workflow-'.$prefix.'-browser-windows';
 @endphp
 
 <div class="space-y-4">
@@ -57,6 +70,33 @@
                 <label class="block text-sm font-medium text-gray-700">Timeout</label>
                 <input type="number" min="0" max="3600" wire:model.defer="editingTaskTimeoutSeconds" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
                 @error('editingTaskTimeoutSeconds') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+            </div>
+        @endif
+
+        @if($form['browser_window'])
+            <div class="{{ $isEdit ? '' : 'md:col-span-2' }}">
+                <label class="block text-sm font-medium text-gray-700">{{ $form['browser_window_label'] }}</label>
+                @if($catalogKey === 'browser.open')
+                    <input
+                        type="text"
+                        list="{{ $browserWindowDatalistId }}"
+                        wire:model.defer="{{ $prefix }}BrowserWindow"
+                        placeholder="{{ $form['browser_window_placeholder'] }}"
+                        class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                    >
+                    <datalist id="{{ $browserWindowDatalistId }}">
+                        @foreach($browserWindowOptions as $browserWindowOption)
+                            <option value="{{ $browserWindowOption }}"></option>
+                        @endforeach
+                    </datalist>
+                @else
+                    <select wire:model.defer="{{ $prefix }}BrowserWindow" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                        @foreach($browserWindowOptions as $browserWindowOption)
+                            <option value="{{ $browserWindowOption }}">{{ $browserWindowOption }}</option>
+                        @endforeach
+                    </select>
+                @endif
+                @error($prefix.'BrowserWindow') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
             </div>
         @endif
     </div>

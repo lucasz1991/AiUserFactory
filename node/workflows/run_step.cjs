@@ -33,6 +33,7 @@ const events = [];
 let browser = null;
 let browserDriver = '';
 let page = null;
+const browserWindowsByName = new Map();
 let previewTimer = null;
 let lastBrowserWindows = [];
 let requestedBrowserEngine = null;
@@ -205,8 +206,20 @@ function resolveString(value, context = {}) {
 }
 
 function taskInput(task, context = {}) {
+  const browserWindow = normalizeBrowserWindowName(
+    task.browser_window_name
+    || task.browser_window
+    || task.browserWindowName
+    || task.browserWindow
+    || context.activeBrowserWindow
+    || 'main',
+  );
   const input = {
     ...task,
+    browserWindow,
+    browserWindowName: browserWindow,
+    browser_window: browserWindow,
+    browser_window_name: browserWindow,
     value: resolveString(task.value ?? task.input ?? '', context),
     inputValue: resolveString(task.input ?? task.value ?? '', context),
     input_value: resolveString(task.input ?? task.value ?? '', context),
@@ -229,6 +242,35 @@ function runtimePerson() {
   return runtime.workflow && typeof runtime.workflow === 'object' && runtime.workflow.person
     ? runtime.workflow.person
     : null;
+}
+
+function normalizeBrowserWindowName(value) {
+  const normalized = String(value || '')
+    .trim()
+    .replace(/\s+/g, '-')
+    .replace(/[^A-Za-z0-9._-]+/g, '')
+    .toLowerCase()
+    .slice(0, 80);
+
+  return normalized || 'main';
+}
+
+function browserWindowNameForTask(task = {}, input = {}) {
+  return normalizeBrowserWindowName(
+    input.browserWindowName
+    || input.browserWindow
+    || input.browser_window_name
+    || input.browser_window
+    || task.browser_window_name
+    || task.browser_window
+    || task.browserWindowName
+    || task.browserWindow
+    || 'main',
+  );
+}
+
+function browserWindowLabel(name) {
+  return name === 'main' ? 'Main' : name;
 }
 
 async function runDataTask(task, context = {}) {
@@ -478,17 +520,48 @@ function patchPuppeteerPage(nextPage) {
   return nextPage;
 }
 
-async function ensurePage(context) {
-  if (page) {
-    return page;
+function registerBrowserWindow(context, nextPage, windowName = 'main', label = '') {
+  const normalizedName = normalizeBrowserWindowName(windowName);
+  const patchedPage = patchPuppeteerPage(nextPage);
+  const existing = browserWindowsByName.get(normalizedName);
+  const windowConfig = {
+    ...(existing || {}),
+    key: normalizedName,
+    name: normalizedName,
+    windowName: normalizedName,
+    browserWindow: normalizedName,
+    browser_window: normalizedName,
+    label: label || browserWindowLabel(normalizedName),
+    page: patchedPage,
+  };
+
+  browserWindowsByName.set(normalizedName, windowConfig);
+  context.browserWindows = Array.from(browserWindowsByName.values());
+  context.windows = context.browserWindows;
+  context.pages = Array.from(new Set(context.browserWindows.map((windowEntry) => windowEntry.page)));
+  context.page = patchedPage;
+  context.activeBrowserWindow = normalizedName;
+  page = patchedPage;
+
+  return patchedPage;
+}
+
+async function ensurePage(context, windowName = 'main', label = '') {
+  const normalizedName = normalizeBrowserWindowName(windowName);
+  const registered = browserWindowsByName.get(normalizedName);
+
+  if (
+    registered?.page
+    && typeof registered.page.screenshot === 'function'
+    && (!registered.page.isClosed || !registered.page.isClosed())
+  ) {
+    return registerBrowserWindow(context, registered.page, normalizedName, registered.label || label);
   }
 
   const currentBrowser = await loadBrowser();
-  page = patchPuppeteerPage(await currentBrowser.newPage());
-  context.page = page;
-  context.pages = [page];
+  const nextPage = await currentBrowser.newPage();
 
-  return page;
+  return registerBrowserWindow(context, nextPage, normalizedName, label);
 }
 
 function startPreviewLoop(context) {
@@ -544,6 +617,9 @@ async function run() {
     livePreviewRelativePath: runtime.livePreviewRelativePath,
     timeoutMs: runtime.observationTimeoutMs || 90000,
     pages: [],
+    browserWindows: [],
+    windows: [],
+    activeBrowserWindow: 'main',
   };
 
   for (const task of runtime.tasks || []) {
@@ -574,22 +650,24 @@ async function run() {
           throw new Error(`Task-Script exportiert keine run()-Funktion: ${task.node_script}`);
         }
 
+        const input = taskInput(task, context);
+        const targetBrowserWindow = browserWindowNameForTask(task, input);
+
         if (task.kind !== 'data') {
-          await ensurePage(context);
+          await ensurePage(context, targetBrowserWindow, targetBrowserWindow === 'main' ? 'Main' : taskLabel);
           startPreviewLoop(context);
         }
 
         context.browser = browser;
-        context.page = page;
-        context.input = taskInput(task, context);
+        context.page = browserWindowsByName.get(targetBrowserWindow)?.page || page;
+        context.activeBrowserWindow = targetBrowserWindow;
+        context.input = input;
         context.timeoutMs = Math.max(1000, Number(task.timeout_seconds || 60) * 1000);
 
         result = await module.run(context);
 
         if (result && result.page) {
-          page = patchPuppeteerPage(result.page);
-          context.page = page;
-          context.pages = Array.from(new Set([...(context.pages || []), page]));
+          registerBrowserWindow(context, result.page, targetBrowserWindow, targetBrowserWindow === 'main' ? 'Main' : taskLabel);
         }
       }
 

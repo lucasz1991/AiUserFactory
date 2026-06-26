@@ -42,6 +42,17 @@ function pageKey(page, fallbackIndex = 0) {
   return pageKeys.get(page);
 }
 
+function configuredWindowKey(config = {}, fallback = '') {
+  return normalizeText(
+    config.key
+    || config.name
+    || config.windowName
+    || config.browserWindow
+    || config.browser_window
+    || fallback,
+  );
+}
+
 function withSuffix(filePath, suffix) {
   if (!filePath || suffix <= 1) {
     return filePath;
@@ -108,11 +119,8 @@ function normalizeWindows(context = {}) {
     .concat(preview.windows || [])
     .concat(context.browserWindows || [])
     .concat(context.windows || [])
-    .concat(context.pages || []);
-
-  if (context.page) {
-    candidates.unshift(context.page);
-  }
+    .concat(context.pages || [])
+    .concat(context.page ? [context.page] : []);
 
   const seen = new Set();
 
@@ -126,20 +134,26 @@ function normalizeWindows(context = {}) {
         return null;
       }
 
-      const key = pageKey(page, index);
-
-      if (seen.has(key)) {
+      if (typeof page.isClosed === 'function' && page.isClosed()) {
         return null;
       }
 
-      seen.add(key);
+      const identityKey = pageKey(page, index);
+
+      if (seen.has(identityKey)) {
+        return null;
+      }
+
+      seen.add(identityKey);
 
       const config = candidate && typeof candidate === 'object' && candidate.page ? candidate : {};
+      const key = configuredWindowKey(config, identityKey);
+      const label = normalizeText(config.label || config.title || key || `Fenster ${seen.size}`);
 
       return {
         key,
         page,
-        label: normalizeText(config.label || config.title || `Fenster ${seen.size}`),
+        label,
         livePreviewPath: windowPath(context, seen.size - 1, config),
         livePreviewRelativePath: windowRelativePath(context, seen.size - 1, config),
       };
