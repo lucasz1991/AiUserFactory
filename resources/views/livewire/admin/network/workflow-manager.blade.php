@@ -82,7 +82,7 @@
                     </button>
                 </div>
 
-                <div x-sort="$wire.reorderStep($item, $position)" class="flex min-h-[560px] items-start gap-0 pb-2">
+                <div x-sort="$dispatch('reorderWorkflowSteps', { item: $item, position: $position })" class="flex min-h-[560px] items-start gap-0 pb-2">
                     @forelse($steps as $step)
                         <div class="flex items-start" x-sort:item="{{ $step->id }}" wire:key="workflow-step-wrap-{{ $step->id }}">
                             <x-workflows.step-card :step="$step" wire:key="workflow-step-{{ $step->id }}">

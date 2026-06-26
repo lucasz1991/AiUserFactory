@@ -11,6 +11,7 @@ use App\Services\Workflows\WorkflowExecutionService;
 use App\Services\Workflows\WorkflowTaskCatalog;
 use App\Services\Workflows\WorkflowTaskOrderingService;
 use Illuminate\Support\Str;
+use Livewire\Attributes\On;
 use Livewire\Component;
 
 class WorkflowManager extends Component
@@ -381,6 +382,14 @@ class WorkflowManager extends Component
         app(WorkflowTaskOrderingService::class)->sortSteps($workflow, (int) $item, (int) $position);
     }
 
+    #[On('reorderWorkflowSteps')]
+    public function handleReorderWorkflowSteps(mixed $item = null, mixed $position = null): void
+    {
+        $payload = $this->sortPayload($item, $position);
+
+        $this->reorderStep($payload['item'], $payload['position']);
+    }
+
     public function prepareTaskFromCatalog(int $stepId, string $taskKey, ?int $position = null): void
     {
         if (! $this->stepForSelectedWorkflow($stepId) || ! app(WorkflowTaskCatalog::class)->task($taskKey)) {
@@ -683,6 +692,22 @@ class WorkflowManager extends Component
         );
     }
 
+    #[On('reorderWorkflowTaskCards')]
+    public function handleReorderWorkflowTaskCards(mixed $item = null, mixed $position = null, mixed $targetStepId = null): void
+    {
+        $payload = $this->sortPayload($item, $position, [
+            'targetStepId' => $targetStepId,
+        ]);
+
+        $targetStepId = (int) ($payload['targetStepId'] ?? 0);
+
+        if ($targetStepId <= 0) {
+            return;
+        }
+
+        $this->reorderTaskCard($targetStepId, $payload['item'], $payload['position']);
+    }
+
     public function moveTaskCard(int $targetStepId, mixed $sourceStepId, string $taskKey, mixed $position): void
     {
         $workflow = $this->selectedWorkflow();
@@ -698,6 +723,26 @@ class WorkflowManager extends Component
             $taskKey,
             (int) $position,
             ((int) $sourceStepId) ?: null,
+        );
+    }
+
+    #[On('moveWorkflowTaskCard')]
+    public function handleMoveWorkflowTaskCard(mixed $targetStepId = null, mixed $sourceStepId = null, mixed $taskKey = null, mixed $position = null): void
+    {
+        $payload = is_array($targetStepId)
+            ? $targetStepId
+            : [
+                'targetStepId' => $targetStepId,
+                'sourceStepId' => $sourceStepId,
+                'taskKey' => $taskKey,
+                'position' => $position,
+            ];
+
+        $this->moveTaskCard(
+            (int) ($payload['targetStepId'] ?? 0),
+            $payload['sourceStepId'] ?? null,
+            (string) ($payload['taskKey'] ?? ''),
+            $payload['position'] ?? 0,
         );
     }
 
@@ -1176,6 +1221,27 @@ class WorkflowManager extends Component
         }
 
         return json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?: '';
+    }
+
+    protected function sortPayload(mixed $item = null, mixed $position = null, array $extra = []): array
+    {
+        $payload = is_array($item)
+            ? $item
+            : [
+                'item' => $item,
+                'position' => $position,
+                ...$extra,
+            ];
+
+        if (! array_key_exists('item', $payload) && array_key_exists('id', $payload)) {
+            $payload['item'] = $payload['id'];
+        }
+
+        if (! array_key_exists('position', $payload)) {
+            $payload['position'] = 0;
+        }
+
+        return $payload;
     }
 
     protected function uniqueTaskKey(array $tasks, string $title): string

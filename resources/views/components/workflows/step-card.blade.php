@@ -46,7 +46,12 @@
                 const catalogKey = event.dataTransfer.getData('application/x-workflow-task-catalog') || event.dataTransfer.getData('text/plain');
 
                 if (taskKey) {
-                    $wire.moveTaskCard({{ $step->id }}, sourceStepId, taskKey, position);
+                    $dispatch('moveWorkflowTaskCard', {
+                        targetStepId: {{ $step->id }},
+                        sourceStepId: sourceStepId,
+                        taskKey: taskKey,
+                        position: position,
+                    });
 
                     return;
                 }
@@ -58,41 +63,45 @@
         }"
         class="flex-1 space-y-0 px-2 pb-3"
     >
-        @foreach($step->task_cards as $task)
-            <div
-                x-on:dragover.prevent="$event.dataTransfer.dropEffect = 'move'"
-                x-on:drop.prevent.stop="dropTask($event, {{ $loop->index }})"
-                class="h-3 rounded border border-dashed border-transparent transition hover:h-8 hover:border-white/50 hover:bg-white/10"
-                wire:key="workflow-task-drop-before-{{ $step->id }}-{{ $task['key'] ?? $loop->index }}"
-            ></div>
-            <div
-                draggable="true"
-                x-on:dragstart.stop="
-                    $event.dataTransfer.setData('application/x-workflow-task-key', @js($task['key'] ?? ''));
-                    $event.dataTransfer.setData('application/x-workflow-source-step-id', @js((string) $step->id));
-                    $event.dataTransfer.effectAllowed = 'move';
-                "
-                x-on:click.stop="focusedTask = @js($step->id.'::'.($task['key'] ?? ''))"
-                x-on:dblclick.stop="$wire.openEditTaskCard({{ $step->id }}, @js($task['key'] ?? ''))"
-                x-bind:class="focusedTask === @js($step->id.'::'.($task['key'] ?? '')) ? 'ring-2 ring-white ring-offset-2 ring-offset-[#0079bf]' : ''"
-                class="cursor-grab rounded-md active:cursor-grabbing"
-                wire:key="workflow-task-{{ $step->id }}-{{ $task['key'] ?? 'task' }}"
-            >
-                @if(! $loop->first)
-                    <div class="ml-4 h-4 w-px bg-white/45"></div>
-                @endif
-                <x-workflows.task-card :task="$task">
-                    <x-slot name="actions">
-                        <button type="button" wire:click="openEditTaskCard({{ $step->id }}, @js($task['key'] ?? ''))" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-100">
-                            Bearbeiten
-                        </button>
-                        <button type="button" wire:click="removeTaskCard({{ $step->id }}, @js($task['key'] ?? ''))" wire:confirm="Step-Karte wirklich entfernen?" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-red-700 hover:bg-red-50">
-                            Entfernen
-                        </button>
-                    </x-slot>
-                </x-workflows.task-card>
-            </div>
-        @endforeach
+        <div
+            x-sort="$dispatch('reorderWorkflowTaskCards', { targetStepId: {{ $step->id }}, item: $item, position: $position })"
+            class="space-y-0"
+        >
+            @foreach($step->task_cards as $task)
+                <div
+                    x-sort:item="{{ $step->id }}::{{ $task['key'] ?? '' }}"
+                    x-on:dragstart.stop="
+                        $event.dataTransfer.setData('application/x-workflow-task-key', @js($task['key'] ?? ''));
+                        $event.dataTransfer.setData('application/x-workflow-source-step-id', @js((string) $step->id));
+                        $event.dataTransfer.effectAllowed = 'move';
+                    "
+                    x-on:click.stop="focusedTask = @js($step->id.'::'.($task['key'] ?? ''))"
+                    x-on:dblclick.stop="$wire.openEditTaskCard({{ $step->id }}, @js($task['key'] ?? ''))"
+                    x-bind:class="focusedTask === @js($step->id.'::'.($task['key'] ?? '')) ? 'ring-2 ring-white ring-offset-2 ring-offset-[#0079bf]' : ''"
+                    class="rounded-md"
+                    wire:key="workflow-task-{{ $step->id }}-{{ $task['key'] ?? 'task' }}"
+                >
+                    <div
+                        x-on:dragover.prevent="$event.dataTransfer.dropEffect = 'move'"
+                        x-on:drop.prevent.stop="dropTask($event, {{ $loop->index }})"
+                        class="h-3 rounded border border-dashed border-transparent transition hover:h-8 hover:border-white/50 hover:bg-white/10"
+                    ></div>
+                    @if(! $loop->first)
+                        <div class="ml-4 h-4 w-px bg-white/45"></div>
+                    @endif
+                    <x-workflows.task-card :task="$task">
+                        <x-slot name="actions">
+                            <button type="button" wire:click="openEditTaskCard({{ $step->id }}, @js($task['key'] ?? ''))" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-100">
+                                Bearbeiten
+                            </button>
+                            <button type="button" wire:click="removeTaskCard({{ $step->id }}, @js($task['key'] ?? ''))" wire:confirm="Step-Karte wirklich entfernen?" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-red-700 hover:bg-red-50">
+                                Entfernen
+                            </button>
+                        </x-slot>
+                    </x-workflows.task-card>
+                </div>
+            @endforeach
+        </div>
 
         @if($step->task_cards === [])
             <div
