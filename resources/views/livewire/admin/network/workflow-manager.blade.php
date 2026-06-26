@@ -69,10 +69,159 @@
 
         <x-admin.panel title="Board">
             <div
-                x-data="{ focusedTask: '' }"
+                x-data="{
+                    focusedTask: '',
+                    routeLines: [],
+                    routeOverlay: { width: 0, height: 0 },
+                    init() {
+                        this.$nextTick(() => this.refreshRouteLines());
+                        this._refreshWorkflowRoutes = () => this.$nextTick(() => this.refreshRouteLines());
+                        window.addEventListener('resize', this._refreshWorkflowRoutes);
+                    },
+                    refreshRouteLines() {
+                        const surface = this.$refs.routeSurface;
+
+                        if (!surface) {
+                            this.routeLines = [];
+                            return;
+                        }
+
+                        const nodes = Array.from(surface.querySelectorAll('[data-workflow-task-node]'));
+                        const surfaceRect = surface.getBoundingClientRect();
+                        const byKey = new Map();
+                        const firstByStep = new Map();
+
+                        nodes.forEach((node) => {
+                            const key = node.dataset.workflowTaskNode || '';
+                            const step = node.dataset.workflowStepAction || '';
+
+                            if (key) {
+                                byKey.set(key, node);
+                            }
+
+                            if (step && !firstByStep.has(step)) {
+                                firstByStep.set(step, node);
+                            }
+                        });
+
+                        const targetNode = (target) => {
+                            const normalized = String(target || '').trim();
+
+                            if (!normalized) {
+                                return null;
+                            }
+
+                            if (normalized.endsWith('::*')) {
+                                return firstByStep.get(normalized.slice(0, -3)) || null;
+                            }
+
+                            return byKey.get(normalized) || null;
+                        };
+                        const makeLine = (source, target, type) => {
+                            const targetElement = targetNode(target);
+
+                            if (!source || !targetElement) {
+                                return null;
+                            }
+
+                            const sourceRect = source.getBoundingClientRect();
+                            const targetRect = targetElement.getBoundingClientRect();
+                            const startX = sourceRect.right - surfaceRect.left + surface.scrollLeft;
+                            const startY = sourceRect.top + (sourceRect.height / 2) - surfaceRect.top + surface.scrollTop;
+                            if (source === targetElement) {
+                                const loopEndY = sourceRect.top + (sourceRect.height * 0.78) - surfaceRect.top + surface.scrollTop;
+                                const loopPath = `M ${startX} ${startY} C ${startX + 70} ${startY}, ${startX + 70} ${loopEndY}, ${startX} ${loopEndY}`;
+
+                                return { path: loopPath, type };
+                            }
+
+                            const endX = targetRect.left - surfaceRect.left + surface.scrollLeft;
+                            const endY = targetRect.top + (targetRect.height / 2) - surfaceRect.top + surface.scrollTop;
+                            const control = Math.max(42, Math.abs(endX - startX) / 2);
+                            const path = `M ${startX} ${startY} C ${startX + control} ${startY}, ${endX - control} ${endY}, ${endX} ${endY}`;
+
+                            return { path, type };
+                        };
+                        const lines = [];
+
+                        nodes.forEach((node, index) => {
+                            const stepElement = node.closest('[data-step-route-success]');
+                            const nextNode = nodes[index + 1] || null;
+                            const nextNodeSameStep = nextNode && nextNode.dataset.workflowStepAction === node.dataset.workflowStepAction;
+                            const lastInStep = !nextNodeSameStep;
+                            let successTarget = String(node.dataset.routeSuccess || '').trim();
+
+                            if (!successTarget && nextNodeSameStep) {
+                                successTarget = nextNode.dataset.workflowTaskNode || '';
+                            }
+
+                            if (!successTarget && lastInStep && stepElement) {
+                                successTarget = String(stepElement.dataset.stepRouteSuccess || '').trim();
+                            }
+
+                            if (!successTarget && nextNode) {
+                                successTarget = nextNode.dataset.workflowTaskNode || '';
+                            }
+
+                            const successLine = makeLine(node, successTarget, 'success');
+
+                            if (successLine) {
+                                lines.push(successLine);
+                            }
+
+                            let failedTarget = String(node.dataset.routeFailed || '').trim();
+
+                            if (!failedTarget && stepElement && lastInStep) {
+                                failedTarget = String(stepElement.dataset.stepRouteFailed || '').trim();
+                            }
+
+                            const failedLine = makeLine(node, failedTarget, 'failed');
+
+                            if (failedLine) {
+                                lines.push(failedLine);
+                            }
+                        });
+
+                        this.routeOverlay = {
+                            width: surface.scrollWidth,
+                            height: surface.scrollHeight,
+                        };
+                        this.routeLines = lines;
+                    },
+                }"
+                x-init="refreshRouteLines()"
+                x-on:scroll.debounce.100ms="refreshRouteLines()"
+                x-ref="routeSurface"
                 class="relative max-h-[calc(100vh-220px)] overflow-auto rounded-md border border-[#075985] bg-[#0079bf] p-4 shadow-sm"
             >
-                <div class="mb-4 flex items-center justify-between gap-3">
+                <svg
+                    class="pointer-events-none absolute left-0 top-0 z-0"
+                    x-bind:width="routeOverlay.width"
+                    x-bind:height="routeOverlay.height"
+                    x-bind:viewBox="`0 0 ${routeOverlay.width} ${routeOverlay.height}`"
+                    aria-hidden="true"
+                >
+                    <defs>
+                        <marker id="workflow-arrow-green" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+                            <path d="M0,0 L0,6 L8,3 z" fill="#bbf7d0"></path>
+                        </marker>
+                        <marker id="workflow-arrow-red" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+                            <path d="M0,0 L0,6 L8,3 z" fill="#fca5a5"></path>
+                        </marker>
+                    </defs>
+                    <template x-for="(line, index) in routeLines" x-bind:key="index">
+                        <path
+                            x-bind:d="line.path"
+                            fill="none"
+                            stroke-width="2"
+                            x-bind:stroke="line.type === 'failed' ? '#fca5a5' : '#bbf7d0'"
+                            x-bind:stroke-dasharray="line.type === 'failed' ? '6 5' : '0'"
+                            x-bind:marker-end="line.type === 'failed' ? 'url(#workflow-arrow-red)' : 'url(#workflow-arrow-green)'"
+                        ></path>
+                    </template>
+                </svg>
+
+                <div class="relative z-10 mb-4 flex items-center justify-between gap-3">
                     <div class="min-w-0">
                         <p class="text-sm font-semibold text-white">{{ $selectedWorkflow->name }}</p>
                         <p class="text-xs text-blue-100">Tasks aus dem rechten Panel auf eine Liste ziehen.</p>
@@ -82,7 +231,7 @@
                     </button>
                 </div>
 
-                <div x-sort="$dispatch('reorderWorkflowSteps', { item: $item, position: $position })" class="flex min-h-[560px] items-start gap-0 pb-2">
+                <div x-sort="$dispatch('reorderWorkflowSteps', { item: $item, position: $position })" class="relative z-10 flex min-h-[560px] items-start gap-0 pb-2">
                     @forelse($steps as $step)
                         <div class="flex items-start" x-sort:item="{{ $step->id }}" wire:key="workflow-step-wrap-{{ $step->id }}">
                             <x-workflows.step-card :step="$step" wire:key="workflow-step-{{ $step->id }}">

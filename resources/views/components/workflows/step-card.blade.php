@@ -6,9 +6,30 @@
     $enabledClass = $step->is_enabled
         ? 'border-transparent bg-transparent'
         : 'border-transparent bg-transparent opacity-70';
+    $routeNodeForStep = static function (?array $route): string {
+        if (! is_array($route)) {
+            return '';
+        }
+
+        $targetStep = trim((string) data_get($route, 'action_key', data_get($route, 'step', '')));
+        $targetCard = trim((string) data_get($route, 'card_key', data_get($route, 'card', '')));
+
+        if (in_array($targetStep, ['', 'next', 'end', 'fail'], true)) {
+            return '';
+        }
+
+        return $targetStep.'::'.($targetCard !== '' ? $targetCard : '*');
+    };
+    $stepSuccessTarget = $routeNodeForStep(is_array(data_get($step->routes, 'success')) ? data_get($step->routes, 'success') : null);
+    $stepFailedTarget = $routeNodeForStep(is_array(data_get($step->routes, 'failed')) ? data_get($step->routes, 'failed') : null);
 @endphp
 
-<div {{ $attributes->merge(['class' => 'flex min-h-[260px] w-[270px] shrink-0 flex-col rounded-md border '.$enabledClass]) }}>
+<div
+    data-workflow-step-action="{{ $step->action_key }}"
+    data-step-route-success="{{ $stepSuccessTarget }}"
+    data-step-route-failed="{{ $stepFailedTarget }}"
+    {{ $attributes->merge(['class' => 'flex min-h-[260px] w-[270px] shrink-0 flex-col rounded-md border '.$enabledClass]) }}
+>
     <div class="px-2 pb-2 pt-1">
         <div class="flex items-start justify-between gap-3">
             <div class="min-w-0">
@@ -71,8 +92,36 @@
             class="space-y-0"
         >
             @foreach($step->task_cards as $task)
+                @php
+                    $taskKey = trim((string) ($task['key'] ?? ''));
+                    $sourceNode = $step->action_key.'::'.$taskKey;
+                    $routeNode = static function (?array $route) use ($step): string {
+                        if (! is_array($route)) {
+                            return '';
+                        }
+
+                        $targetStep = trim((string) data_get($route, 'action_key', data_get($route, 'step', '')));
+                        $targetCard = trim((string) data_get($route, 'card_key', data_get($route, 'card', '')));
+
+                        if (in_array($targetStep, ['', 'next', 'end', 'fail'], true)) {
+                            $targetStep = $targetCard !== '' ? $step->action_key : '';
+                        }
+
+                        if ($targetStep === '') {
+                            return '';
+                        }
+
+                        return $targetStep.'::'.($targetCard !== '' ? $targetCard : '*');
+                    };
+                    $successTarget = $routeNode(is_array($task['next'] ?? null) ? $task['next'] : null);
+                    $failedTarget = $routeNode(is_array($task['on_error'] ?? null) ? $task['on_error'] : null);
+                @endphp
                 <div
                     x-sort:item="{{ $step->id }}::{{ $task['key'] ?? '' }}"
+                    data-workflow-task-node="{{ $sourceNode }}"
+                    data-workflow-step-action="{{ $step->action_key }}"
+                    data-route-success="{{ $successTarget }}"
+                    data-route-failed="{{ $failedTarget }}"
                     x-on:dragstart.stop="
                         $event.dataTransfer.setData('application/x-workflow-task-key', @js($task['key'] ?? ''));
                         $event.dataTransfer.setData('application/x-workflow-source-step-id', @js((string) $step->id));
