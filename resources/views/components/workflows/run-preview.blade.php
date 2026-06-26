@@ -61,25 +61,6 @@
     $downloadName = static function (string $name): string {
         return \Illuminate\Support\Str::slug($name) ?: 'workflow-debug';
     };
-    $taskStatusLabel = static function (?array $taskResult, ?object $stepRun, array $result): string {
-        if (
-            ($stepRun?->workflowStep?->type ?? null) === \App\Models\WorkflowStep::TYPE_PLANNED_ACTION
-            && trim((string) ($stepRun?->external_run_id ?? '')) === ''
-        ) {
-            return 'not_executed';
-        }
-
-        if (is_array($taskResult) && trim((string) data_get($taskResult, 'status')) !== '') {
-            return (string) data_get($taskResult, 'status');
-        }
-
-        if (($stepRun?->status ?? null) === 'completed' && ! is_array(data_get($result, 'tasks'))) {
-            return 'not_executed';
-        }
-
-        return 'configured';
-    };
-
     $stepRuns = $workflowRun?->stepRuns ?? collect();
     $screenshotPanels = collect($stepRuns)
         ->flatMap(function ($stepRun) use ($publicUrl, $windowStatus, $liveStatusForStepRun) {
@@ -140,7 +121,7 @@
         })
         ->first(fn (array $result): bool => $result !== []) ?? [];
     $stepDebugPanels = collect($stepRuns)
-        ->map(function ($stepRun) use ($liveStatusForStepRun, $taskStatusLabel) {
+        ->map(function ($stepRun) use ($liveStatusForStepRun) {
             $step = $stepRun->workflowStep;
             $storedResult = is_array($stepRun->result_json) ? $stepRun->result_json : [];
             $storedLogs = is_array($stepRun->logs_json) ? $stepRun->logs_json : [];
@@ -151,10 +132,21 @@
                 ->keyBy(fn ($task) => (string) data_get($task, 'key'));
             $templateTasks = collect($step?->task_cards ?? []);
             $tasks = $templateTasks
-                ->map(function (array $task) use ($resultTasks, $stepRun, $result, $taskStatusLabel) {
+                ->map(function (array $task) use ($resultTasks, $stepRun, $result) {
                     $taskKey = (string) ($task['key'] ?? '');
                     $resultTask = $resultTasks->get($taskKey);
-                    $status = $taskStatusLabel($resultTask, $stepRun, $result);
+                    $status = 'configured';
+
+                    if (
+                        ($stepRun?->workflowStep?->type ?? null) === \App\Models\WorkflowStep::TYPE_PLANNED_ACTION
+                        && trim((string) ($stepRun?->external_run_id ?? '')) === ''
+                    ) {
+                        $status = 'not_executed';
+                    } elseif (is_array($resultTask) && trim((string) data_get($resultTask, 'status')) !== '') {
+                        $status = (string) data_get($resultTask, 'status');
+                    } elseif (($stepRun?->status ?? null) === 'completed' && ! is_array(data_get($result, 'tasks'))) {
+                        $status = 'not_executed';
+                    }
                     $debug = [
                         'workflowRunId' => $stepRun->workflow_run_id,
                         'workflowStepRunId' => $stepRun->id,
