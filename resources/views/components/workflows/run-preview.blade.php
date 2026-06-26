@@ -55,6 +55,30 @@
             default => [],
         };
     };
+    $jsonDownload = static function (array $payload): string {
+        return 'data:application/json;base64,'.base64_encode(json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+    };
+    $downloadName = static function (string $name): string {
+        return \Illuminate\Support\Str::slug($name) ?: 'workflow-debug';
+    };
+    $taskStatusLabel = static function (?array $taskResult, ?object $stepRun, array $result): string {
+        if (
+            ($stepRun?->workflowStep?->type ?? null) === \App\Models\WorkflowStep::TYPE_PLANNED_ACTION
+            && trim((string) ($stepRun?->external_run_id ?? '')) === ''
+        ) {
+            return 'not_executed';
+        }
+
+        if (is_array($taskResult) && trim((string) data_get($taskResult, 'status')) !== '') {
+            return (string) data_get($taskResult, 'status');
+        }
+
+        if (($stepRun?->status ?? null) === 'completed' && ! is_array(data_get($result, 'tasks'))) {
+            return 'not_executed';
+        }
+
+        return 'configured';
+    };
 
     $stepRuns = $workflowRun?->stepRuns ?? collect();
     $screenshotPanels = collect($stepRuns)
@@ -115,6 +139,111 @@
             return array_replace_recursive($storedResult, $liveStatusForStepRun($stepRun));
         })
         ->first(fn (array $result): bool => $result !== []) ?? [];
+    $stepDebugPanels = collect($stepRuns)
+        ->map(function ($stepRun) use ($liveStatusForStepRun, $taskStatusLabel) {
+            $step = $stepRun->workflowStep;
+            $storedResult = is_array($stepRun->result_json) ? $stepRun->result_json : [];
+            $storedLogs = is_array($stepRun->logs_json) ? $stepRun->logs_json : [];
+            $liveStatus = $liveStatusForStepRun($stepRun);
+            $result = array_replace_recursive($storedResult, $liveStatus);
+            $resultTasks = collect(is_array(data_get($result, 'tasks')) ? data_get($result, 'tasks') : [])
+                ->filter(fn ($task) => is_array($task))
+                ->keyBy(fn ($task) => (string) data_get($task, 'key'));
+            $templateTasks = collect($step?->task_cards ?? []);
+            $tasks = $templateTasks
+                ->map(function (array $task) use ($resultTasks, $stepRun, $result) {
+                    $taskKey = (string) ($task['key'] ?? '');
+                    $resultTask = $resultTasks->get($taskKey);
+                    $status = $taskStatusLabel($resultTask, $stepRun, $result);
+                    $debug = [
+                        'workflowRunId' => $stepRun->workflow_run_id,
+                        'workflowStepRunId' => $stepRun->id,
+                        'workflowStepId' => $stepRun->workflow_step_id,
+                        'externalRunType' => $stepRun->external_run_type,
+                        'externalRunId' => $stepRun->external_run_id,
+                        'status' => $status,
+                        'task' => $task,
+                        'resultTask' => $resultTask,
+                        'note' => $status === 'not_executed'
+                            ? 'Fuer diese Karte liegt kein Runner-Resultat vor. Sie war in diesem Lauf nur Planungskonfiguration.'
+                            : null,
+                    ];
+
+                    return [
+                        'key' => $taskKey,
+                        'title' => (string) ($task['title'] ?? 'Task'),
+                        'status' => $status,
+                        'runner' => (string) ($task['runner'] ?? ''),
+                        'node_script' => (string) ($task['node_script'] ?? ''),
+                        'php_handler' => (string) ($task['php_handler'] ?? ''),
+                        'debug' => $debug,
+                    ];
+                })
+                ->values();
+
+            if ($tasks->isEmpty() && $resultTasks->isNotEmpty()) {
+                $tasks = $resultTasks
+                    ->values()
+                    ->map(fn (array $task) => [
+                        'key' => (string) data_get($task, 'key', ''),
+                        'title' => (string) data_get($task, 'title', 'Task'),
+                        'status' => (string) data_get($task, 'status', $stepRun->status),
+                        'runner' => (string) data_get($task, 'runner', ''),
+                        'node_script' => (string) data_get($task, 'node_script', ''),
+                        'php_handler' => (string) data_get($task, 'php_handler', ''),
+                        'debug' => [
+                            'workflowRunId' => $stepRun->workflow_run_id,
+                            'workflowStepRunId' => $stepRun->id,
+                            'workflowStepId' => $stepRun->workflow_step_id,
+                            'externalRunType' => $stepRun->external_run_type,
+                            'externalRunId' => $stepRun->external_run_id,
+                            'status' => (string) data_get($task, 'status', $stepRun->status),
+                            'resultTask' => $task,
+                        ],
+                    ]);
+            }
+
+            $debug = [
+                'workflowRunId' => $stepRun->workflow_run_id,
+                'workflowStepRunId' => $stepRun->id,
+                'workflowStepId' => $stepRun->workflow_step_id,
+                'stepName' => $step?->name,
+                'stepType' => $step?->type,
+                'stepStatus' => $stepRun->status,
+                'externalRunType' => $stepRun->external_run_type,
+                'externalRunId' => $stepRun->external_run_id,
+                'errorMessage' => $stepRun->error_message,
+                'config' => $step?->config_json,
+                'result' => $result,
+                'logs' => $storedLogs,
+            ];
+
+            return [
+                'title' => $step?->name ?? 'Schritt',
+                'status' => (string) $stepRun->status,
+                'external' => trim((string) $stepRun->external_run_type) !== '' ? $stepRun->external_run_type.' · '.$stepRun->external_run_id : '',
+                'message' => (string) data_get($result, 'statusMessage', data_get($result, 'message', $stepRun->error_message)),
+                'events' => collect([
+                    ...((array) data_get($result, 'events', [])),
+                    ...((array) data_get($storedLogs, 'events', [])),
+                    ...((array) data_get($result, 'browserDebugEvents', [])),
+                    ...((array) data_get($storedLogs, 'browserDebugEvents', [])),
+                ])->filter(fn ($event) => is_array($event))->values()->take(-20)->all(),
+                'tasks' => $tasks,
+                'debug' => $debug,
+            ];
+        })
+        ->values();
+    $timelineEvents = collect(data_get($latestStatusResult, 'events', []))
+        ->filter(fn ($event) => is_array($event))
+        ->values();
+
+    if ($timelineEvents->isEmpty()) {
+        $timelineEvents = $stepDebugPanels
+            ->flatMap(fn ($panel) => $panel['events'] ?? [])
+            ->filter(fn ($event) => is_array($event))
+            ->values();
+    }
 @endphp
 
 <div {{ $attributes->merge(['class' => 'space-y-5']) }}>
@@ -185,7 +314,7 @@
             <div class="max-h-96 overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-4">
                 <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Ablauf</div>
                 <div class="mt-3 space-y-2">
-                    @forelse(array_reverse(data_get($latestStatusResult, 'events', [])) as $event)
+                    @forelse($timelineEvents->reverse()->values() as $event)
                         <div class="rounded-md bg-white p-3 text-xs shadow-sm">
                             <div class="font-semibold text-slate-900">{{ data_get($event, 'stage', '-') }}</div>
                             <div class="mt-1 text-slate-600">{{ data_get($event, 'message', '-') }}</div>
@@ -193,6 +322,97 @@
                         </div>
                     @empty
                         <div class="text-sm text-slate-500">Noch keine Ablaufdaten.</div>
+                    @endforelse
+                </div>
+            </div>
+
+            <div class="max-h-[28rem] overflow-auto rounded-lg border border-slate-200 bg-white p-4">
+                <div class="flex items-center justify-between gap-3">
+                    <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Logs & Debug</div>
+                    <a
+                        href="{{ $jsonDownload([
+                            'workflowRunId' => $workflowRun?->id,
+                            'workflowRunUuid' => $workflowRun?->run_uuid,
+                            'status' => $workflowRun?->status,
+                            'steps' => $stepDebugPanels->pluck('debug')->all(),
+                        ]) }}"
+                        download="workflow-run-{{ $workflowRun?->id ?? 'debug' }}.json"
+                        class="shrink-0 rounded border border-slate-200 px-2 py-1 text-[10px] font-semibold text-slate-600 hover:bg-slate-50"
+                    >
+                        Run JSON
+                    </a>
+                </div>
+
+                <div class="mt-3 space-y-3">
+                    @forelse($stepDebugPanels as $panel)
+                        <div class="rounded-md border border-slate-100 bg-slate-50 p-3">
+                            <div class="flex items-start justify-between gap-3">
+                                <div class="min-w-0">
+                                    <div class="truncate text-xs font-semibold text-slate-900">{{ $panel['title'] }}</div>
+                                    <div class="mt-1 flex flex-wrap items-center gap-1 text-[11px] text-slate-500">
+                                        <span>{{ $panel['status'] }}</span>
+                                        @if($panel['external'])
+                                            <span>·</span>
+                                            <span class="truncate">{{ $panel['external'] }}</span>
+                                        @endif
+                                    </div>
+                                </div>
+                                <a
+                                    href="{{ $jsonDownload($panel['debug']) }}"
+                                    download="{{ $downloadName($panel['title']) }}-step-{{ data_get($panel, 'debug.workflowStepRunId') }}.json"
+                                    class="shrink-0 rounded border border-slate-200 bg-white px-2 py-1 text-[10px] font-semibold text-slate-600 hover:bg-slate-100"
+                                >
+                                    Debug
+                                </a>
+                            </div>
+
+                            @if($panel['message'])
+                                <div class="mt-2 rounded bg-white px-2 py-1 text-[11px] text-slate-600">{{ $panel['message'] }}</div>
+                            @endif
+
+                            @if($panel['tasks']->isNotEmpty())
+                                <div class="mt-2 space-y-1">
+                                    @foreach($panel['tasks'] as $task)
+                                        <div class="flex items-center justify-between gap-2 rounded border border-white bg-white px-2 py-1 text-[11px]">
+                                            <div class="min-w-0">
+                                                <div class="truncate font-semibold text-slate-700">{{ $task['title'] }}</div>
+                                                <div class="truncate text-slate-400">
+                                                    {{ $task['status'] }}
+                                                    @if($task['runner'])
+                                                        · {{ $task['runner'] }}
+                                                    @endif
+                                                    @if($task['node_script'])
+                                                        · {{ $task['node_script'] }}
+                                                    @elseif($task['php_handler'])
+                                                        · {{ $task['php_handler'] }}
+                                                    @endif
+                                                </div>
+                                            </div>
+                                            <a
+                                                href="{{ $jsonDownload($task['debug']) }}"
+                                                download="{{ $downloadName($panel['title'].' '.$task['title']) }}.json"
+                                                class="shrink-0 rounded border border-slate-200 px-2 py-1 text-[10px] font-semibold text-slate-600 hover:bg-slate-50"
+                                            >
+                                                JSON
+                                            </a>
+                                        </div>
+                                    @endforeach
+                                </div>
+                            @endif
+
+                            @if($panel['events'] !== [])
+                                <div class="mt-2 space-y-1">
+                                    @foreach(array_reverse($panel['events']) as $event)
+                                        <div class="rounded bg-white px-2 py-1 text-[11px] text-slate-500">
+                                            <span class="font-semibold text-slate-700">{{ data_get($event, 'stage', data_get($event, 'type', '-')) }}</span>
+                                            <span>{{ data_get($event, 'message', data_get($event, 'text', '')) }}</span>
+                                        </div>
+                                    @endforeach
+                                </div>
+                            @endif
+                        </div>
+                    @empty
+                        <div class="text-sm text-slate-500">Noch keine Debugdaten.</div>
                     @endforelse
                 </div>
             </div>

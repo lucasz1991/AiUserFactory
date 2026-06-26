@@ -136,9 +136,7 @@ class WorkflowManager extends Component
         $steps = $selectedWorkflow
             ? $selectedWorkflow->steps()->ordered()->get()
             : collect();
-        $runs = $selectedWorkflow
-            ? $selectedWorkflow->runs()->with(['stepRuns.workflowStep'])->limit(8)->get()
-            : collect();
+        $quickPreviewRun = $selectedWorkflow ? $this->quickPreviewRun($selectedWorkflow) : null;
         $persons = Person::query()
             ->where('platform', 'instagram')
             ->orderBy('sort_order')
@@ -164,7 +162,7 @@ class WorkflowManager extends Component
         return view('livewire.admin.network.workflow-manager', [
             'selectedWorkflow' => $selectedWorkflow,
             'steps' => $steps,
-            'runs' => $runs,
+            'quickPreviewRun' => $quickPreviewRun,
             'previewWorkflowRun' => $this->previewWorkflowRun(),
             'persons' => $persons,
             'personOptions' => $catalog->personOptions($catalogPersons),
@@ -735,6 +733,21 @@ class WorkflowManager extends Component
         $this->showRunPreviewModal = false;
     }
 
+    public function openLatestRunPreview(): void
+    {
+        $workflow = $this->selectedWorkflow();
+        $run = $workflow ? $this->quickPreviewRun($workflow) : null;
+
+        if (! $run) {
+            session()->flash('success', 'Es gibt noch keinen Testlauf fuer diesen Workflow.');
+
+            return;
+        }
+
+        $this->previewWorkflowRunId = $run->id;
+        $this->showRunPreviewModal = true;
+    }
+
     protected function selectedWorkflow(): ?Workflow
     {
         if (! $this->selectedWorkflowId) {
@@ -757,6 +770,20 @@ class WorkflowManager extends Component
                 'stepRuns.workflowStep',
             ])
             ->find($this->previewWorkflowRunId);
+    }
+
+    protected function quickPreviewRun(Workflow $workflow): ?WorkflowRun
+    {
+        $activeRun = $workflow->runs()
+            ->whereIn('status', ['queued', 'running', 'waiting'])
+            ->latest('updated_at')
+            ->latest('id')
+            ->first();
+
+        return $activeRun ?: $workflow->runs()
+            ->latest('created_at')
+            ->latest('id')
+            ->first();
     }
 
     protected function loadWorkflowForm(): void

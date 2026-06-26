@@ -54,6 +54,7 @@
                         $stepStatus = (string) ($stepRun?->status ?? 'configured');
                         $tasks = $step->task_cards;
                         $resultTasks = collect(data_get($stepRun?->result_json, 'tasks', []))->keyBy(fn ($task) => (string) data_get($task, 'key'));
+                        $plannedOnlyStep = $step->type === \App\Models\WorkflowStep::TYPE_PLANNED_ACTION && trim((string) ($stepRun?->external_run_id ?? '')) === '';
                         $stepTone = $taskTone($stepStatus, $isActiveStep);
                     @endphp
 
@@ -73,7 +74,9 @@
                                     @php
                                         $taskKey = (string) ($task['key'] ?? '');
                                         $taskResult = $resultTasks->get($taskKey);
-                                        $taskStatus = (string) data_get($taskResult, 'status', data_get($task, 'status', 'configured'));
+                                        $taskStatus = $plannedOnlyStep
+                                            ? 'not_executed'
+                                            : (string) data_get($taskResult, 'status', data_get($task, 'status', 'configured'));
                                         $isTaskActive = $isActiveStep && ($activeTaskKey === '' ? ($loop->first && in_array($stepStatus, ['running', 'waiting'], true)) : $taskKey === $activeTaskKey);
                                         $tone = $taskTone($taskStatus, $isTaskActive);
                                         $lineTone = $connectorTone($taskStatus, $isTaskActive);

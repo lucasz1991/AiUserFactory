@@ -15,6 +15,14 @@
 
             @if($selectedWorkflow)
                 <div class="flex flex-wrap justify-end gap-2">
+                    <button
+                        type="button"
+                        wire:click="openLatestRunPreview"
+                        @disabled(! $quickPreviewRun)
+                        class="rounded-md border border-indigo-200 bg-white px-3 py-2 text-sm font-semibold text-indigo-700 shadow-sm hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        {{ $quickPreviewRun && in_array($quickPreviewRun->status, ['queued', 'running', 'waiting'], true) ? 'Laufenden Test öffnen' : 'Letzten Test öffnen' }}
+                    </button>
                     <button type="button" wire:click="$set('showWorkflowModal', true)" class="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
                         Workflow
                     </button>
@@ -150,12 +158,6 @@
                         </div>
                     </div>
                 @endif
-            </div>
-        </x-admin.panel>
-
-        <x-admin.panel title="Ausfuehrungs-Tasks">
-            <div wire:poll.3s>
-                <x-workflows.run-list :runs="$runs" />
             </div>
         </x-admin.panel>
 

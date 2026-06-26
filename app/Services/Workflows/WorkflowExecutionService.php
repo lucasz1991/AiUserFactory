@@ -155,6 +155,7 @@ class WorkflowExecutionService
             $stepRun->forceFill([
                 'status' => 'waiting',
                 'result_json' => $this->publicRunSnapshot($status),
+                'logs_json' => $this->logsFromExternalStatus($status),
             ])->save();
 
             $this->scheduleMonitor($stepRun, (int) ($status['livePreviewPollIntervalSeconds'] ?? $status['livePreviewIntervalSeconds'] ?? 10));
@@ -273,6 +274,7 @@ class WorkflowExecutionService
             'ok' => true,
             'statusMessage' => 'Geplante Persona-Aktion wurde im Workflow verarbeitet.',
             'action' => $step->config_json,
+            'debugMessage' => 'Dieser Schritt wurde als geplante Aktion verarbeitet. Die Task-Karten sind Planungskarten und wurden in diesem Lauf nicht als einzelne Runner-Tasks ausgefuehrt.',
             'completedAt' => now()->toIso8601String(),
         ];
 
@@ -320,6 +322,7 @@ class WorkflowExecutionService
             'finished_at' => $finishedAt,
             'duration_ms' => max(0, $startedAt->diffInMilliseconds($finishedAt)),
             'result_json' => $this->publicRunSnapshot($result),
+            'logs_json' => $this->logsFromExternalStatus($result),
             'error_message' => null,
         ])->save();
     }
@@ -335,6 +338,7 @@ class WorkflowExecutionService
             'finished_at' => $finishedAt,
             'duration_ms' => max(0, $startedAt->diffInMilliseconds($finishedAt)),
             'result_json' => $result ? $this->publicRunSnapshot($result) : $stepRun->result_json,
+            'logs_json' => $result ? $this->logsFromExternalStatus($result) : $stepRun->logs_json,
             'error_message' => $message,
         ])->save();
     }
@@ -903,6 +907,32 @@ class WorkflowExecutionService
         return $payload;
     }
 
+    protected function logsFromExternalStatus(array $status): array
+    {
+        $events = is_array($status['events'] ?? null) ? array_values($status['events']) : [];
+        $browserDebugEvents = is_array($status['browserDebugEvents'] ?? null) ? array_values($status['browserDebugEvents']) : [];
+        $warnings = is_array($status['warnings'] ?? null) ? array_values($status['warnings']) : [];
+        $message = $status['message'] ?? $status['statusMessage'] ?? null;
+
+        if ($events === [] && is_string($message) && trim($message) !== '') {
+            $events[] = [
+                'at' => now()->toIso8601String(),
+                'stage' => $status['stage'] ?? $status['status'] ?? 'status',
+                'message' => $message,
+            ];
+        }
+
+        return [
+            'capturedAt' => now()->toIso8601String(),
+            'state' => $status['state'] ?? $status['status'] ?? null,
+            'stage' => $status['stage'] ?? null,
+            'message' => $message,
+            'events' => $events,
+            'browserDebugEvents' => $browserDebugEvents,
+            'warnings' => $warnings,
+        ];
+    }
+
     protected function withTaskStatuses(WorkflowStep $step, array $result, string $status, ?string $errorMessage = null): array
     {
         $tasks = $step->task_cards;
@@ -911,16 +941,32 @@ class WorkflowExecutionService
             return $result;
         }
 
-        $result['tasks'] = collect($tasks)
-            ->map(function (array $task) use ($status, $errorMessage): array {
-                $task['status'] = $status;
-                $task['finishedAt'] = now()->toIso8601String();
+        $resultTasks = collect(is_array($result['tasks'] ?? null) ? $result['tasks'] : [])
+            ->filter(fn (mixed $task): bool => is_array($task))
+            ->keyBy(fn (array $task): string => (string) ($task['key'] ?? ''));
 
-                if ($errorMessage) {
-                    $task['errorMessage'] = $errorMessage;
+        if ($resultTasks->isEmpty()) {
+            return $result;
+        }
+
+        $result['tasks'] = collect($tasks)
+            ->map(function (array $task) use ($resultTasks, $status, $errorMessage): array {
+                $taskKey = (string) ($task['key'] ?? '');
+                $resultTask = $resultTasks->get($taskKey);
+
+                if (! is_array($resultTask)) {
+                    return $task;
                 }
 
-                return $task;
+                $merged = array_replace($task, $resultTask);
+                $merged['status'] = (string) ($resultTask['status'] ?? $status);
+                $merged['finishedAt'] = $resultTask['finishedAt'] ?? now()->toIso8601String();
+
+                if ($errorMessage && ! isset($merged['errorMessage'])) {
+                    $merged['errorMessage'] = $errorMessage;
+                }
+
+                return $merged;
             })
             ->values()
             ->toArray();
