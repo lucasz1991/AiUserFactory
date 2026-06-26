@@ -126,6 +126,8 @@ class WorkflowStep extends Model
                     'runner' => trim((string) ($task['runner'] ?? '')),
                     'node_script' => trim((string) ($task['node_script'] ?? '')),
                     'php_handler' => trim((string) ($task['php_handler'] ?? '')),
+                    'browser_window' => trim((string) ($task['browser_window'] ?? '')),
+                    'browser_window_name' => trim((string) ($task['browser_window_name'] ?? $task['browser_window'] ?? '')),
                     'timeout_seconds' => max(0, (int) ($task['timeout_seconds'] ?? 0)),
                     'status' => trim((string) ($task['status'] ?? 'template')),
                     'selector' => trim((string) ($task['selector'] ?? '')),

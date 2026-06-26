@@ -412,6 +412,7 @@ class WorkflowManager extends Component
         $this->newTaskSuccessTarget = '';
         $this->newTaskFailedTarget = 'fail';
         $this->applyTaskDefinitionToForm('newTask', $taskKey, true);
+        $this->newTaskBrowserWindow = $this->defaultBrowserWindowNameForTask($taskKey);
         $this->showAddTaskModal = true;
         $this->showTaskPanel = false;
     }
@@ -419,6 +420,7 @@ class WorkflowManager extends Component
     public function updatedNewTaskCatalogKey(string $taskKey): void
     {
         $this->applyTaskDefinitionToForm('newTask', $taskKey, false);
+        $this->newTaskBrowserWindow = $this->defaultBrowserWindowNameForTask($taskKey);
     }
 
     public function updatedEditingTaskCatalogKey(string $taskKey): void
@@ -1134,6 +1136,77 @@ class WorkflowManager extends Component
         $name = strtolower(substr($name, 0, 80));
 
         return $name !== '' ? $name : 'main';
+    }
+
+    protected function defaultBrowserWindowNameForTask(string $taskKey): string
+    {
+        if ($taskKey === 'browser.open') {
+            return $this->nextBrowserWindowName();
+        }
+
+        return $this->lastOpenedBrowserWindowName() ?: 'main';
+    }
+
+    protected function nextBrowserWindowName(): string
+    {
+        $names = $this->configuredBrowserWindowNames();
+
+        if (! in_array('main', $names, true)) {
+            return 'main';
+        }
+
+        for ($index = 2; $index < 100; $index++) {
+            $candidate = 'window-'.$index;
+
+            if (! in_array($candidate, $names, true)) {
+                return $candidate;
+            }
+        }
+
+        return 'window-'.count($names);
+    }
+
+    protected function lastOpenedBrowserWindowName(): string
+    {
+        $workflow = $this->selectedWorkflow();
+        $lastName = 'main';
+
+        if (! $workflow) {
+            return $lastName;
+        }
+
+        foreach ($workflow->steps()->ordered()->get() as $step) {
+            foreach ($step->task_cards as $task) {
+                if (($task['task_key'] ?? '') !== 'browser.open') {
+                    continue;
+                }
+
+                $name = $this->normalizeBrowserWindowName((string) ($task['browser_window_name'] ?? $task['browser_window'] ?? ''));
+
+                if ($name !== '') {
+                    $lastName = $name;
+                }
+            }
+        }
+
+        return $lastName;
+    }
+
+    protected function configuredBrowserWindowNames(): array
+    {
+        $workflow = $this->selectedWorkflow();
+
+        if (! $workflow) {
+            return ['main'];
+        }
+
+        return collect(['main'])
+            ->merge($workflow->steps()->ordered()->get()->flatMap(fn (WorkflowStep $step) => collect($step->task_cards)
+                ->map(fn (array $task): string => $this->normalizeBrowserWindowName((string) ($task['browser_window_name'] ?? $task['browser_window'] ?? '')))))
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
     }
 
     protected function routeTargetFromValue(string $value): ?array
