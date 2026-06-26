@@ -3,6 +3,21 @@
 const fs = require('fs');
 const path = require('path');
 const { captureTaskPreview, stopTaskPreview } = require('./tasks/lib/preview.cjs');
+const {
+  BROWSER_LAUNCHER_SCRIPT_VERSION,
+  launchConfiguredBrowserWithProfileRetry,
+  resolveBrowserEngine,
+} = require('../../resources/node/register/lib/browser-launcher.cjs');
+
+let puppeteer = null;
+
+try {
+  puppeteer = require('puppeteer-extra');
+  const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+  puppeteer.use(StealthPlugin());
+} catch {
+  puppeteer = require('puppeteer');
+}
 
 const runtimePath = process.argv[2];
 
@@ -20,6 +35,9 @@ let browserDriver = '';
 let page = null;
 let previewTimer = null;
 let lastBrowserWindows = [];
+let requestedBrowserEngine = null;
+let activeBrowserEngine = null;
+let browserFallbackReason = null;
 
 function now() {
   return new Date().toISOString();
@@ -88,6 +106,13 @@ function statusPayload(state, stage, message, extra = {}) {
     livePreviewIntervalSeconds: Number(runtime.livePreviewIntervalSeconds || 3),
     livePreviewPollIntervalSeconds: Number(runtime.livePreviewPollIntervalSeconds || runtime.livePreviewIntervalSeconds || 3),
     scriptName: runtime.scriptName || 'run_step.cjs',
+    scriptVersions: {
+      browserLauncher: BROWSER_LAUNCHER_SCRIPT_VERSION || 1,
+    },
+    requestedBrowserEngine,
+    activeBrowserEngine,
+    browserFallbackReason,
+    browserProfilePath: runtime.browserProfilePath || null,
     tasks: runtime.tasks.map((task) => {
       const result = taskResults.find((candidate) => candidate.key === task.key);
 
@@ -172,26 +197,49 @@ async function loadBrowser() {
     return browser;
   }
 
-  try {
-    const playwright = require('playwright');
-    browserDriver = 'playwright';
-    browser = await playwright.chromium.launch({
-      headless: runtime.headlessEnabled === true,
-    });
+  requestedBrowserEngine = resolveBrowserEngine(runtime);
 
-    return browser;
-  } catch (error) {
-    const puppeteer = require('puppeteer');
-    browserDriver = 'puppeteer';
-    browser = await puppeteer.launch({
-      headless: runtime.headlessEnabled === true,
-      userDataDir: runtime.browserProfilePath,
-      args: ['--no-sandbox', '--disable-setuid-sandbox'],
-      defaultViewport: { width: 1366, height: 900 },
-    });
+  const launchOptions = {
+    headless: runtime.headlessEnabled === true ? 'new' : false,
+    userDataDir: runtime.browserProfilePath,
+    defaultViewport: { width: 1366, height: 900 },
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--window-size=1366,900',
+    ],
+  };
 
-    return browser;
+  if (runtime.browserProfilePath) {
+    fs.mkdirSync(runtime.browserProfilePath, { recursive: true });
   }
+
+  const launchResult = await launchConfiguredBrowserWithProfileRetry({
+    puppeteer,
+    runtimeConfig: runtime,
+    launchOptions,
+    onProfileRetry: ({ previousProfilePath, nextProfilePath, error }) => {
+      pushEvent('browser-profile-lock-retry', 'Browser-Profil war gesperrt; neuer Profilordner wird verwendet.', {
+        previousBrowserProfilePath: previousProfilePath,
+        browserProfilePath: nextProfilePath,
+        profileLockError: String(error?.message || error).slice(0, 1200),
+      });
+      writeStatus('starting', 'browser-profile-lock-retry', 'Browser-Profil war gesperrt; neuer Profilordner wird verwendet.');
+    },
+  });
+
+  browser = launchResult.browser;
+  browserDriver = 'puppeteer';
+  activeBrowserEngine = launchResult.activeEngine;
+  browserFallbackReason = launchResult.fallbackReason;
+  pushEvent('browser-started', 'Browser wurde gestartet.', {
+    requestedBrowserEngine,
+    activeBrowserEngine,
+    browserFallbackReason,
+  });
+
+  return browser;
 }
 
 function patchPuppeteerPage(nextPage) {

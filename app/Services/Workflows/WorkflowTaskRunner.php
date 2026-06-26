@@ -5,14 +5,21 @@ namespace App\Services\Workflows;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowStep;
 use App\Models\WorkflowStepRun;
+use App\Services\Mail\MailAccountRegistrationRunner;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Str;
 
 class WorkflowTaskRunner
 {
+    public function __construct(
+        protected MailAccountRegistrationRunner $mailSettings,
+    ) {
+    }
+
     public function start(WorkflowRun $run, WorkflowStep $step, WorkflowStepRun $stepRun, array $runtimeContext = []): array
     {
+        $settings = $this->mailSettings->settings();
         $runId = (string) Str::uuid();
         $runDirectory = $this->runDirectory($runId);
         $publicRunDirectory = storage_path('app/public/'.$this->publicRunRelativeDirectory($runId));
@@ -44,9 +51,12 @@ class WorkflowTaskRunner
             'livePreviewPath' => $publicRunDirectory.DIRECTORY_SEPARATOR.'live.png',
             'livePreviewRelativePath' => $this->publicScreenshotRelativePath($runId),
             'browserProfilePath' => $runDirectory.DIRECTORY_SEPARATOR.'browser-profile',
-            'headlessEnabled' => false,
-            'navigationTimeoutMs' => 120000,
-            'observationTimeoutMs' => 90000,
+            'browserEngine' => $settings['browser_engine'] ?? 'cloak-with-chrome-fallback',
+            'cloakHumanizeEnabled' => (bool) ($settings['cloak_humanize_enabled'] ?? false),
+            'cloakHumanPreset' => $settings['cloak_human_preset'] ?? '',
+            'headlessEnabled' => (bool) ($settings['headless_enabled'] ?? false),
+            'navigationTimeoutMs' => ((int) ($settings['navigation_timeout_seconds'] ?? 120)) * 1000,
+            'observationTimeoutMs' => min(180000, max(30000, ((int) ($settings['observation_timeout_seconds'] ?? 60)) * 1000)),
             'scriptName' => 'run_step.cjs',
         ];
 
