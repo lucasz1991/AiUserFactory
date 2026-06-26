@@ -82,53 +82,33 @@ class WorkflowExecutionService
             return;
         }
 
-        $steps = $run->workflow
-            ->steps
-            ->filter(fn (WorkflowStep $step): bool => $step->is_enabled)
-            ->values();
+        $step = $this->nextStepForRun($run);
 
-        foreach ($steps as $step) {
-            $stepRun = WorkflowStepRun::query()
-                ->where('workflow_run_id', $run->id)
-                ->where('workflow_step_id', $step->id)
-                ->first();
+        if (! $step) {
+            $this->completeRun($run);
 
-            if ($stepRun && in_array($stepRun->status, ['completed', 'skipped'], true)) {
-                continue;
-            }
-
-            if ($stepRun && $stepRun->status === 'failed') {
-                $this->failRun($run, $stepRun->error_message ?: 'Workflow-Schritt ist fehlgeschlagen.');
-
-                return;
-            }
-
-            $stepRun = $stepRun ?: $this->createStepRun($run, $step);
-
-            try {
-                $outcome = $this->executeStep($run, $step, $stepRun);
-            } catch (\Throwable $exception) {
-                $this->failStepRun($stepRun, $exception->getMessage());
-                $this->failRun($run, $exception->getMessage());
-
-                return;
-            }
-
-            if ($outcome === 'waiting') {
-                return;
-            }
-
-            if ($step->wait_after_seconds > 0) {
-                $run->forceFill(['status' => 'waiting'])->save();
-                RunWorkflowJob::dispatch($run->id)->delay(now()->addSeconds($step->wait_after_seconds));
-
-                return;
-            }
-
-            $run = $this->loadRun($run->id);
+            return;
         }
 
-        $this->completeRun($run);
+        $stepRun = WorkflowStepRun::query()
+            ->where('workflow_run_id', $run->id)
+            ->where('workflow_step_id', $step->id)
+            ->first();
+
+        if ($stepRun && $stepRun->status === 'failed') {
+            $this->failRun($run, $stepRun->error_message ?: 'Workflow-Schritt ist fehlgeschlagen.');
+
+            return;
+        }
+
+        $stepRun = $stepRun ?: $this->createStepRun($run, $step);
+
+        try {
+            $this->executeStep($run, $step, $stepRun);
+        } catch (\Throwable $exception) {
+            $this->failStepRun($stepRun, $exception->getMessage());
+            $this->failRun($run, $exception->getMessage());
+        }
     }
 
     public function monitorStepRun(int $workflowStepRunId): void
@@ -144,8 +124,9 @@ class WorkflowExecutionService
         $status = $this->readExternalStatus($stepRun);
 
         if (! is_array($status)) {
-            $this->failStepRun($stepRun, 'Der externe Node-Lauf konnte nicht gelesen werden.');
-            $this->failRun($stepRun->workflowRun, 'Der externe Node-Lauf konnte nicht gelesen werden.');
+            $message = 'Der externe Node-Lauf konnte nicht gelesen werden.';
+            $this->failStepRun($stepRun, $message);
+            $this->continueAfterStep($stepRun->workflowRun, $stepRun, ['ok' => false, 'statusMessage' => $message], 'failed');
 
             return;
         }
@@ -166,6 +147,15 @@ class WorkflowExecutionService
                 ?: 'Node-Schritt wurde nicht erfolgreich abgeschlossen.'
             );
 
+            if ($this->hasRouteForOutcome($stepRun->workflowStep, 'failed')) {
+                $result['routedOutcome'] = 'failed';
+                $result['statusMessage'] = $message;
+                $this->completeStepRun($stepRun, $result, 'failed');
+                $this->continueAfterStep($stepRun->workflowRun, $stepRun, $result, 'failed');
+
+                return;
+            }
+
             $this->failStepRun($stepRun, $message, $result);
             $this->failRun($stepRun->workflowRun, $message);
 
@@ -173,20 +163,9 @@ class WorkflowExecutionService
         }
 
         $this->applyExternalResult($stepRun, $result);
-        $this->completeStepRun($stepRun, $result);
-
-        $delay = max(0, (int) $stepRun->workflowStep->wait_after_seconds);
-
-        $stepRun->workflowRun->forceFill([
-            'status' => $delay > 0 ? 'waiting' : 'running',
-            'current_workflow_step_id' => null,
-        ])->save();
-
-        $pendingDispatch = RunWorkflowJob::dispatch($stepRun->workflow_run_id);
-
-        if ($delay > 0) {
-            $pendingDispatch->delay(now()->addSeconds($delay));
-        }
+        $outcome = $this->resultOutcome($result);
+        $this->completeStepRun($stepRun, $result, 'completed');
+        $this->continueAfterStep($stepRun->workflowRun, $stepRun, $result, $outcome, max(0, (int) $stepRun->workflowStep->wait_after_seconds));
     }
 
     protected function executeStep(WorkflowRun $run, WorkflowStep $step, WorkflowStepRun $stepRun): string
@@ -200,7 +179,7 @@ class WorkflowExecutionService
             WorkflowStep::TYPE_MAIL_ACCOUNT_REGISTRATION => $this->startMailRegistrationStep($run, $step, $stepRun),
             WorkflowStep::TYPE_WEBMAIL_LOGIN => $this->startWebmailLoginStep($run, $step, $stepRun),
             WorkflowStep::TYPE_WAIT => $this->completeWaitStep($run, $step, $stepRun),
-            default => $this->completePlannedActionStep($step, $stepRun),
+            default => $this->completePlannedActionStep($run, $step, $stepRun),
         };
     }
 
@@ -247,7 +226,7 @@ class WorkflowExecutionService
         return 'waiting';
     }
 
-    protected function completePlannedActionStep(WorkflowStep $step, WorkflowStepRun $stepRun): string
+    protected function completePlannedActionStep(WorkflowRun $run, WorkflowStep $step, WorkflowStepRun $stepRun): string
     {
         $result = [
             'ok' => true,
@@ -257,28 +236,25 @@ class WorkflowExecutionService
         ];
 
         $this->completeStepRun($stepRun, $result);
+        $this->continueAfterStep($run, $stepRun, $result, 'success');
 
-        return 'completed';
+        return 'waiting';
     }
 
     protected function completeWaitStep(WorkflowRun $run, WorkflowStep $step, WorkflowStepRun $stepRun): string
     {
         $seconds = max(0, (int) (data_get($step->config_json, 'seconds') ?: $step->wait_after_seconds));
 
-        $this->completeStepRun($stepRun, [
+        $result = [
             'ok' => true,
             'statusMessage' => $seconds > 0 ? 'Workflow wartet bis zum naechsten Schritt.' : 'Warteschritt abgeschlossen.',
             'waitSeconds' => $seconds,
-        ]);
+        ];
 
-        if ($seconds > 0) {
-            $run->forceFill(['status' => 'waiting'])->save();
-            RunWorkflowJob::dispatch($run->id)->delay(now()->addSeconds($seconds));
+        $this->completeStepRun($stepRun, $result);
+        $this->continueAfterStep($run, $stepRun, $result, 'success', $seconds);
 
-            return 'waiting';
-        }
-
-        return 'completed';
+        return 'waiting';
     }
 
     protected function createStepRun(WorkflowRun $run, WorkflowStep $step): WorkflowStepRun
@@ -292,10 +268,11 @@ class WorkflowExecutionService
         ]);
     }
 
-    protected function completeStepRun(WorkflowStepRun $stepRun, array $result): void
+    protected function completeStepRun(WorkflowStepRun $stepRun, array $result, string $taskStatus = 'completed'): void
     {
         $startedAt = $stepRun->started_at instanceof Carbon ? $stepRun->started_at : now();
         $finishedAt = now();
+        $result = $this->withTaskStatuses($stepRun->workflowStep, $result, $taskStatus);
 
         $stepRun->forceFill([
             'status' => 'completed',
@@ -310,6 +287,7 @@ class WorkflowExecutionService
     {
         $startedAt = $stepRun->started_at instanceof Carbon ? $stepRun->started_at : now();
         $finishedAt = now();
+        $result = $result ? $this->withTaskStatuses($stepRun->workflowStep, $result, 'failed', $message) : null;
 
         $stepRun->forceFill([
             'status' => 'failed',
@@ -348,6 +326,182 @@ class WorkflowExecutionService
             ]),
             'error_message' => $message,
         ])->save();
+    }
+
+    protected function nextStepForRun(WorkflowRun $run): ?WorkflowStep
+    {
+        $steps = $run->workflow
+            ->steps
+            ->filter(fn (WorkflowStep $step): bool => $step->is_enabled)
+            ->values();
+        $targetActionKey = trim((string) data_get($run->context_json, 'next_step_action_key', ''));
+
+        if ($targetActionKey !== '') {
+            $target = $steps->first(fn (WorkflowStep $step): bool => $step->action_key === $targetActionKey);
+
+            if (! $target) {
+                throw new \RuntimeException('Routing-Ziel wurde nicht gefunden: '.$targetActionKey);
+            }
+
+            $this->clearRouteCursor($run);
+
+            return $target;
+        }
+
+        foreach ($steps as $step) {
+            $stepRun = WorkflowStepRun::query()
+                ->where('workflow_run_id', $run->id)
+                ->where('workflow_step_id', $step->id)
+                ->first();
+
+            if (! $stepRun || ! in_array($stepRun->status, ['completed', 'skipped'], true)) {
+                return $step;
+            }
+        }
+
+        return null;
+    }
+
+    protected function continueAfterStep(WorkflowRun $run, WorkflowStepRun $stepRun, array $result, string $outcome, int $delaySeconds = 0): void
+    {
+        $route = $this->routeForOutcome($stepRun->workflowStep, $outcome)
+            ?: $this->linearRouteAfterStep($run, $stepRun->workflowStep, $outcome);
+        $routeType = (string) ($route['type'] ?? 'step');
+
+        $this->recordRoute($run, $stepRun, $outcome, $route);
+        $run->refresh();
+
+        if ($routeType === 'end') {
+            $this->completeRun($run);
+
+            return;
+        }
+
+        if ($routeType === 'fail') {
+            $this->failRun($run, (string) (
+                $route['message']
+                ?? data_get($result, 'statusMessage')
+                ?? data_get($result, 'message')
+                ?? 'Workflow wurde ueber Fehlerroute beendet.'
+            ));
+
+            return;
+        }
+
+        $context = is_array($run->context_json) ? $run->context_json : [];
+        $targetActionKey = trim((string) ($route['action_key'] ?? $route['step'] ?? ''));
+        $targetCardKey = trim((string) ($route['card_key'] ?? $route['card'] ?? ''));
+
+        if ($targetActionKey !== '') {
+            $context['next_step_action_key'] = $targetActionKey;
+        } else {
+            unset($context['next_step_action_key']);
+        }
+
+        if ($routeType === 'card' && $targetCardKey !== '') {
+            $context['next_task_key'] = $targetCardKey;
+        } elseif ($targetCardKey !== '') {
+            $context['next_task_key'] = $targetCardKey;
+        } else {
+            unset($context['next_task_key']);
+        }
+
+        $run->forceFill([
+            'status' => $delaySeconds > 0 ? 'waiting' : 'running',
+            'current_workflow_step_id' => null,
+            'context_json' => $context,
+        ])->save();
+
+        $pendingDispatch = RunWorkflowJob::dispatch($run->id);
+
+        if ($delaySeconds > 0) {
+            $pendingDispatch->delay(now()->addSeconds($delaySeconds));
+        }
+    }
+
+    protected function routeForOutcome(WorkflowStep $step, string $outcome): ?array
+    {
+        $routes = $step->routes;
+        $route = $routes[$outcome] ?? $routes['default'] ?? null;
+
+        return is_array($route) ? $route : null;
+    }
+
+    protected function hasRouteForOutcome(WorkflowStep $step, string $outcome): bool
+    {
+        return $this->routeForOutcome($step, $outcome) !== null;
+    }
+
+    protected function linearRouteAfterStep(WorkflowRun $run, WorkflowStep $currentStep, string $outcome): array
+    {
+        if ($outcome === 'failed') {
+            return [
+                'type' => 'fail',
+                'label' => 'Fehler ohne explizite Route',
+            ];
+        }
+
+        $steps = $run->workflow
+            ->steps
+            ->filter(fn (WorkflowStep $step): bool => $step->is_enabled)
+            ->values();
+        $currentIndex = $steps->search(fn (WorkflowStep $step): bool => $step->id === $currentStep->id);
+
+        if ($currentIndex === false) {
+            return ['type' => 'end', 'label' => 'Kein naechster Schritt'];
+        }
+
+        $nextStep = $steps->get($currentIndex + 1);
+
+        if (! $nextStep) {
+            return ['type' => 'end', 'label' => 'Workflow abschliessen'];
+        }
+
+        return [
+            'type' => 'step',
+            'action_key' => $nextStep->action_key,
+            'label' => $nextStep->name,
+        ];
+    }
+
+    protected function resultOutcome(array $result): string
+    {
+        if (! (bool) ($result['ok'] ?? false)) {
+            return 'failed';
+        }
+
+        $statusLevel = strtolower(trim((string) ($result['statusLevel'] ?? '')));
+
+        if (in_array($statusLevel, ['partial', 'waiting', 'warning'], true)) {
+            return 'partial';
+        }
+
+        return 'success';
+    }
+
+    protected function recordRoute(WorkflowRun $run, WorkflowStepRun $stepRun, string $outcome, array $route): void
+    {
+        $context = is_array($run->context_json) ? $run->context_json : [];
+        $history = is_array($context['route_history'] ?? null) ? $context['route_history'] : [];
+        $history[] = [
+            'at' => now()->toIso8601String(),
+            'workflow_step_id' => $stepRun->workflow_step_id,
+            'workflow_step_run_id' => $stepRun->id,
+            'outcome' => $outcome,
+            'route' => $route,
+        ];
+
+        $context['route_history'] = array_slice($history, -50);
+
+        $run->forceFill(['context_json' => $context])->save();
+    }
+
+    protected function clearRouteCursor(WorkflowRun $run): void
+    {
+        $context = is_array($run->context_json) ? $run->context_json : [];
+        unset($context['next_step_action_key'], $context['next_task_key']);
+
+        $run->forceFill(['context_json' => $context])->save();
     }
 
     protected function readExternalStatus(WorkflowStepRun $stepRun): ?array
@@ -637,6 +791,31 @@ class WorkflowExecutionService
         }
 
         return $payload;
+    }
+
+    protected function withTaskStatuses(WorkflowStep $step, array $result, string $status, ?string $errorMessage = null): array
+    {
+        $tasks = $step->task_cards;
+
+        if ($tasks === []) {
+            return $result;
+        }
+
+        $result['tasks'] = collect($tasks)
+            ->map(function (array $task) use ($status, $errorMessage): array {
+                $task['status'] = $status;
+                $task['finishedAt'] = now()->toIso8601String();
+
+                if ($errorMessage) {
+                    $task['errorMessage'] = $errorMessage;
+                }
+
+                return $task;
+            })
+            ->values()
+            ->toArray();
+
+        return $result;
     }
 
     protected function isFinalStatus(string $status): bool

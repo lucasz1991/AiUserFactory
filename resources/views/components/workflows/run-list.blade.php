@@ -35,8 +35,33 @@
                             @if($stepRun->external_run_id)
                                 <p class="mt-1 truncate text-[11px] text-slate-500">{{ $stepRun->external_run_type }} · {{ $stepRun->external_run_id }}</p>
                             @endif
+                            @if(is_array(data_get($stepRun->result_json, 'tasks')) && data_get($stepRun->result_json, 'tasks') !== [])
+                                <div class="mt-2 space-y-1">
+                                    @foreach(data_get($stepRun->result_json, 'tasks', []) as $task)
+                                        <div class="rounded border border-white bg-white px-2 py-1 text-[11px] text-slate-600">
+                                            <div class="flex items-center justify-between gap-2">
+                                                <span class="truncate font-semibold">{{ data_get($task, 'title', 'Task') }}</span>
+                                                <span class="shrink-0 text-slate-400">{{ data_get($task, 'status', '-') }}</span>
+                                            </div>
+                                        </div>
+                                    @endforeach
+                                </div>
+                            @endif
                         </div>
                     @endforeach
+                </div>
+            @endif
+
+            @if(is_array(data_get($run->context_json, 'route_history')) && data_get($run->context_json, 'route_history') !== [])
+                <div class="mt-3 rounded-md border border-slate-100 bg-slate-50 p-3">
+                    <div class="text-[11px] font-semibold uppercase text-slate-500">Weiterleitungen</div>
+                    <div class="mt-2 space-y-1">
+                        @foreach(array_slice(data_get($run->context_json, 'route_history', []), -6) as $routeEvent)
+                            <div class="rounded bg-white px-2 py-1 text-[11px] text-slate-600">
+                                {{ data_get($routeEvent, 'outcome', '-') }} -> {{ data_get($routeEvent, 'route.label', data_get($routeEvent, 'route.action_key', data_get($routeEvent, 'route.type', '-'))) }}
+                            </div>
+                        @endforeach
+                    </div>
                 </div>
             @endif
         </div>

@@ -4,37 +4,57 @@
 
 @php
     $enabledClass = $step->is_enabled
-        ? 'border-slate-200 bg-white'
+        ? 'border-slate-200 bg-slate-100'
         : 'border-slate-200 bg-slate-50 opacity-70';
 @endphp
 
-<div {{ $attributes->merge(['class' => 'rounded-md border p-4 shadow-sm '.$enabledClass]) }}>
-    <div class="flex flex-wrap items-start justify-between gap-3">
-        <div class="flex min-w-0 flex-1 items-start gap-3">
-            <div x-sort:handle class="mt-1 flex h-8 w-8 cursor-grab items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-xs font-bold text-slate-500 active:cursor-grabbing">
-                ::
-            </div>
+<div {{ $attributes->merge(['class' => 'flex max-h-[760px] min-h-[260px] w-[310px] shrink-0 flex-col rounded-md border shadow-sm '.$enabledClass]) }}>
+    <div class="border-b border-slate-200 p-3">
+        <div class="flex items-start justify-between gap-3">
             <div class="min-w-0">
                 <div class="flex flex-wrap items-center gap-2">
                     <p class="font-semibold text-slate-900">{{ $step->name }}</p>
-                    <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600 ring-1 ring-slate-200">
-                        {{ $step->type_label }}
-                    </span>
                     @if(! $step->is_enabled)
                         <x-workflows.status-badge status="skipped" />
                     @endif
                 </div>
-                <p class="mt-1 text-sm text-slate-500">{{ $step->config_summary }}</p>
-                @if($step->wait_after_seconds > 0)
-                    <p class="mt-1 text-xs text-slate-400">Pause danach: {{ $step->wait_after_seconds }}s</p>
-                @endif
+                <p class="mt-1 text-xs font-semibold text-slate-500">{{ $step->type_label }}</p>
+            </div>
+            <div x-sort:handle class="flex h-8 w-8 cursor-grab items-center justify-center rounded-md border border-slate-200 bg-white text-xs font-bold text-slate-500 active:cursor-grabbing">
+                ::
             </div>
         </div>
 
-        @isset($actions)
-            <div class="flex flex-wrap justify-end gap-2">
-                {{ $actions }}
+        <p class="mt-3 text-sm text-slate-600">{{ $step->config_summary }}</p>
+        @if($step->wait_after_seconds > 0)
+            <p class="mt-1 text-xs text-slate-400">Pause danach: {{ $step->wait_after_seconds }}s</p>
+        @endif
+        @if($step->routes !== [])
+            <div class="mt-3 flex flex-wrap gap-1 text-[11px]">
+                @foreach($step->routes as $outcome => $route)
+                    <span class="rounded-full bg-white px-2 py-1 font-semibold text-slate-600 ring-1 ring-slate-200">
+                        {{ $outcome }} -> {{ data_get($route, 'label', data_get($route, 'action_key', data_get($route, 'target', data_get($route, 'type', 'route')))) }}
+                    </span>
+                @endforeach
             </div>
-        @endisset
+        @endif
     </div>
+
+    <div class="flex-1 space-y-3 overflow-auto p-3">
+        @forelse($step->task_cards as $task)
+            <x-workflows.task-card :task="$task" />
+        @empty
+            <x-workflows.task-card :task="[
+                'title' => $step->name,
+                'description' => $step->config_summary,
+                'kind' => $step->type === 'wait' ? 'wait' : 'data',
+            ]" />
+        @endforelse
+    </div>
+
+    @isset($actions)
+        <div class="flex flex-wrap gap-2 border-t border-slate-200 p-3">
+            {{ $actions }}
+        </div>
+    @endisset
 </div>

@@ -159,8 +159,8 @@
                     </div>
                 </x-admin.panel>
 
-                <x-admin.panel title="Ablauf">
-                    <div x-data x-sort="$wire.reorderStep($item, $position)" class="space-y-3">
+                <x-admin.panel title="Board">
+                    <div x-data x-sort="$wire.reorderStep($item, $position)" class="flex gap-4 overflow-x-auto pb-2">
                         @forelse($steps as $step)
                             <x-workflows.step-card :step="$step" x-sort:item="{{ $step->id }}" wire:key="workflow-step-{{ $step->id }}">
                                 <x-slot name="actions">
@@ -218,7 +218,7 @@
                     </div>
                 </x-admin.panel>
 
-                <x-admin.panel title="Laufhistorie">
+                <x-admin.panel title="Ausfuehrungs-Tasks">
                     <div wire:poll.10s>
                         <x-workflows.run-list :runs="$runs" />
                     </div>

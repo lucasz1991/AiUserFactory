@@ -16,6 +16,8 @@ class WorkflowStep extends Model
     public const TYPE_WEBMAIL_LOGIN = 'webmail_login';
     public const TYPE_PLANNED_ACTION = 'planned_action';
     public const TYPE_WAIT = 'wait';
+    public const TYPE_BROWSER_TASK = 'browser_task';
+    public const TYPE_DATA_TASK = 'data_task';
 
     protected $fillable = [
         'workflow_id',
@@ -59,6 +61,8 @@ class WorkflowStep extends Model
             self::TYPE_WEBMAIL_LOGIN => 'Webmail Login',
             self::TYPE_PLANNED_ACTION => 'Geplante Aktion',
             self::TYPE_WAIT => 'Warten',
+            self::TYPE_BROWSER_TASK => 'Browser Task',
+            self::TYPE_DATA_TASK => 'Daten Task',
             default => (string) str($this->type)->replace('_', ' ')->title(),
         };
     }
@@ -72,11 +76,11 @@ class WorkflowStep extends Model
         }
 
         if ($this->type === self::TYPE_MAIL_ACCOUNT_REGISTRATION) {
-            return 'Provider: '.(trim((string) ($config['provider_key'] ?? '')) ?: 'Standard');
+            return (string) ($config['automation_summary'] ?? ('Provider: '.(trim((string) ($config['provider_key'] ?? '')) ?: 'Standard')));
         }
 
         if ($this->type === self::TYPE_WEBMAIL_LOGIN) {
-            return 'Provider: '.(trim((string) ($config['provider'] ?? '')) ?: 'aus Person');
+            return (string) ($config['automation_summary'] ?? ('Provider: '.(trim((string) ($config['provider'] ?? '')) ?: 'aus Person')));
         }
 
         if ($this->type === self::TYPE_WAIT) {
@@ -84,5 +88,39 @@ class WorkflowStep extends Model
         }
 
         return '';
+    }
+
+    public function getTaskCardsAttribute(): array
+    {
+        $tasks = data_get($this->config_json, 'tasks', []);
+
+        if (! is_array($tasks)) {
+            return [];
+        }
+
+        return collect($tasks)
+            ->filter(fn (mixed $task): bool => is_array($task))
+            ->map(function (array $task, int $index): array {
+                return [
+                    'key' => trim((string) ($task['key'] ?? 'task-'.$this->id.'-'.$index)),
+                    'title' => trim((string) ($task['title'] ?? $task['label'] ?? 'Task')),
+                    'description' => trim((string) ($task['description'] ?? '')),
+                    'kind' => trim((string) ($task['kind'] ?? 'browser')),
+                    'status' => trim((string) ($task['status'] ?? 'template')),
+                    'selector' => trim((string) ($task['selector'] ?? '')),
+                    'input' => trim((string) ($task['input'] ?? '')),
+                    'next' => is_array($task['next'] ?? null) ? $task['next'] : null,
+                    'on_error' => is_array($task['on_error'] ?? null) ? $task['on_error'] : null,
+                ];
+            })
+            ->values()
+            ->toArray();
+    }
+
+    public function getRoutesAttribute(): array
+    {
+        $routes = data_get($this->config_json, 'routes', []);
+
+        return is_array($routes) ? $routes : [];
     }
 }
