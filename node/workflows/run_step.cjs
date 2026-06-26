@@ -99,6 +99,8 @@ function publicAccount(account = null, includePassword = false) {
   }
 
   delete copy.password_encrypted;
+  delete copy.webmailSession;
+  delete copy.webmail_session;
 
   if (account.password || account.password_encrypted || account.hasPassword === true) {
     copy.hasPassword = true;
@@ -107,10 +109,36 @@ function publicAccount(account = null, includePassword = false) {
   return copy;
 }
 
+function publicWorkflow(workflow = null) {
+  if (!workflow || typeof workflow !== 'object') {
+    return null;
+  }
+
+  const copy = cleanForJson(workflow);
+
+  for (const key of ['account', 'email_account']) {
+    if (copy[key] && typeof copy[key] === 'object') {
+      delete copy[key].password;
+      delete copy[key].password_encrypted;
+      delete copy[key].webmailSession;
+      delete copy[key].webmail_session;
+    }
+  }
+
+  if (copy.person?.emailAccount && typeof copy.person.emailAccount === 'object') {
+    delete copy.person.emailAccount.password;
+    delete copy.person.emailAccount.password_encrypted;
+    delete copy.person.emailAccount.webmailSession;
+    delete copy.person.emailAccount.webmail_session;
+  }
+
+  return copy;
+}
+
 function statusPayload(state, stage, message, extra = {}) {
   return {
     runId: runtime.runId,
-    workflow: runtime.workflow || null,
+    workflow: publicWorkflow(runtime.workflow || null),
     workflowRunId: runtime.workflowRunId,
     workflowRunUuid: runtime.workflowRunUuid,
     workflowStepId: runtime.workflowStepId,
@@ -271,6 +299,67 @@ function browserWindowNameForTask(task = {}, input = {}) {
 
 function browserWindowLabel(name) {
   return name === 'main' ? 'Main' : name;
+}
+
+function workflowBrowserWindowState(windowName = 'main') {
+  const normalizedName = normalizeBrowserWindowName(windowName);
+  const workflow = runtime.workflow || {};
+  const windows = workflow.browserWindows || workflow.browser_windows || {};
+
+  if (Array.isArray(windows)) {
+    return windows.find((windowEntry) => {
+      const key = normalizeBrowserWindowName(
+        windowEntry?.key
+        || windowEntry?.name
+        || windowEntry?.browserWindow
+        || windowEntry?.browser_window
+        || '',
+      );
+
+      return key === normalizedName;
+    }) || null;
+  }
+
+  if (windows && typeof windows === 'object') {
+    return windows[normalizedName] || null;
+  }
+
+  return null;
+}
+
+async function restoreBrowserWindowState(context, nextPage, windowName = 'main') {
+  const state = workflowBrowserWindowState(windowName);
+  const url = String(state?.url || '').trim();
+
+  if (!state || !/^https?:\/\//i.test(url)) {
+    return false;
+  }
+
+  const currentUrl = typeof nextPage.url === 'function' ? String(nextPage.url() || '') : '';
+
+  if (currentUrl && currentUrl !== 'about:blank') {
+    return false;
+  }
+
+  try {
+    await nextPage.goto(url, {
+      waitUntil: 'domcontentloaded',
+      timeout: Number(runtime.navigationTimeoutMs || 120000),
+    });
+    pushEvent('browser-window-restored', 'Browserfenster wurde aus dem Workflow-Kontext wiederhergestellt.', {
+      browserWindow: normalizeBrowserWindowName(windowName),
+      url,
+    });
+
+    return true;
+  } catch (error) {
+    pushEvent('browser-window-restore-failed', error.message, {
+      browserWindow: normalizeBrowserWindowName(windowName),
+      url,
+    });
+
+    return false;
+  }
 }
 
 async function runDataTask(task, context = {}) {
@@ -560,8 +649,10 @@ async function ensurePage(context, windowName = 'main', label = '') {
 
   const currentBrowser = await loadBrowser();
   const nextPage = await currentBrowser.newPage();
+  const registeredPage = registerBrowserWindow(context, nextPage, normalizedName, label);
+  await restoreBrowserWindowState(context, registeredPage, normalizedName);
 
-  return registerBrowserWindow(context, nextPage, normalizedName, label);
+  return registeredPage;
 }
 
 function selectExistingPage(context, windowName = 'main') {
@@ -691,6 +782,26 @@ async function run() {
         context.timeoutMs = Math.max(1000, Number(task.timeout_seconds || 60) * 1000);
 
         result = await module.run(context);
+
+        if (task.task_key === 'browser.close') {
+          result = result || {};
+          browserWindowsByName.delete(targetBrowserWindow);
+          context.browserWindows = Array.from(browserWindowsByName.values());
+          context.windows = context.browserWindows;
+          context.pages = Array.from(new Set(context.browserWindows.map((windowEntry) => windowEntry.page)));
+          context.page = context.pages[0] || null;
+          page = context.page;
+
+          if (Array.isArray(result?.browserWindows)) {
+            result.browserWindows = result.browserWindows.filter((windowEntry) => {
+              const key = normalizeBrowserWindowName(windowEntry?.key || windowEntry?.name || '');
+
+              return key !== targetBrowserWindow;
+            });
+          }
+
+          result.closedBrowserWindow = targetBrowserWindow;
+        }
 
         if (result && result.page) {
           registerBrowserWindow(context, result.page, targetBrowserWindow, targetBrowserWindow === 'main' ? 'Main' : taskLabel);

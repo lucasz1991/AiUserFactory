@@ -42,6 +42,21 @@ class WorkflowTaskCatalog
                     'failure_payload' => true,
                 ],
             ],
+            'browser.open_webmail_session' => [
+                'label' => 'Browser-Session laden und Webmailportal oeffnen',
+                'kind' => 'browser',
+                'runner' => 'node',
+                'node_script' => 'node/workflows/tasks/browser/open_webmail_session.cjs',
+                'timeout_seconds' => 120,
+                'description' => 'Laedt gespeicherte Webmail-Cookies und Browser-Storage der Person und oeffnet das Webmailportal.',
+                'form' => [
+                    'selector' => false,
+                    'value' => false,
+                    'url' => false,
+                    'success_payload' => true,
+                    'failure_payload' => true,
+                ],
+            ],
             'browser.find_inputs' => [
                 'label' => 'Input-Felder suchen',
                 'kind' => 'input',

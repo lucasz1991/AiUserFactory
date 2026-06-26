@@ -52,7 +52,7 @@ class WorkflowTaskRunner
             'livePreviewPollIntervalSeconds' => 3,
             'livePreviewPath' => $publicRunDirectory.DIRECTORY_SEPARATOR.'live.png',
             'livePreviewRelativePath' => $this->publicScreenshotRelativePath($runId),
-            'browserProfilePath' => $runDirectory.DIRECTORY_SEPARATOR.'browser-profile',
+            'browserProfilePath' => $this->workflowBrowserProfilePath($run),
             'browserEngine' => $settings['browser_engine'] ?? 'cloak-with-chrome-fallback',
             'cloakHumanizeEnabled' => (bool) ($settings['cloak_humanize_enabled'] ?? false),
             'cloakHumanPreset' => $settings['cloak_human_preset'] ?? '',
@@ -64,7 +64,7 @@ class WorkflowTaskRunner
 
         $this->writeJsonFile($statusPath, [
             'runId' => $runId,
-            'workflow' => $runtimeContext,
+            'workflow' => $this->publicRuntimeContext($runtimeContext),
             'state' => 'queued',
             'stage' => 'queued',
             'message' => 'Workflow-Task-Lauf ist eingeplant.',
@@ -96,7 +96,7 @@ class WorkflowTaskRunner
         } catch (\Throwable $exception) {
             $this->writeJsonFile($statusPath, [
                 'runId' => $runId,
-                'workflow' => $runtimeContext,
+                'workflow' => $this->publicRuntimeContext($runtimeContext),
                 'state' => 'failed',
                 'stage' => 'process-start-failed',
                 'message' => $exception->getMessage(),
@@ -200,6 +200,28 @@ class WorkflowTaskRunner
     protected function runDirectory(string $runId): string
     {
         return storage_path('app/workflow-task-runs/'.$runId);
+    }
+
+    protected function workflowBrowserProfilePath(WorkflowRun $run): string
+    {
+        return storage_path('app/workflow-runs/'.$run->run_uuid.'/browser-profile');
+    }
+
+    protected function publicRuntimeContext(array $runtimeContext): array
+    {
+        $public = $runtimeContext;
+
+        foreach (['account', 'email_account'] as $key) {
+            if (isset($public[$key]) && is_array($public[$key])) {
+                unset($public[$key]['password'], $public[$key]['webmailSession'], $public[$key]['webmail_session']);
+            }
+        }
+
+        if (isset($public['person']['emailAccount']) && is_array($public['person']['emailAccount'])) {
+            unset($public['person']['emailAccount']['password'], $public['person']['emailAccount']['webmailSession'], $public['person']['emailAccount']['webmail_session']);
+        }
+
+        return $public;
     }
 
     protected function publicRunRelativeDirectory(string $runId): string

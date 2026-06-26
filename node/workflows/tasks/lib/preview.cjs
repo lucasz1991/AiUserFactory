@@ -182,9 +182,18 @@ async function captureWindow(windowConfig, context = {}, force = false) {
 
   windowConfig.lastCapturedAtMs = now;
 
+  const url = typeof windowConfig.page.url === 'function'
+    ? String(windowConfig.page.url() || '')
+    : '';
+  const title = typeof windowConfig.page.title === 'function'
+    ? await windowConfig.page.title().catch(() => '')
+    : '';
+
   return {
     key: windowConfig.key,
     label: windowConfig.label,
+    url,
+    title,
     liveScreenshotPath: windowConfig.livePreviewPath,
     livePreviewPath: windowConfig.livePreviewPath,
     livePreviewRelativePath: windowConfig.livePreviewRelativePath || null,

@@ -470,7 +470,16 @@ class WorkflowExecutionService
             $routeType = (string) ($route['type'] ?? 'step');
         }
 
-        $this->recordRoute($run, $stepRun, $outcome, $route);
+        $context = is_array($run->context_json) ? $run->context_json : [];
+        $context = $this->mergeWorkflowBrowserState($context, $result);
+
+        if ($this->failedBackRouteExceeded($run, $stepRun, $outcome, $route, $context)) {
+            $this->failRun($run, 'Fehlerroute wurde zu oft wiederholt und der Workflow wurde abgebrochen.');
+
+            return;
+        }
+
+        $this->recordRoute($run, $stepRun, $outcome, $route, $context);
         $run->refresh();
 
         if ($routeType === 'end') {
@@ -658,9 +667,67 @@ class WorkflowExecutionService
         };
     }
 
-    protected function recordRoute(WorkflowRun $run, WorkflowStepRun $stepRun, string $outcome, array $route): void
+    protected function failedBackRouteExceeded(WorkflowRun $run, WorkflowStepRun $stepRun, string $outcome, array $route, array $context): bool
     {
-        $context = is_array($run->context_json) ? $run->context_json : [];
+        if ($outcome !== 'failed') {
+            return false;
+        }
+
+        $maxAttempts = max(0, (int) ($route['max_attempts'] ?? $route['retry_limit'] ?? 0));
+
+        if ($maxAttempts <= 0 || ! $this->isBackRoute($run, $stepRun->workflowStep, $route)) {
+            return false;
+        }
+
+        $attemptKey = $this->routeAttemptKey($stepRun->workflowStep, $outcome, $route);
+        $attempts = is_array($context['route_attempts'] ?? null) ? $context['route_attempts'] : [];
+        $currentAttempts = max(0, (int) ($attempts[$attemptKey] ?? 0));
+
+        return $currentAttempts >= $maxAttempts;
+    }
+
+    protected function isBackRoute(WorkflowRun $run, WorkflowStep $sourceStep, array $route): bool
+    {
+        $type = trim((string) ($route['type'] ?? ''));
+
+        if (in_array($type, ['end', 'fail'], true)) {
+            return false;
+        }
+
+        $targetActionKey = trim((string) ($route['action_key'] ?? $route['step'] ?? ''));
+
+        if ($targetActionKey === '' || in_array($targetActionKey, ['next', 'end', 'fail'], true)) {
+            return false;
+        }
+
+        $targetStep = $run->workflow
+            ? $run->workflow->steps->first(fn (WorkflowStep $step): bool => $step->action_key === $targetActionKey)
+            : null;
+
+        if (! $targetStep) {
+            $targetStep = WorkflowStep::query()
+                ->where('workflow_id', $run->workflow_id)
+                ->where('action_key', $targetActionKey)
+                ->first();
+        }
+
+        return $targetStep && (int) $targetStep->position <= (int) $sourceStep->position;
+    }
+
+    protected function routeAttemptKey(WorkflowStep $step, string $outcome, array $route): string
+    {
+        return implode(':', [
+            $step->id,
+            $outcome,
+            trim((string) ($route['type'] ?? 'step')),
+            trim((string) ($route['action_key'] ?? $route['step'] ?? '')),
+            trim((string) ($route['card_key'] ?? $route['card'] ?? '')),
+        ]);
+    }
+
+    protected function recordRoute(WorkflowRun $run, WorkflowStepRun $stepRun, string $outcome, array $route, ?array $context = null): void
+    {
+        $context = is_array($context) ? $context : (is_array($run->context_json) ? $run->context_json : []);
         $history = is_array($context['route_history'] ?? null) ? $context['route_history'] : [];
         $history[] = [
             'at' => now()->toIso8601String(),
@@ -671,6 +738,13 @@ class WorkflowExecutionService
         ];
 
         $context['route_history'] = array_slice($history, -50);
+
+        if ($outcome === 'failed' && $this->isBackRoute($run, $stepRun->workflowStep, $route)) {
+            $attempts = is_array($context['route_attempts'] ?? null) ? $context['route_attempts'] : [];
+            $attemptKey = $this->routeAttemptKey($stepRun->workflowStep, $outcome, $route);
+            $attempts[$attemptKey] = max(0, (int) ($attempts[$attemptKey] ?? 0)) + 1;
+            $context['route_attempts'] = $attempts;
+        }
 
         $run->forceFill(['context_json' => $context])->save();
     }
@@ -900,6 +974,7 @@ class WorkflowExecutionService
         $accountUsername = trim((string) ($emailAccount['username'] ?? $accountEmail));
         $accountProvider = (string) ($emailAccount['provider'] ?? 'proton');
         $accountPassword = (string) ($this->decryptString($emailAccount['password_encrypted'] ?? null) ?? '');
+        $webmailSessionPayload = $this->decryptedWebmailSessionPayload($emailAccount);
         $accountPayload = [
             'provider' => $accountProvider,
             'email' => $accountEmail,
@@ -907,7 +982,11 @@ class WorkflowExecutionService
             'password' => $accountPassword,
             'webmailUrl' => trim((string) ($emailAccount['webmail_url'] ?? '')) ?: $this->defaultWebmailUrl($accountProvider),
             'hasPassword' => $accountPassword !== '',
+            'hasWebmailSession' => is_array($webmailSessionPayload),
+            'webmailSession' => $webmailSessionPayload,
         ];
+        $context = is_array($run->context_json) ? $run->context_json : [];
+        $browserWindows = is_array($context['browser_windows'] ?? null) ? $context['browser_windows'] : [];
 
         return [
             'workflowRunId' => $run->id,
@@ -919,6 +998,8 @@ class WorkflowExecutionService
             'workflowStepName' => $step->name,
             'workflowStepType' => $step->type,
             'personId' => data_get($run->context_json, 'person_id'),
+            'browserWindows' => $browserWindows,
+            'browser_windows' => $browserWindows,
             'account' => $person ? $accountPayload : null,
             'email_account' => $person ? $accountPayload : null,
             'person' => $person ? [
@@ -935,6 +1016,60 @@ class WorkflowExecutionService
                 'emailAccount' => $accountPayload,
             ] : null,
         ];
+    }
+
+    protected function decryptedWebmailSessionPayload(array $emailAccount): ?array
+    {
+        $encryptedPayload = trim((string) data_get($emailAccount, 'webmail_session.payload_encrypted', ''));
+
+        if ($encryptedPayload === '') {
+            return null;
+        }
+
+        $decrypted = $this->decryptString($encryptedPayload);
+        $payload = is_string($decrypted) ? json_decode($decrypted, true) : null;
+
+        return is_array($payload) ? $payload : null;
+    }
+
+    protected function mergeWorkflowBrowserState(array $context, array $result): array
+    {
+        $closedWindow = trim((string) ($result['closedBrowserWindow'] ?? ''));
+
+        if ($closedWindow !== '' && is_array($context['browser_windows'] ?? null)) {
+            unset($context['browser_windows'][$closedWindow]);
+        }
+
+        $windows = collect(data_get($result, 'browserWindows', []))
+            ->filter(fn (mixed $window): bool => is_array($window))
+            ->mapWithKeys(function (array $window): array {
+                $key = trim((string) ($window['key'] ?? $window['name'] ?? ''));
+                $url = trim((string) ($window['url'] ?? ''));
+
+                if ($key === '' || $url === '' || $url === 'about:blank') {
+                    return [];
+                }
+
+                return [
+                    $key => [
+                        'key' => $key,
+                        'label' => trim((string) ($window['label'] ?? $key)) ?: $key,
+                        'url' => $url,
+                        'title' => trim((string) ($window['title'] ?? '')),
+                        'capturedAt' => trim((string) ($window['capturedAt'] ?? now()->toIso8601String())),
+                    ],
+                ];
+            })
+            ->all();
+
+        if ($windows === []) {
+            return $context;
+        }
+
+        $existing = is_array($context['browser_windows'] ?? null) ? $context['browser_windows'] : [];
+        $context['browser_windows'] = array_replace($existing, $windows);
+
+        return $context;
     }
 
     protected function scheduleMonitor(WorkflowStepRun $stepRun, int $delaySeconds = 10): void
@@ -972,7 +1107,24 @@ class WorkflowExecutionService
         unset($payload['encryptedSessionPayload'], $payload['password'], $payload['passwordEncrypted']);
 
         if (isset($payload['account']) && is_array($payload['account'])) {
-            unset($payload['account']['password'], $payload['account']['passwordEncrypted']);
+            unset($payload['account']['password'], $payload['account']['passwordEncrypted'], $payload['account']['webmailSession'], $payload['account']['webmail_session']);
+        }
+
+        if (isset($payload['workflow']) && is_array($payload['workflow'])) {
+            foreach (['account', 'email_account'] as $key) {
+                if (isset($payload['workflow'][$key]) && is_array($payload['workflow'][$key])) {
+                    unset($payload['workflow'][$key]['password'], $payload['workflow'][$key]['passwordEncrypted'], $payload['workflow'][$key]['webmailSession'], $payload['workflow'][$key]['webmail_session']);
+                }
+            }
+
+            if (isset($payload['workflow']['person']['emailAccount']) && is_array($payload['workflow']['person']['emailAccount'])) {
+                unset(
+                    $payload['workflow']['person']['emailAccount']['password'],
+                    $payload['workflow']['person']['emailAccount']['passwordEncrypted'],
+                    $payload['workflow']['person']['emailAccount']['webmailSession'],
+                    $payload['workflow']['person']['emailAccount']['webmail_session'],
+                );
+            }
         }
 
         return $payload;

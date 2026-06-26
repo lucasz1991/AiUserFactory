@@ -100,6 +100,12 @@ class WorkflowManager extends Component
 
     public string $editingStepFailedTarget = '';
 
+    public string $editingStepSuccessReason = '';
+
+    public string $editingStepFailedReason = '';
+
+    public int $editingStepFailedRetryLimit = 0;
+
     public ?int $editingTaskStepId = null;
 
     public string $editingTaskKey = '';
@@ -335,6 +341,9 @@ class WorkflowManager extends Component
         $this->editingStepWaitAfterSeconds = max(0, (int) $step->wait_after_seconds);
         $this->editingStepSuccessTarget = $this->routeValueFromTarget($routes['success'] ?? null);
         $this->editingStepFailedTarget = $this->routeValueFromTarget($routes['failed'] ?? null);
+        $this->editingStepSuccessReason = trim((string) data_get($routes, 'success.reason', ''));
+        $this->editingStepFailedReason = trim((string) data_get($routes, 'failed.reason', ''));
+        $this->editingStepFailedRetryLimit = max(0, (int) data_get($routes, 'failed.max_attempts', 0));
         $this->showEditStepModal = true;
     }
 
@@ -353,13 +362,27 @@ class WorkflowManager extends Component
             'editingStepWaitAfterSeconds' => ['required', 'integer', 'min:0', 'max:3600'],
             'editingStepSuccessTarget' => ['nullable', 'string', 'max:180'],
             'editingStepFailedTarget' => ['nullable', 'string', 'max:180'],
+            'editingStepSuccessReason' => ['nullable', 'string', 'max:180'],
+            'editingStepFailedReason' => ['nullable', 'string', 'max:180'],
+            'editingStepFailedRetryLimit' => ['required', 'integer', 'min:0', 'max:20'],
         ]);
 
         $config = is_array($step->config_json) ? $step->config_json : [];
         $config['description'] = trim((string) ($validated['editingStepDescription'] ?? ''));
         $routes = is_array($config['routes'] ?? null) ? $config['routes'] : [];
-        $routes = $this->setRoute($routes, 'success', (string) ($validated['editingStepSuccessTarget'] ?? ''));
-        $routes = $this->setRoute($routes, 'failed', (string) ($validated['editingStepFailedTarget'] ?? ''));
+        $routes = $this->setRoute(
+            $routes,
+            'success',
+            (string) ($validated['editingStepSuccessTarget'] ?? ''),
+            (string) ($validated['editingStepSuccessReason'] ?? ''),
+        );
+        $routes = $this->setRoute(
+            $routes,
+            'failed',
+            (string) ($validated['editingStepFailedTarget'] ?? ''),
+            (string) ($validated['editingStepFailedReason'] ?? ''),
+            (int) ($validated['editingStepFailedRetryLimit'] ?? 0),
+        );
         unset($routes['partial']);
         $config['routes'] = $routes;
 
@@ -1318,11 +1341,25 @@ class WorkflowManager extends Component
         return null;
     }
 
-    protected function setRoute(array $routes, string $outcome, string $value): array
+    protected function setRoute(array $routes, string $outcome, string $value, string $reason = '', int $maxAttempts = 0): array
     {
         $route = $this->routeTargetFromValue($value);
 
         if ($route) {
+            $reason = trim($reason);
+
+            if ($reason !== '') {
+                $route['reason'] = $reason;
+            } else {
+                unset($route['reason']);
+            }
+
+            if ($outcome === 'failed' && $maxAttempts > 0) {
+                $route['max_attempts'] = $maxAttempts;
+            } else {
+                unset($route['max_attempts']);
+            }
+
             $routes[$outcome] = $route;
         } else {
             unset($routes[$outcome]);

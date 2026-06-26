@@ -99,9 +99,34 @@
                                 </x-slot>
                             </x-workflows.step-card>
                             @if(! $loop->last)
-                                <div class="flex h-24 w-10 shrink-0 items-center px-2">
-                                    <div class="h-px flex-1 bg-white/50"></div>
-                                    <div class="h-0 w-0 border-y-4 border-l-8 border-y-transparent border-l-white/70"></div>
+                                @php
+                                    $successRoute = is_array($step->routes['success'] ?? null) ? $step->routes['success'] : null;
+                                    $failedRoute = is_array($step->routes['failed'] ?? null) ? $step->routes['failed'] : null;
+                                    $successReason = trim((string) data_get($successRoute, 'reason', data_get($successRoute, 'label', 'Erfolg')));
+                                    $failedReason = trim((string) data_get($failedRoute, 'reason', data_get($failedRoute, 'label', 'Fehler')));
+                                    $failedAttempts = max(0, (int) data_get($failedRoute, 'max_attempts', 0));
+                                @endphp
+                                <div class="flex h-32 w-32 shrink-0 flex-col justify-center gap-3 px-2">
+                                    <div class="min-w-0">
+                                        <div class="flex items-center">
+                                            <div class="h-px flex-1 bg-emerald-200/80"></div>
+                                            <div class="h-0 w-0 border-y-4 border-l-8 border-y-transparent border-l-emerald-200"></div>
+                                        </div>
+                                        <div class="mt-1 truncate rounded bg-emerald-50/95 px-2 py-0.5 text-[11px] font-semibold text-emerald-800" title="{{ $successReason }}">
+                                            {{ $successReason ?: 'Erfolg' }}
+                                        </div>
+                                    </div>
+                                    @if($failedRoute)
+                                        <div class="min-w-0">
+                                            <div class="flex items-center">
+                                                <div class="h-px flex-1 bg-red-300"></div>
+                                                <div class="h-0 w-0 border-y-4 border-l-8 border-y-transparent border-l-red-300"></div>
+                                            </div>
+                                            <div class="mt-1 truncate rounded bg-red-50/95 px-2 py-0.5 text-[11px] font-semibold text-red-800" title="{{ $failedReason }}">
+                                                {{ $failedReason ?: 'Fehler' }}@if($failedAttempts > 0) - {{ $failedAttempts }}x @endif
+                                            </div>
+                                        </div>
+                                    @endif
                                 </div>
                             @endif
                         </div>
@@ -289,6 +314,24 @@
                                 </select>
                             </div>
                         @endforeach
+                    </div>
+                    <div class="grid gap-4 md:grid-cols-2">
+                        <div>
+                            <label for="workflow-edit-step-success-reason" class="block text-sm font-medium text-gray-700">Grund bei Erfolg</label>
+                            <input id="workflow-edit-step-success-reason" type="text" wire:model.defer="editingStepSuccessReason" placeholder="z.B. Element gefunden / Login erfolgreich" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                            @error('editingStepSuccessReason') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                        </div>
+                        <div>
+                            <label for="workflow-edit-step-failed-reason" class="block text-sm font-medium text-gray-700">Grund bei Fehler</label>
+                            <input id="workflow-edit-step-failed-reason" type="text" wire:model.defer="editingStepFailedReason" placeholder="z.B. Selector nicht gefunden / Timeout" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                            @error('editingStepFailedReason') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                        </div>
+                    </div>
+                    <div class="max-w-xs">
+                        <label for="workflow-edit-step-failed-retry-limit" class="block text-sm font-medium text-gray-700">Fehler-Rueckleitung wiederholen bis Abbruch</label>
+                        <input id="workflow-edit-step-failed-retry-limit" type="number" min="0" max="20" wire:model.defer="editingStepFailedRetryLimit" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                        <p class="mt-1 text-xs text-slate-500">0 bedeutet kein Limit. Das Limit gilt nur fuer Fehler-Routen zur selben oder einer frueheren Liste.</p>
+                        @error('editingStepFailedRetryLimit') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
                     </div>
                 </div>
             </x-slot>
