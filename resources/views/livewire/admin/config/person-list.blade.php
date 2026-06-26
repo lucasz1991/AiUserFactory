@@ -1,14 +1,18 @@
 <div class="space-y-6" wire:loading.class="opacity-50 pointer-events-none cursor-wait">
     @php
-        $profiles = collect($profileOptions);
-        $primaryProfile = $profiles->firstWhere('is_primary', true);
-        $totalPersonsCount = $profiles->count();
-        $activePersonsCount = $profiles->where('is_active', true)->count();
-        $blockedPersonsCount = $profiles->where('is_scrape_blocked', true)->count();
-        $baseSyncedPersonsCount = $profiles->where('base_sync_status', 'synced')->count();
-        $instagramReadyPersonsCount = $profiles->filter(fn ($profile) => data_get($profile, 'instagram_status.level') === 'success')->count();
-        $mailReadyPersonsCount = $profiles->filter(fn ($profile) => data_get($profile, 'mail_status.level') === 'success')->count();
-        $runningProcessPersonsCount = $profiles->filter(fn ($profile) => (int) data_get($profile, 'process_status.count', 0) > 0)->count();
+        $allProfiles = collect($profileOptions);
+        $profiles = collect($visibleProfileOptions);
+        $totalPersonsCount = $allProfiles->count();
+        $visiblePersonsCount = $profiles->count();
+        $activePersonsCount = $allProfiles->where('is_active', true)->count();
+        $blockedPersonsCount = $allProfiles->where('is_scrape_blocked', true)->count();
+        $baseSyncedPersonsCount = $allProfiles->where('base_sync_status', 'synced')->count();
+        $instagramReadyPersonsCount = $allProfiles->filter(fn ($profile) => data_get($profile, 'instagram_status.level') === 'success')->count();
+        $mailReadyPersonsCount = $allProfiles->filter(fn ($profile) => data_get($profile, 'mail_status.level') === 'success')->count();
+        $runningProcessPersonsCount = $allProfiles->filter(fn ($profile) => (int) data_get($profile, 'process_status.count', 0) > 0)->count();
+        $selectedCount = count($selectedProfileIds);
+        $visibleIds = $profiles->pluck('id')->all();
+        $allVisibleSelected = $visibleIds !== [] && array_diff($visibleIds, $selectedProfileIds) === [];
         $statusIconClass = fn ($level) => match($level) {
             'success' => 'bg-emerald-50 text-emerald-700 ring-emerald-200',
             'running' => 'bg-blue-50 text-blue-700 ring-blue-200',
@@ -19,55 +23,34 @@
         };
     @endphp
 
-    <div class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-        <div class="border-b border-slate-200 bg-slate-50 px-5 py-4">
-            <div class="flex flex-wrap items-start justify-between gap-4">
-                <div class="min-w-0">
-                    <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Instagram-Scraper</p>
-                    <h2 class="mt-1 text-xl font-semibold text-slate-900">Personen verwalten</h2>
-                    <p class="mt-1 max-w-3xl text-sm text-slate-600">
-                        Sessions, Persona-Daten und Bot-Status an einem Ort. Sichtbare Browserfenster werden nur beim expliziten Session-Aufbau geoeffnet.
-                    </p>
-                </div>
-                <div class="flex flex-wrap gap-2">
-                    <button type="button" wire:click="openRuntimeSettingsModal" class="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
-                        Timeouts
-                    </button>
-                    <button type="button" wire:click="openCreateProfileModal" class="rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">
-                        Person hinzufuegen
-                    </button>
-                </div>
+    <div class="rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+            <div class="min-w-0">
+                <h2 class="text-base font-semibold text-slate-900">Personen</h2>
+                <p class="text-xs text-slate-500">{{ $visiblePersonsCount }} sichtbar · {{ $selectedCount }} ausgewaehlt</p>
             </div>
-        </div>
-
-        <div class="grid gap-px bg-slate-200 sm:grid-cols-2 xl:grid-cols-6">
-            <div class="bg-white p-4">
-                <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Personen</p>
-                <p class="mt-2 text-2xl font-semibold text-slate-900">{{ $totalPersonsCount }}</p>
+            <div class="grid flex-1 grid-cols-2 gap-2 sm:grid-cols-4 lg:max-w-5xl lg:grid-cols-7">
+                <div class="rounded-md bg-slate-50 px-2.5 py-1.5 ring-1 ring-slate-200"><p class="text-[10px] font-semibold uppercase text-slate-400">Gesamt</p><p class="text-sm font-semibold text-slate-900">{{ $totalPersonsCount }}</p></div>
+                <div class="rounded-md bg-slate-50 px-2.5 py-1.5 ring-1 ring-slate-200"><p class="text-[10px] font-semibold uppercase text-slate-400">Aktiv</p><p class="text-sm font-semibold text-emerald-700">{{ $activePersonsCount }}</p></div>
+                <div class="rounded-md bg-slate-50 px-2.5 py-1.5 ring-1 ring-slate-200"><p class="text-[10px] font-semibold uppercase text-slate-400">Sperren</p><p class="text-sm font-semibold text-amber-700">{{ $blockedPersonsCount }}</p></div>
+                <div class="rounded-md bg-slate-50 px-2.5 py-1.5 ring-1 ring-slate-200"><p class="text-[10px] font-semibold uppercase text-slate-400">IG</p><p class="text-sm font-semibold text-pink-700">{{ $instagramReadyPersonsCount }}</p></div>
+                <div class="rounded-md bg-slate-50 px-2.5 py-1.5 ring-1 ring-slate-200"><p class="text-[10px] font-semibold uppercase text-slate-400">Mail</p><p class="text-sm font-semibold text-sky-700">{{ $mailReadyPersonsCount }}</p></div>
+                <div class="rounded-md bg-slate-50 px-2.5 py-1.5 ring-1 ring-slate-200"><p class="text-[10px] font-semibold uppercase text-slate-400">Runs</p><p class="text-sm font-semibold text-blue-700">{{ $runningProcessPersonsCount }}</p></div>
+                <div class="rounded-md bg-slate-50 px-2.5 py-1.5 ring-1 ring-slate-200"><p class="text-[10px] font-semibold uppercase text-slate-400">Base</p><p class="text-sm font-semibold text-slate-900">{{ $baseSyncedPersonsCount }}/{{ $totalPersonsCount }}</p></div>
             </div>
-            <div class="bg-white p-4">
-                <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Analyse aktiv</p>
-                <p class="mt-2 text-2xl font-semibold text-emerald-700">{{ $activePersonsCount }}</p>
-            </div>
-            <div class="bg-white p-4">
-                <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Instagram-Sperren</p>
-                <p class="mt-2 text-2xl font-semibold text-amber-700">{{ $blockedPersonsCount }}</p>
-            </div>
-            <div class="bg-white p-4">
-                <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Instagram bereit</p>
-                <p class="mt-2 text-2xl font-semibold text-pink-700">{{ $instagramReadyPersonsCount }}</p>
-            </div>
-            <div class="bg-white p-4">
-                <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Mail bereit</p>
-                <p class="mt-2 text-2xl font-semibold text-sky-700">{{ $mailReadyPersonsCount }}</p>
-            </div>
-            <div class="bg-white p-4">
-                <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Prozesse</p>
-                <p class="mt-2 text-2xl font-semibold text-blue-700">{{ $runningProcessPersonsCount }}</p>
-            </div>
-            <div class="bg-white p-4">
-                <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Base-Sync</p>
-                <p class="mt-2 text-2xl font-semibold text-slate-900">{{ $baseSyncedPersonsCount }}<span class="text-sm font-medium text-slate-500">/{{ $totalPersonsCount }}</span></p>
+            <div class="flex shrink-0 items-center gap-2">
+                <button type="button" title="AI-Vorschlaege fuer Auswahl" wire:click="openAiSuggestionForSelected" class="inline-flex h-9 w-9 items-center justify-center rounded-md border border-purple-200 bg-white text-purple-700 shadow-sm hover:bg-purple-50">
+                    <span class="sr-only">AI-Vorschlaege</span>
+                    <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor" aria-hidden="true"><path d="M12 3 9.8 8.8 4 11l5.8 2.2L12 19l2.2-5.8L20 11l-5.8-2.2z"></path></svg>
+                </button>
+                <button type="button" title="Timeouts" wire:click="openRuntimeSettingsModal" class="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-700 shadow-sm hover:bg-slate-50">
+                    <span class="sr-only">Timeouts</span>
+                    <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor" aria-hidden="true"><path d="M12 6v6l4 2"></path><circle cx="12" cy="12" r="9"></circle></svg>
+                </button>
+                <button type="button" title="Person hinzufuegen" wire:click="openCreateProfileModal" class="inline-flex h-9 w-9 items-center justify-center rounded-md bg-slate-900 text-white shadow-sm hover:bg-slate-800">
+                    <span class="sr-only">Person hinzufuegen</span>
+                    <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+                </button>
             </div>
         </div>
     </div>
@@ -78,68 +61,72 @@
         </div>
     @endif
 
-    <div class="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-        <div class="flex flex-wrap items-start justify-between gap-4">
-            <div class="min-w-0">
-                <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Standard-Person</p>
-                <h3 class="mt-1 text-lg font-semibold text-slate-900">
-                    @if($primaryProfile)
-                        {{ $primaryProfile['display_name'] }}
-                    @else
-                        Keine Standard-Person ausgewaehlt
-                    @endif
-                </h3>
-                <p class="mt-1 text-sm text-slate-600">
-                    @if($primaryProfile)
-                        {{ $primaryProfile['label'] }}{{ $primaryProfile['login_username'] !== '' ? ' - @'.$primaryProfile['login_username'] : '' }} - {{ $activePersonsCount }} {{ $activePersonsCount === 1 ? 'Person ist' : 'Personen sind' }} aktiv.
-                    @else
-                        Lege eine Person an oder setze eine vorhandene Person als Standard.
-                    @endif
-                </p>
-            </div>
-            <div class="flex flex-wrap gap-2">
-                @if($primaryProfile)
-                    <a href="{{ route('persons.show', ['profileId' => $primaryProfile['id']]) }}" class="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
-                        Details
-                    </a>
-                    <button type="button" wire:click="selectAndEditProfile('{{ $primaryProfile['id'] }}')" class="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
-                        Bearbeiten
-                    </button>
-                @endif
-                <button type="button" wire:click="syncProfilesToBase" class="rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">
-                    An Base senden
-                </button>
-            </div>
-        </div>
-    </div>
-
     <div class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-        <div class="border-b border-slate-200 px-5 py-4">
-            <div class="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                    <h3 class="text-lg font-semibold text-slate-900">Personenliste</h3>
-                    <p class="mt-1 text-sm text-slate-500">Schneller Ueberblick ueber Account, Session, Status und die wichtigsten Aktionen.</p>
+        <div class="border-b border-slate-200 px-4 py-3">
+            <div class="grid gap-3 xl:grid-cols-[minmax(260px,1fr)_auto]">
+                <div class="grid gap-2 md:grid-cols-[minmax(220px,1fr)_160px_180px_160px_120px]">
+                    <input type="search" wire:model.live.debounce.300ms="personSearch" placeholder="Suchen..." class="h-9 rounded-md border-slate-300 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                    <select wire:model.live="statusFilter" class="h-9 rounded-md border-slate-300 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                        <option value="all">Alle Status</option>
+                        <option value="active">Aktiv</option>
+                        <option value="inactive">Inaktiv</option>
+                        <option value="blocked">Gesperrt</option>
+                        <option value="primary">Standard</option>
+                        <option value="process">Prozess laeuft</option>
+                    </select>
+                    <select wire:model.live="accountFilter" class="h-9 rounded-md border-slate-300 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                        <option value="all">Alle Accounts</option>
+                        <option value="instagram_ready">Instagram bereit</option>
+                        <option value="instagram_missing">Instagram fehlt</option>
+                        <option value="mail_ready">Mail bereit</option>
+                        <option value="mail_missing">Mail fehlt</option>
+                        <option value="base_synced">Base synchron</option>
+                        <option value="base_pending">Base offen</option>
+                        <option value="base_failed">Base Fehler</option>
+                    </select>
+                    <select wire:model.live="sortField" class="h-9 rounded-md border-slate-300 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                        <option value="name">Name</option>
+                        <option value="label">Profil</option>
+                        <option value="active">Aktivitaet</option>
+                        <option value="instagram">Instagram</option>
+                        <option value="mail">Mail</option>
+                        <option value="process">Prozess</option>
+                        <option value="base">Base</option>
+                    </select>
+                    <select wire:model.live="sortDirection" class="h-9 rounded-md border-slate-300 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                        <option value="asc">Aufsteigend</option>
+                        <option value="desc">Absteigend</option>
+                    </select>
                 </div>
-                <span class="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600 ring-1 ring-slate-200">
-                    {{ $totalPersonsCount }} {{ $totalPersonsCount === 1 ? 'Eintrag' : 'Eintraege' }}
-                </span>
+                <div class="flex flex-wrap items-center justify-end gap-2">
+                    <button type="button" wire:click="{{ $allVisibleSelected ? 'clearProfileSelection' : 'selectAllVisibleProfiles' }}" class="h-9 rounded-md border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
+                        {{ $allVisibleSelected ? 'Auswahl leeren' : 'Alle sichtbar' }}
+                    </button>
+                    <button type="button" wire:click="bulkActivateSelected" @disabled($selectedCount === 0) class="h-9 rounded-md border border-emerald-200 bg-white px-3 text-xs font-semibold text-emerald-700 shadow-sm hover:bg-emerald-50 disabled:opacity-40">Aktivieren</button>
+                    <button type="button" wire:click="bulkDeactivateSelected" @disabled($selectedCount === 0) class="h-9 rounded-md border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-40">Deaktivieren</button>
+                    <button type="button" wire:click="bulkSyncSelectedToBase" @disabled($selectedCount === 0) class="h-9 rounded-md border border-blue-200 bg-white px-3 text-xs font-semibold text-blue-700 shadow-sm hover:bg-blue-50 disabled:opacity-40">Base</button>
+                    <button type="button" wire:click="bulkDeleteSelected" wire:confirm="Ausgewaehlte Personen wirklich loeschen?" @disabled($selectedCount === 0) class="h-9 rounded-md border border-red-200 bg-white px-3 text-xs font-semibold text-red-700 shadow-sm hover:bg-red-50 disabled:opacity-40">Loeschen</button>
+                    <button type="button" wire:click="resetListFilters" class="h-9 rounded-md border border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-600 hover:bg-slate-100">Reset</button>
+                </div>
             </div>
         </div>
 
-        <div class="hidden grid-cols-12 gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 lg:grid">
-            <div class="col-span-3">Person</div>
-            <div class="col-span-4">Accounts</div>
-            <div class="col-span-3">Status</div>
-            <div class="col-span-2 text-right">Aktionen</div>
+        <div class="hidden grid-cols-12 gap-4 border-b border-slate-200 bg-slate-50 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500 lg:grid">
+            <div class="col-span-1">Auswahl</div>
+            <div class="col-span-4">Person</div>
+            <div class="col-span-4">Status</div>
+            <div class="col-span-2">Meta</div>
+            <div class="col-span-1 text-right">Aktionen</div>
         </div>
 
         <div class="divide-y divide-slate-200">
-            @forelse($profileOptions as $profile)
+            @forelse($visibleProfileOptions as $profile)
                 @php
+                    $selected = in_array($profile['id'], $selectedProfileIds, true);
                     $rowClass = $profile['is_scrape_blocked']
-                        ? 'border-l-amber-500 bg-amber-50/70'
+                        ? 'border-l-amber-500 bg-amber-50/70 hover:bg-amber-50'
                         : ($profile['is_primary']
-                            ? 'border-l-blue-500 bg-blue-50/60'
+                            ? 'border-l-blue-500 bg-blue-50/60 hover:bg-blue-50'
                             : ($profile['is_active'] ? 'border-l-emerald-500 bg-white hover:bg-emerald-50/30' : 'border-l-slate-200 bg-white hover:bg-slate-50'));
                     $avatarClass = $profile['is_scrape_blocked']
                         ? 'bg-amber-600 text-white'
@@ -168,171 +155,135 @@
                     $baseStatus = $profile['base_status'] ?? [];
                 @endphp
 
-                <article wire:key="scraper-profile-{{ $profile['id'] }}" class="grid gap-5 border-l-4 px-5 py-5 text-sm lg:grid-cols-12 {{ $rowClass }}">
-                    <div class="flex min-w-0 items-start gap-4 lg:col-span-3">
+                <article
+                    wire:key="scraper-profile-{{ $profile['id'] }}"
+                    x-data="{ clickTimer: null, profileId: @js($profile['id']) }"
+                    x-on:click="
+                        if ($event.target.closest('[data-row-control]')) return;
+                        clearTimeout(clickTimer);
+                        clickTimer = setTimeout(() => $wire.toggleProfileSelection(profileId), 180);
+                    "
+                    x-on:dblclick.prevent="
+                        if ($event.target.closest('[data-row-control]')) return;
+                        clearTimeout(clickTimer);
+                        $wire.openProfileDetail(profileId);
+                    "
+                    class="grid cursor-pointer gap-4 border-l-4 px-4 py-3 text-sm transition lg:grid-cols-12 {{ $rowClass }} {{ $selected ? 'ring-2 ring-blue-300 ring-inset' : '' }}"
+                >
+                    <div class="flex items-start lg:col-span-1" data-row-control>
+                        <input
+                            type="checkbox"
+                            class="mt-2 rounded border-slate-300 text-blue-600 shadow-sm focus:ring-blue-500"
+                            @checked($selected)
+                            x-on:click.stop="$wire.toggleProfileSelection(profileId)"
+                            aria-label="Person {{ $profile['display_name'] }} auswaehlen"
+                        >
+                    </div>
+
+                    <div class="flex min-w-0 items-start gap-3 lg:col-span-4">
                         @if(!empty($profile['avatar_url']))
                             <img
                                 src="{{ $profile['avatar_url'] }}"
                                 alt="Profilbild von {{ $profile['display_name'] }}"
-                                class="h-12 w-12 shrink-0 rounded-lg object-cover ring-1 ring-slate-200"
+                                class="h-10 w-10 shrink-0 rounded-md object-cover ring-1 ring-slate-200"
                             >
                         @else
-                            <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg {{ $avatarClass }} text-base font-semibold">
+                            <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-md {{ $avatarClass }} text-sm font-semibold">
                                 {{ strtoupper(substr($profile['label'], 0, 1)) }}
                             </div>
                         @endif
                         <div class="min-w-0">
-                            <div class="flex flex-wrap items-center gap-2">
+                            <div class="flex min-w-0 items-center gap-2">
                                 <p class="truncate font-semibold text-slate-900">{{ $profile['display_name'] }}</p>
                                 @if($profile['is_primary'])
-                                    <span class="rounded-full bg-blue-600 px-2 py-0.5 text-xs font-semibold text-white">Standard</span>
+                                    <span title="Standard-Person" class="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-blue-600 text-[10px] font-semibold text-white">S</span>
                                 @endif
                             </div>
-                            <p class="mt-1 truncate text-xs text-slate-500">{{ $profile['label'] }}</p>
-                            <p class="mt-1 truncate text-xs font-medium {{ $profile['login_username'] !== '' ? 'text-pink-700' : 'text-slate-400' }}">
-                                {{ $profile['login_username'] !== '' ? '@'.$profile['login_username'] : 'Kein Instagram-Benutzername' }}
-                            </p>
-                            <p class="mt-1 truncate text-xs font-medium {{ $profile['person_email'] !== '' ? 'text-sky-700' : 'text-slate-400' }}">
-                                {{ $profile['person_email'] !== '' ? $profile['person_email'] : 'Kein Mailaccount' }}
-                            </p>
-                            <p class="mt-2 truncate text-xs text-slate-500">
-                                {{ trim(($profile['person_city'] ?? '').' '.($profile['person_country'] ?? '')) ?: 'Keine Personendaten hinterlegt' }}
+                            <p class="mt-0.5 truncate text-xs text-slate-500">{{ $profile['label'] }}</p>
+                            <p class="mt-1 truncate text-xs text-slate-500">
+                                {{ trim(($profile['person_city'] ?? '').' '.($profile['person_country'] ?? '')) ?: 'Keine Ortsdaten' }}
                             </p>
                         </div>
                     </div>
 
-                    <div class="min-w-0 space-y-3 lg:col-span-4">
-                        <div class="flex flex-wrap items-center gap-2">
-                            <span title="{{ data_get($instagramStatus, 'label') }} - {{ data_get($instagramStatus, 'detail') }}" class="inline-flex h-10 w-10 items-center justify-center rounded-md ring-1 {{ $statusIconClass(data_get($instagramStatus, 'level')) }}">
+                    <div class="flex min-w-0 flex-wrap items-center gap-2 lg:col-span-4">
+                            <span title="{{ data_get($instagramStatus, 'label') }} - {{ data_get($instagramStatus, 'detail') }}{{ data_get($instagramStatus, 'synced_at_label') ? ' - Cookies: '.data_get($instagramStatus, 'synced_at_label') : '' }}" class="inline-flex h-9 w-9 items-center justify-center rounded-md ring-1 {{ $statusIconClass(data_get($instagramStatus, 'level')) }}">
                                 <span class="sr-only">{{ data_get($instagramStatus, 'label') }}</span>
-                                <svg class="h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.7" stroke="currentColor" aria-hidden="true">
+                                <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.7" stroke="currentColor" aria-hidden="true">
                                     <rect width="16" height="16" x="4" y="4" rx="4"></rect>
                                     <circle cx="12" cy="12" r="3"></circle>
                                     <path d="M16.5 7.5h.01"></path>
                                 </svg>
                             </span>
 
-                            <span title="{{ data_get($mailStatus, 'label') }} - {{ data_get($mailStatus, 'detail') }}" class="inline-flex h-10 w-10 items-center justify-center rounded-md ring-1 {{ $statusIconClass(data_get($mailStatus, 'level')) }}">
+                            <span title="{{ data_get($mailStatus, 'label') }} - {{ data_get($mailStatus, 'detail') }}{{ data_get($mailStatus, 'has_webmail_session') ? ' - Webmail-Session vorhanden' : '' }}" class="inline-flex h-9 w-9 items-center justify-center rounded-md ring-1 {{ $statusIconClass(data_get($mailStatus, 'level')) }}">
                                 <span class="sr-only">{{ data_get($mailStatus, 'label') }}</span>
-                                <svg class="h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.7" stroke="currentColor" aria-hidden="true">
+                                <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.7" stroke="currentColor" aria-hidden="true">
                                     <path d="M4 6h16v12H4z"></path>
                                     <path d="m4 7 8 6 8-6"></path>
                                 </svg>
                             </span>
 
-                            <span title="{{ data_get($processStatus, 'label') }} - {{ data_get($processStatus, 'detail') }}" class="inline-flex h-10 w-10 items-center justify-center rounded-md ring-1 {{ $statusIconClass(data_get($processStatus, 'level')) }}">
+                            <span title="{{ data_get($processStatus, 'label') }} - {{ data_get($processStatus, 'detail') }}" class="inline-flex h-9 w-9 items-center justify-center rounded-md ring-1 {{ $statusIconClass(data_get($processStatus, 'level')) }}">
                                 <span class="sr-only">{{ data_get($processStatus, 'label') }}</span>
-                                <svg class="h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.7" stroke="currentColor" aria-hidden="true">
+                                <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.7" stroke="currentColor" aria-hidden="true">
                                     <path d="M8 5v14l11-7z"></path>
                                     <path d="M4 5v14"></path>
                                 </svg>
                             </span>
 
-                            <span title="{{ data_get($baseStatus, 'label') }} - {{ data_get($baseStatus, 'detail') }}" class="inline-flex h-10 w-10 items-center justify-center rounded-md ring-1 {{ $statusIconClass(data_get($baseStatus, 'level')) }}">
+                            <span title="{{ data_get($baseStatus, 'label') }} - {{ data_get($baseStatus, 'detail') }}" class="inline-flex h-9 w-9 items-center justify-center rounded-md ring-1 {{ $statusIconClass(data_get($baseStatus, 'level')) }}">
                                 <span class="sr-only">{{ data_get($baseStatus, 'label') }}</span>
-                                <svg class="h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.7" stroke="currentColor" aria-hidden="true">
+                                <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.7" stroke="currentColor" aria-hidden="true">
                                     <ellipse cx="12" cy="5" rx="7" ry="3"></ellipse>
                                     <path d="M5 5v6c0 1.7 3.1 3 7 3s7-1.3 7-3V5"></path>
                                     <path d="M5 11v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"></path>
                                 </svg>
                             </span>
-                        </div>
 
-                        <div class="grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
-                            <div class="min-w-0 rounded-md bg-slate-50 px-3 py-2 ring-1 ring-slate-200">
-                                <p class="font-semibold text-slate-700">Instagram</p>
-                                <p class="mt-1 truncate">{{ data_get($instagramStatus, 'detail') }}</p>
-                                <p class="mt-1 text-slate-500">
-                                    {{ data_get($instagramStatus, 'has_session') ? 'Session vorhanden' : 'Keine Session' }}
-                                    @if((int) data_get($instagramStatus, 'cookie_count') > 0)
-                                        - {{ data_get($instagramStatus, 'cookie_count') }} Cookies
-                                    @endif
-                                </p>
-                            </div>
-                            <div class="min-w-0 rounded-md bg-slate-50 px-3 py-2 ring-1 ring-slate-200">
-                                <p class="font-semibold text-slate-700">Mail</p>
-                                <p class="mt-1 truncate">{{ data_get($mailStatus, 'detail') }}</p>
-                                <p class="mt-1 text-slate-500">
-                                    {{ data_get($mailStatus, 'has_webmail_session') ? 'Webmail-Session vorhanden' : (data_get($mailStatus, 'has_password') ? 'Passwort gespeichert' : 'Unvollstaendig') }}
-                                </p>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="flex flex-wrap content-start items-center gap-2 lg:col-span-3">
-                        @if($profile['is_active'])
-                            <span class="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-200">
-                                <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
-                                Analyse aktiv
-                            </span>
-                        @else
-                            <span class="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600 ring-1 ring-slate-200">
-                                <span class="h-1.5 w-1.5 rounded-full bg-slate-400"></span>
-                                Inaktiv
-                            </span>
-                        @endif
-
-                        <span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700 ring-1 ring-slate-200">Bot: {{ $botLabel }}</span>
-                        <span class="rounded-full {{ $baseClass }} px-2.5 py-1 text-xs font-semibold">Base: {{ $baseLabel }}</span>
-                        <span class="rounded-full {{ $profile['has_stored_password'] ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200' : 'bg-amber-50 text-amber-700 ring-1 ring-amber-200' }} px-2.5 py-1 text-xs font-semibold">
-                            {{ $profile['has_stored_password'] ? 'Passwort gespeichert' : 'Kein Passwort' }}
+                        <span title="{{ $profile['is_active'] ? 'Analyse aktiv' : 'Analyse inaktiv' }}" class="inline-flex h-9 w-9 items-center justify-center rounded-md ring-1 {{ $profile['is_active'] ? 'bg-emerald-50 text-emerald-700 ring-emerald-200' : 'bg-slate-100 text-slate-500 ring-slate-200' }}">
+                            <span class="sr-only">{{ $profile['is_active'] ? 'Aktiv' : 'Inaktiv' }}</span>
+                            <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.7" stroke="currentColor" aria-hidden="true">
+                                <path d="M9 12.75 11.25 15 15 9.75"></path><circle cx="12" cy="12" r="9"></circle>
+                            </svg>
                         </span>
 
-                        @if((int) data_get($processStatus, 'count') > 0)
-                            <span class="rounded-full {{ data_get($processStatus, 'is_idle_suspect') ? 'bg-amber-50 text-amber-800 ring-1 ring-amber-200' : 'bg-blue-50 text-blue-700 ring-1 ring-blue-200' }} px-2.5 py-1 text-xs font-semibold">
-                                {{ data_get($processStatus, 'label') }}
-                            </span>
-                            <p class="basis-full text-xs text-slate-500">{{ data_get($processStatus, 'detail') }}</p>
-                        @endif
-
                         @if($profile['is_scrape_blocked'])
-                            <span class="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800 ring-1 ring-amber-300">
-                                Gesperrt bis {{ $profile['scrape_blocked_until_label'] ?? 'unbekannt' }}
+                            <span title="Gesperrt bis {{ $profile['scrape_blocked_until_label'] ?? 'unbekannt' }}" class="inline-flex h-9 w-9 items-center justify-center rounded-md bg-amber-100 text-amber-800 ring-1 ring-amber-300">
+                                <span class="sr-only">Gesperrt</span>
+                                <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.7" stroke="currentColor" aria-hidden="true"><path d="M16 10V7a4 4 0 0 0-8 0v3"></path><rect x="5" y="10" width="14" height="10" rx="2"></rect></svg>
                             </span>
-                        @endif
-
-                        @if(($profile['base_sync_status'] ?? 'pending') === 'synced' && !empty($profile['base_synced_at_label']))
-                            <p class="basis-full text-xs text-slate-500">Zuletzt synchronisiert: {{ $profile['base_synced_at_label'] }}</p>
-                        @endif
-                        @if(($profile['base_sync_status'] ?? 'pending') === 'failed' && !empty($profile['base_sync_error']))
-                            <p class="basis-full break-words text-xs text-red-700">{{ $profile['base_sync_error'] }}</p>
                         @endif
                     </div>
 
-                    <div class="flex flex-wrap items-start justify-start gap-2 lg:col-span-2 lg:justify-end">
-                        <a href="{{ route('persons.show', ['profileId' => $profile['id']]) }}" class="rounded-md bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-slate-800">
-                            Details
-                        </a>
-                        <button type="button" wire:click="selectAndEditProfile('{{ $profile['id'] }}')" class="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
-                            Bearbeiten
-                        </button>
-                        @if(! $profile['is_primary'])
-                            <button type="button" wire:click="makePrimaryProfile('{{ $profile['id'] }}')" class="rounded-md border border-blue-200 bg-white px-3 py-1.5 text-xs font-semibold text-blue-700 shadow-sm hover:bg-blue-50">
-                                Standard
+                    <div class="min-w-0 text-xs text-slate-500 lg:col-span-2">
+                        <p class="truncate">{{ $profile['login_username'] !== '' ? '@'.$profile['login_username'] : 'Kein Instagram' }}</p>
+                        <p class="mt-1 truncate">{{ $profile['person_email'] !== '' ? $profile['person_email'] : 'Keine Mail' }}</p>
+                        <p class="mt-1 truncate">Bot: {{ $botLabel }} · Base: {{ $baseLabel }}</p>
+                    </div>
+
+                    <div class="flex items-start justify-end lg:col-span-1" data-row-control>
+                        <div class="relative" x-data="{ open: false }" x-on:click.outside="open = false">
+                            <button type="button" title="Aktionen" x-on:click.stop="open = !open" class="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 shadow-sm hover:bg-slate-50">
+                                <span class="sr-only">Aktionen</span>
+                                <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor" aria-hidden="true"><path d="M12 6.75h.01M12 12h.01M12 17.25h.01"></path></svg>
                             </button>
-                        @endif
-                        @if($profile['is_scrape_blocked'])
-                            <button type="button" wire:click="clearProfileScrapeBlock('{{ $profile['id'] }}')" class="rounded-md border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-800 shadow-sm hover:bg-amber-50">
-                                Entsperren
-                            </button>
-                        @endif
-                        @if(! $profile['is_active'])
-                            <button type="button" wire:click="toggleProfileActive('{{ $profile['id'] }}')" class="rounded-md border border-emerald-200 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-700 shadow-sm hover:bg-emerald-50">
-                                Aktivieren
-                            </button>
-                        @else
-                            <button type="button" wire:click="toggleProfileActive('{{ $profile['id'] }}')" class="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
-                                Deaktivieren
-                            </button>
-                        @endif
-                        <button
-                            type="button"
-                            wire:click="deleteProfile('{{ $profile['id'] }}')"
-                            onclick="return confirm('Diese Person wirklich loeschen?')"
-                            class="rounded-md border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 shadow-sm hover:bg-red-50"
-                        >
-                            Loeschen
-                        </button>
+                            <div x-cloak x-show="open" x-transition class="absolute right-0 z-20 mt-2 w-48 overflow-hidden rounded-md border border-slate-200 bg-white py-1 text-sm shadow-lg">
+                                <a href="{{ route('persons.show', ['profileId' => $profile['id']]) }}" class="block px-3 py-2 text-slate-700 hover:bg-slate-50">Profil oeffnen</a>
+                                <button type="button" wire:click="selectAndEditProfile('{{ $profile['id'] }}')" class="block w-full px-3 py-2 text-left text-slate-700 hover:bg-slate-50">Bearbeiten</button>
+                                <button type="button" wire:click="openAiSuggestion('{{ $profile['id'] }}')" class="block w-full px-3 py-2 text-left text-purple-700 hover:bg-purple-50">AI-Vorschlag</button>
+                                @if(! $profile['is_primary'])
+                                    <button type="button" wire:click="makePrimaryProfile('{{ $profile['id'] }}')" class="block w-full px-3 py-2 text-left text-blue-700 hover:bg-blue-50">Als Standard</button>
+                                @endif
+                                @if($profile['is_scrape_blocked'])
+                                    <button type="button" wire:click="clearProfileScrapeBlock('{{ $profile['id'] }}')" class="block w-full px-3 py-2 text-left text-amber-800 hover:bg-amber-50">Entsperren</button>
+                                @endif
+                                <button type="button" wire:click="toggleProfileActive('{{ $profile['id'] }}')" class="block w-full px-3 py-2 text-left text-slate-700 hover:bg-slate-50">
+                                    {{ $profile['is_active'] ? 'Deaktivieren' : 'Aktivieren' }}
+                                </button>
+                                <button type="button" wire:click="deleteProfile('{{ $profile['id'] }}')" wire:confirm="Diese Person wirklich loeschen?" class="block w-full px-3 py-2 text-left text-red-700 hover:bg-red-50">Loeschen</button>
+                            </div>
+                        </div>
                     </div>
                 </article>
             @empty
@@ -683,4 +634,6 @@
         </x-slot>
     </x-dialog-modal>
 
+    @livewire('admin.persons.ai-complete-person-profile-modal')
+    @livewire('admin.persons.generate-person-images-modal')
 </div>

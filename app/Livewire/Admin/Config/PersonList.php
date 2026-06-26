@@ -28,6 +28,18 @@ class PersonList extends Component
 
     public array $profileOptions = [];
 
+    public array $selectedProfileIds = [];
+
+    public string $personSearch = '';
+
+    public string $statusFilter = 'all';
+
+    public string $accountFilter = 'all';
+
+    public string $sortField = 'name';
+
+    public string $sortDirection = 'asc';
+
     public bool $showCreateProfileModal = false;
 
     public bool $showProfileModal = false;
@@ -434,6 +446,10 @@ class PersonList extends Component
         $this->activeProfileIds = $collection['active_profile_ids'];
         $this->profileOptions = $this->buildProfileOptions($collection);
         $this->sessionBuildResult = null;
+        $this->selectedProfileIds = array_values(array_filter(
+            $this->selectedProfileIds,
+            static fn (string $selectedProfileId): bool => $selectedProfileId !== $profileId,
+        ));
         $this->showProfileModal = $this->showProfileModal && $this->editingProfileId !== $profileId;
         $this->editingProfileId = $this->editingProfileId === $profileId ? '' : $this->editingProfileId;
 
@@ -651,7 +667,241 @@ class PersonList extends Component
 
     public function render()
     {
-        return view('livewire.admin.config.person-list');
+        return view('livewire.admin.config.person-list', [
+            'visibleProfileOptions' => $this->visibleProfileOptions(),
+        ]);
+    }
+
+    public function updatedPersonSearch(): void
+    {
+        $this->pruneSelectedProfileIds();
+    }
+
+    public function updatedStatusFilter(): void
+    {
+        $this->pruneSelectedProfileIds();
+    }
+
+    public function updatedAccountFilter(): void
+    {
+        $this->pruneSelectedProfileIds();
+    }
+
+    public function updatedSortField(): void
+    {
+        $this->normalizeSortState();
+    }
+
+    public function updatedSortDirection(): void
+    {
+        $this->normalizeSortState();
+    }
+
+    public function resetListFilters(): void
+    {
+        $this->personSearch = '';
+        $this->statusFilter = 'all';
+        $this->accountFilter = 'all';
+        $this->sortField = 'name';
+        $this->sortDirection = 'asc';
+        $this->selectedProfileIds = [];
+    }
+
+    public function toggleProfileSelection(string $profileId): void
+    {
+        $profileId = $this->normalizeProfileId($profileId);
+
+        if (! in_array($profileId, $this->visibleProfileIds(), true)) {
+            return;
+        }
+
+        if (in_array($profileId, $this->selectedProfileIds, true)) {
+            $this->selectedProfileIds = array_values(array_filter(
+                $this->selectedProfileIds,
+                static fn (string $selectedProfileId): bool => $selectedProfileId !== $profileId,
+            ));
+
+            return;
+        }
+
+        $this->selectedProfileIds[] = $profileId;
+        $this->selectedProfileIds = array_values(array_unique($this->selectedProfileIds));
+    }
+
+    public function selectAllVisibleProfiles(): void
+    {
+        $this->selectedProfileIds = $this->visibleProfileIds();
+    }
+
+    public function clearProfileSelection(): void
+    {
+        $this->selectedProfileIds = [];
+    }
+
+    public function bulkActivateSelected(): void
+    {
+        $this->bulkSetSelectedActive(true);
+    }
+
+    public function bulkDeactivateSelected(): void
+    {
+        $this->bulkSetSelectedActive(false);
+    }
+
+    public function bulkDeleteSelected(): void
+    {
+        $selectedIds = $this->selectedExistingProfileIds();
+
+        if ($selectedIds === []) {
+            $this->dispatch('showAlert', 'Bitte waehle mindestens eine Person aus.', 'warning');
+
+            return;
+        }
+
+        $collection = $this->loadProfileCollection();
+        $remainingProfiles = array_values(array_filter(
+            $collection['profiles'],
+            static fn (array $profile): bool => ! in_array((string) ($profile['id'] ?? ''), $selectedIds, true),
+        ));
+
+        if ($remainingProfiles === []) {
+            $remainingProfiles[] = $this->defaultProfile('default');
+        }
+
+        $remainingProfileIds = array_column($remainingProfiles, 'id');
+        $collection['profiles'] = $remainingProfiles;
+        $collection['active_profile_ids'] = array_values(array_intersect($collection['active_profile_ids'], $remainingProfileIds));
+
+        if ($collection['active_profile_ids'] === []) {
+            $collection['active_profile_ids'] = [$remainingProfiles[0]['id']];
+        }
+
+        if (! in_array($collection['active_profile_id'], $remainingProfileIds, true)) {
+            $collection['active_profile_id'] = $collection['active_profile_ids'][0];
+        }
+
+        $collection['updated_at'] = now()->toIso8601String();
+
+        $this->persistProfileCollection($collection);
+        $this->refreshProfileState($collection);
+        $this->selectedProfileIds = [];
+
+        session()->flash('success', count($selectedIds).' Personen wurden geloescht.');
+        $this->dispatch('showAlert', count($selectedIds).' Personen wurden geloescht.', 'success');
+    }
+
+    public function bulkSyncSelectedToBase(): void
+    {
+        $selectedIds = $this->selectedExistingProfileIds();
+
+        if ($selectedIds === []) {
+            $this->dispatch('showAlert', 'Bitte waehle mindestens eine Person aus.', 'warning');
+
+            return;
+        }
+
+        $collection = $this->loadProfileCollection();
+        $collection['profiles'] = array_values(array_filter(
+            $collection['profiles'],
+            static fn (array $profile): bool => in_array((string) ($profile['id'] ?? ''), $selectedIds, true),
+        ));
+        $collection['active_profile_ids'] = array_values(array_intersect($collection['active_profile_ids'], $selectedIds));
+
+        if ($collection['profiles'] === []) {
+            $this->dispatch('showAlert', 'Die ausgewaehlten Personen wurden nicht gefunden.', 'error');
+
+            return;
+        }
+
+        if ($collection['active_profile_ids'] === []) {
+            $collection['active_profile_ids'] = [($collection['profiles'][0]['id'] ?? $selectedIds[0])];
+        }
+
+        if (! in_array($collection['active_profile_id'], $selectedIds, true)) {
+            $collection['active_profile_id'] = $collection['active_profile_ids'][0];
+        }
+
+        try {
+            $payload = app(ScraperProfileSyncClient::class)->syncCollection($collection);
+        } catch (\Throwable $exception) {
+            $this->baseSyncResult = [
+                'ok' => false,
+                'message' => $exception->getMessage(),
+            ];
+
+            Person::query()
+                ->whereIn('profile_key', $selectedIds)
+                ->update([
+                    'base_sync_status' => 'failed',
+                    'base_sync_error' => $exception->getMessage(),
+                ]);
+
+            $this->profileOptions = $this->buildProfileOptions($this->loadProfileCollection());
+            $this->dispatch('showAlert', 'Auswahl konnte nicht an die Base gesendet werden.', 'error');
+
+            return;
+        }
+
+        $syncedKeys = array_values(array_filter($payload['profile_keys'] ?? $selectedIds));
+
+        Person::query()
+            ->whereIn('profile_key', $syncedKeys)
+            ->update([
+                'base_sync_status' => 'synced',
+                'base_synced_at' => now('UTC'),
+                'base_sync_error' => null,
+            ]);
+
+        $this->baseSyncResult = [
+            'ok' => true,
+            'message' => sprintf('%d Personen wurden an die Base gesendet.', (int) ($payload['synced'] ?? count($syncedKeys))),
+        ];
+        $this->profileOptions = $this->buildProfileOptions($this->loadProfileCollection());
+
+        session()->flash('success', $this->baseSyncResult['message']);
+        $this->dispatch('showAlert', $this->baseSyncResult['message'], 'success');
+    }
+
+    public function openAiSuggestionForSelected(): void
+    {
+        $selectedIds = $this->selectedExistingProfileIds();
+
+        if ($selectedIds === []) {
+            $this->dispatch('showAlert', 'Bitte waehle genau eine Person fuer AI-Vorschlaege aus.', 'warning');
+
+            return;
+        }
+
+        if (count($selectedIds) > 1) {
+            $this->dispatch('showAlert', 'AI-Vorschlaege werden einzeln erstellt. Es wird die erste Auswahl geoeffnet.', 'warning');
+        }
+
+        $this->openAiSuggestion($selectedIds[0]);
+    }
+
+    public function openAiSuggestion(string $profileId): void
+    {
+        $profile = collect($this->profileOptions)->firstWhere('id', $profileId);
+        $personId = (int) data_get($profile, 'person_record_id', 0);
+
+        if ($personId <= 0) {
+            $this->dispatch('showAlert', 'Fuer diese Person existiert noch kein Datenbankprofil.', 'warning');
+
+            return;
+        }
+
+        $this->dispatch('open-ai-complete-person-profile', personId: $personId);
+    }
+
+    public function openProfileDetail(string $profileId): void
+    {
+        $profile = collect($this->profileOptions)->firstWhere('id', $profileId);
+
+        if (! $profile) {
+            return;
+        }
+
+        $this->redirectRoute('persons.show', ['profileId' => $profileId], navigate: true);
     }
 
     protected function persistSettings(): array
@@ -1143,6 +1393,194 @@ class PersonList extends Component
                 'base_status' => $this->baseStatus($profile),
             ];
         }, $collection['profiles']);
+    }
+
+    protected function visibleProfileOptions(): array
+    {
+        $this->normalizeSortState();
+
+        $search = Str::of($this->personSearch)->lower()->ascii()->trim()->toString();
+
+        $profiles = collect($this->profileOptions)
+            ->filter(function (array $profile) use ($search): bool {
+                if ($search === '') {
+                    return true;
+                }
+
+                $haystack = Str::of(collect([
+                    $profile['display_name'] ?? '',
+                    $profile['label'] ?? '',
+                    $profile['login_username'] ?? '',
+                    $profile['person_email'] ?? '',
+                    $profile['person_city'] ?? '',
+                    $profile['person_country'] ?? '',
+                    data_get($profile, 'mail_status.detail', ''),
+                ])->implode(' '))
+                    ->lower()
+                    ->ascii()
+                    ->toString();
+
+                return str_contains($haystack, $search);
+            })
+            ->filter(fn (array $profile): bool => $this->matchesStatusFilter($profile))
+            ->filter(fn (array $profile): bool => $this->matchesAccountFilter($profile));
+
+        $profiles = $profiles->sortBy(
+            fn (array $profile): mixed => $this->profileSortValue($profile),
+            SORT_REGULAR,
+            $this->sortDirection === 'desc',
+        );
+
+        return $profiles->values()->all();
+    }
+
+    protected function visibleProfileIds(): array
+    {
+        return array_values(array_map(
+            static fn (array $profile): string => (string) $profile['id'],
+            $this->visibleProfileOptions(),
+        ));
+    }
+
+    protected function selectedExistingProfileIds(): array
+    {
+        $existingIds = array_column($this->profileOptions, 'id');
+
+        return array_values(array_intersect(
+            array_values(array_unique($this->selectedProfileIds)),
+            $existingIds,
+        ));
+    }
+
+    protected function pruneSelectedProfileIds(): void
+    {
+        $visibleIds = $this->visibleProfileIds();
+        $this->selectedProfileIds = array_values(array_intersect($this->selectedProfileIds, $visibleIds));
+    }
+
+    protected function normalizeSortState(): void
+    {
+        if (! in_array($this->sortField, ['name', 'label', 'active', 'instagram', 'mail', 'process', 'base'], true)) {
+            $this->sortField = 'name';
+        }
+
+        if (! in_array($this->sortDirection, ['asc', 'desc'], true)) {
+            $this->sortDirection = 'asc';
+        }
+    }
+
+    protected function matchesStatusFilter(array $profile): bool
+    {
+        return match ($this->statusFilter) {
+            'active' => (bool) ($profile['is_active'] ?? false),
+            'inactive' => ! (bool) ($profile['is_active'] ?? false),
+            'blocked' => (bool) ($profile['is_scrape_blocked'] ?? false),
+            'primary' => (bool) ($profile['is_primary'] ?? false),
+            'process' => (int) data_get($profile, 'process_status.count', 0) > 0,
+            default => true,
+        };
+    }
+
+    protected function matchesAccountFilter(array $profile): bool
+    {
+        return match ($this->accountFilter) {
+            'instagram_ready' => data_get($profile, 'instagram_status.level') === 'success',
+            'instagram_missing' => in_array(data_get($profile, 'instagram_status.level'), ['empty', 'partial'], true),
+            'mail_ready' => data_get($profile, 'mail_status.level') === 'success',
+            'mail_missing' => in_array(data_get($profile, 'mail_status.level'), ['empty', 'partial'], true),
+            'base_synced' => ($profile['base_sync_status'] ?? 'pending') === 'synced',
+            'base_pending' => ($profile['base_sync_status'] ?? 'pending') === 'pending',
+            'base_failed' => ($profile['base_sync_status'] ?? 'pending') === 'failed',
+            default => true,
+        };
+    }
+
+    protected function profileSortValue(array $profile): mixed
+    {
+        return match ($this->sortField) {
+            'label' => Str::of($profile['label'] ?? '')->lower()->ascii()->toString(),
+            'active' => (bool) ($profile['is_active'] ?? false) ? 0 : 1,
+            'instagram' => $this->statusSortWeight(data_get($profile, 'instagram_status.level')),
+            'mail' => $this->statusSortWeight(data_get($profile, 'mail_status.level')),
+            'process' => -1 * (int) data_get($profile, 'process_status.count', 0),
+            'base' => $this->statusSortWeight(data_get($profile, 'base_status.level')),
+            default => Str::of($profile['display_name'] ?? '')->lower()->ascii()->toString(),
+        };
+    }
+
+    protected function statusSortWeight(mixed $level): int
+    {
+        return match ($level) {
+            'running' => 0,
+            'success' => 1,
+            'warning' => 2,
+            'partial' => 3,
+            'danger' => 4,
+            default => 5,
+        };
+    }
+
+    protected function bulkSetSelectedActive(bool $active): void
+    {
+        $selectedIds = $this->selectedExistingProfileIds();
+
+        if ($selectedIds === []) {
+            $this->dispatch('showAlert', 'Bitte waehle mindestens eine Person aus.', 'warning');
+
+            return;
+        }
+
+        $collection = $this->loadProfileCollection();
+        $profileIds = array_column($collection['profiles'], 'id');
+        $activeIds = $collection['active_profile_ids'];
+
+        if ($active) {
+            foreach ($selectedIds as $selectedId) {
+                $activeIds = $this->appendActiveProfileId($activeIds, $selectedId);
+            }
+        } else {
+            $activeIds = array_values(array_diff($activeIds, $selectedIds));
+
+            if ($activeIds === []) {
+                $fallbackId = collect($profileIds)
+                    ->first(fn (string $profileId): bool => ! in_array($profileId, $selectedIds, true))
+                    ?: ($collection['active_profile_id'] ?? ($profileIds[0] ?? null));
+
+                if ($fallbackId) {
+                    $activeIds = [$fallbackId];
+                }
+            }
+        }
+
+        $collection['active_profile_ids'] = array_values(array_intersect($activeIds, $profileIds));
+
+        if ($collection['active_profile_ids'] === [] && $profileIds !== []) {
+            $collection['active_profile_ids'] = [$profileIds[0]];
+        }
+
+        if (! in_array($collection['active_profile_id'], $collection['active_profile_ids'], true)) {
+            $collection['active_profile_id'] = $collection['active_profile_ids'][0] ?? ($profileIds[0] ?? 'default');
+        }
+
+        $collection['updated_at'] = now()->toIso8601String();
+
+        $this->persistProfileCollection($collection);
+        $this->refreshProfileState($collection);
+
+        $message = count($selectedIds).' Personen wurden '.($active ? 'aktiviert.' : 'deaktiviert.');
+        session()->flash('success', $message);
+        $this->dispatch('showAlert', $message, 'success');
+    }
+
+    protected function refreshProfileState(array $collection): void
+    {
+        $this->activeProfileId = $collection['active_profile_id'];
+        $this->selectedProfileId = in_array($this->selectedProfileId, array_column($collection['profiles'], 'id'), true)
+            ? $this->selectedProfileId
+            : $collection['active_profile_id'];
+        $this->activeProfileIds = $collection['active_profile_ids'];
+        $this->profileOptions = $this->buildProfileOptions($collection);
+        $this->sessionBuildResult = null;
     }
 
     protected function personRecordsForProfiles(array $profiles): array
