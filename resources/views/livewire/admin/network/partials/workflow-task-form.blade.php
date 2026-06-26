@@ -28,6 +28,34 @@
         ->filter()
         ->unique()
         ->values();
+    $activeBrowserWindowOptions = collect();
+
+    foreach ($steps as $step) {
+        foreach ($step->task_cards ?? [] as $task) {
+            $taskWindowName = trim((string) data_get($task, 'browser_window_name', data_get($task, 'browser_window', 'main'))) ?: 'main';
+
+            if (($task['task_key'] ?? '') === 'browser.open' && ! $activeBrowserWindowOptions->contains($taskWindowName)) {
+                $activeBrowserWindowOptions->push($taskWindowName);
+            }
+
+            if (($task['task_key'] ?? '') === 'browser.close') {
+                $activeBrowserWindowOptions = $activeBrowserWindowOptions
+                    ->reject(fn ($activeWindowName) => $activeWindowName === $taskWindowName)
+                    ->values();
+            }
+        }
+    }
+
+    $selectBrowserWindowOptions = ($catalogKey === 'browser.open' ? $browserWindowOptions : $activeBrowserWindowOptions)
+        ->merge([$currentBrowserWindow])
+        ->filter()
+        ->unique()
+        ->values();
+
+    if ($selectBrowserWindowOptions->isEmpty()) {
+        $selectBrowserWindowOptions = collect(['main']);
+    }
+
     $browserWindowDatalistId = 'workflow-'.$prefix.'-browser-windows';
 @endphp
 
@@ -85,13 +113,13 @@
                         class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"
                     >
                     <datalist id="{{ $browserWindowDatalistId }}">
-                        @foreach($browserWindowOptions as $browserWindowOption)
+                        @foreach($selectBrowserWindowOptions as $browserWindowOption)
                             <option value="{{ $browserWindowOption }}"></option>
                         @endforeach
                     </datalist>
                 @else
                     <select wire:model.defer="{{ $prefix }}BrowserWindow" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
-                        @foreach($browserWindowOptions as $browserWindowOption)
+                        @foreach($selectBrowserWindowOptions as $browserWindowOption)
                             <option value="{{ $browserWindowOption }}">{{ $browserWindowOption }}</option>
                         @endforeach
                     </select>

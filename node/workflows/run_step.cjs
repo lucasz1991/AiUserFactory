@@ -564,6 +564,28 @@ async function ensurePage(context, windowName = 'main', label = '') {
   return registerBrowserWindow(context, nextPage, normalizedName, label);
 }
 
+function selectExistingPage(context, windowName = 'main') {
+  const normalizedName = normalizeBrowserWindowName(windowName);
+  const registered = browserWindowsByName.get(normalizedName);
+
+  if (
+    registered?.page
+    && typeof registered.page.screenshot === 'function'
+    && (!registered.page.isClosed || !registered.page.isClosed())
+  ) {
+    context.page = registered.page;
+    context.activeBrowserWindow = normalizedName;
+    page = registered.page;
+
+    return registered.page;
+  }
+
+  context.page = null;
+  context.activeBrowserWindow = normalizedName;
+
+  return null;
+}
+
 function startPreviewLoop(context) {
   if (previewTimer || runtime.livePreviewEnabled === false) {
     return;
@@ -653,13 +675,17 @@ async function run() {
         const input = taskInput(task, context);
         const targetBrowserWindow = browserWindowNameForTask(task, input);
 
-        if (task.kind !== 'data') {
+        if (task.task_key === 'browser.close') {
+          selectExistingPage(context, targetBrowserWindow);
+        } else if (task.kind !== 'data') {
           await ensurePage(context, targetBrowserWindow, targetBrowserWindow === 'main' ? 'Main' : taskLabel);
           startPreviewLoop(context);
         }
 
         context.browser = browser;
-        context.page = browserWindowsByName.get(targetBrowserWindow)?.page || page;
+        context.page = task.task_key === 'browser.close'
+          ? context.page
+          : (browserWindowsByName.get(targetBrowserWindow)?.page || page);
         context.activeBrowserWindow = targetBrowserWindow;
         context.input = input;
         context.timeoutMs = Math.max(1000, Number(task.timeout_seconds || 60) * 1000);
