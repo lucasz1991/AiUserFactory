@@ -183,6 +183,7 @@ class WorkflowTaskRunner
             'data.read_account_data' => 'node/workflows/tasks/data/read_account_data.cjs',
             'data.resolve_person' => 'node/workflows/tasks/data/resolve_person.cjs',
             'data.read_login_data' => 'node/workflows/tasks/data/read_login_data.cjs',
+            'data.persist_mail_account' => 'node/workflows/tasks/data/persist_mail_account.cjs',
             default => null,
         };
 

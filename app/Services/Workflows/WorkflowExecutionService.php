@@ -755,6 +755,18 @@ class WorkflowExecutionService
 
         if ($stepRun->external_run_type === 'webmail-session') {
             $this->applyWebmailSessionResult($stepRun->workflowRun, $result);
+
+            return;
+        }
+
+        if (
+            $stepRun->external_run_type === 'workflow-task'
+            && (
+                $stepRun->workflowStep?->type === WorkflowStep::TYPE_MAIL_ACCOUNT_REGISTRATION
+                || (bool) data_get($result, 'account.generated', false)
+            )
+        ) {
+            $this->applyMailRegistrationResult($stepRun->workflowRun, $result);
         }
     }
 

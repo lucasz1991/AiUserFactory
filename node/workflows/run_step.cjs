@@ -86,6 +86,23 @@ function cleanForJson(value, depth = 0) {
   return String(value);
 }
 
+function publicAccount(account = null) {
+  if (!account || typeof account !== 'object') {
+    return null;
+  }
+
+  const copy = { ...account };
+
+  delete copy.password;
+  delete copy.password_encrypted;
+
+  if (account.password || account.password_encrypted || account.hasPassword === true) {
+    copy.hasPassword = true;
+  }
+
+  return copy;
+}
+
 function statusPayload(state, stage, message, extra = {}) {
   return {
     runId: runtime.runId,
@@ -602,6 +619,7 @@ async function run() {
         status,
         statusMessage: result.statusMessage || `Task fehlgeschlagen: ${taskLabel}`,
         failedTaskKey: task.key,
+        account: publicAccount(context.account),
         tasks: taskResults,
         browserWindows: lastBrowserWindows,
         events,
@@ -624,6 +642,7 @@ async function run() {
     ok: true,
     status: 'success',
     statusMessage: 'Workflow-Tasks wurden ausgefuehrt.',
+    account: publicAccount(context.account),
     tasks: taskResults,
     browserWindows: lastBrowserWindows,
     events,
