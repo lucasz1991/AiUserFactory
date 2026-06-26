@@ -187,6 +187,26 @@
             </x-slot>
         </x-dialog-modal>
 
+        <x-dialog-modal wire:model="showRunPreviewModal" maxWidth="6xl">
+            <x-slot name="title">Workflow-Vorschau</x-slot>
+            <x-slot name="content">
+                <div @if($showRunPreviewModal) wire:poll.3s @endif>
+                    @if($previewWorkflowRun)
+                        <x-workflows.run-preview :workflow-run="$previewWorkflowRun" />
+                    @else
+                        <div class="rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
+                            Dieser Workflow-Lauf wurde noch nicht geladen.
+                        </div>
+                    @endif
+                </div>
+            </x-slot>
+            <x-slot name="footer">
+                <button type="button" wire:click="closeRunPreview" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">
+                    Schliessen
+                </button>
+            </x-slot>
+        </x-dialog-modal>
+
         <x-dialog-modal wire:model="showAddStepModal" maxWidth="2xl">
             <x-slot name="title">Liste / Aufgabe hinzufuegen</x-slot>
             <x-slot name="content">

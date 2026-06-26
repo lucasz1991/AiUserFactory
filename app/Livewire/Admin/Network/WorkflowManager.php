@@ -4,6 +4,7 @@ namespace App\Livewire\Admin\Network;
 
 use App\Models\Person;
 use App\Models\Workflow;
+use App\Models\WorkflowRun;
 use App\Models\WorkflowStep;
 use App\Services\Workflows\PersonaActionWorkflowCatalog;
 use App\Services\Workflows\WorkflowExecutionService;
@@ -60,6 +61,10 @@ class WorkflowManager extends Component
     public bool $showWorkflowModal = false;
 
     public bool $showRunModal = false;
+
+    public bool $showRunPreviewModal = false;
+
+    public ?int $previewWorkflowRunId = null;
 
     public bool $showAddStepModal = false;
 
@@ -160,6 +165,7 @@ class WorkflowManager extends Component
             'selectedWorkflow' => $selectedWorkflow,
             'steps' => $steps,
             'runs' => $runs,
+            'previewWorkflowRun' => $this->previewWorkflowRun(),
             'persons' => $persons,
             'personOptions' => $catalog->personOptions($catalogPersons),
             'actions' => $actions,
@@ -716,10 +722,17 @@ class WorkflowManager extends Component
             ]);
 
             $this->showRunModal = false;
+            $this->previewWorkflowRunId = $run->id;
+            $this->showRunPreviewModal = true;
             session()->flash('success', 'Workflow-Lauf wurde eingeplant: '.$run->run_uuid);
         } catch (\Throwable $exception) {
             session()->flash('success', 'Workflow konnte nicht gestartet werden: '.$exception->getMessage());
         }
+    }
+
+    public function closeRunPreview(): void
+    {
+        $this->showRunPreviewModal = false;
     }
 
     protected function selectedWorkflow(): ?Workflow
@@ -729,6 +742,21 @@ class WorkflowManager extends Component
         }
 
         return Workflow::query()->find($this->selectedWorkflowId);
+    }
+
+    protected function previewWorkflowRun(): ?WorkflowRun
+    {
+        if (! $this->previewWorkflowRunId) {
+            return null;
+        }
+
+        return WorkflowRun::query()
+            ->with([
+                'currentStep',
+                'workflow.steps' => fn ($query) => $query->ordered(),
+                'stepRuns.workflowStep',
+            ])
+            ->find($this->previewWorkflowRunId);
     }
 
     protected function loadWorkflowForm(): void
