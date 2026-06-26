@@ -75,8 +75,12 @@
                     routeOverlay: { width: 0, height: 0 },
                     init() {
                         this.$nextTick(() => this.refreshRouteLines());
+                        setTimeout(() => this.refreshRouteLines(), 150);
+                        setTimeout(() => this.refreshRouteLines(), 600);
                         this._refreshWorkflowRoutes = () => this.$nextTick(() => this.refreshRouteLines());
                         window.addEventListener('resize', this._refreshWorkflowRoutes);
+                        document.addEventListener('livewire:updated', this._refreshWorkflowRoutes);
+                        document.addEventListener('livewire:navigated', this._refreshWorkflowRoutes);
                     },
                     refreshRouteLines() {
                         const surface = this.$refs.routeSurface;
@@ -192,10 +196,10 @@
                 x-init="refreshRouteLines()"
                 x-on:scroll.debounce.100ms="refreshRouteLines()"
                 x-ref="routeSurface"
-                class="relative max-h-[calc(100vh-220px)] overflow-auto rounded-md border border-[#075985] bg-[#0079bf] p-4 shadow-sm"
+                class="relative max-h-[calc(100vh-220px)] overflow-auto rounded-md border border-blue-200 bg-blue-100 p-4 shadow-sm"
             >
                 <svg
-                    class="pointer-events-none absolute left-0 top-0 z-0"
+                    class="pointer-events-none absolute left-0 top-0 z-30"
                     x-bind:width="routeOverlay.width"
                     x-bind:height="routeOverlay.height"
                     x-bind:viewBox="`0 0 ${routeOverlay.width} ${routeOverlay.height}`"
@@ -213,7 +217,8 @@
                         <path
                             x-bind:d="line.path"
                             fill="none"
-                            stroke-width="2"
+                            stroke-width="3"
+                            stroke-linecap="round"
                             x-bind:stroke="line.type === 'failed' ? '#fca5a5' : '#bbf7d0'"
                             x-bind:stroke-dasharray="line.type === 'failed' ? '6 5' : '0'"
                             x-bind:marker-end="line.type === 'failed' ? 'url(#workflow-arrow-red)' : 'url(#workflow-arrow-green)'"
