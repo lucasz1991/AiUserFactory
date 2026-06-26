@@ -188,12 +188,16 @@ async function captureWindow(windowConfig, context = {}, force = false) {
   const title = typeof windowConfig.page.title === 'function'
     ? await windowConfig.page.title().catch(() => '')
     : '';
+  const targetId = typeof windowConfig.page.target === 'function'
+    ? String(windowConfig.page.target()?._targetId || '')
+    : '';
 
   return {
     key: windowConfig.key,
     label: windowConfig.label,
     url,
     title,
+    targetId,
     liveScreenshotPath: windowConfig.livePreviewPath,
     livePreviewPath: windowConfig.livePreviewPath,
     livePreviewRelativePath: windowConfig.livePreviewRelativePath || null,

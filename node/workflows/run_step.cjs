@@ -39,6 +39,7 @@ let lastBrowserWindows = [];
 let requestedBrowserEngine = null;
 let activeBrowserEngine = null;
 let browserFallbackReason = null;
+let connectedToExistingBrowser = false;
 
 function now() {
   return new Date().toISOString();
@@ -115,6 +116,10 @@ function publicWorkflow(workflow = null) {
   }
 
   const copy = cleanForJson(workflow);
+  delete copy.browser;
+  delete copy.browser_runtime;
+  delete copy.browserWsEndpoint;
+  delete copy.browser_ws_endpoint;
 
   for (const key of ['account', 'email_account']) {
     if (copy[key] && typeof copy[key] === 'object') {
@@ -162,6 +167,7 @@ function statusPayload(state, stage, message, extra = {}) {
     activeBrowserEngine,
     browserFallbackReason,
     browserProfilePath: runtime.browserProfilePath || null,
+    browserWsEndpoint: browserWsEndpoint(),
     tasks: runtime.tasks.map((task) => {
       const result = taskResults.find((candidate) => candidate.key === task.key);
 
@@ -187,6 +193,18 @@ function pushEvent(stage, message, extra = {}) {
 
 function writeStatus(state, stage, message, extra = {}) {
   writeJson(runtime.statusPath, statusPayload(state, stage, message, extra));
+}
+
+function browserWsEndpoint() {
+  if (!browser || typeof browser.wsEndpoint !== 'function') {
+    return '';
+  }
+
+  try {
+    return String(browser.wsEndpoint() || '');
+  } catch {
+    return '';
+  }
 }
 
 function valueFromPath(source, keyPath) {
@@ -325,6 +343,67 @@ function workflowBrowserWindowState(windowName = 'main') {
   }
 
   return null;
+}
+
+function workflowBrowserRuntime() {
+  const workflow = runtime.workflow || {};
+  const browserRuntime = workflow.browser || workflow.browser_runtime || {};
+
+  return {
+    wsEndpoint: String(
+      browserRuntime.wsEndpoint
+      || browserRuntime.ws_endpoint
+      || workflow.browserWsEndpoint
+      || workflow.browser_ws_endpoint
+      || '',
+    ).trim(),
+  };
+}
+
+function pageTargetId(candidatePage) {
+  if (!candidatePage || typeof candidatePage.target !== 'function') {
+    return '';
+  }
+
+  try {
+    return String(candidatePage.target()?._targetId || '');
+  } catch {
+    return '';
+  }
+}
+
+async function existingPageForWindow(currentBrowser, windowName = 'main') {
+  const state = workflowBrowserWindowState(windowName);
+  const targetId = String(state?.targetId || state?.target_id || '').trim();
+  const url = String(state?.url || '').trim();
+
+  if (!currentBrowser || typeof currentBrowser.pages !== 'function') {
+    return null;
+  }
+
+  const pages = await currentBrowser.pages().catch(() => []);
+  const openPages = pages.filter((candidatePage) => (
+    candidatePage
+    && typeof candidatePage.screenshot === 'function'
+    && (!candidatePage.isClosed || !candidatePage.isClosed())
+  ));
+
+  if (targetId !== '') {
+    const exactPage = openPages.find((candidatePage) => pageTargetId(candidatePage) === targetId);
+
+    if (exactPage) {
+      return exactPage;
+    }
+  }
+
+  if (/^https?:\/\//i.test(url)) {
+    return openPages.find((candidatePage) => (
+      typeof candidatePage.url === 'function'
+      && String(candidatePage.url() || '') === url
+    )) || null;
+  }
+
+  return openPages.find((candidatePage) => String(candidatePage.url?.() || '') === 'about:blank') || null;
 }
 
 async function restoreBrowserWindowState(context, nextPage, windowName = 'main') {
@@ -483,6 +562,26 @@ async function loadBrowser() {
   }
 
   requestedBrowserEngine = resolveBrowserEngine(runtime);
+  const existingRuntime = workflowBrowserRuntime();
+
+  if (existingRuntime.wsEndpoint) {
+    try {
+      browser = await puppeteer.connect({
+        browserWSEndpoint: existingRuntime.wsEndpoint,
+        defaultViewport: { width: 1366, height: 900 },
+      });
+      browserDriver = 'puppeteer';
+      activeBrowserEngine = 'connected';
+      connectedToExistingBrowser = true;
+      pushEvent('browser-connected', 'Bestehender Workflow-Browser wurde wieder verbunden.');
+
+      return browser;
+    } catch (error) {
+      pushEvent('browser-connect-failed', 'Bestehender Workflow-Browser konnte nicht verbunden werden; es wird neu gestartet.', {
+        browserConnectError: String(error?.message || error).slice(0, 1200),
+      });
+    }
+  }
 
   const launchOptions = {
     headless: runtime.headlessEnabled === true ? 'new' : false,
@@ -516,6 +615,7 @@ async function loadBrowser() {
 
   browser = launchResult.browser;
   browserDriver = 'puppeteer';
+  connectedToExistingBrowser = false;
   activeBrowserEngine = launchResult.activeEngine;
   browserFallbackReason = launchResult.fallbackReason;
   pushEvent('browser-started', 'Browser wurde gestartet.', {
@@ -648,6 +748,18 @@ async function ensurePage(context, windowName = 'main', label = '') {
   }
 
   const currentBrowser = await loadBrowser();
+  const existingPage = await existingPageForWindow(currentBrowser, normalizedName);
+
+  if (existingPage) {
+    pushEvent('browser-window-attached', 'Bestehendes Browserfenster wurde wieder angebunden.', {
+      browserWindow: normalizedName,
+      url: typeof existingPage.url === 'function' ? existingPage.url() : '',
+      targetId: pageTargetId(existingPage),
+    });
+
+    return registerBrowserWindow(context, existingPage, normalizedName, label);
+  }
+
   const nextPage = await currentBrowser.newPage();
   const registeredPage = registerBrowserWindow(context, nextPage, normalizedName, label);
   await restoreBrowserWindowState(context, registeredPage, normalizedName);
@@ -801,6 +913,12 @@ async function run() {
           }
 
           result.closedBrowserWindow = targetBrowserWindow;
+
+          if (browserWindowsByName.size === 0 && browser && typeof browser.close === 'function') {
+            await browser.close().catch(() => {});
+            browser = null;
+            result.closedBrowser = true;
+          }
         }
 
         if (result && result.page) {
@@ -846,6 +964,7 @@ async function run() {
         new_password: context.new_password || context.account?.password || null,
         tasks: taskResults,
         browserWindows: lastBrowserWindows,
+        browserWsEndpoint: browserWsEndpoint(),
         events,
         finishedAt: now(),
       };
@@ -870,6 +989,7 @@ async function run() {
     new_password: context.new_password || context.account?.password || null,
     tasks: taskResults,
     browserWindows: lastBrowserWindows,
+    browserWsEndpoint: browserWsEndpoint(),
     events,
     finishedAt: now(),
   };
@@ -887,6 +1007,7 @@ run()
       error: error.stack || error.message,
       tasks: taskResults,
       browserWindows: lastBrowserWindows,
+      browserWsEndpoint: browserWsEndpoint(),
       events,
       finishedAt: now(),
     };
@@ -897,7 +1018,9 @@ run()
     const context = { __workflowPreviewTimer: null };
     stopPreviewLoop(context);
 
-    if (browser && typeof browser.close === 'function') {
+    if (browser && typeof browser.disconnect === 'function') {
+      browser.disconnect();
+    } else if (browser && typeof browser.close === 'function') {
       await browser.close().catch(() => {});
     }
   });

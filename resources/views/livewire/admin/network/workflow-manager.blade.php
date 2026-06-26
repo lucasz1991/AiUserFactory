@@ -99,35 +99,7 @@
                                 </x-slot>
                             </x-workflows.step-card>
                             @if(! $loop->last)
-                                @php
-                                    $successRoute = is_array($step->routes['success'] ?? null) ? $step->routes['success'] : null;
-                                    $failedRoute = is_array($step->routes['failed'] ?? null) ? $step->routes['failed'] : null;
-                                    $successReason = trim((string) data_get($successRoute, 'reason', data_get($successRoute, 'label', 'Erfolg')));
-                                    $failedReason = trim((string) data_get($failedRoute, 'reason', data_get($failedRoute, 'label', 'Fehler')));
-                                    $failedAttempts = max(0, (int) data_get($failedRoute, 'max_attempts', 0));
-                                @endphp
-                                <div class="flex h-32 w-32 shrink-0 flex-col justify-center gap-3 px-2">
-                                    <div class="min-w-0">
-                                        <div class="flex items-center">
-                                            <div class="h-px flex-1 bg-emerald-200/80"></div>
-                                            <div class="h-0 w-0 border-y-4 border-l-8 border-y-transparent border-l-emerald-200"></div>
-                                        </div>
-                                        <div class="mt-1 truncate rounded bg-emerald-50/95 px-2 py-0.5 text-[11px] font-semibold text-emerald-800" title="{{ $successReason }}">
-                                            {{ $successReason ?: 'Erfolg' }}
-                                        </div>
-                                    </div>
-                                    @if($failedRoute)
-                                        <div class="min-w-0">
-                                            <div class="flex items-center">
-                                                <div class="h-px flex-1 bg-red-300"></div>
-                                                <div class="h-0 w-0 border-y-4 border-l-8 border-y-transparent border-l-red-300"></div>
-                                            </div>
-                                            <div class="mt-1 truncate rounded bg-red-50/95 px-2 py-0.5 text-[11px] font-semibold text-red-800" title="{{ $failedReason }}">
-                                                {{ $failedReason ?: 'Fehler' }}@if($failedAttempts > 0) - {{ $failedAttempts }}x @endif
-                                            </div>
-                                        </div>
-                                    @endif
-                                </div>
+                                <div class="w-4 shrink-0"></div>
                             @endif
                         </div>
                     @empty

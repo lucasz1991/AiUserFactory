@@ -147,7 +147,7 @@ class WorkflowTaskRunner
         $status['livePreviewPollIntervalSeconds'] = (int) ($status['livePreviewPollIntervalSeconds'] ?? $status['livePreviewIntervalSeconds']);
         $status['result'] = $result;
 
-        return $status;
+        return $this->publicRunStatus($status);
     }
 
     public function readResult(?string $runId): ?array
@@ -210,6 +210,7 @@ class WorkflowTaskRunner
     protected function publicRuntimeContext(array $runtimeContext): array
     {
         $public = $runtimeContext;
+        unset($public['browser'], $public['browser_runtime'], $public['browserWsEndpoint'], $public['browser_ws_endpoint']);
 
         foreach (['account', 'email_account'] as $key) {
             if (isset($public[$key]) && is_array($public[$key])) {
@@ -222,6 +223,17 @@ class WorkflowTaskRunner
         }
 
         return $public;
+    }
+
+    protected function publicRunStatus(array $status): array
+    {
+        unset($status['browserWsEndpoint'], $status['browser_ws_endpoint']);
+
+        if (isset($status['result']) && is_array($status['result'])) {
+            unset($status['result']['browserWsEndpoint'], $status['result']['browser_ws_endpoint']);
+        }
+
+        return $status;
     }
 
     protected function publicRunRelativeDirectory(string $runId): string

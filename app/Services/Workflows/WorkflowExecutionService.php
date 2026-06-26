@@ -987,6 +987,7 @@ class WorkflowExecutionService
         ];
         $context = is_array($run->context_json) ? $run->context_json : [];
         $browserWindows = is_array($context['browser_windows'] ?? null) ? $context['browser_windows'] : [];
+        $browserRuntime = is_array($context['browser_runtime'] ?? null) ? $context['browser_runtime'] : [];
 
         return [
             'workflowRunId' => $run->id,
@@ -1000,6 +1001,8 @@ class WorkflowExecutionService
             'personId' => data_get($run->context_json, 'person_id'),
             'browserWindows' => $browserWindows,
             'browser_windows' => $browserWindows,
+            'browser' => $browserRuntime,
+            'browser_runtime' => $browserRuntime,
             'account' => $person ? $accountPayload : null,
             'email_account' => $person ? $accountPayload : null,
             'person' => $person ? [
@@ -1035,9 +1038,24 @@ class WorkflowExecutionService
     protected function mergeWorkflowBrowserState(array $context, array $result): array
     {
         $closedWindow = trim((string) ($result['closedBrowserWindow'] ?? ''));
+        $closedBrowser = (bool) ($result['closedBrowser'] ?? false);
 
         if ($closedWindow !== '' && is_array($context['browser_windows'] ?? null)) {
             unset($context['browser_windows'][$closedWindow]);
+        }
+
+        if ($closedBrowser) {
+            unset($context['browser_runtime'], $context['browser_ws_endpoint']);
+        } else {
+            $wsEndpoint = trim((string) ($result['browserWsEndpoint'] ?? data_get($result, 'browser.wsEndpoint', '')));
+
+            if ($wsEndpoint !== '') {
+                $context['browser_runtime'] = [
+                    'wsEndpoint' => $wsEndpoint,
+                    'updatedAt' => now()->toIso8601String(),
+                ];
+                $context['browser_ws_endpoint'] = $wsEndpoint;
+            }
         }
 
         $windows = collect(data_get($result, 'browserWindows', []))
@@ -1056,6 +1074,7 @@ class WorkflowExecutionService
                         'label' => trim((string) ($window['label'] ?? $key)) ?: $key,
                         'url' => $url,
                         'title' => trim((string) ($window['title'] ?? '')),
+                        'targetId' => trim((string) ($window['targetId'] ?? $window['target_id'] ?? '')),
                         'capturedAt' => trim((string) ($window['capturedAt'] ?? now()->toIso8601String())),
                     ],
                 ];
@@ -1104,13 +1123,26 @@ class WorkflowExecutionService
 
     protected function publicRunSnapshot(array $payload): array
     {
-        unset($payload['encryptedSessionPayload'], $payload['password'], $payload['passwordEncrypted']);
+        unset(
+            $payload['encryptedSessionPayload'],
+            $payload['password'],
+            $payload['passwordEncrypted'],
+            $payload['browserWsEndpoint'],
+            $payload['browser_ws_endpoint'],
+        );
 
         if (isset($payload['account']) && is_array($payload['account'])) {
             unset($payload['account']['password'], $payload['account']['passwordEncrypted'], $payload['account']['webmailSession'], $payload['account']['webmail_session']);
         }
 
         if (isset($payload['workflow']) && is_array($payload['workflow'])) {
+            unset(
+                $payload['workflow']['browser'],
+                $payload['workflow']['browser_runtime'],
+                $payload['workflow']['browserWsEndpoint'],
+                $payload['workflow']['browser_ws_endpoint'],
+            );
+
             foreach (['account', 'email_account'] as $key) {
                 if (isset($payload['workflow'][$key]) && is_array($payload['workflow'][$key])) {
                     unset($payload['workflow'][$key]['password'], $payload['workflow'][$key]['passwordEncrypted'], $payload['workflow'][$key]['webmailSession'], $payload['workflow'][$key]['webmail_session']);

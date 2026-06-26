@@ -85,10 +85,12 @@
 
                 $panels[] = [
                     'title' => data_get($window, 'label', 'Browserfenster'),
+                    'windowKey' => data_get($window, 'key', data_get($window, 'label', 'Browserfenster')),
                     'image' => $image,
                     'window' => $windowStatus($window, $result),
                     'dom' => data_get($window, 'debugDomUrl'),
                     'step' => $stepRun->workflowStep?->name ?? 'Schritt',
+                    'capturedAt' => data_get($window, 'capturedAt', data_get($window, 'liveScreenshotAt')),
                 ];
                 $hasBrowserWindows = true;
             }
@@ -104,6 +106,8 @@
             ] as $panel) {
                 if ($panel['image'] || is_array($panel['window']) || $panel['dom']) {
                     $panel['step'] = $stepRun->workflowStep?->name ?? 'Schritt';
+                    $panel['windowKey'] = $panel['title'];
+                    $panel['capturedAt'] = data_get($panel['window'], 'capturedAt', data_get($panel['window'], 'heartbeatAt'));
                     $panels[] = $panel;
                 }
             }
@@ -111,7 +115,8 @@
             return $panels;
         })
         ->filter(fn ($panel) => $panel['image'] || is_array($panel['window']) || $panel['dom'])
-        ->unique(fn ($panel) => ($panel['title'] ?? '').'|'.($panel['image'] ?? '').'|'.($panel['step'] ?? ''))
+        ->groupBy(fn ($panel) => (string) ($panel['windowKey'] ?? $panel['title'] ?? 'Browser'))
+        ->map(fn ($panels) => $panels->sortBy(fn ($panel) => (string) ($panel['capturedAt'] ?? ''))->last())
         ->values();
     $latestStatusResult = collect($stepRuns)
         ->reverse()
