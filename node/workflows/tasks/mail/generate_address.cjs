@@ -1,5 +1,7 @@
 'use strict';
 
+const { captureTaskPreview } = require('../lib/preview.cjs');
+
 function workflowContext(context = {}) {
   return context.workflow && typeof context.workflow === 'object' ? context.workflow : {};
 }
@@ -28,6 +30,24 @@ function randomNumber(min = 10, max = 9999) {
 
 function unique(values) {
   return Array.from(new Set(values.filter(Boolean)));
+}
+
+function selectorsFromInput(input = {}) {
+  return []
+    .concat(input.selector || [])
+    .concat(input.selectors || [])
+    .concat(input.inputSelector || [])
+    .concat(input.input_selector || [])
+    .concat([
+      'input[name*="username" i]',
+      'input[id*="username" i]',
+      'input[autocomplete="username"]',
+      'input[name*="email" i]',
+      'input[id*="email" i]',
+      'input[type="email"]',
+      'input[type="text"]',
+    ])
+    .filter(Boolean);
 }
 
 function personNameParts(person = {}) {
@@ -65,18 +85,50 @@ function buildCandidates(person, domain) {
     }));
 }
 
+async function fillFirstMatching(page, selectors, value, timeout) {
+  for (const selector of selectors) {
+    try {
+      const locator = typeof page.locator === 'function' ? page.locator(selector).first() : null;
+
+      if (locator && await locator.count() > 0) {
+        await locator.fill(String(value), { timeout });
+        return selector;
+      }
+
+      if (typeof page.fill === 'function') {
+        await page.fill(selector, String(value), { timeout });
+        return selector;
+      }
+    } catch (error) {
+      // Try next selector.
+    }
+  }
+
+  return null;
+}
+
 async function run(context = {}) {
   const workflow = workflowContext(context);
   const input = context.input || {};
+  const page = context.page;
   const person = workflow.person || context.person || null;
-  const domain = normalizeDomain(input.value || input.domain || workflow.mailDomain || 'proton.me') || 'proton.me';
+  const domain = normalizeDomain(input.domain || workflow.mailDomain || 'proton.me') || 'proton.me';
   const provider = String(input.provider || workflow.provider || workflow.provider_key || 'proton').trim() || 'proton';
+  const timeout = Number(input.timeoutMs || context.timeoutMs || 45000);
 
   if (!person) {
     return {
       ok: false,
       status: 'failed',
       statusMessage: 'Keine Person fuer Mailadress-Generierung gefunden.',
+    };
+  }
+
+  if (!page) {
+    return {
+      ok: false,
+      status: 'failed',
+      statusMessage: 'Kein Page-Handle fuer die Username-Eingabe vorhanden.',
     };
   }
 
@@ -106,11 +158,22 @@ async function run(context = {}) {
     webmailUrl: provider.toLowerCase().includes('gmx') ? 'https://www.gmx.net' : 'https://mail.proton.me',
     generated: true,
   };
+  const selector = await fillFirstMatching(page, selectorsFromInput(input), context.account.username, timeout);
 
-  return {
+  if (!selector) {
+    return {
+      ok: false,
+      status: 'failed',
+      statusMessage: 'Kein Username-/E-Mail-Feld konnte fuer den generierten Wert gefuellt werden.',
+      candidateCount: candidates.length,
+    };
+  }
+
+  return captureTaskPreview(context, {
     ok: true,
     status: 'success',
-    statusMessage: `Mailadress-Kandidat vorbereitet: ${context.account.email}`,
+    statusMessage: `Username-Kandidat wurde eingetragen: ${context.account.username}`,
+    selector,
     account: {
       provider: context.account.provider,
       username: context.account.username,
@@ -119,7 +182,7 @@ async function run(context = {}) {
       generated: true,
     },
     candidateCount: candidates.length,
-  };
+  });
 }
 
 module.exports = { key: 'mail.generate_address', run };
