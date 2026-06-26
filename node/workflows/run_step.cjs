@@ -40,6 +40,7 @@ let requestedBrowserEngine = null;
 let activeBrowserEngine = null;
 let browserFallbackReason = null;
 let connectedToExistingBrowser = false;
+let browserDisconnected = false;
 
 function now() {
   return new Date().toISOString();
@@ -193,6 +194,16 @@ function pushEvent(stage, message, extra = {}) {
 
 function writeStatus(state, stage, message, extra = {}) {
   writeJson(runtime.statusPath, statusPayload(state, stage, message, extra));
+}
+
+function trackBrowserLifecycle(nextBrowser) {
+  if (!nextBrowser || typeof nextBrowser.on !== 'function') {
+    return;
+  }
+
+  nextBrowser.on('disconnected', () => {
+    browserDisconnected = true;
+  });
 }
 
 function browserWsEndpoint() {
@@ -358,6 +369,17 @@ function workflowBrowserRuntime() {
       || '',
     ).trim(),
   };
+}
+
+function workflowHasBrowserWindows() {
+  const workflow = runtime.workflow || {};
+  const windows = workflow.browserWindows || workflow.browser_windows || {};
+
+  if (Array.isArray(windows)) {
+    return windows.length > 0;
+  }
+
+  return windows && typeof windows === 'object' && Object.keys(windows).length > 0;
 }
 
 function pageTargetId(candidatePage) {
@@ -570,17 +592,23 @@ async function loadBrowser() {
         browserWSEndpoint: existingRuntime.wsEndpoint,
         defaultViewport: { width: 1366, height: 900 },
       });
+      trackBrowserLifecycle(browser);
       browserDriver = 'puppeteer';
       activeBrowserEngine = 'connected';
       connectedToExistingBrowser = true;
-      pushEvent('browser-connected', 'Bestehender Workflow-Browser wurde wieder verbunden.');
+      pushEvent('workflow-browser-active', 'Workflow-Browser ist aktiv und wird fuer diese Liste genutzt.');
 
       return browser;
     } catch (error) {
-      pushEvent('browser-connect-failed', 'Bestehender Workflow-Browser konnte nicht verbunden werden; es wird neu gestartet.', {
+      pushEvent('browser-connect-failed', 'Workflow-Browser konnte nicht erreicht werden.', {
         browserConnectError: String(error?.message || error).slice(0, 1200),
       });
+      throw new Error('Workflow-Browser ist nicht erreichbar. Das Browserfenster wird nicht automatisch neu geoeffnet, weil es workflow-weit aktiv bleiben muss.');
     }
+  }
+
+  if (workflowHasBrowserWindows()) {
+    throw new Error('Workflow-Kontext enthaelt aktive Browserfenster, aber keinen erreichbaren Workflow-Browser. Bitte das Browserfenster per Task schliessen oder den Workflow neu starten.');
   }
 
   const launchOptions = {
@@ -614,6 +642,7 @@ async function loadBrowser() {
   });
 
   browser = launchResult.browser;
+  trackBrowserLifecycle(browser);
   browserDriver = 'puppeteer';
   connectedToExistingBrowser = false;
   activeBrowserEngine = launchResult.activeEngine;
@@ -751,7 +780,7 @@ async function ensurePage(context, windowName = 'main', label = '') {
   const existingPage = await existingPageForWindow(currentBrowser, normalizedName);
 
   if (existingPage) {
-    pushEvent('browser-window-attached', 'Bestehendes Browserfenster wurde wieder angebunden.', {
+    pushEvent('workflow-browser-window-active', 'Workflow-Browserfenster ist aktiv.', {
       browserWindow: normalizedName,
       url: typeof existingPage.url === 'function' ? existingPage.url() : '',
       targetId: pageTargetId(existingPage),
@@ -821,6 +850,51 @@ function stopPreviewLoop(context) {
   }
 
   stopTaskPreview(context);
+}
+
+async function openBrowserWindowCount() {
+  if (!browser || typeof browser.pages !== 'function') {
+    return 0;
+  }
+
+  const pages = await browser.pages().catch(() => []);
+
+  return pages.filter((candidatePage) => (
+    candidatePage
+    && (!candidatePage.isClosed || !candidatePage.isClosed())
+  )).length;
+}
+
+async function keepWorkflowBrowserAlive() {
+  if (
+    connectedToExistingBrowser
+    || !browser
+    || browserDisconnected
+    || browserWindowsByName.size === 0
+  ) {
+    return;
+  }
+
+  pushEvent('workflow-browser-kept-active', 'Workflow-Browser bleibt aktiv bis ein Browser-schliessen-Task ihn beendet.');
+  writeStatus('completed', 'workflow-browser-kept-active', 'Workflow-Browser bleibt aktiv.');
+
+  await new Promise((resolve) => {
+    const interval = setInterval(async () => {
+      if (!browser || browserDisconnected) {
+        clearInterval(interval);
+        resolve();
+
+        return;
+      }
+
+      const openWindows = await openBrowserWindowCount();
+
+      if (openWindows <= 0) {
+        clearInterval(interval);
+        resolve();
+      }
+    }, 3000);
+  });
 }
 
 async function run() {
@@ -1018,9 +1092,11 @@ run()
     const context = { __workflowPreviewTimer: null };
     stopPreviewLoop(context);
 
-    if (browser && typeof browser.disconnect === 'function') {
+    await keepWorkflowBrowserAlive();
+
+    if (browser && connectedToExistingBrowser && typeof browser.disconnect === 'function') {
       browser.disconnect();
-    } else if (browser && typeof browser.close === 'function') {
+    } else if (browser && browserWindowsByName.size === 0 && typeof browser.close === 'function') {
       await browser.close().catch(() => {});
     }
   });
