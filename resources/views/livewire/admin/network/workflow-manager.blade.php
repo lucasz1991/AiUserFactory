@@ -120,46 +120,47 @@
                     </button>
                 </div>
 
-                @if($showTaskPanel)
-                    <div class="fixed inset-y-0 right-0 z-40 flex w-full max-w-sm flex-col border-l border-slate-200 bg-white shadow-2xl">
-                        <div class="flex items-start justify-between gap-3 border-b border-slate-200 p-4">
-                            <div>
-                                <h2 class="text-base font-semibold text-slate-900">Task-Bibliothek</h2>
-                                <p class="mt-1 text-xs text-slate-500">Task auf eine Liste ziehen, danach oeffnet sich das Formular.</p>
-                            </div>
-                            <button type="button" wire:click="$set('showTaskPanel', false)" class="flex h-8 w-8 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-900">
-                                x
-                            </button>
-                        </div>
-                        <div class="border-b border-slate-200 px-4">
-                            <nav class="-mb-px flex gap-4 overflow-x-auto" aria-label="Task Gruppen">
-                                @foreach($taskGroups as $taskGroup)
-                                    <button type="button" wire:click="$set('activeTaskGroup', @js($taskGroup))" class="whitespace-nowrap border-b-2 py-3 text-sm font-semibold {{ $activeTaskGroup === $taskGroup ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700' }}">
-                                        {{ $taskGroupLabels[$taskGroup] ?? $taskGroup }}
-                                        <span class="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{{ collect($taskDefinitions)->where('kind', $taskGroup)->count() }}</span>
-                                    </button>
-                                @endforeach
-                            </nav>
-                        </div>
-                        <div class="flex-1 space-y-3 overflow-y-auto p-4">
-                            @foreach($visibleTaskDefinitions as $taskDefinition)
-                                <div
-                                    draggable="true"
-                                    x-on:dragstart="$event.dataTransfer.setData('application/x-workflow-task-catalog', @js($taskDefinition['key'])); $event.dataTransfer.setData('text/plain', @js($taskDefinition['key'])); $event.dataTransfer.effectAllowed = 'copy'"
-                                    class="cursor-grab rounded-md border border-slate-200 bg-white p-3 shadow-sm transition hover:border-blue-300 hover:shadow-md active:cursor-grabbing"
-                                >
-                                    <div class="flex items-start justify-between gap-3">
-                                        <p class="text-sm font-semibold text-slate-900">{{ $taskDefinition['label'] }}</p>
-                                        <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">{{ $taskDefinition['kind'] }}</span>
-                                    </div>
-                                    <p class="mt-2 line-clamp-2 text-xs leading-5 text-slate-500">{{ $taskDefinition['description'] }}</p>
-                                </div>
-                            @endforeach
-                        </div>
-                    </div>
-                @endif
             </div>
         </x-admin.panel>
+
+        @if($showTaskPanel)
+            <div x-data="{}" class="fixed inset-y-0 right-0 z-40 flex w-full max-w-sm flex-col border-l border-slate-200 bg-white shadow-2xl">
+                <div class="flex items-start justify-between gap-3 border-b border-slate-200 p-4">
+                    <div>
+                        <h2 class="text-base font-semibold text-slate-900">Task-Bibliothek</h2>
+                        <p class="mt-1 text-xs text-slate-500">Task auf eine Liste ziehen, danach oeffnet sich das Formular.</p>
+                    </div>
+                    <button type="button" wire:click="$set('showTaskPanel', false)" class="flex h-8 w-8 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-900">
+                        x
+                    </button>
+                </div>
+                <div class="border-b border-slate-200 px-4">
+                    <nav class="-mb-px flex gap-4 overflow-x-auto" aria-label="Task Gruppen">
+                        @foreach($taskGroups as $taskGroup)
+                            <button type="button" wire:click="$set('activeTaskGroup', @js($taskGroup))" class="whitespace-nowrap border-b-2 py-3 text-sm font-semibold {{ $activeTaskGroup === $taskGroup ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700' }}">
+                                {{ $taskGroupLabels[$taskGroup] ?? $taskGroup }}
+                                <span class="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{{ collect($taskDefinitions)->where('kind', $taskGroup)->count() }}</span>
+                            </button>
+                        @endforeach
+                    </nav>
+                </div>
+                <div class="flex-1 space-y-3 overflow-y-auto p-4">
+                    @foreach($visibleTaskDefinitions as $taskDefinition)
+                        <div
+                            draggable="true"
+                            x-on:dragstart.stop="$event.dataTransfer.setData('application/x-workflow-task-catalog', @js($taskDefinition['key'])); $event.dataTransfer.setData('text/plain', @js($taskDefinition['key'])); $event.dataTransfer.effectAllowed = 'copy'"
+                            class="cursor-grab rounded-md border border-slate-200 bg-white p-3 shadow-sm transition hover:border-blue-300 hover:shadow-md active:cursor-grabbing"
+                        >
+                            <div class="flex items-start justify-between gap-3">
+                                <p class="text-sm font-semibold text-slate-900">{{ $taskDefinition['label'] }}</p>
+                                <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">{{ $taskDefinition['kind'] }}</span>
+                            </div>
+                            <p class="mt-2 line-clamp-2 text-xs leading-5 text-slate-500">{{ $taskDefinition['description'] }}</p>
+                        </div>
+                    @endforeach
+                </div>
+            </div>
+        @endif
 
         <x-dialog-modal wire:model="showWorkflowModal" maxWidth="2xl">
             <x-slot name="title">Workflow bearbeiten</x-slot>

@@ -40,6 +40,9 @@
 
     <div
         x-data="{
+            dragEffect(event) {
+                return Array.from(event.dataTransfer.types || []).includes('application/x-workflow-task-catalog') ? 'copy' : 'move';
+            },
             dropTask(event, position) {
                 const taskKey = event.dataTransfer.getData('application/x-workflow-task-key');
                 const sourceStepId = event.dataTransfer.getData('application/x-workflow-source-step-id');
@@ -82,7 +85,7 @@
                     wire:key="workflow-task-{{ $step->id }}-{{ $task['key'] ?? 'task' }}"
                 >
                     <div
-                        x-on:dragover.prevent="$event.dataTransfer.dropEffect = 'move'"
+                        x-on:dragover.prevent="$event.dataTransfer.dropEffect = dragEffect($event)"
                         x-on:drop.prevent.stop="dropTask($event, {{ $loop->index }})"
                         class="h-3 rounded border border-dashed border-transparent transition hover:h-8 hover:border-white/50 hover:bg-white/10"
                     ></div>
@@ -122,7 +125,7 @@
         @endif
 
         <div
-            x-on:dragover.prevent="$event.dataTransfer.dropEffect = 'move'"
+            x-on:dragover.prevent="$event.dataTransfer.dropEffect = dragEffect($event)"
             x-on:drop.prevent.stop="dropTask($event, {{ count($step->task_cards) }})"
             class="mb-2 h-3 rounded border border-dashed border-transparent transition hover:h-8 hover:border-white/50 hover:bg-white/10"
         ></div>
