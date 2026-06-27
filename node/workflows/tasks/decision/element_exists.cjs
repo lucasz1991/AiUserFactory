@@ -1,6 +1,7 @@
 'use strict';
 
 const { captureTaskPreview } = require('../lib/preview.cjs');
+const { findVisibleElement } = require('../lib/find_visible_element.cjs');
 
 async function run(context = {}) {
   const page = context.page;
@@ -26,11 +27,7 @@ async function run(context = {}) {
     return { ok: false, status: 'failed', statusMessage: 'Kein Selector fuer die IF-Element-Pruefung angegeben.' };
   }
 
-  const handle = await page.waitForSelector(selector, {
-    state: 'visible',
-    visible: true,
-    timeout,
-  }).catch(() => null);
+  const handle = await findVisibleElement(page, selector, timeout);
 
   if (!handle) {
     return captureTaskPreview(context, {
