@@ -75,6 +75,28 @@ function relativeWithSuffix(relativePath, suffix) {
   return `${base}-${suffix}${ext}`;
 }
 
+function debugDomPathFor(livePreviewPath) {
+  if (!livePreviewPath) {
+    return '';
+  }
+
+  const ext = path.extname(livePreviewPath) || '.png';
+  const base = livePreviewPath.slice(0, -ext.length);
+
+  return `${base}-dom.json`;
+}
+
+function debugDomRelativePathFor(livePreviewRelativePath) {
+  if (!livePreviewRelativePath) {
+    return '';
+  }
+
+  const ext = path.extname(livePreviewRelativePath) || '.png';
+  const base = livePreviewRelativePath.slice(0, -ext.length);
+
+  return `${base}-dom.json`;
+}
+
 function windowPath(context, index, windowConfig = {}) {
   const preview = context.preview || context.livePreview || {};
   const explicitPath = normalizeText(windowConfig.livePreviewPath || windowConfig.path || windowConfig.screenshotPath);
@@ -161,6 +183,97 @@ function normalizeWindows(context = {}) {
     .filter(Boolean);
 }
 
+async function frameDomSnapshot(frame) {
+  const frameUrl = typeof frame.url === 'function' ? String(frame.url() || '') : '';
+  const frameName = typeof frame.name === 'function' ? String(frame.name() || '') : '';
+
+  try {
+    return await frame.evaluate(() => {
+      const inputSelector = 'input, textarea, select, button, [contenteditable="true"]';
+      const fieldValue = (element) => {
+        if (element instanceof HTMLInputElement && ['password', 'hidden'].includes(String(element.type || '').toLowerCase())) {
+          return '';
+        }
+
+        if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement) {
+          return element.value || '';
+        }
+
+        return element.textContent || '';
+      };
+      const visible = (element) => {
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+
+        return rect.width > 0
+          && rect.height > 0
+          && style.visibility !== 'hidden'
+          && style.display !== 'none';
+      };
+
+      return {
+        url: window.location.href,
+        title: document.title || '',
+        text: document.body ? document.body.innerText || '' : '',
+        html: document.documentElement ? document.documentElement.outerHTML || '' : '',
+        fields: Array.from(document.querySelectorAll(inputSelector)).map((element, index) => ({
+          index,
+          tag: String(element.tagName || '').toLowerCase(),
+          type: element.getAttribute('type') || '',
+          id: element.id || '',
+          name: element.getAttribute('name') || '',
+          autocomplete: element.getAttribute('autocomplete') || '',
+          placeholder: element.getAttribute('placeholder') || '',
+          ariaLabel: element.getAttribute('aria-label') || '',
+          disabled: element.disabled === true || element.getAttribute('aria-disabled') === 'true',
+          readOnly: element.readOnly === true,
+          visible: visible(element),
+          value: fieldValue(element),
+        })),
+      };
+    });
+  } catch (error) {
+    return {
+      url: frameUrl,
+      name: frameName,
+      error: error.message,
+    };
+  }
+}
+
+async function captureDebugDom(windowConfig, capture = {}) {
+  const debugDomPath = debugDomPathFor(windowConfig.livePreviewPath);
+
+  if (!debugDomPath || !windowConfig.page || typeof windowConfig.page.frames !== 'function') {
+    return {};
+  }
+
+  const frames = await Promise.all(
+    windowConfig.page.frames().map(async (frame, index) => ({
+      index,
+      name: typeof frame.name === 'function' ? String(frame.name() || '') : '',
+      ...(await frameDomSnapshot(frame)),
+    })),
+  );
+  const payload = {
+    capturedAt: new Date().toISOString(),
+    key: windowConfig.key,
+    label: windowConfig.label,
+    url: capture.url || (typeof windowConfig.page.url === 'function' ? String(windowConfig.page.url() || '') : ''),
+    title: capture.title || '',
+    targetId: capture.targetId || '',
+    frames,
+  };
+
+  fs.mkdirSync(path.dirname(debugDomPath), { recursive: true });
+  fs.writeFileSync(debugDomPath, JSON.stringify(payload, null, 2));
+
+  return {
+    debugDomPath,
+    debugDomRelativePath: debugDomRelativePathFor(windowConfig.livePreviewRelativePath),
+  };
+}
+
 async function captureWindow(windowConfig, context = {}, force = false) {
   if (!enabled(context) || !windowConfig.livePreviewPath) {
     return null;
@@ -191,6 +304,9 @@ async function captureWindow(windowConfig, context = {}, force = false) {
   const targetId = typeof windowConfig.page.target === 'function'
     ? String(windowConfig.page.target()?._targetId || '')
     : '';
+  const debugDom = await captureDebugDom(windowConfig, { url, title, targetId }).catch((error) => ({
+    debugDomError: error.message,
+  }));
 
   return {
     key: windowConfig.key,
@@ -201,6 +317,7 @@ async function captureWindow(windowConfig, context = {}, force = false) {
     liveScreenshotPath: windowConfig.livePreviewPath,
     livePreviewPath: windowConfig.livePreviewPath,
     livePreviewRelativePath: windowConfig.livePreviewRelativePath || null,
+    ...debugDom,
     capturedAt: new Date(now).toISOString(),
   };
 }

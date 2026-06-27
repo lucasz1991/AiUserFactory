@@ -88,7 +88,7 @@
                     'windowKey' => data_get($window, 'key', data_get($window, 'label', 'Browserfenster')),
                     'image' => $image,
                     'window' => $windowStatus($window, $result),
-                    'dom' => data_get($window, 'debugDomUrl'),
+                    'dom' => data_get($window, 'debugDomUrl') ?: $publicUrl(data_get($window, 'debugDomRelativePath')),
                     'step' => $stepRun->workflowStep?->name ?? 'Schritt',
                     'capturedAt' => data_get($window, 'capturedAt', data_get($window, 'liveScreenshotAt')),
                 ];
@@ -270,7 +270,7 @@
                             ])
                         </div>
                         @if($panel['dom'])
-                            <a href="{{ $panel['dom'] }}" download="workflow-preview-dom.json" class="rounded border border-slate-700 px-2 py-1 text-[10px] text-slate-200 hover:bg-slate-800">
+                            <a href="{{ $panel['dom'] }}" download="{{ $downloadName(($panel['step'] ?? 'workflow').' '.($panel['title'] ?? 'browser')).'-dom.json' }}" class="rounded border border-slate-700 px-2 py-1 text-[10px] text-slate-200 hover:bg-slate-800">
                                 DOM
                             </a>
                         @endif
