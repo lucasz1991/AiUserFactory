@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { captureTaskPreview, stopTaskPreview } = require('./tasks/lib/preview.cjs');
+const { parseExtendedSelector } = require('./lib/selector.cjs');
 const {
   BROWSER_LAUNCHER_SCRIPT_VERSION,
   launchConfiguredBrowserWithProfileRetry,
@@ -689,12 +690,50 @@ function patchPuppeteerPage(nextPage) {
   }
 
   const originalWaitForSelector = nextPage.waitForSelector.bind(nextPage);
-  nextPage.waitForSelector = (selector, options = {}) => {
+  nextPage.waitForSelector = async (selector, options = {}) => {
     const normalizedOptions = { ...options };
 
     if (normalizedOptions.state) {
       normalizedOptions.visible = normalizedOptions.state === 'visible';
       delete normalizedOptions.state;
+    }
+
+    const extendedSelector = parseExtendedSelector(selector);
+
+    if (extendedSelector) {
+      const handle = await nextPage.waitForFunction((css, descendantCss, text, exact, visible) => {
+        const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+        const expected = normalize(text).toLowerCase();
+        const isVisible = (element) => {
+          if (!visible) return true;
+
+          const rect = element.getBoundingClientRect();
+          const style = window.getComputedStyle(element);
+
+          return rect.width > 0
+            && rect.height > 0
+            && style.visibility !== 'hidden'
+            && style.display !== 'none';
+        };
+
+        return Array.from(document.querySelectorAll(css)).find((element) => {
+          const textElements = descendantCss
+            ? Array.from(element.querySelectorAll(descendantCss))
+            : [element];
+          const textMatches = textElements.some((textElement) => {
+            const actual = normalize(textElement.innerText || textElement.textContent).toLowerCase();
+
+            return exact ? actual === expected : actual.includes(expected);
+          });
+
+          return isVisible(element) && textMatches;
+        }) || false;
+      }, {
+        timeout: normalizedOptions.timeout,
+        polling: 100,
+      }, extendedSelector.css, extendedSelector.descendantCss || null, extendedSelector.text, extendedSelector.exact, normalizedOptions.visible === true);
+
+      return handle.asElement();
     }
 
     return originalWaitForSelector(selector, normalizedOptions);
@@ -705,20 +744,45 @@ function patchPuppeteerPage(nextPage) {
       return this;
     },
     async count() {
+      const extendedSelector = parseExtendedSelector(selector);
+
+      if (extendedSelector) {
+        return nextPage.evaluate((css, descendantCss, text, exact) => {
+          const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+          const expected = normalize(text);
+
+          return Array.from(document.querySelectorAll(css))
+            .filter((element) => {
+              const textElements = descendantCss
+                ? Array.from(element.querySelectorAll(descendantCss))
+                : [element];
+
+              return textElements.some((textElement) => {
+                const actual = normalize(textElement.innerText || textElement.textContent);
+
+                return exact ? actual === expected : actual.includes(expected);
+              });
+            })
+            .length;
+        }, extendedSelector.css, extendedSelector.descendantCss || null, extendedSelector.text, extendedSelector.exact);
+      }
+
       return (await nextPage.$$(selector)).length;
     },
     async fill(value, options = {}) {
-      await nextPage.waitForSelector(selector, { visible: true, timeout: options.timeout });
-      await nextPage.$eval(selector, (element, nextValue) => {
+      const handle = await nextPage.waitForSelector(selector, { visible: true, timeout: options.timeout });
+      await handle.evaluate((element, nextValue) => {
         element.focus();
         element.value = nextValue;
         element.dispatchEvent(new Event('input', { bubbles: true }));
         element.dispatchEvent(new Event('change', { bubbles: true }));
       }, value);
+      await handle.dispose?.().catch(() => {});
     },
     async click(options = {}) {
-      await nextPage.waitForSelector(selector, { visible: true, timeout: options.timeout });
-      await nextPage.click(selector);
+      const handle = await nextPage.waitForSelector(selector, { visible: true, timeout: options.timeout });
+      await handle.click();
+      await handle.dispose?.().catch(() => {});
     },
   });
 
@@ -944,12 +1008,25 @@ async function run() {
     activeBrowserWindow: 'main',
   };
 
-  for (const task of runtime.tasks || []) {
+  const runtimeTasks = runtime.tasks || [];
+  let taskIndex = 0;
+  let requestedSuccessRouteTask = null;
+  let routeTransitions = 0;
+
+  while (taskIndex < runtimeTasks.length) {
+    const task = runtimeTasks[taskIndex];
     const taskStartedAt = now();
     const taskLabel = task.title || task.task_key || task.key || 'Task';
 
     pushEvent('task-started', taskLabel, { taskKey: task.key, taskType: task.task_key });
-    taskResults.push({ key: task.key, title: taskLabel, status: 'running', startedAt: taskStartedAt });
+    const existingTaskResult = taskResults.find((candidate) => candidate.key === task.key);
+
+    if (existingTaskResult) {
+      Object.assign(existingTaskResult, { title: taskLabel, status: 'running', startedAt: taskStartedAt });
+    } else {
+      taskResults.push({ key: task.key, title: taskLabel, status: 'running', startedAt: taskStartedAt });
+    }
+
     writeStatus('running', 'task-started', taskLabel);
 
     let result;
@@ -1088,6 +1165,31 @@ async function run() {
 
       return;
     }
+
+    const successRoute = task.next && typeof task.next === 'object' ? task.next : null;
+
+    if (successRoute) {
+      const targetCardKey = String(successRoute.card_key || successRoute.card || '').trim();
+      const targetTaskIndex = targetCardKey === ''
+        ? -1
+        : runtimeTasks.findIndex((candidate) => String(candidate.key || '') === targetCardKey);
+
+      if (targetTaskIndex >= 0) {
+        routeTransitions += 1;
+
+        if (routeTransitions > Math.max(100, runtimeTasks.length * 20)) {
+          throw new Error('Zu viele Task-Routenwechsel. Moegliche Schleife in der Erfolgsroute.');
+        }
+
+        taskIndex = targetTaskIndex;
+        continue;
+      }
+
+      requestedSuccessRouteTask = task;
+      break;
+    }
+
+    taskIndex += 1;
   }
 
   const finalPreview = await captureTaskPreview(context, {}, true).catch(() => ({}));
@@ -1109,6 +1211,10 @@ async function run() {
     browserWsEndpoint: browserWsEndpoint(),
     events,
     finishedAt: now(),
+    ...(requestedSuccessRouteTask ? {
+      routeRequested: true,
+      completedTaskKey: requestedSuccessRouteTask.key,
+    } : {}),
   };
 
   writeJson(runtime.resultPath, result);

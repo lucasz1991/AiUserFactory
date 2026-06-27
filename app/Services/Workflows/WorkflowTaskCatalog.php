@@ -95,6 +95,23 @@ class WorkflowTaskCatalog
                     'failure_payload' => true,
                 ],
             ],
+            'decision.element_exists' => [
+                'label' => 'IF Element vorhanden',
+                'kind' => 'browser',
+                'runner' => 'node',
+                'node_script' => 'node/workflows/tasks/decision/element_exists.cjs',
+                'timeout_seconds' => 15,
+                'description' => 'Prueft, ob ein sichtbares Element existiert. Treffer folgen der Erfolgsroute, fehlende Elemente der Fehlerroute.',
+                'form' => [
+                    'selector' => true,
+                    'selector_label' => 'IF-Selector',
+                    'selector_placeholder' => 'button:has(span:has-text("Login")), #mailbox',
+                    'value' => false,
+                    'url' => false,
+                    'success_payload' => false,
+                    'failure_payload' => false,
+                ],
+            ],
             'browser.click' => [
                 'label' => 'Button/Link klicken',
                 'kind' => 'browser',

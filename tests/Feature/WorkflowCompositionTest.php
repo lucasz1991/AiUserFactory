@@ -4,7 +4,10 @@ namespace Tests\Feature;
 
 use App\Livewire\Admin\Network\WorkflowManager;
 use App\Models\Workflow;
+use App\Models\WorkflowRun;
 use App\Models\WorkflowStep;
+use App\Services\Workflows\WorkflowExecutionService;
+use App\Services\Workflows\WorkflowTaskCatalog;
 use App\Services\Workflows\WorkflowTaskRunner;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
@@ -77,6 +80,78 @@ class WorkflowCompositionTest extends TestCase
         $this->assertSame('Manuell gesperrt.', $workflow->lock_reason);
     }
 
+    public function test_task_error_routes_resume_at_the_target_card_and_detect_back_routes(): void
+    {
+        $workflow = $this->workflow('task-routes');
+        $first = $this->waitTask('first');
+        $second = $this->waitTask('second');
+        $second['on_error'] = [
+            'type' => 'card',
+            'action_key' => 'route-list',
+            'step' => 'route-list',
+            'card_key' => 'first',
+            'card' => 'first',
+            'max_attempts' => 2,
+        ];
+        $second['next'] = ['type' => 'end', 'step' => 'end', 'label' => 'Workflow abschliessen'];
+        $third = $this->waitTask('third');
+        $step = $this->step($workflow, 'Route list', [$first, $second, $third]);
+        $run = WorkflowRun::query()->create([
+            'run_uuid' => (string) str()->uuid(),
+            'workflow_id' => $workflow->id,
+            'status' => 'running',
+            'context_json' => [],
+            'result_json' => [],
+        ])->load('workflow.steps');
+
+        $executionReflection = new ReflectionClass(WorkflowExecutionService::class);
+        $execution = $executionReflection->newInstanceWithoutConstructor();
+        $routeMethod = $executionReflection->getMethod('routeForResult');
+        $route = $routeMethod->invoke($execution, $step, 'failed', [
+            'failedTaskKey' => 'second',
+            'tasks' => [['key' => 'second', 'status' => 'failed']],
+        ]);
+
+        $this->assertSame('first', $route['card_key']);
+        $this->assertSame('second', $route['_source_card_key']);
+        $this->assertSame(2, $route['max_attempts']);
+
+        $successRoute = $routeMethod->invoke($execution, $step, 'success', [
+            'routeRequested' => true,
+            'completedTaskKey' => 'second',
+        ]);
+        $this->assertSame('end', $successRoute['type']);
+
+        $backRouteMethod = $executionReflection->getMethod('isBackRoute');
+        $this->assertTrue($backRouteMethod->invoke($execution, $run, $step, $route));
+
+        $runtimeTasks = $this->runtimeTasks($step, 'second');
+        $this->assertSame(['second', 'third'], collect($runtimeTasks)->pluck('key')->all());
+
+        $manager = app(WorkflowManager::class);
+        $manager->mount($workflow);
+        $managerReflection = new ReflectionClass($manager);
+        $nextRouteMethod = $managerReflection->getMethod('taskRouteTargetFromValue');
+        $nextRoute = $nextRouteMethod->invoke($manager, 'next', $step, 'second', null);
+
+        $this->assertSame('third', $nextRoute['card_key']);
+
+        Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
+            ->call('openEditTaskCard', $step->id, 'second')
+            ->set('editingTaskInputValue', '0')
+            ->set('editingTaskFailedTarget', 'card:'.$step->id.':first')
+            ->set('editingTaskFailedRetryLimit', 2)
+            ->call('saveEditTaskCard')
+            ->assertHasNoErrors();
+
+        $savedSecondTask = collect($step->fresh()->task_cards)->firstWhere('key', 'second');
+        $this->assertSame('first', data_get($savedSecondTask, 'on_error.card_key'));
+        $this->assertSame(2, data_get($savedSecondTask, 'on_error.max_attempts'));
+
+        $decisionTask = app(WorkflowTaskCatalog::class)->task('decision.element_exists');
+        $this->assertSame('node/workflows/tasks/decision/element_exists.cjs', $decisionTask['node_script']);
+    }
+
     protected function workflow(string $slug): Workflow
     {
         return Workflow::query()->create([
@@ -129,12 +204,12 @@ class WorkflowCompositionTest extends TestCase
         ];
     }
 
-    protected function runtimeTasks(WorkflowStep $step): array
+    protected function runtimeTasks(WorkflowStep $step, ?string $startTaskKey = null): array
     {
         $reflection = new ReflectionClass(WorkflowTaskRunner::class);
         $runner = $reflection->newInstanceWithoutConstructor();
         $method = $reflection->getMethod('runtimeTasks');
 
-        return $method->invoke($runner, $step);
+        return $method->invoke($runner, $step, $startTaskKey);
     }
 }

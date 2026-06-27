@@ -60,6 +60,8 @@ class WorkflowManager extends Component
 
     public string $newTaskFailedTarget = 'fail';
 
+    public int $newTaskFailedRetryLimit = 3;
+
     public ?int $newTaskInsertPosition = null;
 
     public string $runPersonId = '';
@@ -141,6 +143,8 @@ class WorkflowManager extends Component
     public string $editingTaskSuccessTarget = '';
 
     public string $editingTaskFailedTarget = '';
+
+    public int $editingTaskFailedRetryLimit = 0;
 
     public function mount(Workflow $workflow): void
     {
@@ -444,6 +448,7 @@ class WorkflowManager extends Component
         $this->newTaskFailurePayload = '';
         $this->newTaskSuccessTarget = '';
         $this->newTaskFailedTarget = 'fail';
+        $this->newTaskFailedRetryLimit = 3;
         $this->applyTaskDefinitionToForm('newTask', $taskKey, true);
         $this->newTaskBrowserWindow = $this->defaultBrowserWindowNameForTask($taskKey);
         $this->showAddTaskModal = true;
@@ -484,6 +489,7 @@ class WorkflowManager extends Component
             'newTaskFailurePayload' => ['nullable', 'string', 'max:4000'],
             'newTaskSuccessTarget' => ['nullable', 'string', 'max:180'],
             'newTaskFailedTarget' => ['nullable', 'string', 'max:180'],
+            'newTaskFailedRetryLimit' => ['required', 'integer', 'min:0', 'max:20'],
         ]);
 
         $definition = $this->taskDefinition($validated['newTaskCatalogKey']);
@@ -545,14 +551,28 @@ class WorkflowManager extends Component
             $task['failure_payload'] = $failurePayload;
         }
 
-        $successRoute = $this->routeTargetFromValue((string) ($validated['newTaskSuccessTarget'] ?? ''));
-        $failedRoute = $this->routeTargetFromValue((string) ($validated['newTaskFailedTarget'] ?? ''));
+        $successRoute = $this->taskRouteTargetFromValue(
+            (string) ($validated['newTaskSuccessTarget'] ?? ''),
+            $step,
+            null,
+            $this->newTaskInsertPosition,
+        );
+        $failedRoute = $this->taskRouteTargetFromValue(
+            (string) ($validated['newTaskFailedTarget'] ?? ''),
+            $step,
+            null,
+            $this->newTaskInsertPosition,
+        );
 
         if ($successRoute) {
             $task['next'] = $successRoute;
         }
 
         if ($failedRoute) {
+            if ((int) $validated['newTaskFailedRetryLimit'] > 0) {
+                $failedRoute['max_attempts'] = (int) $validated['newTaskFailedRetryLimit'];
+            }
+
             $task['on_error'] = $failedRoute;
         }
 
@@ -573,6 +593,7 @@ class WorkflowManager extends Component
         $this->newTaskFailurePayload = '';
         $this->newTaskSuccessTarget = '';
         $this->newTaskFailedTarget = 'fail';
+        $this->newTaskFailedRetryLimit = 3;
         $this->newTaskInsertPosition = null;
         $this->showAddTaskModal = false;
 
@@ -602,7 +623,11 @@ class WorkflowManager extends Component
         $this->editingTaskDescription = (string) ($task['description'] ?? '');
         $this->editingTaskElementSelector = (string) ($task['element_selector'] ?? $task['selector'] ?? '');
         $this->editingTaskInputSelector = (string) ($task['input_selector'] ?? '');
-        $this->editingTaskInputValue = (string) ($task['url'] ?? $task['value'] ?? $task['input'] ?? '');
+        $this->editingTaskInputValue = (string) (collect([
+            $task['url'] ?? null,
+            $task['value'] ?? null,
+            $task['input'] ?? null,
+        ])->first(fn (mixed $value): bool => $value !== null && trim((string) $value) !== '') ?? '');
         $this->editingTaskMailboxSource = $this->normalizeMailboxSource((string) ($task['mailbox_source'] ?? 'person'));
         $this->editingTaskBrowserWindow = $this->normalizeBrowserWindowName((string) ($task['browser_window_name'] ?? $task['browser_window'] ?? 'main'));
         $this->editingTaskSuccessPayload = $this->payloadToString($task['success_payload'] ?? null);
@@ -610,6 +635,7 @@ class WorkflowManager extends Component
         $this->editingTaskTimeoutSeconds = max(0, (int) ($task['timeout_seconds'] ?? 0));
         $this->editingTaskSuccessTarget = $this->routeValueFromTarget($task['next'] ?? null);
         $this->editingTaskFailedTarget = $this->routeValueFromTarget($task['on_error'] ?? null);
+        $this->editingTaskFailedRetryLimit = max(0, (int) data_get($task, 'on_error.max_attempts', 0));
         $this->applyTaskDefinitionToForm('editingTask', $this->editingTaskCatalogKey, false);
         $this->showEditTaskModal = true;
     }
@@ -637,6 +663,7 @@ class WorkflowManager extends Component
             'editingTaskTimeoutSeconds' => ['required', 'integer', 'min:0', 'max:3600'],
             'editingTaskSuccessTarget' => ['nullable', 'string', 'max:180'],
             'editingTaskFailedTarget' => ['nullable', 'string', 'max:180'],
+            'editingTaskFailedRetryLimit' => ['required', 'integer', 'min:0', 'max:20'],
         ]);
 
         $definition = $this->taskDefinition($validated['editingTaskCatalogKey']);
@@ -663,7 +690,7 @@ class WorkflowManager extends Component
         $tasks = collect(is_array($config['tasks'] ?? null) ? $config['tasks'] : []);
 
         $config['tasks'] = $tasks
-            ->map(function (array $task) use ($validated): array {
+            ->map(function (array $task) use ($validated, $step): array {
                 if ((string) ($task['key'] ?? '') !== $this->editingTaskKey) {
                     return $task;
                 }
@@ -714,9 +741,13 @@ class WorkflowManager extends Component
                     'next' => (string) ($validated['editingTaskSuccessTarget'] ?? ''),
                     'on_error' => (string) ($validated['editingTaskFailedTarget'] ?? ''),
                 ] as $key => $value) {
-                    $route = $this->routeTargetFromValue($value);
+                    $route = $this->taskRouteTargetFromValue($value, $step, $this->editingTaskKey);
 
                     if ($route) {
+                        if ($key === 'on_error' && (int) $validated['editingTaskFailedRetryLimit'] > 0) {
+                            $route['max_attempts'] = (int) $validated['editingTaskFailedRetryLimit'];
+                        }
+
                         $task[$key] = $route;
                     } else {
                         unset($task[$key]);
@@ -1239,7 +1270,7 @@ class WorkflowManager extends Component
             'browser_window_placeholder' => $taskKey === 'browser.open' ? 'main, registrierung, webmail' : 'Fenster auswaehlen',
             'selector' => false,
             'selector_label' => 'Selector',
-            'selector_placeholder' => 'button[type=submit], input[name=email], text=Weiter',
+            'selector_placeholder' => 'button[type=submit], button:has(span:has-text("Login"))',
             'value' => false,
             'value_label' => 'Wert',
             'value_placeholder' => 'person.email oder fester Wert',
@@ -1570,6 +1601,74 @@ class WorkflowManager extends Component
         }
 
         return null;
+    }
+
+    protected function taskRouteTargetFromValue(
+        string $value,
+        WorkflowStep $sourceStep,
+        ?string $sourceTaskKey = null,
+        ?int $insertPosition = null,
+    ): ?array {
+        if (trim($value) !== 'next') {
+            return $this->routeTargetFromValue($value);
+        }
+
+        $tasks = collect($sourceStep->task_cards)->values();
+        $nextTask = null;
+
+        if ($sourceTaskKey !== null) {
+            $sourceIndex = $tasks->search(
+                fn (array $task): bool => (string) ($task['key'] ?? '') === $sourceTaskKey,
+            );
+            $nextTask = $sourceIndex !== false ? $tasks->get($sourceIndex + 1) : null;
+        } elseif ($insertPosition !== null) {
+            $nextTask = $tasks->get(max(0, $insertPosition));
+        }
+
+        if (is_array($nextTask)) {
+            $taskKey = trim((string) ($nextTask['key'] ?? ''));
+
+            if ($taskKey !== '') {
+                return [
+                    'type' => 'card',
+                    'action_key' => $sourceStep->action_key,
+                    'step' => $sourceStep->action_key,
+                    'card_key' => $taskKey,
+                    'card' => $taskKey,
+                    'label' => 'Naechste Karte',
+                ];
+            }
+        }
+
+        $workflow = $this->selectedWorkflow();
+        $steps = $workflow ? $workflow->steps()->ordered()->get()->values() : collect();
+        $sourceStepIndex = $steps->search(fn (WorkflowStep $step): bool => (int) $step->id === (int) $sourceStep->id);
+        $nextStep = $sourceStepIndex !== false ? $steps->get($sourceStepIndex + 1) : null;
+
+        if (! $nextStep) {
+            return ['type' => 'end', 'step' => 'end', 'label' => 'Workflow abschliessen'];
+        }
+
+        $firstTask = collect($nextStep->task_cards)->first();
+        $firstTaskKey = is_array($firstTask) ? trim((string) ($firstTask['key'] ?? '')) : '';
+
+        if ($firstTaskKey !== '') {
+            return [
+                'type' => 'card',
+                'action_key' => $nextStep->action_key,
+                'step' => $nextStep->action_key,
+                'card_key' => $firstTaskKey,
+                'card' => $firstTaskKey,
+                'label' => 'Naechste Karte',
+            ];
+        }
+
+        return [
+            'type' => 'step',
+            'action_key' => $nextStep->action_key,
+            'step' => $nextStep->action_key,
+            'label' => $nextStep->name,
+        ];
     }
 
     protected function setRoute(array $routes, string $outcome, string $value, string $reason = '', int $maxAttempts = 0): array

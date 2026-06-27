@@ -131,6 +131,55 @@
 
                             return byKey.get(normalized) || null;
                         };
+                        const relativeRect = (element) => {
+                            const rect = element.getBoundingClientRect();
+
+                            return {
+                                left: rect.left - surfaceRect.left + surface.scrollLeft,
+                                right: rect.right - surfaceRect.left + surface.scrollLeft,
+                                top: rect.top - surfaceRect.top + surface.scrollTop,
+                                bottom: rect.bottom - surfaceRect.top + surface.scrollTop,
+                                centerX: rect.left + (rect.width / 2) - surfaceRect.left + surface.scrollLeft,
+                                centerY: rect.top + (rect.height / 2) - surfaceRect.top + surface.scrollTop,
+                            };
+                        };
+                        const roundedPath = (points, radius = 9) => {
+                            const compact = points.filter((point, index) => {
+                                const previous = points[index - 1];
+
+                                return !previous || previous.x !== point.x || previous.y !== point.y;
+                            });
+
+                            if (compact.length < 2) {
+                                return '';
+                            }
+
+                            let path = `M ${compact[0].x} ${compact[0].y}`;
+
+                            for (let index = 1; index < compact.length - 1; index++) {
+                                const previous = compact[index - 1];
+                                const current = compact[index];
+                                const next = compact[index + 1];
+                                const incoming = Math.hypot(current.x - previous.x, current.y - previous.y);
+                                const outgoing = Math.hypot(next.x - current.x, next.y - current.y);
+                                const cornerRadius = Math.min(radius, incoming / 2, outgoing / 2);
+                                const before = {
+                                    x: current.x + ((previous.x - current.x) / incoming) * cornerRadius,
+                                    y: current.y + ((previous.y - current.y) / incoming) * cornerRadius,
+                                };
+                                const after = {
+                                    x: current.x + ((next.x - current.x) / outgoing) * cornerRadius,
+                                    y: current.y + ((next.y - current.y) / outgoing) * cornerRadius,
+                                };
+
+                                path += ` L ${before.x} ${before.y} Q ${current.x} ${current.y} ${after.x} ${after.y}`;
+                            }
+
+                            const end = compact[compact.length - 1];
+
+                            return `${path} L ${end.x} ${end.y}`;
+                        };
+                        let routeLane = 0;
                         const makeLine = (source, target, type) => {
                             const targetElement = targetNode(target);
 
@@ -138,57 +187,72 @@
                                 return null;
                             }
 
-                            const sourceRect = source.getBoundingClientRect();
-                            const targetRect = targetElement.getBoundingClientRect();
                             const sourceStep = source.dataset.workflowStepAction || '';
                             const targetStep = targetElement.dataset.workflowStepAction || '';
-                            const sourceCenterX = sourceRect.left + (sourceRect.width / 2) - surfaceRect.left + surface.scrollLeft;
-                            const sourceCenterY = sourceRect.top + (sourceRect.height / 2) - surfaceRect.top + surface.scrollTop;
-                            const targetCenterX = targetRect.left + (targetRect.width / 2) - surfaceRect.left + surface.scrollLeft;
-                            const targetCenterY = targetRect.top + (targetRect.height / 2) - surfaceRect.top + surface.scrollTop;
-                            const sourceRight = sourceRect.right - surfaceRect.left + surface.scrollLeft;
-                            const sourceLeft = sourceRect.left - surfaceRect.left + surface.scrollLeft;
-                            const sourceTop = sourceRect.top - surfaceRect.top + surface.scrollTop;
-                            const sourceBottom = sourceRect.bottom - surfaceRect.top + surface.scrollTop;
-                            const targetLeft = targetRect.left - surfaceRect.left + surface.scrollLeft;
-                            const targetRight = targetRect.right - surfaceRect.left + surface.scrollLeft;
-                            const targetTop = targetRect.top - surfaceRect.top + surface.scrollTop;
-                            const targetBottom = targetRect.bottom - surfaceRect.top + surface.scrollTop;
+                            const sourceRect = relativeRect(source);
+                            const targetRect = relativeRect(targetElement);
+                            const sourceStepElement = source.closest('[data-workflow-step-action]');
+                            const targetStepElement = targetElement.closest('[data-workflow-step-action]');
+                            const sourceStepRect = sourceStepElement ? relativeRect(sourceStepElement) : sourceRect;
+                            const targetStepRect = targetStepElement ? relativeRect(targetStepElement) : targetRect;
+                            const laneOffset = 10 + ((routeLane++ % 6) * 5);
+                            let points = [];
 
                             if (source === targetElement) {
-                                const loopX = sourceRight + 34;
-                                const loopEndY = sourceTop + (sourceRect.height * 0.78);
-                                const loopPath = `M ${sourceRight} ${sourceCenterY} L ${loopX} ${sourceCenterY} L ${loopX} ${loopEndY} L ${sourceRight} ${loopEndY}`;
+                                const loopX = sourceStepRect.right + 6;
+                                points = [
+                                    { x: sourceRect.right, y: sourceRect.centerY - 6 },
+                                    { x: loopX, y: sourceRect.centerY - 6 },
+                                    { x: loopX, y: sourceRect.centerY + 12 },
+                                    { x: sourceRect.right, y: sourceRect.centerY + 12 },
+                                ];
 
-                                return { path: loopPath, type };
+                                return { path: roundedPath(points, 7), type };
                             }
 
                             if (sourceStep === targetStep) {
-                                if (targetTop >= sourceBottom) {
-                                    const gapY = sourceBottom + Math.max(8, (targetTop - sourceBottom) / 2);
-                                    const path = `M ${sourceCenterX} ${sourceBottom} L ${sourceCenterX} ${gapY} L ${targetCenterX} ${gapY} L ${targetCenterX} ${targetTop}`;
+                                const stepNodes = nodes
+                                    .filter((node) => (node.dataset.workflowStepAction || '') === sourceStep)
+                                    .sort((left, right) => relativeRect(left).top - relativeRect(right).top);
+                                const sourceIndex = stepNodes.indexOf(source);
+                                const targetIndex = stepNodes.indexOf(targetElement);
 
-                                    return { path, type };
+                                if (targetIndex === sourceIndex + 1) {
+                                    points = [
+                                        { x: sourceRect.centerX, y: sourceRect.bottom },
+                                        { x: targetRect.centerX, y: targetRect.top },
+                                    ];
+
+                                    return { path: roundedPath(points), type };
                                 }
 
-                                const sideX = Math.max(sourceRight, targetRight) + 28;
-                                const path = `M ${sourceRight} ${sourceCenterY} L ${sideX} ${sourceCenterY} L ${sideX} ${targetCenterY} L ${targetRight} ${targetCenterY}`;
+                                const sideX = sourceStepRect.right + 6;
+                                points = [
+                                    { x: sourceRect.right, y: sourceRect.centerY },
+                                    { x: sideX, y: sourceRect.centerY },
+                                    { x: sideX, y: targetRect.centerY },
+                                    { x: targetRect.right, y: targetRect.centerY },
+                                ];
 
-                                return { path, type };
+                                return { path: roundedPath(points), type };
                             }
 
-                            if (targetLeft >= sourceRight) {
-                                const gapX = sourceRight + Math.max(16, (targetLeft - sourceRight) / 2);
-                                const path = `M ${sourceRight} ${sourceCenterY} L ${gapX} ${sourceCenterY} L ${gapX} ${targetCenterY} L ${targetLeft} ${targetCenterY}`;
+                            const movesRight = targetStepRect.left >= sourceStepRect.right;
+                            const sourceAnchorX = movesRight ? sourceRect.right : sourceRect.left;
+                            const targetAnchorX = movesRight ? targetRect.left : targetRect.right;
+                            const sourceLaneX = movesRight ? sourceStepRect.right + 6 : sourceStepRect.left - 6;
+                            const targetLaneX = movesRight ? targetStepRect.left - 6 : targetStepRect.right + 6;
+                            const topLaneY = Math.max(8, Math.min(sourceStepRect.top, targetStepRect.top) - laneOffset);
+                            points = [
+                                { x: sourceAnchorX, y: sourceRect.centerY },
+                                { x: sourceLaneX, y: sourceRect.centerY },
+                                { x: sourceLaneX, y: topLaneY },
+                                { x: targetLaneX, y: topLaneY },
+                                { x: targetLaneX, y: targetRect.centerY },
+                                { x: targetAnchorX, y: targetRect.centerY },
+                            ];
 
-                                return { path, type };
-                            }
-
-                            const sideX = Math.max(sourceRight, targetRight) + 42;
-                            const entryX = targetLeft < sourceLeft ? targetRight : targetLeft;
-                            const path = `M ${sourceRight} ${sourceCenterY} L ${sideX} ${sourceCenterY} L ${sideX} ${targetCenterY} L ${entryX} ${targetCenterY}`;
-
-                            return { path, type };
+                            return { path: roundedPath(points), type };
                         };
                         const lines = [];
 
@@ -241,7 +305,7 @@
                             const dash = line.type === 'failed' ? ' stroke-dasharray=&quot;6 5&quot;' : '';
                             const path = String(line.path || '').replace(/&/g, '&amp;').replace(/&quot;/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-                            return `<path d=&quot;${path}&quot; fill=&quot;none&quot; stroke-width=&quot;3&quot; stroke-linecap=&quot;round&quot; stroke=&quot;${color}&quot;${dash} marker-end=&quot;${marker}&quot;></path>`;
+                            return `<path d=&quot;${path}&quot; fill=&quot;none&quot; stroke-width=&quot;2&quot; stroke-linecap=&quot;round&quot; stroke-linejoin=&quot;round&quot; stroke=&quot;${color}&quot;${dash} marker-end=&quot;${marker}&quot;></path>`;
                         }).join('');
                     },
                 }"
@@ -258,11 +322,11 @@
                     aria-hidden="true"
                 >
                     <defs>
-                        <marker id="workflow-arrow-green" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
-                            <path d="M0,0 L0,6 L8,3 z" fill="#bbf7d0"></path>
+                        <marker id="workflow-arrow-green" markerWidth="5" markerHeight="5" refX="4.5" refY="2.5" orient="auto" markerUnits="userSpaceOnUse">
+                            <path d="M0,0 L0,5 L5,2.5 z" fill="#bbf7d0"></path>
                         </marker>
-                        <marker id="workflow-arrow-red" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
-                            <path d="M0,0 L0,6 L8,3 z" fill="#fca5a5"></path>
+                        <marker id="workflow-arrow-red" markerWidth="5" markerHeight="5" refX="4.5" refY="2.5" orient="auto" markerUnits="userSpaceOnUse">
+                            <path d="M0,0 L0,5 L5,2.5 z" fill="#fca5a5"></path>
                         </marker>
                     </defs>
                     <g x-html="routeSvgMarkup"></g>

@@ -32,7 +32,10 @@ class WorkflowTaskRunner
         File::ensureDirectoryExists($runDirectory);
         File::ensureDirectoryExists($publicRunDirectory);
 
-        $tasks = $this->runtimeTasks($step);
+        $tasks = $this->runtimeTasks(
+            $step,
+            trim((string) ($runtimeContext['nextTaskKey'] ?? $runtimeContext['next_task_key'] ?? '')) ?: null,
+        );
 
         $runtime = [
             'runId' => $runId,
@@ -217,10 +220,24 @@ class WorkflowTaskRunner
             ->toArray();
     }
 
-    protected function runtimeTasks(WorkflowStep $step): array
+    protected function runtimeTasks(WorkflowStep $step, ?string $startTaskKey = null): array
     {
+        $tasks = $step->task_cards;
+
+        if ($startTaskKey !== null) {
+            $startIndex = collect($tasks)->search(
+                fn (array $task): bool => (string) ($task['key'] ?? '') === $startTaskKey,
+            );
+
+            if ($startIndex === false) {
+                throw new \RuntimeException('Die Ziel-Task fuer den Ruecksprung wurde nicht gefunden: '.$startTaskKey);
+            }
+
+            $tasks = array_slice($tasks, (int) $startIndex);
+        }
+
         return $this->expandRuntimeTasks(
-            $step->task_cards,
+            $tasks,
             [(int) $step->workflow_id],
         );
     }

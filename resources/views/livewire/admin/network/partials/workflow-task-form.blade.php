@@ -10,7 +10,7 @@
         'browser_window_placeholder' => $catalogKey === 'browser.open' ? 'main, registrierung, webmail' : 'Fenster auswaehlen',
         'selector' => false,
         'selector_label' => 'Selector',
-        'selector_placeholder' => 'button[type=submit], input[name=email], text=Weiter',
+        'selector_placeholder' => 'button[type=submit], button:has(span:has-text("Login"))',
         'value' => false,
         'value_label' => 'Wert',
         'value_placeholder' => 'person.email oder fester Wert',
@@ -65,7 +65,7 @@
     $browserWindowDatalistId = 'workflow-'.$prefix.'-browser-windows';
 @endphp
 
-<div class="space-y-4">
+<div class="space-y-4" x-data="{ failedTarget: @entangle($prefix.'FailedTarget').live }">
     <div class="grid gap-4 md:grid-cols-2">
         @if(! $isEdit)
             <div>
@@ -199,8 +199,11 @@
         ] as $model => $label)
             <div>
                 <label class="block text-sm font-medium text-gray-700">{{ $label }}</label>
-                <select wire:model.defer="{{ $model }}" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                <select @if($model === $prefix.'FailedTarget') x-model="failedTarget" @else wire:model.defer="{{ $model }}" @endif class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
                     <option value="">{{ $label === 'Bei Erfolg' ? 'Naechste Karte' : 'Keine Route' }}</option>
+                    @if($label === 'Bei Fehler')
+                        <option value="next">Naechste Karte</option>
+                    @endif
                     <option value="end">Workflow beenden</option>
                     <option value="fail">Fehlerroute</option>
                     @foreach($steps as $targetStep)
@@ -213,5 +216,12 @@
                 @error($model) <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
             </div>
         @endforeach
+    </div>
+
+    <div x-cloak x-show="String(failedTarget || '').startsWith('card:')" class="rounded-md border border-amber-200 bg-amber-50 p-3">
+        <label class="block text-sm font-medium text-amber-900">Maximale Fehlerrueckspruenge</label>
+        <input type="number" min="0" max="20" wire:model.defer="{{ $prefix }}FailedRetryLimit" class="mt-1 block w-full rounded-md border border-amber-300 bg-white p-2 text-sm shadow-sm focus:border-amber-500 focus:ring-amber-500">
+        <p class="mt-1 text-xs text-amber-800">Wird nur angewendet, wenn der Fehlerweg zu dieser oder einer vorherigen Task-Karte zurueckfuehrt. 0 bedeutet unbegrenzt.</p>
+        @error($prefix.'FailedRetryLimit') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
     </div>
 </div>

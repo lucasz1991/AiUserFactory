@@ -266,7 +266,7 @@ class WorkflowExecutionService
                 ?: 'Node-Schritt wurde nicht erfolgreich abgeschlossen.'
             );
 
-            if ($this->hasRouteForOutcome($stepRun->workflowStep, 'failed')) {
+            if ($this->routeForResult($stepRun->workflowStep, 'failed', $result)) {
                 $result['routedOutcome'] = 'failed';
                 $result['statusMessage'] = $message;
                 $this->completeStepRun($stepRun, $result, 'failed');
@@ -310,6 +310,12 @@ class WorkflowExecutionService
             'current_workflow_step_id' => $step->id,
         ])->save();
 
+        $hasTaskCursor = trim((string) data_get($run->context_json, 'next_task_key', '')) !== '';
+
+        if ($hasTaskCursor && $step->task_cards !== []) {
+            return $this->startWorkflowTaskStep($run, $step, $stepRun);
+        }
+
         return match ($step->type) {
             WorkflowStep::TYPE_MAIL_ACCOUNT_REGISTRATION => $this->startMailRegistrationStep($run, $step, $stepRun),
             WorkflowStep::TYPE_WEBMAIL_LOGIN => $this->startWebmailLoginStep($run, $step, $stepRun),
@@ -320,12 +326,23 @@ class WorkflowExecutionService
 
     protected function startWorkflowTaskStep(WorkflowRun $run, WorkflowStep $step, WorkflowStepRun $stepRun): string
     {
+        $stepRun->forceFill([
+            'status' => 'running',
+            'started_at' => now(),
+            'finished_at' => null,
+            'duration_ms' => null,
+            'error_message' => null,
+        ])->save();
+
+        $runtimeContext = $this->workflowRuntimeContext($run, $step, $stepRun);
         $externalRun = $this->workflowTasks->start(
             $run,
             $step,
             $stepRun,
-            $this->workflowRuntimeContext($run, $step, $stepRun),
+            $runtimeContext,
         );
+
+        $this->clearRouteCursor($run);
 
         $stepRun->forceFill([
             'status' => 'waiting',
@@ -532,7 +549,7 @@ class WorkflowExecutionService
                 throw new \RuntimeException('Routing-Ziel wurde nicht gefunden: '.$targetActionKey);
             }
 
-            $this->clearRouteCursor($run);
+            $this->clearRouteCursor($run, true);
 
             return $target;
         }
@@ -553,7 +570,7 @@ class WorkflowExecutionService
 
     protected function continueAfterStep(WorkflowRun $run, WorkflowStepRun $stepRun, array $result, string $outcome, int $delaySeconds = 0): void
     {
-        $route = $this->routeForOutcome($stepRun->workflowStep, $outcome)
+        $route = $this->routeForResult($stepRun->workflowStep, $outcome, $result)
             ?: $this->linearRouteAfterStep($run, $stepRun->workflowStep, $outcome);
         $routeType = (string) ($route['type'] ?? 'step');
 
@@ -628,6 +645,46 @@ class WorkflowExecutionService
         $route = $routes[$outcome] ?? $routes['default'] ?? null;
 
         return is_array($route) ? $this->normalizeRoute($step, $route) : null;
+    }
+
+    protected function routeForResult(WorkflowStep $step, string $outcome, array $result): ?array
+    {
+        if ($outcome === 'success' && (bool) ($result['routeRequested'] ?? false)) {
+            $completedTaskKey = trim((string) ($result['completedTaskKey'] ?? $result['completed_task_key'] ?? ''));
+            $sourceTask = collect($step->task_cards)
+                ->first(fn (array $task): bool => (string) ($task['key'] ?? '') === $completedTaskKey);
+            $route = is_array($sourceTask) ? ($sourceTask['next'] ?? null) : null;
+
+            if (is_array($route)) {
+                $route['_source_card_key'] = $completedTaskKey;
+
+                return $this->normalizeRoute($step, $route);
+            }
+        }
+
+        if (in_array($outcome, ['failed', 'timeout'], true)) {
+            $failedTaskKey = trim((string) ($result['failedTaskKey'] ?? $result['failed_task_key'] ?? ''));
+
+            if ($failedTaskKey !== '') {
+                $resultTask = collect(is_array($result['tasks'] ?? null) ? $result['tasks'] : [])
+                    ->first(fn (mixed $task): bool => is_array($task) && (string) ($task['key'] ?? '') === $failedTaskKey);
+                $sourceTaskKey = trim((string) data_get($resultTask, 'parent_task_key', $failedTaskKey));
+                $sourceTask = collect($step->task_cards)
+                    ->first(fn (array $task): bool => (string) ($task['key'] ?? '') === $sourceTaskKey);
+
+                if ($sourceTask) {
+                    $route = $sourceTask['on_error'] ?? data_get($sourceTask, 'status_routes.'.$outcome);
+
+                    if (is_array($route)) {
+                        $route['_source_card_key'] = $sourceTaskKey;
+
+                        return $this->normalizeRoute($step, $route);
+                    }
+                }
+            }
+        }
+
+        return $this->routeForOutcome($step, $outcome);
     }
 
     protected function hasRouteForOutcome(WorkflowStep $step, string $outcome): bool
@@ -803,7 +860,30 @@ class WorkflowExecutionService
                 ->first();
         }
 
-        return $targetStep && (int) $targetStep->position <= (int) $sourceStep->position;
+        if (! $targetStep) {
+            return false;
+        }
+
+        if ((int) $targetStep->position < (int) $sourceStep->position) {
+            return true;
+        }
+
+        if ((int) $targetStep->position > (int) $sourceStep->position) {
+            return false;
+        }
+
+        $sourceCardKey = trim((string) ($route['_source_card_key'] ?? ''));
+        $targetCardKey = trim((string) ($route['card_key'] ?? $route['card'] ?? ''));
+
+        if ($sourceCardKey === '' || $targetCardKey === '') {
+            return true;
+        }
+
+        $tasks = collect($sourceStep->task_cards)->values();
+        $sourceIndex = $tasks->search(fn (array $task): bool => (string) ($task['key'] ?? '') === $sourceCardKey);
+        $targetIndex = $tasks->search(fn (array $task): bool => (string) ($task['key'] ?? '') === $targetCardKey);
+
+        return $sourceIndex !== false && $targetIndex !== false && $targetIndex <= $sourceIndex;
     }
 
     protected function routeAttemptKey(WorkflowStep $step, string $outcome, array $route): string
@@ -814,6 +894,7 @@ class WorkflowExecutionService
             trim((string) ($route['type'] ?? 'step')),
             trim((string) ($route['action_key'] ?? $route['step'] ?? '')),
             trim((string) ($route['card_key'] ?? $route['card'] ?? '')),
+            trim((string) ($route['_source_card_key'] ?? '')),
         ]);
     }
 
@@ -841,10 +922,14 @@ class WorkflowExecutionService
         $run->forceFill(['context_json' => $context])->save();
     }
 
-    protected function clearRouteCursor(WorkflowRun $run): void
+    protected function clearRouteCursor(WorkflowRun $run, bool $preserveTaskCursor = false): void
     {
         $context = is_array($run->context_json) ? $run->context_json : [];
-        unset($context['next_step_action_key'], $context['next_task_key']);
+        unset($context['next_step_action_key']);
+
+        if (! $preserveTaskCursor) {
+            unset($context['next_task_key']);
+        }
 
         $run->forceFill(['context_json' => $context])->save();
     }
@@ -1107,6 +1192,8 @@ class WorkflowExecutionService
             'workflowStepRunId' => $stepRun->id,
             'workflowStepName' => $step->name,
             'workflowStepType' => $step->type,
+            'nextTaskKey' => trim((string) data_get($run->context_json, 'next_task_key', '')) ?: null,
+            'next_task_key' => trim((string) data_get($run->context_json, 'next_task_key', '')) ?: null,
             'personId' => data_get($run->context_json, 'person_id'),
             'browserWindows' => $browserWindows,
             'browser_windows' => $browserWindows,
