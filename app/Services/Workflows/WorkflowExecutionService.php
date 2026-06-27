@@ -1035,6 +1035,7 @@ class WorkflowExecutionService
         $username = trim((string) ($mailbox['username'] ?? '')) ?: $email;
         $webmailUrl = trim((string) ($mailbox['webmail_url'] ?? $mailbox['webmailUrl'] ?? ''))
             ?: $this->defaultWebmailUrl($provider);
+        $webmailSessionPayload = $this->decryptedWebmailSessionPayload($mailbox);
 
         return [
             'enabled' => (bool) ($mailbox['enabled'] ?? false),
@@ -1044,7 +1045,9 @@ class WorkflowExecutionService
             'webmailUrl' => $webmailUrl,
             'webmail_url' => $webmailUrl,
             'hasPassword' => trim((string) ($mailbox['password_encrypted'] ?? '')) !== '',
-            'hasWebmailSession' => is_array($mailbox['webmail_session'] ?? null),
+            'hasWebmailSession' => is_array($webmailSessionPayload),
+            'webmailSession' => $webmailSessionPayload,
+            'webmail_session' => $webmailSessionPayload,
         ];
     }
 
@@ -1158,8 +1161,10 @@ class WorkflowExecutionService
             $payload['browser_ws_endpoint'],
         );
 
-        if (isset($payload['account']) && is_array($payload['account'])) {
-            unset($payload['account']['password'], $payload['account']['passwordEncrypted'], $payload['account']['webmailSession'], $payload['account']['webmail_session']);
+        foreach (['account', 'email_account', 'verificationMailbox', 'verification_mailbox', 'veri_account', 'veri-account'] as $key) {
+            if (isset($payload[$key]) && is_array($payload[$key])) {
+                unset($payload[$key]['password'], $payload[$key]['passwordEncrypted'], $payload[$key]['password_encrypted'], $payload[$key]['webmailSession'], $payload[$key]['webmail_session']);
+            }
         }
 
         if (isset($payload['workflow']) && is_array($payload['workflow'])) {
@@ -1170,9 +1175,9 @@ class WorkflowExecutionService
                 $payload['workflow']['browser_ws_endpoint'],
             );
 
-            foreach (['account', 'email_account'] as $key) {
+            foreach (['account', 'email_account', 'verificationMailbox', 'verification_mailbox', 'veri_account', 'veri-account'] as $key) {
                 if (isset($payload['workflow'][$key]) && is_array($payload['workflow'][$key])) {
-                    unset($payload['workflow'][$key]['password'], $payload['workflow'][$key]['passwordEncrypted'], $payload['workflow'][$key]['webmailSession'], $payload['workflow'][$key]['webmail_session']);
+                    unset($payload['workflow'][$key]['password'], $payload['workflow'][$key]['passwordEncrypted'], $payload['workflow'][$key]['password_encrypted'], $payload['workflow'][$key]['webmailSession'], $payload['workflow'][$key]['webmail_session']);
                 }
             }
 
@@ -1180,6 +1185,7 @@ class WorkflowExecutionService
                 unset(
                     $payload['workflow']['person']['emailAccount']['password'],
                     $payload['workflow']['person']['emailAccount']['passwordEncrypted'],
+                    $payload['workflow']['person']['emailAccount']['password_encrypted'],
                     $payload['workflow']['person']['emailAccount']['webmailSession'],
                     $payload['workflow']['person']['emailAccount']['webmail_session'],
                 );

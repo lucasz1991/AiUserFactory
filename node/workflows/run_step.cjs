@@ -100,6 +100,7 @@ function publicAccount(account = null, includePassword = false) {
     delete copy.password;
   }
 
+  delete copy.passwordEncrypted;
   delete copy.password_encrypted;
   delete copy.webmailSession;
   delete copy.webmail_session;
@@ -122,9 +123,10 @@ function publicWorkflow(workflow = null) {
   delete copy.browserWsEndpoint;
   delete copy.browser_ws_endpoint;
 
-  for (const key of ['account', 'email_account']) {
+  for (const key of ['account', 'email_account', 'verificationMailbox', 'verification_mailbox', 'veri_account', 'veri-account']) {
     if (copy[key] && typeof copy[key] === 'object') {
       delete copy[key].password;
+      delete copy[key].passwordEncrypted;
       delete copy[key].password_encrypted;
       delete copy[key].webmailSession;
       delete copy[key].webmail_session;
@@ -134,6 +136,7 @@ function publicWorkflow(workflow = null) {
   if (copy.person?.emailAccount && typeof copy.person.emailAccount === 'object') {
     delete copy.person.emailAccount.password;
     delete copy.person.emailAccount.password_encrypted;
+    delete copy.person.emailAccount.passwordEncrypted;
     delete copy.person.emailAccount.webmailSession;
     delete copy.person.emailAccount.webmail_session;
   }

@@ -6,7 +6,20 @@ function normalizeText(value) {
   return String(value ?? '').trim();
 }
 
-function accountFromContext(context = {}) {
+function isMailboxSourceToken(value) {
+  return ['person', 'reference_person', 'verification', 'verification_mailbox', 'veri-account', 'veri_account', 'main', 'master']
+    .includes(normalizeText(value).toLowerCase());
+}
+
+function normalizeMailboxSource(value) {
+  const normalized = normalizeText(value).toLowerCase();
+
+  return ['verification', 'verification_mailbox', 'veri-account', 'veri_account', 'main', 'master'].includes(normalized)
+    ? 'verification'
+    : 'person';
+}
+
+function personAccountFromContext(context = {}) {
   const workflow = context.workflow || {};
   const person = context.person || workflow.person || {};
   const workflowAccount = workflow.account
@@ -20,6 +33,34 @@ function accountFromContext(context = {}) {
     webmailSession: context.account?.webmailSession || workflowAccount.webmailSession || workflowAccount.webmail_session || null,
     webmail_session: context.account?.webmail_session || workflowAccount.webmail_session || workflowAccount.webmailSession || null,
   };
+}
+
+function verificationAccountFromContext(context = {}) {
+  const workflow = context.workflow || {};
+  const verificationAccount = context.verificationMailbox
+    || context.verification_mailbox
+    || context.veri_account
+    || context['veri-account']
+    || workflow.verificationMailbox
+    || workflow.verification_mailbox
+    || workflow.veri_account
+    || workflow['veri-account']
+    || {};
+
+  return {
+    ...verificationAccount,
+    webmailSession: verificationAccount.webmailSession || verificationAccount.webmail_session || null,
+    webmail_session: verificationAccount.webmail_session || verificationAccount.webmailSession || null,
+  };
+}
+
+function accountFromContext(context = {}, input = {}) {
+  const mailboxSource = normalizeMailboxSource(input.mailbox_source || input.mailboxSource || input.account_source || input.accountSource || input.value || 'person');
+  const account = mailboxSource === 'verification'
+    ? verificationAccountFromContext(context)
+    : personAccountFromContext(context);
+
+  return { account, mailboxSource };
 }
 
 function storageValues(session = {}) {
@@ -67,10 +108,11 @@ async function restoreStorage(page, session = {}) {
 async function run(context = {}) {
   const page = context.page;
   const input = context.input || {};
-  const account = accountFromContext(context);
+  const { account, mailboxSource } = accountFromContext(context, input);
   const session = account.webmailSession || account.webmail_session || null;
   const fallbackUrl = normalizeText(account.webmailUrl || account.webmail_url || 'https://mail.proton.me');
-  const targetUrl = normalizeText(input.url || input.value || input.webmailUrl || session?.finalUrl || fallbackUrl);
+  const valueAsUrl = isMailboxSourceToken(input.value) ? '' : input.value;
+  const targetUrl = normalizeText(input.url || input.webmailUrl || valueAsUrl || session?.finalUrl || fallbackUrl);
   const timeout = Number(input.timeoutMs || context.timeoutMs || 120000);
 
   if (!page || typeof page.goto !== 'function') {
@@ -78,10 +120,13 @@ async function run(context = {}) {
   }
 
   if (!session || typeof session !== 'object') {
+    const accountLabel = mailboxSource === 'verification' ? 'Haupt-Verifikationskonto' : 'Bezugs-Person';
+
     return {
       ok: false,
       status: 'failed',
-      statusMessage: 'Keine gespeicherte Webmail-Session an der Person gefunden.',
+      statusMessage: `Keine gespeicherte Webmail-Session fuer ${accountLabel} gefunden.`,
+      mailboxSource,
     };
   }
 
@@ -113,6 +158,8 @@ async function run(context = {}) {
     status: 'success',
     statusMessage: 'Webmail-Session wurde geladen und das Webmailportal wurde geoeffnet.',
     url: typeof page.url === 'function' ? page.url() : targetUrl,
+    mailboxSource,
+    mailboxEmail: account.email || '',
     cookieCount: cookiesRestored,
     storageRestored,
   });

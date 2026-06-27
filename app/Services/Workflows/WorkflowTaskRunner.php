@@ -212,14 +212,14 @@ class WorkflowTaskRunner
         $public = $runtimeContext;
         unset($public['browser'], $public['browser_runtime'], $public['browserWsEndpoint'], $public['browser_ws_endpoint']);
 
-        foreach (['account', 'email_account'] as $key) {
+        foreach (['account', 'email_account', 'verificationMailbox', 'verification_mailbox', 'veri_account', 'veri-account'] as $key) {
             if (isset($public[$key]) && is_array($public[$key])) {
-                unset($public[$key]['password'], $public[$key]['webmailSession'], $public[$key]['webmail_session']);
+                unset($public[$key]['password'], $public[$key]['passwordEncrypted'], $public[$key]['password_encrypted'], $public[$key]['webmailSession'], $public[$key]['webmail_session']);
             }
         }
 
         if (isset($public['person']['emailAccount']) && is_array($public['person']['emailAccount'])) {
-            unset($public['person']['emailAccount']['password'], $public['person']['emailAccount']['webmailSession'], $public['person']['emailAccount']['webmail_session']);
+            unset($public['person']['emailAccount']['password'], $public['person']['emailAccount']['passwordEncrypted'], $public['person']['emailAccount']['password_encrypted'], $public['person']['emailAccount']['webmailSession'], $public['person']['emailAccount']['webmail_session']);
         }
 
         return $public;

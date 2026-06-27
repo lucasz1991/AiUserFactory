@@ -17,6 +17,12 @@
         'url' => false,
         'url_label' => 'URL',
         'url_placeholder' => 'https://example.test',
+        'mailbox_source' => false,
+        'mailbox_source_label' => 'Postfach',
+        'mailbox_source_options' => [
+            'person' => 'Bezugs-Person',
+            'verification' => 'Haupt-Verifikationskonto',
+        ],
         'success_payload' => false,
         'failure_payload' => false,
     ], is_array($selectedDefinition['form'] ?? null) ? $selectedDefinition['form'] : []);
@@ -152,6 +158,18 @@
                     @error($prefix.'InputValue') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
                 </div>
             @endif
+        </div>
+    @endif
+
+    @if($form['mailbox_source'])
+        <div>
+            <label class="block text-sm font-medium text-gray-700">{{ $form['mailbox_source_label'] }}</label>
+            <select wire:model.defer="{{ $prefix }}MailboxSource" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                @foreach($form['mailbox_source_options'] as $mailboxSourceValue => $mailboxSourceLabel)
+                    <option value="{{ $mailboxSourceValue }}">{{ $mailboxSourceLabel }}</option>
+                @endforeach
+            </select>
+            @error($prefix.'MailboxSource') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
         </div>
     @endif
 

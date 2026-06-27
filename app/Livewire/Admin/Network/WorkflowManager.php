@@ -46,6 +46,8 @@ class WorkflowManager extends Component
 
     public string $newTaskInputValue = '';
 
+    public string $newTaskMailboxSource = 'person';
+
     public string $newTaskBrowserWindow = 'main';
 
     public string $newTaskSuccessPayload = '';
@@ -123,6 +125,8 @@ class WorkflowManager extends Component
     public string $editingTaskInputSelector = '';
 
     public string $editingTaskInputValue = '';
+
+    public string $editingTaskMailboxSource = 'person';
 
     public string $editingTaskBrowserWindow = 'main';
 
@@ -429,6 +433,7 @@ class WorkflowManager extends Component
         $this->newTaskElementSelector = '';
         $this->newTaskInputSelector = '';
         $this->newTaskInputValue = '';
+        $this->newTaskMailboxSource = 'person';
         $this->newTaskBrowserWindow = 'main';
         $this->newTaskSuccessPayload = '';
         $this->newTaskFailurePayload = '';
@@ -468,6 +473,7 @@ class WorkflowManager extends Component
             'newTaskElementSelector' => ['nullable', 'string', 'max:1000'],
             'newTaskInputSelector' => ['nullable', 'string', 'max:1000'],
             'newTaskInputValue' => ['nullable', 'string', 'max:2000'],
+            'newTaskMailboxSource' => ['nullable', 'string', 'in:person,verification'],
             'newTaskBrowserWindow' => ['nullable', 'string', 'max:80'],
             'newTaskSuccessPayload' => ['nullable', 'string', 'max:4000'],
             'newTaskFailurePayload' => ['nullable', 'string', 'max:4000'],
@@ -492,6 +498,7 @@ class WorkflowManager extends Component
         $key = $this->uniqueTaskKey($tasks, $validated['newTaskTitle']);
         $selector = trim((string) ($validated['newTaskElementSelector'] ?? ''));
         $value = trim((string) ($validated['newTaskInputValue'] ?? ''));
+        $mailboxSource = $this->normalizeMailboxSource((string) ($validated['newTaskMailboxSource'] ?? 'person'));
         $browserWindow = $this->normalizeBrowserWindowName((string) ($validated['newTaskBrowserWindow'] ?? ''));
 
         if (! $this->validateBrowserWindowState($validated['newTaskCatalogKey'], $browserWindow, 'newTaskBrowserWindow')) {
@@ -510,6 +517,7 @@ class WorkflowManager extends Component
             'input' => $value,
             'value' => $value,
             'url' => ($formConfig['url'] ?? false) ? $value : null,
+            'mailbox_source' => ($formConfig['mailbox_source'] ?? false) ? $mailboxSource : null,
             'status' => 'configured',
         ]);
 
@@ -546,6 +554,7 @@ class WorkflowManager extends Component
         $this->newTaskElementSelector = '';
         $this->newTaskInputSelector = '';
         $this->newTaskInputValue = '';
+        $this->newTaskMailboxSource = 'person';
         $this->newTaskBrowserWindow = 'main';
         $this->newTaskSuccessPayload = '';
         $this->newTaskFailurePayload = '';
@@ -581,6 +590,7 @@ class WorkflowManager extends Component
         $this->editingTaskElementSelector = (string) ($task['element_selector'] ?? $task['selector'] ?? '');
         $this->editingTaskInputSelector = (string) ($task['input_selector'] ?? '');
         $this->editingTaskInputValue = (string) ($task['url'] ?? $task['value'] ?? $task['input'] ?? '');
+        $this->editingTaskMailboxSource = $this->normalizeMailboxSource((string) ($task['mailbox_source'] ?? 'person'));
         $this->editingTaskBrowserWindow = $this->normalizeBrowserWindowName((string) ($task['browser_window_name'] ?? $task['browser_window'] ?? 'main'));
         $this->editingTaskSuccessPayload = $this->payloadToString($task['success_payload'] ?? null);
         $this->editingTaskFailurePayload = $this->payloadToString($task['failure_payload'] ?? null);
@@ -607,6 +617,7 @@ class WorkflowManager extends Component
             'editingTaskElementSelector' => ['nullable', 'string', 'max:1000'],
             'editingTaskInputSelector' => ['nullable', 'string', 'max:1000'],
             'editingTaskInputValue' => ['nullable', 'string', 'max:2000'],
+            'editingTaskMailboxSource' => ['nullable', 'string', 'in:person,verification'],
             'editingTaskBrowserWindow' => ['nullable', 'string', 'max:80'],
             'editingTaskSuccessPayload' => ['nullable', 'string', 'max:4000'],
             'editingTaskFailurePayload' => ['nullable', 'string', 'max:4000'],
@@ -639,6 +650,7 @@ class WorkflowManager extends Component
                 $formConfig = $this->taskFormConfig($validated['editingTaskCatalogKey']);
                 $selector = trim((string) ($validated['editingTaskElementSelector'] ?? ''));
                 $value = trim((string) ($validated['editingTaskInputValue'] ?? ''));
+                $mailboxSource = $this->normalizeMailboxSource((string) ($validated['editingTaskMailboxSource'] ?? 'person'));
                 $browserWindow = $this->normalizeBrowserWindowName((string) ($validated['editingTaskBrowserWindow'] ?? ''));
                 $task = array_replace(
                     $task,
@@ -659,6 +671,7 @@ class WorkflowManager extends Component
                         'input' => $value,
                         'value' => $value,
                         'url' => ($formConfig['url'] ?? false) ? $value : null,
+                        'mailbox_source' => ($formConfig['mailbox_source'] ?? false) ? $mailboxSource : null,
                         'timeout_seconds' => (int) $validated['editingTaskTimeoutSeconds'],
                     ],
                 );
@@ -691,6 +704,10 @@ class WorkflowManager extends Component
 
                 if (! ($formConfig['browser_window'] ?? false)) {
                     unset($task['browser_window'], $task['browser_window_name']);
+                }
+
+                if (! ($formConfig['mailbox_source'] ?? false)) {
+                    unset($task['mailbox_source']);
                 }
 
                 unset($task['on_partial']);
@@ -1063,6 +1080,7 @@ class WorkflowManager extends Component
         $selectorProperty = $prefix.'ElementSelector';
         $inputSelectorProperty = $prefix.'InputSelector';
         $valueProperty = $prefix.'InputValue';
+        $mailboxSourceProperty = $prefix.'MailboxSource';
         $browserWindowProperty = $prefix.'BrowserWindow';
         $successPayloadProperty = $prefix.'SuccessPayload';
         $failurePayloadProperty = $prefix.'FailurePayload';
@@ -1085,6 +1103,12 @@ class WorkflowManager extends Component
 
         if (! ($formConfig['value'] ?? false) && ! ($formConfig['url'] ?? false)) {
             $this->{$valueProperty} = '';
+        }
+
+        if ($formConfig['mailbox_source'] ?? false) {
+            $this->{$mailboxSourceProperty} = $this->normalizeMailboxSource((string) $this->{$mailboxSourceProperty});
+        } else {
+            $this->{$mailboxSourceProperty} = 'person';
         }
 
         if ($formConfig['browser_window'] ?? false) {
@@ -1122,6 +1146,12 @@ class WorkflowManager extends Component
             'url' => false,
             'url_label' => 'URL',
             'url_placeholder' => 'https://example.test',
+            'mailbox_source' => false,
+            'mailbox_source_label' => 'Postfach',
+            'mailbox_source_options' => [
+                'person' => 'Bezugs-Person',
+                'verification' => 'Haupt-Verifikationskonto',
+            ],
             'success_payload' => false,
             'failure_payload' => false,
         ], $form);
@@ -1142,6 +1172,7 @@ class WorkflowManager extends Component
         $valid = true;
         $selectorProperty = $prefix.'ElementSelector';
         $valueProperty = $prefix.'InputValue';
+        $mailboxSourceProperty = $prefix.'MailboxSource';
         $browserWindowProperty = $prefix.'BrowserWindow';
 
         if (($formConfig['browser_window'] ?? false) && trim((string) $this->{$browserWindowProperty}) === '') {
@@ -1159,7 +1190,21 @@ class WorkflowManager extends Component
             $valid = false;
         }
 
+        if (($formConfig['mailbox_source'] ?? false) && ! in_array($this->normalizeMailboxSource((string) $this->{$mailboxSourceProperty}), ['person', 'verification'], true)) {
+            $this->addError($mailboxSourceProperty, 'Bitte ein Postfach auswaehlen.');
+            $valid = false;
+        }
+
         return $valid;
+    }
+
+    protected function normalizeMailboxSource(string $value): string
+    {
+        $value = strtolower(trim($value));
+
+        return in_array($value, ['verification', 'verification_mailbox', 'veri-account', 'veri_account', 'main', 'master'], true)
+            ? 'verification'
+            : 'person';
     }
 
     protected function normalizeBrowserWindowName(string $value): string
