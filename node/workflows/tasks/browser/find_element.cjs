@@ -14,8 +14,8 @@ function firstNonEmpty(...values) {
   return '';
 }
 
-async function elementSnapshot(locator, selector) {
-  return locator.evaluate((element, fallbackSelector) => ({
+async function elementSnapshot(handle, selector) {
+  return handle.evaluate((element, fallbackSelector) => ({
     selector: fallbackSelector,
     tag: element.tagName.toLowerCase(),
     id: element.id || '',
@@ -30,15 +30,69 @@ async function elementSnapshot(locator, selector) {
 }
 
 async function trySelector(page, selector, timeout) {
-  const locator = page.locator(selector).first();
+  if (typeof page.waitForSelector === 'function') {
+    const handle = await page.waitForSelector(selector, { visible: true, timeout }).catch(() => null);
 
-  if (await locator.count() < 1) {
+    if (!handle) {
+      return null;
+    }
+
+    try {
+      return await elementSnapshot(handle, selector);
+    } finally {
+      await handle.dispose?.().catch(() => {});
+    }
+  }
+
+  const handle = typeof page.$ === 'function' ? await page.$(selector).catch(() => null) : null;
+
+  if (!handle) {
     return null;
   }
 
-  await locator.waitFor({ state: 'visible', timeout });
+  try {
+    return await elementSnapshot(handle, selector);
+  } finally {
+    await handle.dispose?.().catch(() => {});
+  }
+}
 
-  return elementSnapshot(locator, selector);
+async function tryText(page, text) {
+  if (!page || typeof page.evaluate !== 'function') {
+    return null;
+  }
+
+  return page.evaluate((needle) => {
+    const normalizedNeedle = String(needle || '').toLowerCase();
+    const visible = (element) => {
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+
+      return rect.width > 0
+        && rect.height > 0
+        && style.visibility !== 'hidden'
+        && style.display !== 'none';
+    };
+    const element = Array.from(document.querySelectorAll('a,button,[role=button],input[type=button],input[type=submit],label,span,div'))
+      .find((candidate) => visible(candidate) && String(candidate.innerText || candidate.value || candidate.textContent || '').toLowerCase().includes(normalizedNeedle));
+
+    if (!element) {
+      return null;
+    }
+
+    return {
+      selector: `text=${needle}`,
+      tag: element.tagName.toLowerCase(),
+      id: element.id || '',
+      name: element.getAttribute('name') || '',
+      type: element.getAttribute('type') || '',
+      role: element.getAttribute('role') || '',
+      ariaLabel: element.getAttribute('aria-label') || '',
+      placeholder: element.getAttribute('placeholder') || '',
+      href: element.getAttribute('href') || '',
+      text: (element.innerText || element.textContent || '').trim().slice(0, 500),
+    };
+  }, text).catch(() => null);
 }
 
 async function run(context = {}) {
@@ -78,18 +132,16 @@ async function run(context = {}) {
     }
   }
 
-  if (text !== '' && typeof page.getByText === 'function') {
+  if (text !== '') {
     try {
-      const locator = page.getByText(text, { exact: false }).first();
+      const match = await tryText(page, text);
 
-      if (await locator.count() > 0) {
-        await locator.waitFor({ state: 'visible', timeout });
-
+      if (match) {
         return captureTaskPreview(context, {
           ok: true,
           status: 'success',
           statusMessage: 'Element wurde ueber Text gefunden.',
-          element: await elementSnapshot(locator, `text=${text}`),
+          element: match,
         });
       }
     } catch (error) {
