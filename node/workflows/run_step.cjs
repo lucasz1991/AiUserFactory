@@ -42,6 +42,7 @@ let activeBrowserEngine = null;
 let browserFallbackReason = null;
 let connectedToExistingBrowser = false;
 let browserDisconnected = false;
+let shutdownInProgress = false;
 
 function now() {
   return new Date().toISOString();
@@ -963,7 +964,7 @@ async function openBrowserWindowCount() {
   )).length;
 }
 
-async function keepWorkflowBrowserAlive() {
+async function keepWorkflowBrowserAlive(state = 'completed', stage = 'workflow-browser-kept-active', message = 'Workflow-Browser bleibt aktiv.') {
   if (
     connectedToExistingBrowser
     || !browser
@@ -974,7 +975,7 @@ async function keepWorkflowBrowserAlive() {
   }
 
   pushEvent('workflow-browser-kept-active', 'Workflow-Browser bleibt aktiv bis ein Browser-schliessen-Task ihn beendet.');
-  writeStatus('completed', 'workflow-browser-kept-active', 'Workflow-Browser bleibt aktiv.');
+  writeStatus(state, stage, message);
 
   await new Promise((resolve) => {
     const interval = setInterval(async () => {
@@ -994,6 +995,61 @@ async function keepWorkflowBrowserAlive() {
     }, 3000);
   });
 }
+
+async function finalizeBrowserLifecycle(state = 'completed') {
+  const context = { __workflowPreviewTimer: null };
+  stopPreviewLoop(context);
+
+  await keepWorkflowBrowserAlive(
+    state,
+    state === 'cancelled' ? 'cancelled-browser-kept-active' : 'workflow-browser-kept-active',
+    state === 'cancelled' ? 'Workflow wurde gestoppt; Browserfenster bleibt aktiv.' : 'Workflow-Browser bleibt aktiv.',
+  );
+
+  if (browser && connectedToExistingBrowser && typeof browser.disconnect === 'function') {
+    browser.disconnect();
+  } else if (browser && browserWindowsByName.size === 0 && typeof browser.close === 'function') {
+    await browser.close().catch(() => {});
+  }
+}
+
+async function handleShutdownSignal(signal) {
+  if (shutdownInProgress) {
+    return;
+  }
+
+  shutdownInProgress = true;
+
+  const result = {
+    ok: false,
+    status: 'cancelled',
+    statusMessage: 'Workflow-Task-Lauf wurde gestoppt.',
+    signal,
+    tasks: taskResults,
+    browserWindows: lastBrowserWindows,
+    browserWsEndpoint: browserWsEndpoint(),
+    events,
+    finishedAt: now(),
+  };
+
+  pushEvent('cancelled', result.statusMessage, { signal });
+  writeJson(runtime.resultPath, result);
+  writeStatus('cancelled', 'cancelled', result.statusMessage, { result });
+
+  try {
+    await finalizeBrowserLifecycle('cancelled');
+  } finally {
+    process.exit(0);
+  }
+}
+
+process.once('SIGTERM', () => {
+  handleShutdownSignal('SIGTERM').catch(() => process.exit(0));
+});
+
+process.once('SIGINT', () => {
+  handleShutdownSignal('SIGINT').catch(() => process.exit(0));
+});
 
 async function run() {
   writeStatus('starting', 'starting', 'Workflow-Task-Runner startet.');
@@ -1272,14 +1328,7 @@ run()
     writeStatus('failed', 'failed', error.message, { result });
   })
   .finally(async () => {
-    const context = { __workflowPreviewTimer: null };
-    stopPreviewLoop(context);
-
-    await keepWorkflowBrowserAlive();
-
-    if (browser && connectedToExistingBrowser && typeof browser.disconnect === 'function') {
-      browser.disconnect();
-    } else if (browser && browserWindowsByName.size === 0 && typeof browser.close === 'function') {
-      await browser.close().catch(() => {});
+    if (!shutdownInProgress) {
+      await finalizeBrowserLifecycle();
     }
   });

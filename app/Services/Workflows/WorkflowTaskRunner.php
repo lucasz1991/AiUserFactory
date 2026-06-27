@@ -176,6 +176,7 @@ class WorkflowTaskRunner
         $resultPath = $this->runDirectory($runId).DIRECTORY_SEPARATOR.'result.json';
         $status = $this->readJsonFile($statusPath) ?: [];
         $pid = (int) ($status['pid'] ?? 0);
+        $browserWindows = $this->browserWindowsFromStatus($status);
 
         if ($pid > 1) {
             $this->stopProcess($pid, $force);
@@ -186,6 +187,7 @@ class WorkflowTaskRunner
             'status' => 'cancelled',
             'statusMessage' => $message,
             'cancelledAt' => now()->toIso8601String(),
+            'browserWindows' => $browserWindows,
         ];
         $events = is_array($status['events'] ?? null) ? $status['events'] : [];
         $events[] = [
@@ -204,12 +206,45 @@ class WorkflowTaskRunner
             'cancelledAt' => now()->toIso8601String(),
             'at' => now()->toIso8601String(),
             'events' => array_slice($events, -80),
+            'browserWindows' => $browserWindows,
         ]);
 
         $this->writeJsonFile($resultPath, $result);
         $this->writeJsonFile($statusPath, $status);
 
         return ['ok' => true, 'message' => $message, 'pid' => $pid ?: null];
+    }
+
+    protected function browserWindowsFromStatus(array $status): array
+    {
+        foreach ([
+            $status['browserWindows'] ?? null,
+            data_get($status, 'result.browserWindows'),
+            data_get($status, 'workflow.browserWindows'),
+            data_get($status, 'workflow.browser_windows'),
+        ] as $candidate) {
+            if (! is_array($candidate) || $candidate === []) {
+                continue;
+            }
+
+            return collect($candidate)
+                ->map(function (mixed $window, int|string $key): ?array {
+                    if (! is_array($window)) {
+                        return null;
+                    }
+
+                    if (! array_key_exists('key', $window) && ! is_int($key)) {
+                        $window['key'] = (string) $key;
+                    }
+
+                    return $window;
+                })
+                ->filter()
+                ->values()
+                ->all();
+        }
+
+        return [];
     }
 
     protected function configuredTasks(array $tasks): array

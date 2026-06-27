@@ -1038,7 +1038,7 @@ class WorkflowExecutionService
         match ($stepRun->external_run_type) {
             'mail-registration' => $this->mailRegistration->cancelRun($externalRunId, true, $message),
             'webmail-session' => $this->webmailSession->cancelRun($externalRunId, true, $message),
-            'workflow-task' => $this->workflowTasks->cancelRun($externalRunId, true, $message),
+            'workflow-task' => $this->workflowTasks->cancelRun($externalRunId, false, $message),
             default => null,
         };
     }
