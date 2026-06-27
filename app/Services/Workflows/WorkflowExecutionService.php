@@ -987,6 +987,8 @@ class WorkflowExecutionService
         $context = is_array($run->context_json) ? $run->context_json : [];
         $browserWindows = is_array($context['browser_windows'] ?? null) ? $context['browser_windows'] : [];
         $browserRuntime = is_array($context['browser_runtime'] ?? null) ? $context['browser_runtime'] : [];
+        $settings = $this->mailRegistration->settings();
+        $verificationMailbox = $this->workflowVerificationMailbox($settings['verification_mailbox'] ?? []);
 
         return [
             'workflowRunId' => $run->id,
@@ -1004,6 +1006,10 @@ class WorkflowExecutionService
             'browser_runtime' => $browserRuntime,
             'account' => $person ? $accountPayload : null,
             'email_account' => $person ? $accountPayload : null,
+            'verificationMailbox' => $verificationMailbox,
+            'verification_mailbox' => $verificationMailbox,
+            'veri_account' => $verificationMailbox,
+            'veri-account' => $verificationMailbox,
             'person' => $person ? [
                 'id' => $person->id,
                 'displayName' => $person->display_name,
@@ -1017,6 +1023,28 @@ class WorkflowExecutionService
                 'loginUsername' => $person->login_username,
                 'emailAccount' => $accountPayload,
             ] : null,
+        ];
+    }
+
+    protected function workflowVerificationMailbox(mixed $mailbox): array
+    {
+        $mailbox = is_array($mailbox) ? $mailbox : [];
+        $provider = strtolower(trim((string) ($mailbox['provider'] ?? 'proton')));
+        $provider = str_contains($provider, 'gmx') ? 'gmx' : 'proton';
+        $email = trim((string) ($mailbox['email'] ?? ''));
+        $username = trim((string) ($mailbox['username'] ?? '')) ?: $email;
+        $webmailUrl = trim((string) ($mailbox['webmail_url'] ?? $mailbox['webmailUrl'] ?? ''))
+            ?: $this->defaultWebmailUrl($provider);
+
+        return [
+            'enabled' => (bool) ($mailbox['enabled'] ?? false),
+            'email' => $email,
+            'provider' => $provider,
+            'username' => $username,
+            'webmailUrl' => $webmailUrl,
+            'webmail_url' => $webmailUrl,
+            'hasPassword' => trim((string) ($mailbox['password_encrypted'] ?? '')) !== '',
+            'hasWebmailSession' => is_array($mailbox['webmail_session'] ?? null),
         ];
     }
 

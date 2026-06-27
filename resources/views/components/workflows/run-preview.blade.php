@@ -252,14 +252,35 @@
         </div>
     @endif
 
-    <x-workflows.minimap
-        :workflow-run="$workflowRun"
-        :active-step-id="$activeStepId"
-        :active-task-key="$activeTaskKey"
-    />
+    <details class="group rounded-lg border border-slate-200 bg-white shadow-sm" open>
+        <summary class="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 marker:hidden">
+            <div class="min-w-0">
+                <div class="truncate text-sm font-semibold text-slate-900">{{ $workflowRun?->workflow?->name ?? 'Workflow' }}</div>
+                <div class="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                    <span>Run #{{ $workflowRun?->id ?? '-' }}</span>
+                    <span>{{ $workflowRun?->status ?? '-' }}</span>
+                    @if($activeTaskKey)
+                        <span class="max-w-[18rem] truncate">Aktiv: {{ $activeTaskKey }}</span>
+                    @endif
+                </div>
+            </div>
+            <div class="flex shrink-0 items-center gap-2">
+                <x-workflows.status-badge :status="$workflowRun?->status" />
+                <span class="rounded border border-slate-200 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500 group-open:hidden">Maximieren</span>
+                <span class="hidden rounded border border-slate-200 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500 group-open:inline">Minimieren</span>
+            </div>
+        </summary>
+        <div class="border-t border-slate-100 px-4 py-3">
+            <x-workflows.minimap
+                :workflow-run="$workflowRun"
+                :active-step-id="$activeStepId"
+                :active-task-key="$activeTaskKey"
+            />
+        </div>
+    </details>
 
-    <div class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(360px,460px)]">
-        <div class="grid gap-3">
+    <div class="space-y-5">
+        <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             @forelse($screenshotPanels as $panel)
                 <div class="overflow-hidden rounded-lg border border-slate-200 bg-slate-950">
                     <div class="flex items-center justify-between gap-3 border-b border-slate-800 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-300">
@@ -284,13 +305,13 @@
                     @endif
                 </div>
             @empty
-                <div class="rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
+                <div class="rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500 md:col-span-2 xl:col-span-3">
                     Fuer diesen Workflow-Lauf wurden noch keine Browser-Screenshots gespeichert.
                 </div>
             @endforelse
         </div>
 
-        <div class="space-y-4">
+        <div class="grid gap-4 xl:grid-cols-[minmax(260px,360px)_minmax(0,1fr)]">
             <div class="rounded-lg border border-slate-200 bg-white p-4">
                 <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Status</div>
                 <div class="mt-2 text-sm font-semibold text-slate-900">
@@ -323,27 +344,28 @@
                     @endforelse
                 </div>
             </div>
+        </div>
 
-            <div class="max-h-[28rem] overflow-auto rounded-lg border border-slate-200 bg-white p-4">
-                <div class="flex items-center justify-between gap-3">
-                    <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Logs & Debug</div>
-                    <a
-                        href="{{ $jsonDownload([
-                            'workflowRunId' => $workflowRun?->id,
-                            'workflowRunUuid' => $workflowRun?->run_uuid,
-                            'status' => $workflowRun?->status,
-                            'steps' => $stepDebugPanels->pluck('debug')->all(),
-                        ]) }}"
-                        download="workflow-run-{{ $workflowRun?->id ?? 'debug' }}.json"
-                        class="shrink-0 rounded border border-slate-200 px-2 py-1 text-[10px] font-semibold text-slate-600 hover:bg-slate-50"
-                    >
-                        Run JSON
-                    </a>
-                </div>
+        <div class="max-h-[32rem] overflow-auto rounded-lg border border-slate-200 bg-white p-4">
+            <div class="flex items-center justify-between gap-3">
+                <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Logs & Debug</div>
+                <a
+                    href="{{ $jsonDownload([
+                        'workflowRunId' => $workflowRun?->id,
+                        'workflowRunUuid' => $workflowRun?->run_uuid,
+                        'status' => $workflowRun?->status,
+                        'steps' => $stepDebugPanels->pluck('debug')->all(),
+                    ]) }}"
+                    download="workflow-run-{{ $workflowRun?->id ?? 'debug' }}.json"
+                    class="shrink-0 rounded border border-slate-200 px-2 py-1 text-[10px] font-semibold text-slate-600 hover:bg-slate-50"
+                >
+                    Run JSON
+                </a>
+            </div>
 
-                <div class="mt-3 space-y-3">
-                    @forelse($stepDebugPanels as $panel)
-                        <div class="rounded-md border border-slate-100 bg-slate-50 p-3">
+            <div class="mt-3 space-y-3">
+                @forelse($stepDebugPanels as $panel)
+                    <div class="rounded-md border border-slate-100 bg-slate-50 p-3">
                             <div class="flex items-start justify-between gap-3">
                                 <div class="min-w-0">
                                     <div class="truncate text-xs font-semibold text-slate-900">{{ $panel['title'] }}</div>
@@ -413,7 +435,6 @@
                         <div class="text-sm text-slate-500">Noch keine Debugdaten.</div>
                     @endforelse
                 </div>
-            </div>
         </div>
     </div>
 </div>

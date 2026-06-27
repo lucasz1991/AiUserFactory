@@ -249,12 +249,24 @@ function resolveString(value, context = {}) {
   }
 
   const workflow = runtime.workflow || {};
+  const verificationAccount = context.verificationMailbox
+    || context.verification_mailbox
+    || context.veri_account
+    || workflow.verificationMailbox
+    || workflow.verification_mailbox
+    || workflow.veri_account
+    || workflow['veri-account']
+    || null;
   const lookupRoot = {
     ...workflow,
     workflow,
     person: context.person || workflow.person || null,
     account: context.account || context.lastResult?.account || workflow.account || null,
     email_account: context.account || context.lastResult?.account || workflow.email_account || null,
+    verificationMailbox: verificationAccount,
+    verification_mailbox: verificationAccount,
+    veri_account: verificationAccount,
+    'veri-account': verificationAccount,
     new_password: context.new_password || context.generated_password || context.account?.password || context.lastResult?.new_password || '',
     generated_password: context.generated_password || context.new_password || context.account?.password || context.lastResult?.generated_password || context.lastResult?.new_password || '',
     'generated-password': context.generated_password || context.new_password || context.account?.password || context.lastResult?.['generated-password'] || context.lastResult?.generated_password || context.lastResult?.new_password || '',
@@ -264,7 +276,7 @@ function resolveString(value, context = {}) {
   const resolved = valueFromPath(lookupRoot, normalized);
 
   if (resolved === undefined || resolved === null || resolved === '') {
-    return /^(person|account|email_account|workflow)\./.test(normalized) || directRuntimeKeys.includes(normalized) ? '' : value;
+    return /^(person|account|email_account|workflow|verificationMailbox|verification_mailbox|veri_account|veri-account)\./.test(normalized) || directRuntimeKeys.includes(normalized) ? '' : value;
   }
 
   return resolved;
