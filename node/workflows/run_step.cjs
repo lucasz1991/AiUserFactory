@@ -354,6 +354,17 @@ function browserWindowLabel(name) {
   return name === 'main' ? 'Main' : name;
 }
 
+function startedFromFailureRoute() {
+  const workflow = runtime.workflow || {};
+  const outcome = String(
+    workflow.nextTaskRouteOutcome
+    || workflow.next_task_route_outcome
+    || '',
+  ).trim().toLowerCase();
+
+  return ['failed', 'timeout'].includes(outcome);
+}
+
 function workflowBrowserWindowState(windowName = 'main') {
   const normalizedName = normalizeBrowserWindowName(windowName);
   const workflow = runtime.workflow || {};
@@ -1012,6 +1023,7 @@ async function run() {
   let taskIndex = 0;
   let requestedSuccessRouteTask = null;
   let routeTransitions = 0;
+  const preserveBrowserForFailureRoute = startedFromFailureRoute();
 
   while (taskIndex < runtimeTasks.length) {
     const task = runtimeTasks[taskIndex];
@@ -1067,9 +1079,31 @@ async function run() {
         context.input = input;
         context.timeoutMs = Math.max(1000, Number(task.timeout_seconds || 60) * 1000);
 
-        result = await module.run(context);
+        if (task.task_key === 'browser.close' && preserveBrowserForFailureRoute) {
+          pushEvent('browser-close-skipped', 'Browserfenster bleibt offen, weil diese Task ueber eine Fehlerroute erreicht wurde.', {
+            browserWindow: targetBrowserWindow,
+            routeOutcome: runtime.workflow?.nextTaskRouteOutcome || runtime.workflow?.next_task_route_outcome || null,
+            routeSourceTaskKey: runtime.workflow?.nextTaskRouteSourceKey || runtime.workflow?.next_task_route_source_key || null,
+          });
 
-        if (task.task_key === 'browser.close') {
+          result = await captureTaskPreview(context, {
+            ok: true,
+            status: 'skipped',
+            statusMessage: 'Browserfenster bleibt offen, weil diese Task ueber eine Fehlerroute erreicht wurde.',
+            skippedBrowserClose: true,
+            browserWindow: targetBrowserWindow,
+          }, true).catch(() => ({
+            ok: true,
+            status: 'skipped',
+            statusMessage: 'Browserfenster bleibt offen, weil diese Task ueber eine Fehlerroute erreicht wurde.',
+            skippedBrowserClose: true,
+            browserWindow: targetBrowserWindow,
+          }));
+        } else {
+          result = await module.run(context);
+        }
+
+        if (task.task_key === 'browser.close' && !result?.skippedBrowserClose) {
           result = result || {};
           browserWindowsByName.delete(targetBrowserWindow);
           context.browserWindows = Array.from(browserWindowsByName.values());

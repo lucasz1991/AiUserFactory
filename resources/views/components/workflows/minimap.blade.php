@@ -7,16 +7,145 @@
 
 @php
     $workflow = $workflowRun?->workflow;
-    $steps = $workflow?->steps ?? collect();
-    $stepRuns = $workflowRun?->stepRuns ?? collect();
+    $steps = collect($workflow?->steps ?? [])->values();
+    $stepRuns = collect($workflowRun?->stepRuns ?? [])->values();
     $runningStepRun = $stepRuns->first(fn ($stepRun) => in_array($stepRun->status, ['running', 'waiting'], true));
     $activeStepId = $activeStepId ?: ($workflowRun?->current_workflow_step_id ?: $runningStepRun?->workflow_step_id);
     $activeTaskKey = trim((string) ($activeTaskKey ?: data_get($workflowRun?->context_json, 'next_task_key', '')));
-    $stepRunByStep = $stepRuns->keyBy('workflow_step_id');
+    $stepRunByStep = $stepRuns->groupBy('workflow_step_id')->map(fn ($runs) => $runs->last());
+    $taskResultsByStep = $stepRuns
+        ->groupBy('workflow_step_id')
+        ->map(function ($runs) {
+            $results = collect();
+
+            foreach ($runs as $run) {
+                foreach ((array) data_get($run?->result_json, 'tasks', []) as $taskResult) {
+                    if (is_array($taskResult) && trim((string) data_get($taskResult, 'key', '')) !== '') {
+                        $results->put((string) data_get($taskResult, 'key'), $taskResult);
+                    }
+                }
+            }
+
+            return $results;
+        });
+    $stepById = $steps->keyBy('id');
+    $stepByAction = $steps->keyBy(fn ($step) => (string) $step->action_key);
+    $nodePositions = [];
+    $firstTaskNodeByStep = [];
+    $taskLabelByNode = [];
+
+    foreach ($steps as $stepIndex => $step) {
+        $actionKey = trim((string) $step->action_key);
+
+        if ($actionKey === '') {
+            continue;
+        }
+
+        $stepNode = $actionKey.'::*';
+        $nodePositions[$stepNode] = ['step' => $stepIndex, 'task' => -1];
+        $taskLabelByNode[$stepNode] = $step->name;
+
+        foreach (collect($step->task_cards)->values() as $taskIndex => $task) {
+            $taskKey = trim((string) ($task['key'] ?? ''));
+
+            if ($taskKey === '') {
+                continue;
+            }
+
+            $node = $actionKey.'::'.$taskKey;
+            $nodePositions[$node] = ['step' => $stepIndex, 'task' => $taskIndex];
+            $taskLabelByNode[$node] = $step->name.' / '.(string) ($task['title'] ?? $taskKey);
+            $firstTaskNodeByStep[$actionKey] ??= $node;
+        }
+    }
+
+    $routeDirection = static function (string $sourceNode, string $targetNode, string $type) use ($nodePositions): string {
+        if (in_array($type, ['end', 'fail'], true)) {
+            return $type;
+        }
+
+        if ($sourceNode === '' || $targetNode === '' || ! isset($nodePositions[$sourceNode], $nodePositions[$targetNode])) {
+            return 'route';
+        }
+
+        $source = $nodePositions[$sourceNode];
+        $target = $nodePositions[$targetNode];
+
+        if ($sourceNode === $targetNode) {
+            return 'loop';
+        }
+
+        if ($target['step'] < $source['step'] || ($target['step'] === $source['step'] && $target['task'] <= $source['task'])) {
+            return 'back';
+        }
+
+        return 'forward';
+    };
+    $routeEvents = collect(data_get($workflowRun?->context_json, 'route_history', []))
+        ->filter(fn ($event) => is_array($event) && is_array(data_get($event, 'route')))
+        ->map(function (array $event, int $index) use ($stepById, $stepByAction, $firstTaskNodeByStep, $taskLabelByNode, $routeDirection) {
+            $route = data_get($event, 'route', []);
+            $outcome = (string) data_get($event, 'outcome', '-');
+            $routeType = trim((string) data_get($route, 'type', 'step')) ?: 'step';
+            $sourceStep = $stepById->get((int) data_get($event, 'workflow_step_id'));
+            $sourceAction = trim((string) ($sourceStep?->action_key ?? ''));
+            $sourceCard = trim((string) data_get($route, '_source_card_key', ''));
+            $sourceNode = $sourceAction !== '' ? $sourceAction.'::'.($sourceCard !== '' ? $sourceCard : '*') : '';
+            $targetAction = trim((string) data_get($route, 'action_key', data_get($route, 'step', '')));
+            $targetCard = trim((string) data_get($route, 'card_key', data_get($route, 'card', '')));
+            $targetNode = '';
+
+            if (! in_array($routeType, ['end', 'fail'], true) && ! in_array($targetAction, ['', 'next', 'end', 'fail'], true)) {
+                $targetNode = $targetAction.'::'.($targetCard !== '' ? $targetCard : '*');
+
+                if ($targetCard === '' && isset($firstTaskNodeByStep[$targetAction])) {
+                    $targetNode = $firstTaskNodeByStep[$targetAction];
+                }
+            }
+
+            $direction = $routeDirection($sourceNode, $targetNode, $routeType);
+            $targetStep = $stepByAction->get($targetAction);
+            $directionLabel = match ($direction) {
+                'back' => 'Zuruecksprung',
+                'forward' => 'Weiterlauf',
+                'loop' => 'Schleife',
+                'end' => 'Ende',
+                'fail' => 'Abbruch',
+                default => 'Route',
+            };
+            $lineTone = match ($outcome) {
+                'success' => 'success',
+                'failed', 'timeout' => 'failed',
+                'partial', 'waiting' => 'waiting',
+                default => 'default',
+            };
+
+            return [
+                'id' => 'route-'.$index,
+                'at' => (string) data_get($event, 'at', ''),
+                'outcome' => $outcome,
+                'type' => $routeType,
+                'direction' => $direction,
+                'directionLabel' => $directionLabel,
+                'lineTone' => $lineTone,
+                'sourceNode' => $sourceNode,
+                'targetNode' => $targetNode,
+                'sourceLabel' => $taskLabelByNode[$sourceNode] ?? ($sourceStep?->name ?? '-'),
+                'targetLabel' => $targetNode !== ''
+                    ? ($taskLabelByNode[$targetNode] ?? ($targetStep?->name ?? '-'))
+                    : (string) data_get($route, 'label', $routeType),
+                'routeLabel' => (string) data_get($route, 'label', data_get($route, 'action_key', data_get($route, 'type', '-'))),
+            ];
+        })
+        ->filter()
+        ->values();
+    $routeEventsForJs = $routeEvents->take(-16)->values()->all();
+    $mapId = 'workflow-minimap-'.($workflowRun?->id ?? 'preview');
     $taskTone = static function (string $status, bool $active): string {
         return match (true) {
             $active || in_array($status, ['running', 'waiting'], true) => 'border-amber-300 bg-amber-50 text-amber-900 shadow-amber-100',
             $status === 'completed' || $status === 'success' => 'border-emerald-300 bg-emerald-50 text-emerald-900 shadow-emerald-100',
+            $status === 'skipped' || $status === 'not_executed' => 'border-slate-200 bg-slate-50 text-slate-500 shadow-slate-100',
             in_array($status, ['failed', 'timeout'], true) => 'border-red-300 bg-red-50 text-red-900 shadow-red-100',
             default => 'border-slate-200 bg-white text-slate-600 shadow-slate-100',
         };
@@ -25,8 +154,17 @@
         return match (true) {
             $active || in_array($status, ['running', 'waiting'], true) => 'bg-amber-300 text-amber-400',
             $status === 'completed' || $status === 'success' => 'bg-emerald-300 text-emerald-400',
+            $status === 'skipped' || $status === 'not_executed' => 'bg-slate-200 text-slate-300',
             in_array($status, ['failed', 'timeout'], true) => 'bg-red-300 text-red-400',
             default => 'bg-slate-200 text-slate-300',
+        };
+    };
+    $routeChipClass = static function (array $routeEvent): string {
+        return match ($routeEvent['lineTone'] ?? 'default') {
+            'success' => 'bg-emerald-50 text-emerald-700 ring-emerald-200',
+            'failed' => 'bg-red-50 text-red-700 ring-red-200',
+            'waiting' => 'bg-amber-50 text-amber-700 ring-amber-200',
+            default => 'bg-slate-100 text-slate-600 ring-slate-200',
         };
     };
 @endphp
@@ -45,22 +183,207 @@
             <x-workflows.status-badge :status="$workflowRun->status" />
         </div>
 
-        <div class="overflow-x-auto pb-2">
-            <div class="flex min-w-max items-start gap-0">
+        <div
+            x-data="{
+                routeEvents: @js($routeEventsForJs),
+                routeOverlay: { width: 0, height: 0 },
+                routeSvgMarkup: '',
+                markerIds: {
+                    success: @js($mapId.'-arrow-success'),
+                    failed: @js($mapId.'-arrow-failed'),
+                    waiting: @js($mapId.'-arrow-waiting'),
+                    default: @js($mapId.'-arrow-default'),
+                },
+                init() {
+                    this.$nextTick(() => this.refreshRouteLines());
+                    setTimeout(() => this.refreshRouteLines(), 150);
+                    setTimeout(() => this.refreshRouteLines(), 600);
+                    this._refreshMinimapRoutes = () => this.$nextTick(() => this.refreshRouteLines());
+                    window.addEventListener('resize', this._refreshMinimapRoutes);
+                    document.addEventListener('livewire:updated', this._refreshMinimapRoutes);
+                    document.addEventListener('livewire:navigated', this._refreshMinimapRoutes);
+                },
+                refreshRouteLines() {
+                    const surface = this.$refs.minimapSurface;
+
+                    if (!surface) {
+                        this.routeOverlay = { width: 0, height: 0 };
+                        this.routeSvgMarkup = '';
+                        return;
+                    }
+
+                    const surfaceRect = surface.getBoundingClientRect();
+                    const nodes = new Map(Array.from(surface.querySelectorAll('[data-minimap-node]')).map((node) => [node.dataset.minimapNode || '', node]));
+                    const relativeRect = (element) => {
+                        const rect = element.getBoundingClientRect();
+
+                        return {
+                            left: rect.left - surfaceRect.left + surface.scrollLeft,
+                            right: rect.right - surfaceRect.left + surface.scrollLeft,
+                            top: rect.top - surfaceRect.top + surface.scrollTop,
+                            bottom: rect.bottom - surfaceRect.top + surface.scrollTop,
+                            centerX: rect.left + (rect.width / 2) - surfaceRect.left + surface.scrollLeft,
+                            centerY: rect.top + (rect.height / 2) - surfaceRect.top + surface.scrollTop,
+                        };
+                    };
+                    const roundedPath = (points, radius = 10) => {
+                        const compact = points.filter((point, index) => {
+                            const previous = points[index - 1];
+
+                            return !previous || previous.x !== point.x || previous.y !== point.y;
+                        });
+
+                        if (compact.length < 2) {
+                            return '';
+                        }
+
+                        let path = `M ${compact[0].x} ${compact[0].y}`;
+
+                        for (let index = 1; index < compact.length - 1; index++) {
+                            const previous = compact[index - 1];
+                            const current = compact[index];
+                            const next = compact[index + 1];
+                            const incoming = Math.max(1, Math.hypot(current.x - previous.x, current.y - previous.y));
+                            const outgoing = Math.max(1, Math.hypot(next.x - current.x, next.y - current.y));
+                            const cornerRadius = Math.min(radius, incoming / 2, outgoing / 2);
+                            const before = {
+                                x: current.x + ((previous.x - current.x) / incoming) * cornerRadius,
+                                y: current.y + ((previous.y - current.y) / incoming) * cornerRadius,
+                            };
+                            const after = {
+                                x: current.x + ((next.x - current.x) / outgoing) * cornerRadius,
+                                y: current.y + ((next.y - current.y) / outgoing) * cornerRadius,
+                            };
+
+                            path += ` L ${before.x} ${before.y} Q ${current.x} ${current.y} ${after.x} ${after.y}`;
+                        }
+
+                        const end = compact[compact.length - 1];
+
+                        return `${path} L ${end.x} ${end.y}`;
+                    };
+                    const lineFor = (routeEvent, index) => {
+                        const source = nodes.get(routeEvent.sourceNode || '');
+                        const target = nodes.get(routeEvent.targetNode || '');
+
+                        if (!source || !target) {
+                            return null;
+                        }
+
+                        const sourceRect = relativeRect(source);
+                        const targetRect = relativeRect(target);
+                        const lane = 12 + ((index % 5) * 8);
+                        const tone = routeEvent.lineTone || 'default';
+                        let points = [];
+
+                        if (source === target) {
+                            const loopX = sourceRect.right + lane;
+                            points = [
+                                { x: sourceRect.right, y: sourceRect.centerY - 5 },
+                                { x: loopX, y: sourceRect.centerY - 5 },
+                                { x: loopX, y: sourceRect.centerY + 16 },
+                                { x: sourceRect.right, y: sourceRect.centerY + 16 },
+                            ];
+
+                            return { path: roundedPath(points, 8), tone, direction: routeEvent.direction || 'loop' };
+                        }
+
+                        if (Math.abs(sourceRect.centerX - targetRect.centerX) < 12) {
+                            const sideX = Math.max(sourceRect.right, targetRect.right) + lane;
+                            points = [
+                                { x: sourceRect.right, y: sourceRect.centerY },
+                                { x: sideX, y: sourceRect.centerY },
+                                { x: sideX, y: targetRect.centerY },
+                                { x: targetRect.right, y: targetRect.centerY },
+                            ];
+
+                            return { path: roundedPath(points), tone, direction: routeEvent.direction || 'route' };
+                        }
+
+                        const goesBack = targetRect.centerX < sourceRect.centerX;
+                        const sourceX = goesBack ? sourceRect.left : sourceRect.right;
+                        const targetX = goesBack ? targetRect.right : targetRect.left;
+                        const sourceLaneX = goesBack ? sourceRect.left - lane : sourceRect.right + lane;
+                        const targetLaneX = goesBack ? targetRect.right + lane : targetRect.left - lane;
+                        const laneY = Math.max(4, Math.min(sourceRect.top, targetRect.top) - lane);
+                        points = [
+                            { x: sourceX, y: sourceRect.centerY },
+                            { x: sourceLaneX, y: sourceRect.centerY },
+                            { x: sourceLaneX, y: laneY },
+                            { x: targetLaneX, y: laneY },
+                            { x: targetLaneX, y: targetRect.centerY },
+                            { x: targetX, y: targetRect.centerY },
+                        ];
+
+                        return { path: roundedPath(points), tone, direction: routeEvent.direction || 'route' };
+                    };
+                    const lines = this.routeEvents
+                        .map((routeEvent, index) => lineFor(routeEvent, index))
+                        .filter(Boolean);
+
+                    this.routeOverlay = {
+                        width: surface.scrollWidth,
+                        height: surface.scrollHeight,
+                    };
+                    this.routeSvgMarkup = lines.map((line) => {
+                        const color = {
+                            success: '#34d399',
+                            failed: '#f87171',
+                            waiting: '#f59e0b',
+                            default: '#94a3b8',
+                        }[line.tone] || '#94a3b8';
+                        const marker = this.markerIds[line.tone] || this.markerIds.default;
+                        const dash = line.tone === 'failed' || line.direction === 'back' ? ' stroke-dasharray=&quot;6 5&quot;' : '';
+                        const path = String(line.path || '').replace(/&/g, '&amp;').replace(/&quot;/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+                        return `<path d=&quot;${path}&quot; fill=&quot;none&quot; stroke-width=&quot;2.5&quot; stroke-linecap=&quot;round&quot; stroke-linejoin=&quot;round&quot; stroke=&quot;${color}&quot;${dash} marker-end=&quot;url(#${marker})&quot;></path>`;
+                    }).join('');
+                },
+            }"
+            x-ref="minimapSurface"
+            x-on:scroll.debounce.100ms="refreshRouteLines()"
+            class="relative overflow-x-auto pb-2"
+        >
+            <svg
+                class="pointer-events-none absolute left-0 top-0 z-20"
+                x-bind:width="routeOverlay.width"
+                x-bind:height="routeOverlay.height"
+                x-bind:viewBox="`0 0 ${routeOverlay.width} ${routeOverlay.height}`"
+                aria-hidden="true"
+            >
+                <defs>
+                    <marker id="{{ $mapId }}-arrow-success" markerWidth="6" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+                        <path d="M0,0 L0,6 L6,3 z" fill="#34d399"></path>
+                    </marker>
+                    <marker id="{{ $mapId }}-arrow-failed" markerWidth="6" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+                        <path d="M0,0 L0,6 L6,3 z" fill="#f87171"></path>
+                    </marker>
+                    <marker id="{{ $mapId }}-arrow-waiting" markerWidth="6" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+                        <path d="M0,0 L0,6 L6,3 z" fill="#f59e0b"></path>
+                    </marker>
+                    <marker id="{{ $mapId }}-arrow-default" markerWidth="6" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+                        <path d="M0,0 L0,6 L6,3 z" fill="#94a3b8"></path>
+                    </marker>
+                </defs>
+                <g x-html="routeSvgMarkup"></g>
+            </svg>
+
+            <div class="relative z-10 flex min-w-max items-start gap-0 pt-7">
                 @foreach($steps as $step)
                     @php
                         $stepRun = $stepRunByStep->get($step->id);
                         $isActiveStep = (int) $activeStepId === (int) $step->id;
                         $stepStatus = (string) ($stepRun?->status ?? 'configured');
-                        $tasks = $step->task_cards;
-                        $resultTasks = collect(data_get($stepRun?->result_json, 'tasks', []))->keyBy(fn ($task) => (string) data_get($task, 'key'));
+                        $tasks = collect($step->task_cards)->values();
+                        $resultTasks = $taskResultsByStep->get($step->id, collect());
                         $plannedOnlyStep = $step->type === \App\Models\WorkflowStep::TYPE_PLANNED_ACTION && trim((string) ($stepRun?->external_run_id ?? '')) === '';
                         $stepTone = $taskTone($stepStatus, $isActiveStep);
+                        $stepNode = trim((string) $step->action_key).'::*';
                     @endphp
 
                     <div class="flex items-start">
                         <div class="w-56 shrink-0">
-                            <div class="mb-2 flex items-center justify-between gap-2 px-1">
+                            <div data-minimap-node="{{ $stepNode }}" class="mb-2 flex items-center justify-between gap-2 rounded px-1 py-1">
                                 <div class="truncate text-xs font-semibold text-slate-800">{{ $step->name }}</div>
                                 @if($stepRun?->status)
                                     <span class="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold {{ $stepTone }}">
@@ -80,14 +403,15 @@
                                         $isTaskActive = $isActiveStep && ($activeTaskKey === '' ? ($loop->first && in_array($stepStatus, ['running', 'waiting'], true)) : $taskKey === $activeTaskKey);
                                         $tone = $taskTone($taskStatus, $isTaskActive);
                                         $lineTone = $connectorTone($taskStatus, $isTaskActive);
+                                        $taskNode = trim((string) $step->action_key).'::'.$taskKey;
                                     @endphp
 
                                     @if(! $loop->first)
                                         <div class="ml-4 h-4 w-px {{ $lineTone }}"></div>
                                     @endif
 
-                                    <div class="relative rounded-md border px-2 py-1.5 text-[11px] shadow-sm {{ $tone }}">
-                                        <div class="truncate font-semibold">{{ $task['title'] ?? 'Task' }}</div>
+                                    <div data-minimap-node="{{ $taskNode }}" class="relative rounded-md border px-2 py-1.5 text-[11px] shadow-sm {{ $tone }}">
+                                        <div class="truncate pr-2 font-semibold">{{ $task['title'] ?? 'Task' }}</div>
                                         <div class="mt-0.5 truncate opacity-70">{{ $taskStatus }}</div>
                                     </div>
                                 @empty
@@ -110,20 +434,11 @@
             </div>
         </div>
 
-        @if(data_get($workflowRun->context_json, 'route_history'))
+        @if($routeEvents->isNotEmpty())
             <div class="flex flex-wrap gap-1 text-[11px]">
-                @foreach(array_slice(data_get($workflowRun->context_json, 'route_history', []), -4) as $routeEvent)
-                    @php
-                        $outcome = (string) data_get($routeEvent, 'outcome', '-');
-                        $routeClass = match ($outcome) {
-                            'success' => 'bg-emerald-50 text-emerald-700 ring-emerald-200',
-                            'failed', 'timeout' => 'bg-red-50 text-red-700 ring-red-200',
-                            'partial', 'waiting' => 'bg-amber-50 text-amber-700 ring-amber-200',
-                            default => 'bg-slate-100 text-slate-600 ring-slate-200',
-                        };
-                    @endphp
-                    <span class="rounded-full px-2 py-1 font-semibold ring-1 {{ $routeClass }}">
-                        {{ $outcome }} -> {{ data_get($routeEvent, 'route.label', data_get($routeEvent, 'route.action_key', data_get($routeEvent, 'route.type', '-'))) }}
+                @foreach($routeEvents->take(-6) as $routeEvent)
+                    <span class="rounded-full px-2 py-1 font-semibold ring-1 {{ $routeChipClass($routeEvent) }}">
+                        {{ $routeEvent['directionLabel'] }}: {{ $routeEvent['outcome'] }} -> {{ $routeEvent['routeLabel'] }}
                     </span>
                 @endforeach
             </div>

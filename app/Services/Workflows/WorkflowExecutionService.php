@@ -626,6 +626,13 @@ class WorkflowExecutionService
             unset($context['next_task_key']);
         }
 
+        if ($targetCardKey !== '') {
+            $context['next_task_route_outcome'] = $outcome;
+            $context['next_task_route_source_key'] = trim((string) ($route['_source_card_key'] ?? ''));
+        } else {
+            unset($context['next_task_route_outcome'], $context['next_task_route_source_key']);
+        }
+
         $run->forceFill([
             'status' => $delaySeconds > 0 ? 'waiting' : 'running',
             'current_workflow_step_id' => null,
@@ -928,7 +935,7 @@ class WorkflowExecutionService
         unset($context['next_step_action_key']);
 
         if (! $preserveTaskCursor) {
-            unset($context['next_task_key']);
+            unset($context['next_task_key'], $context['next_task_route_outcome'], $context['next_task_route_source_key']);
         }
 
         $run->forceFill(['context_json' => $context])->save();
@@ -1194,6 +1201,10 @@ class WorkflowExecutionService
             'workflowStepType' => $step->type,
             'nextTaskKey' => trim((string) data_get($run->context_json, 'next_task_key', '')) ?: null,
             'next_task_key' => trim((string) data_get($run->context_json, 'next_task_key', '')) ?: null,
+            'nextTaskRouteOutcome' => trim((string) data_get($run->context_json, 'next_task_route_outcome', '')) ?: null,
+            'next_task_route_outcome' => trim((string) data_get($run->context_json, 'next_task_route_outcome', '')) ?: null,
+            'nextTaskRouteSourceKey' => trim((string) data_get($run->context_json, 'next_task_route_source_key', '')) ?: null,
+            'next_task_route_source_key' => trim((string) data_get($run->context_json, 'next_task_route_source_key', '')) ?: null,
             'personId' => data_get($run->context_json, 'person_id'),
             'browserWindows' => $browserWindows,
             'browser_windows' => $browserWindows,

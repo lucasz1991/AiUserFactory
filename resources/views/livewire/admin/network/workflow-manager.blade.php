@@ -386,7 +386,12 @@
                 <div class="border-b border-slate-200 px-4">
                     <nav class="-mb-px flex gap-4 overflow-x-auto" aria-label="Task Gruppen">
                         @foreach($taskGroups as $taskGroup)
-                            <button type="button" wire:click="$set('activeTaskGroup', @js($taskGroup))" class="whitespace-nowrap border-b-2 py-3 text-sm font-semibold {{ $activeTaskGroup === $taskGroup ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700' }}">
+                            <button
+                                type="button"
+                                data-task-group-tab="{{ $taskGroup }}"
+                                wire:click="$set('activeTaskGroup', @js($taskGroup))"
+                                class="whitespace-nowrap border-b-2 py-3 text-sm font-semibold {{ $activeTaskGroup === $taskGroup ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700' }}"
+                            >
                                 {{ $taskGroupLabels[$taskGroup] ?? $taskGroup }}
                                 <span class="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{{ collect($taskDefinitions)->where('kind', $taskGroup)->count() }}</span>
                             </button>
