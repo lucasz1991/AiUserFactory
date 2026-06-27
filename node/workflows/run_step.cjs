@@ -1235,6 +1235,16 @@ async function run() {
     writeStatus('running', ok ? 'task-completed' : 'task-failed', result.statusMessage || taskLabel);
 
     if (!ok) {
+      const failurePreview = await captureTaskPreview(context, result, true).catch(() => ({}));
+
+      if (Array.isArray(failurePreview.browserWindows)) {
+        lastBrowserWindows = failurePreview.browserWindows;
+        result = {
+          ...result,
+          browserWindows: failurePreview.browserWindows,
+        };
+      }
+
       const failedResult = {
         ok: false,
         status,

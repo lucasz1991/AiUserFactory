@@ -50,13 +50,13 @@ async function run(context = {}) {
       }
     } catch (error) {
       if (text === '') {
-        return {
+        return captureTaskPreview(context, {
           ok: false,
           status: 'failed',
           statusMessage: `Element konnte nicht geklickt werden: ${selector}`,
           selector,
           error: error.message,
-        };
+        });
       }
     }
   }
@@ -75,23 +75,23 @@ async function run(context = {}) {
         });
       }
     } catch (error) {
-      return {
+      return captureTaskPreview(context, {
         ok: false,
         status: 'failed',
         statusMessage: `Textziel konnte nicht geklickt werden: ${text}`,
         text,
         error: error.message,
-      };
+      });
     }
   }
 
-  return {
+  return captureTaskPreview(context, {
     ok: false,
     status: 'failed',
     statusMessage: 'Kein klickbares Ziel uebergeben oder gefunden.',
     selector,
     text,
-  };
+  });
 }
 
 module.exports = { key: 'browser.click', run };
