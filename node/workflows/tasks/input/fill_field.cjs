@@ -1,6 +1,7 @@
 'use strict';
 
 const { captureTaskPreview } = require('../lib/preview.cjs');
+const { fillFirstMatchingInput } = require('../lib/fill_input.cjs');
 
 async function run(context = {}) {
   const page = context.page;
@@ -29,29 +30,26 @@ async function run(context = {}) {
     ? selectors
     : ['input[type=email]', 'input[name*=email i]', 'input[name*=user i]', 'input[type=text]', 'textarea'];
 
-  for (const selector of candidates) {
-    const locator = typeof page.locator === 'function' ? page.locator(selector).first() : null;
+  const fillResult = await fillFirstMatchingInput(page, candidates, value, timeout);
 
-    try {
-      if (locator && await locator.count() > 0) {
-        await locator.fill(value, { timeout });
-        return captureTaskPreview(context, { ok: true, status: 'success', statusMessage: 'Input-Feld wurde gefuellt.', selector });
-      }
-
-      if (typeof page.fill === 'function') {
-        await page.fill(selector, value, { timeout });
-        return captureTaskPreview(context, { ok: true, status: 'success', statusMessage: 'Input-Feld wurde gefuellt.', selector });
-      }
-    } catch (error) {
-      // Try the next selector.
-    }
+  if (fillResult.ok) {
+    return captureTaskPreview(context, {
+      ok: true,
+      status: 'success',
+      statusMessage: 'Input-Feld wurde gefuellt.',
+      selector: fillResult.selector,
+      frameUrl: fillResult.frameUrl,
+    });
   }
 
   return {
     ok: false,
     status: 'failed',
     statusMessage: 'Kein passendes Input-Feld konnte gefuellt werden.',
-    attemptedSelectors: candidates,
+    attemptedSelectors: fillResult.attemptedSelectors,
+    inputAttempts: fillResult.attempts,
+    matchedElementCount: fillResult.matchedElementCount,
+    lastFillError: fillResult.lastError || null,
   };
 }
 

@@ -250,7 +250,7 @@ class WorkflowTaskCatalog
                 'runner' => 'node',
                 'node_script' => 'node/workflows/tasks/mail/generate_password.cjs',
                 'timeout_seconds' => 45,
-                'description' => 'Generiert ein neues Passwort, traegt es in Passwortfelder ein und stellt new_password bereit.',
+                'description' => 'Generiert ein neues Passwort, traegt es ein und stellt generated-password sowie new_password bereit.',
                 'form' => [
                     'selector' => true,
                     'selector_label' => 'Passwort-Selector',

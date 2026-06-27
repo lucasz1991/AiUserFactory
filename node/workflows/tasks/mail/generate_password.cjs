@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const { captureTaskPreview } = require('../lib/preview.cjs');
+const { fillFirstMatchingInput } = require('../lib/fill_input.cjs');
 
 const LOWER = 'abcdefghijkmnopqrstuvwxyz';
 const UPPER = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
@@ -50,50 +51,6 @@ function selectorsFromInput(input = {}) {
     .filter(Boolean);
 }
 
-async function passwordInputs(page, selectors, timeout) {
-  for (const selector of selectors) {
-    try {
-      const locator = typeof page.locator === 'function' ? page.locator(selector) : null;
-      const count = locator ? await locator.count() : 0;
-
-      if (count > 0) {
-        return { locator, count, selector };
-      }
-    } catch (error) {
-      // Try next selector.
-    }
-  }
-
-  if (typeof page.$$ === 'function') {
-    const handles = await page.$$('input[type="password"]');
-
-    if (handles.length > 0) {
-      return { handles, count: handles.length, selector: 'input[type="password"]' };
-    }
-  }
-
-  return { locator: null, handles: [], count: 0, selector: '' };
-}
-
-async function fillPasswordTargets(targets, password, timeout) {
-  const fillCount = Math.min(Math.max(targets.count, 1), 2);
-
-  if (targets.locator) {
-    for (let index = 0; index < fillCount; index += 1) {
-      await targets.locator.nth(index).fill(password, { timeout });
-    }
-
-    return fillCount;
-  }
-
-  for (let index = 0; index < Math.min(targets.handles.length, 2); index += 1) {
-    await targets.handles[index].click({ clickCount: 3 }).catch(() => {});
-    await targets.handles[index].type(password);
-  }
-
-  return Math.min(targets.handles.length, 2);
-}
-
 async function run(context = {}) {
   const page = context.page;
   const input = context.input || {};
@@ -104,19 +61,22 @@ async function run(context = {}) {
   }
 
   const password = generatePassword(input.length || input.passwordLength || input.password_length || 18);
-  const targets = await passwordInputs(page, selectorsFromInput(input), timeout);
+  const fillResult = await fillFirstMatchingInput(page, selectorsFromInput(input), password, timeout);
 
-  if (targets.count < 1) {
+  if (!fillResult.ok) {
     return {
       ok: false,
       status: 'failed',
       statusMessage: 'Kein Passwortfeld konnte gefunden werden.',
+      attemptedSelectors: fillResult.attemptedSelectors,
+      inputAttempts: fillResult.attempts,
+      matchedElementCount: fillResult.matchedElementCount,
+      lastFillError: fillResult.lastError || null,
     };
   }
 
-  const filled = await fillPasswordTargets(targets, password, timeout);
-
   context.new_password = password;
+  context.generated_password = password;
   context.account = {
     ...(context.account || {}),
     password,
@@ -126,10 +86,13 @@ async function run(context = {}) {
   return captureTaskPreview(context, {
     ok: true,
     status: 'success',
-    statusMessage: `Wunschpasswort wurde in ${filled} Feld(er) eingetragen.`,
-    selector: targets.selector,
+    statusMessage: 'Wunschpasswort wurde eingetragen.',
+    selector: fillResult.selector,
+    frameUrl: fillResult.frameUrl,
     passwordFilled: true,
     new_password: password,
+    generated_password: password,
+    'generated-password': password,
     account: {
       ...(context.account || {}),
       password,

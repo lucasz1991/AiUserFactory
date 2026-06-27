@@ -236,7 +236,13 @@ function valueFromPath(source, keyPath) {
 function resolveString(value, context = {}) {
   const normalized = String(value ?? '').trim();
 
-  const directRuntimeKeys = ['new_password', 'new_mail_username', 'new_mail_address'];
+  const directRuntimeKeys = [
+    'new_password',
+    'generated_password',
+    'generated-password',
+    'new_mail_username',
+    'new_mail_address',
+  ];
 
   if ((!normalized.includes('.') && !directRuntimeKeys.includes(normalized)) || normalized.includes('://')) {
     return value;
@@ -249,14 +255,16 @@ function resolveString(value, context = {}) {
     person: context.person || workflow.person || null,
     account: context.account || context.lastResult?.account || workflow.account || null,
     email_account: context.account || context.lastResult?.account || workflow.email_account || null,
-    new_password: context.new_password || context.account?.password || context.lastResult?.new_password || '',
+    new_password: context.new_password || context.generated_password || context.account?.password || context.lastResult?.new_password || '',
+    generated_password: context.generated_password || context.new_password || context.account?.password || context.lastResult?.generated_password || context.lastResult?.new_password || '',
+    'generated-password': context.generated_password || context.new_password || context.account?.password || context.lastResult?.['generated-password'] || context.lastResult?.generated_password || context.lastResult?.new_password || '',
     new_mail_username: context.account?.username || context.lastResult?.account?.username || '',
     new_mail_address: context.account?.email || context.lastResult?.account?.email || '',
   };
   const resolved = valueFromPath(lookupRoot, normalized);
 
   if (resolved === undefined || resolved === null || resolved === '') {
-    return /^(person|account|email_account|workflow)\./.test(normalized) || /^(new_password|new_mail_username|new_mail_address)$/.test(normalized) ? '' : value;
+    return /^(person|account|email_account|workflow)\./.test(normalized) || directRuntimeKeys.includes(normalized) ? '' : value;
   }
 
   return resolved;
@@ -1002,6 +1010,22 @@ async function run() {
 
       result = cleanForJson(result || {});
       context.lastResult = result;
+
+      const generatedPassword = result.generated_password
+        || result['generated-password']
+        || result.new_password
+        || result.account?.password
+        || '';
+
+      if (generatedPassword) {
+        context.new_password = generatedPassword;
+        context.generated_password = generatedPassword;
+        context.account = {
+          ...(context.account || {}),
+          password: generatedPassword,
+          hasPassword: true,
+        };
+      }
     } catch (error) {
       result = {
         ok: false,
@@ -1036,6 +1060,8 @@ async function run() {
         failedTaskKey: task.key,
         account: publicAccount(context.account, true),
         new_password: context.new_password || context.account?.password || null,
+        generated_password: context.generated_password || context.new_password || context.account?.password || null,
+        'generated-password': context.generated_password || context.new_password || context.account?.password || null,
         tasks: taskResults,
         browserWindows: lastBrowserWindows,
         browserWsEndpoint: browserWsEndpoint(),
@@ -1061,6 +1087,8 @@ async function run() {
     statusMessage: 'Workflow-Tasks wurden ausgefuehrt.',
     account: publicAccount(context.account, true),
     new_password: context.new_password || context.account?.password || null,
+    generated_password: context.generated_password || context.new_password || context.account?.password || null,
+    'generated-password': context.generated_password || context.new_password || context.account?.password || null,
     tasks: taskResults,
     browserWindows: lastBrowserWindows,
     browserWsEndpoint: browserWsEndpoint(),

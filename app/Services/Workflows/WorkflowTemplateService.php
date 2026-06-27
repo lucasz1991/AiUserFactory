@@ -263,7 +263,7 @@ class WorkflowTemplateService
             [
                 'key' => 'fill-password',
                 'title' => 'Passwort generieren und fuellen',
-                'description' => 'Wunschpasswort erzeugen, als new_password bereitstellen und Passwortfelder fuellen.',
+                'description' => 'Wunschpasswort erzeugen, als generated-password und new_password bereitstellen und Passwortfelder fuellen.',
                 'kind' => 'input',
                 'status' => 'automated',
                 'selector' => 'input[type=password]',
