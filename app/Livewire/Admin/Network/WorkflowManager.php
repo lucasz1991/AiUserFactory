@@ -882,6 +882,28 @@ class WorkflowManager extends Component
         session()->flash('success', 'Workflow-Test wurde gestoppt.');
     }
 
+    public function deleteQueuedPreviewWorkflowRun(): void
+    {
+        if (! $this->previewWorkflowRunId) {
+            return;
+        }
+
+        $run = WorkflowRun::query()->find($this->previewWorkflowRunId);
+
+        if (! $run) {
+            return;
+        }
+
+        $result = app(WorkflowExecutionService::class)->deleteQueued($run);
+
+        if ($result['ok'] ?? false) {
+            $this->previewWorkflowRunId = null;
+            $this->showRunPreviewModal = false;
+        }
+
+        session()->flash('success', (string) ($result['message'] ?? 'Workflow-Test wurde geloescht.'));
+    }
+
     public function openLatestRunPreview(): void
     {
         $workflow = $this->selectedWorkflow();

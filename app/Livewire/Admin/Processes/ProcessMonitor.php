@@ -126,6 +126,21 @@ class ProcessMonitor extends Component
         $this->syncProcesses(false);
     }
 
+    public function deleteQueuedWorkflowRun(int $workflowRunId): void
+    {
+        $workflowRun = WorkflowRun::query()->find($workflowRunId);
+
+        if (! $workflowRun) {
+            $this->notice = 'Workflow-Lauf wurde nicht gefunden.';
+
+            return;
+        }
+
+        $result = app(WorkflowExecutionService::class)->deleteQueued($workflowRun);
+        $this->notice = (string) ($result['message'] ?? 'Workflow-Lauf wurde geloescht.');
+        $this->syncProcesses(false);
+    }
+
     public function render()
     {
         $processes = Schema::hasTable('managed_processes')

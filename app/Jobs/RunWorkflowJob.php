@@ -8,6 +8,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 
 class RunWorkflowJob implements ShouldQueue
 {
@@ -28,6 +29,10 @@ class RunWorkflowJob implements ShouldQueue
 
     public function handle(WorkflowExecutionService $workflows): void
     {
-        $workflows->advance($this->workflowRunId);
+        try {
+            $workflows->advance($this->workflowRunId);
+        } catch (ModelNotFoundException) {
+            return;
+        }
     }
 }

@@ -396,7 +396,11 @@
                 </div>
             </x-slot>
             <x-slot name="footer">
-                @if($previewWorkflowRun && in_array($previewWorkflowRun->status, ['queued', 'running', 'waiting'], true))
+                @if($previewWorkflowRun && $previewWorkflowRun->status === 'queued')
+                    <button type="button" wire:click="deleteQueuedPreviewWorkflowRun" wire:confirm="Eingeplanten Workflow-Test wirklich loeschen?" class="rounded-md border border-red-300 bg-white px-4 py-2 text-sm font-semibold text-red-700 shadow-sm hover:bg-red-50">
+                        Loeschen
+                    </button>
+                @elseif($previewWorkflowRun && in_array($previewWorkflowRun->status, ['running', 'waiting'], true))
                     <button type="button" wire:click="cancelPreviewWorkflowRun" wire:confirm="Workflow-Test wirklich stoppen?" class="rounded-md border border-red-300 bg-white px-4 py-2 text-sm font-semibold text-red-700 shadow-sm hover:bg-red-50">
                         Stoppen
                     </button>

@@ -3,6 +3,8 @@
     $children = $process->children ?? collect();
     $hasChildren = $children->isNotEmpty();
     $isWorkflowProcess = $process->process_type === 'workflow-run';
+    $workflowRunPreview = $process->relationLoaded('workflowRunPreview') ? $process->getRelation('workflowRunPreview') : null;
+    $workflowRunStatus = (string) data_get($workflowRunPreview, 'status', '');
 @endphp
 
 <tr wire:key="managed-process-{{ $process->id }}" class="{{ $process->is_idle_suspect ? 'bg-amber-50/60' : '' }}">
@@ -50,7 +52,11 @@
         @endif
     </td>
     <td class="whitespace-nowrap px-4 py-3 text-right">
-        @if($isWorkflowProcess && $process->isRunning())
+        @if($isWorkflowProcess && $workflowRunStatus === 'queued')
+            <button type="button" wire:click="deleteQueuedWorkflowRun({{ abs((int) $process->pid) }})" wire:confirm="Eingeplanten Workflow-Lauf #{{ abs((int) $process->pid) }} wirklich loeschen?" class="rounded border border-red-300 px-2 py-1 text-xs font-semibold text-red-700 hover:bg-red-50">
+                Loeschen
+            </button>
+        @elseif($isWorkflowProcess && $process->isRunning())
             <button type="button" wire:click="cancelWorkflowRun({{ abs((int) $process->pid) }})" wire:confirm="Workflow-Lauf #{{ abs((int) $process->pid) }} stoppen?" class="rounded border border-red-300 px-2 py-1 text-xs font-semibold text-red-700 hover:bg-red-50">
                 Stoppen
             </button>

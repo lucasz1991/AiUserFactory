@@ -76,6 +76,8 @@
                             @php
                                 $isWorkflowProcess = $process->process_type === 'workflow-run';
                                 $workflowRunPreview = $process->relationLoaded('workflowRunPreview') ? $process->getRelation('workflowRunPreview') : null;
+                                $workflowRunId = (int) data_get($process->metadata, 'workflow_run_db_id');
+                                $workflowRunStatus = (string) data_get($workflowRunPreview, 'status', '');
                                 $heartbeatAge = $process->heartbeat_at ? (int) $process->heartbeat_at->diffInSeconds(now()) : null;
                                 $isStale = ! $isWorkflowProcess && $process->isRunning() && ($heartbeatAge === null || $heartbeatAge > 30);
                             @endphp
@@ -122,12 +124,15 @@
                                     <div class="mt-1 text-xs text-slate-400">zuletzt gesehen: {{ optional($process->last_seen_at)->format('d.m.Y H:i:s') ?: '-' }}</div>
                                 </td>
                                 <td class="whitespace-nowrap px-4 py-3 text-right">
-                                    @if($isWorkflowProcess && (int) data_get($process->metadata, 'workflow_run_db_id') > 0)
-                                        @php($workflowRunId = (int) data_get($process->metadata, 'workflow_run_db_id'))
+                                    @if($isWorkflowProcess && $workflowRunId > 0)
                                         <button type="button" wire:click="openWorkflowPreview({{ $workflowRunId }})" class="rounded border border-blue-200 bg-white px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-50">
                                             Vorschau
                                         </button>
-                                        @if($process->isRunning())
+                                        @if($workflowRunStatus === 'queued')
+                                            <button type="button" wire:click="deleteQueuedWorkflowRun({{ $workflowRunId }})" wire:confirm="Eingeplanten Workflow-Lauf #{{ $workflowRunId }} wirklich loeschen?" class="ml-2 rounded border border-red-300 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50">
+                                                Loeschen
+                                            </button>
+                                        @elseif($process->isRunning())
                                             <button type="button" wire:click="cancelWorkflowRun({{ $workflowRunId }})" wire:confirm="Workflow-Lauf #{{ $workflowRunId }} stoppen?" class="ml-2 rounded border border-red-300 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50">
                                                 Stoppen
                                             </button>
@@ -136,7 +141,11 @@
                                         <button type="button" wire:click="openWorkflowPreview({{ $workflowRunPreview->id }})" class="rounded border border-blue-200 bg-white px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-50">
                                             Workflow
                                         </button>
-                                        @if($process->isRunning())
+                                        @if($workflowRunStatus === 'queued')
+                                            <button type="button" wire:click="deleteQueuedWorkflowRun({{ $workflowRunPreview->id }})" wire:confirm="Eingeplanten Workflow-Lauf #{{ $workflowRunPreview->id }} wirklich loeschen?" class="ml-2 rounded border border-red-300 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50">
+                                                Loeschen
+                                            </button>
+                                        @elseif($process->isRunning())
                                             <button type="button" wire:click="terminateProcess({{ $process->id }}, true)" wire:confirm="Prozess {{ $process->pid }} stoppen?" class="ml-2 rounded border border-red-300 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50">
                                                 Stoppen
                                             </button>
@@ -304,7 +313,11 @@
         </x-slot>
 
         <x-slot name="footer">
-            @if($previewWorkflowRun && in_array($previewWorkflowRun->status, ['queued', 'running', 'waiting'], true))
+            @if($previewWorkflowRun && $previewWorkflowRun->status === 'queued')
+                <button type="button" wire:click="deleteQueuedWorkflowPreview" wire:confirm="Eingeplanten Workflow-Lauf wirklich loeschen?" class="rounded-md border border-red-300 bg-white px-4 py-2 text-sm font-semibold text-red-700 shadow-sm hover:bg-red-50">
+                    Loeschen
+                </button>
+            @elseif($previewWorkflowRun && in_array($previewWorkflowRun->status, ['running', 'waiting'], true))
                 <button type="button" wire:click="cancelWorkflowPreview" wire:confirm="Workflow-Lauf wirklich stoppen?" class="rounded-md border border-red-300 bg-white px-4 py-2 text-sm font-semibold text-red-700 shadow-sm hover:bg-red-50">
                     Stoppen
                 </button>

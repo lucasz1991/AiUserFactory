@@ -193,6 +193,26 @@ class WorkflowExecutionService
         return ['ok' => true, 'message' => $message, 'cancelledStepRuns' => $stepRuns->count()];
     }
 
+    public function deleteQueued(int|WorkflowRun $workflowRun): array
+    {
+        $run = $this->loadRun($workflowRun);
+
+        if ($run->status !== 'queued') {
+            return [
+                'ok' => false,
+                'message' => 'Nur eingeplante Workflow-Laeufe koennen direkt geloescht werden. Laufende Laeufe bitte zuerst stoppen.',
+            ];
+        }
+
+        $runId = $run->id;
+        $run->delete();
+
+        return [
+            'ok' => true,
+            'message' => 'Workflow-Lauf #'.$runId.' wurde geloescht.',
+        ];
+    }
+
     public function monitorStepRun(int $workflowStepRunId): void
     {
         $stepRun = WorkflowStepRun::query()

@@ -165,6 +165,36 @@ class PersonProcessList extends Component
         $this->cancelWorkflowRun($this->previewWorkflowRunId);
     }
 
+    public function deleteQueuedWorkflowRun(int $workflowRunId): void
+    {
+        $run = WorkflowRun::query()->find($workflowRunId);
+
+        if (! $run) {
+            $this->notice = 'Workflow-Lauf wurde nicht gefunden.';
+
+            return;
+        }
+
+        $result = app(WorkflowExecutionService::class)->deleteQueued($run);
+        $this->notice = (string) ($result['message'] ?? 'Workflow-Lauf wurde geloescht.');
+
+        if (($result['ok'] ?? false) && $this->previewWorkflowRunId === $workflowRunId) {
+            $this->previewWorkflowRunId = null;
+            $this->showWorkflowPreviewModal = false;
+        }
+
+        $this->syncProcesses(false);
+    }
+
+    public function deleteQueuedWorkflowPreview(): void
+    {
+        if (! $this->previewWorkflowRunId) {
+            return;
+        }
+
+        $this->deleteQueuedWorkflowRun($this->previewWorkflowRunId);
+    }
+
     public function terminateProcess(int $processId, bool $force = true): void
     {
         $process = ManagedProcess::query()->find($processId);
