@@ -24,8 +24,7 @@ class WorkflowExecutionService
         protected MailAccountRegistrationRunner $mailRegistration,
         protected WebmailSessionRunner $webmailSession,
         protected WorkflowTaskRunner $workflowTasks,
-    ) {
-    }
+    ) {}
 
     public function start(Workflow $workflow, array $context = [], string $requestedBy = 'admin-ui'): WorkflowRun
     {
@@ -1338,8 +1337,9 @@ class WorkflowExecutionService
             return $result;
         }
 
-        $resultTasks = collect(is_array($result['tasks'] ?? null) ? $result['tasks'] : [])
-            ->filter(fn (mixed $task): bool => is_array($task))
+        $allResultTasks = collect(is_array($result['tasks'] ?? null) ? $result['tasks'] : [])
+            ->filter(fn (mixed $task): bool => is_array($task));
+        $resultTasks = $allResultTasks
             ->keyBy(fn (array $task): string => (string) ($task['key'] ?? ''));
 
         if ($resultTasks->isEmpty()) {
@@ -1347,9 +1347,25 @@ class WorkflowExecutionService
         }
 
         $result['tasks'] = collect($tasks)
-            ->map(function (array $task) use ($resultTasks, $status, $errorMessage): array {
+            ->map(function (array $task) use ($allResultTasks, $resultTasks, $status, $errorMessage): array {
                 $taskKey = (string) ($task['key'] ?? '');
                 $resultTask = $resultTasks->get($taskKey);
+
+                if (($task['runner'] ?? null) === 'workflow') {
+                    $includedTasks = $allResultTasks
+                        ->where('parent_task_key', $taskKey)
+                        ->values();
+
+                    if ($includedTasks->isNotEmpty()) {
+                        $resultTask = [
+                            'key' => $taskKey,
+                            'status' => $includedTasks->contains(fn (array $item): bool => in_array((string) ($item['status'] ?? ''), ['failed', 'timeout'], true))
+                                ? 'failed'
+                                : ($includedTasks->every(fn (array $item): bool => in_array((string) ($item['status'] ?? ''), ['success', 'completed'], true)) ? 'completed' : $status),
+                            'included_tasks' => $includedTasks->all(),
+                        ];
+                    }
+                }
 
                 if (! is_array($resultTask)) {
                     return $task;

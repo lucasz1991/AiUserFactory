@@ -419,7 +419,7 @@ class WorkflowTaskCatalog
             $definition['browser_window'] = 'main';
         }
 
-        foreach (['node_script', 'php_handler', 'browser_window', 'browser_window_name', 'selector', 'element_selector', 'input_selector', 'input', 'value', 'url', 'mailbox_source', 'success_payload', 'failure_payload', 'next', 'on_partial', 'on_error', 'status_routes'] as $key) {
+        foreach (['node_script', 'php_handler', 'workflow_id', 'workflow_slug', 'browser_window', 'browser_window_name', 'selector', 'element_selector', 'input_selector', 'input', 'value', 'url', 'mailbox_source', 'success_payload', 'failure_payload', 'next', 'on_partial', 'on_error', 'status_routes'] as $key) {
             $value = Arr::get($overrides, $key, Arr::get($definition, $key));
 
             if ($value !== null && $value !== '') {

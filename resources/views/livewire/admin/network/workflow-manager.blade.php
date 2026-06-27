@@ -1,3 +1,4 @@
+@php($workflowLocked = (bool) ($selectedWorkflow?->is_edit_locked ?? false))
 <div class="space-y-6" wire:loading.class="opacity-60 pointer-events-none">
     <div class="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
         <div class="flex flex-wrap items-start justify-between gap-4">
@@ -7,7 +8,16 @@
                     <span class="text-sm text-slate-400">/</span>
                     <span class="text-sm text-slate-500">Management</span>
                 </div>
-                <h1 class="mt-2 text-2xl font-semibold text-gray-900">{{ $selectedWorkflow?->name ?? 'Workflow Management' }}</h1>
+                <div class="mt-2 flex items-center gap-2">
+                    <h1 class="text-2xl font-semibold text-gray-900">{{ $selectedWorkflow?->name ?? 'Workflow Management' }}</h1>
+                    @if($workflowLocked)
+                        <span title="{{ $selectedWorkflow->lock_reason }}" class="inline-flex h-7 w-7 items-center justify-center rounded-full bg-amber-100 text-amber-700" aria-label="Workflow gesperrt">
+                            <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 0 0-9 0v3.75m-.75 0h10.5A2.25 2.25 0 0 1 19.5 12.75v6A2.25 2.25 0 0 1 17.25 21H6.75a2.25 2.25 0 0 1-2.25-2.25v-6A2.25 2.25 0 0 1 6.75 10.5Z" />
+                            </svg>
+                        </span>
+                    @endif
+                </div>
                 <p class="mt-1 text-sm text-gray-500">
                     Workflow als Prozessablauf: Aufgaben als Listen, Tasks als Karten, Verzweigungen nach Ergebnisstatus.
                 </p>
@@ -23,27 +33,17 @@
                     >
                         {{ $quickPreviewRun && in_array($quickPreviewRun->status, ['queued', 'running', 'waiting'], true) ? 'Laufenden Test öffnen' : 'Letzten Test öffnen' }}
                     </button>
-                    <button type="button" wire:click="$set('showWorkflowModal', true)" class="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
-                        Workflow
-                    </button>
                     <button type="button" wire:click="$set('showRunModal', true)" class="rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">
                         Testen
                     </button>
-                    <button type="button" wire:click="$set('showAddStepModal', true)" class="rounded-md border border-blue-200 bg-white px-3 py-2 text-sm font-semibold text-blue-700 shadow-sm hover:bg-blue-50">
-                        Liste
-                    </button>
-                    <button type="button" wire:click="$set('showTaskPanel', true)" class="rounded-md border border-emerald-200 bg-white px-3 py-2 text-sm font-semibold text-emerald-700 shadow-sm hover:bg-emerald-50">
-                        Tasks
-                    </button>
-                    <button type="button" wire:click="$set('showActionLibraryModal', true)" class="rounded-md border border-amber-200 bg-white px-3 py-2 text-sm font-semibold text-amber-700 shadow-sm hover:bg-amber-50">
-                        Aktionen
-                    </button>
-                    <a href="{{ route('processes.index') }}" class="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">
-                        Prozesse
-                    </a>
-                    <button type="button" wire:click="deleteWorkflow" wire:confirm="Workflow samt Aufgaben, Tasks und Ausfuehrungen wirklich loeschen?" class="rounded-md border border-red-300 bg-white px-3 py-2 text-sm font-semibold text-red-700 shadow-sm hover:bg-red-50">
-                        Loeschen
-                    </button>
+                    @if(! $workflowLocked)
+                        <button type="button" wire:click="$set('showWorkflowModal', true)" class="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">Workflow</button>
+                        <button type="button" wire:click="$set('showAddStepModal', true)" class="rounded-md border border-blue-200 bg-white px-3 py-2 text-sm font-semibold text-blue-700 shadow-sm hover:bg-blue-50">Liste</button>
+                        <button type="button" wire:click="$set('showTaskPanel', true)" class="rounded-md border border-emerald-200 bg-white px-3 py-2 text-sm font-semibold text-emerald-700 shadow-sm hover:bg-emerald-50">Tasks</button>
+                        <button type="button" wire:click="$set('showActionLibraryModal', true)" class="rounded-md border border-amber-200 bg-white px-3 py-2 text-sm font-semibold text-amber-700 shadow-sm hover:bg-amber-50">Aktionen</button>
+                        <a href="{{ route('processes.index') }}" class="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">Prozesse</a>
+                        <button type="button" wire:click="deleteWorkflow" wire:confirm="Workflow samt Aufgaben, Tasks und Ausfuehrungen wirklich loeschen?" class="rounded-md border border-red-300 bg-white px-3 py-2 text-sm font-semibold text-red-700 shadow-sm hover:bg-red-50">Loeschen</button>
+                    @endif
                 </div>
             @endif
         </div>
@@ -55,11 +55,20 @@
         </div>
     @endif
 
+    @if (session()->has('error'))
+        <div class="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-900">{{ session('error') }}</div>
+    @endif
+
     @if(! $selectedWorkflow)
         <x-admin.panel>
             <div class="text-sm text-gray-500">Dieser Workflow wurde nicht gefunden.</div>
         </x-admin.panel>
     @else
+        @if($workflowLocked)
+            <div class="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                <span class="font-semibold">Nur-Lese-Modus.</span> {{ $selectedWorkflow->lock_reason }} Im Manager koennen fuer diesen Workflow nur Tests gestartet und geoeffnet werden.
+            </div>
+        @endif
         <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <x-admin.stat label="Aufgaben" :value="$summary['actions']" tone="slate" />
             <x-admin.stat label="Listen" :value="$summary['lists']" tone="blue" />
@@ -264,26 +273,22 @@
                         <p class="text-sm font-semibold text-white">{{ $selectedWorkflow->name }}</p>
                         <p class="text-xs text-blue-100">Tasks aus dem rechten Panel auf eine Liste ziehen.</p>
                     </div>
-                    <button type="button" wire:click="$set('showTaskPanel', true)" class="rounded-md bg-white/95 px-3 py-2 text-sm font-semibold text-slate-800 shadow-sm hover:bg-white">
-                        Task-Bibliothek
-                    </button>
+                    @if(! $workflowLocked)
+                        <button type="button" wire:click="$set('showTaskPanel', true)" class="rounded-md bg-white/95 px-3 py-2 text-sm font-semibold text-slate-800 shadow-sm hover:bg-white">Task-Bibliothek</button>
+                    @endif
                 </div>
 
-                <div x-sort="$dispatch('reorderWorkflowSteps', { item: $item, position: $position })" class="relative z-10 flex min-h-[560px] items-start gap-0 pb-2">
+                <div @if(! $workflowLocked) x-sort="$dispatch('reorderWorkflowSteps', { item: $item, position: $position })" @endif class="relative z-10 flex min-h-[560px] items-start gap-0 pb-2">
                     @forelse($steps as $step)
-                        <div class="flex items-start" x-sort:item="{{ $step->id }}" wire:key="workflow-step-wrap-{{ $step->id }}">
-                            <x-workflows.step-card :step="$step" wire:key="workflow-step-{{ $step->id }}">
-                                <x-slot name="actions">
-                                    <button type="button" wire:click="openEditStep({{ $step->id }})" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-100">
-                                        Bearbeiten
-                                    </button>
-                                    <button type="button" wire:click="toggleStep({{ $step->id }})" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-100">
-                                        {{ $step->is_enabled ? 'Pausieren' : 'Aktivieren' }}
-                                    </button>
-                                    <button type="button" wire:click="removeStep({{ $step->id }})" wire:confirm="Liste samt Tasks wirklich entfernen?" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-red-700 hover:bg-red-50">
-                                        Entfernen
-                                    </button>
-                                </x-slot>
+                        <div class="flex items-start" @if(! $workflowLocked) x-sort:item="{{ $step->id }}" @endif wire:key="workflow-step-wrap-{{ $step->id }}">
+                            <x-workflows.step-card :step="$step" :locked="$workflowLocked" wire:key="workflow-step-{{ $step->id }}">
+                                @if(! $workflowLocked)
+                                    <x-slot name="actions">
+                                        <button type="button" wire:click="openEditStep({{ $step->id }})" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-100">Bearbeiten</button>
+                                        <button type="button" wire:click="toggleStep({{ $step->id }})" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-100">{{ $step->is_enabled ? 'Pausieren' : 'Aktivieren' }}</button>
+                                        <button type="button" wire:click="removeStep({{ $step->id }})" wire:confirm="Liste samt Tasks wirklich entfernen?" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-red-700 hover:bg-red-50">Entfernen</button>
+                                    </x-slot>
+                                @endif
                             </x-workflows.step-card>
                             @if(! $loop->last)
                                 <div class="w-4 shrink-0"></div>
@@ -295,19 +300,15 @@
                         </div>
                     @endforelse
 
-                    <button
-                        type="button"
-                        wire:click="$set('showAddStepModal', true)"
-                        class="flex min-h-[220px] w-[260px] shrink-0 items-start rounded-md border border-dashed border-white/45 bg-transparent p-3 text-left text-sm font-semibold text-blue-50 transition hover:border-white hover:bg-white/10 hover:text-white"
-                    >
-                        + Neue Liste rechts anlegen
-                    </button>
+                    @if(! $workflowLocked)
+                        <button type="button" wire:click="$set('showAddStepModal', true)" class="flex min-h-[220px] w-[260px] shrink-0 items-start rounded-md border border-dashed border-white/45 bg-transparent p-3 text-left text-sm font-semibold text-blue-50 transition hover:border-white hover:bg-white/10 hover:text-white">+ Neue Liste rechts anlegen</button>
+                    @endif
                 </div>
 
             </div>
         </x-admin.panel>
 
-        @if($showTaskPanel)
+        @if($showTaskPanel && ! $workflowLocked)
             <div x-data="{}" class="fixed inset-y-0 right-0 z-40 flex w-full max-w-sm flex-col border-l border-slate-200 bg-white shadow-2xl">
                 <div class="flex items-start justify-between gap-3 border-b border-slate-200 p-4">
                     <div>
@@ -354,6 +355,8 @@
                     group-model="workflowGroup"
                     description-model="workflowDescription"
                     active-model="workflowActive"
+                    lock-model="workflowLocked"
+                    lock-help="Nach dem Speichern ist der Workflow im Manager nur noch testbar. Entsperren ist in der Workflow-Liste moeglich."
                 />
             </x-slot>
             <x-slot name="footer">

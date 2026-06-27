@@ -30,10 +30,16 @@ class WorkflowsIndex extends Component
 
     public bool $editingWorkflowActive = true;
 
+    public bool $editingWorkflowLocked = false;
+
+    public bool $editingWorkflowIncluded = false;
+
+    public bool $editingWorkflowEffectiveLocked = false;
+
     public function render()
     {
         $workflows = Workflow::query()
-            ->with(['steps'])
+            ->with(['steps', 'includedByWorkflows'])
             ->withCount(['steps', 'runs'])
             ->orderBy('category')
             ->orderBy('name')
@@ -77,6 +83,7 @@ class WorkflowsIndex extends Component
             'description' => trim((string) ($validated['newWorkflowDescription'] ?? '')),
             'category' => $group,
             'is_active' => true,
+            'is_locked' => false,
             'trigger_type' => 'manual',
             'settings_json' => [
                 'created_from' => 'workflows-index',
@@ -96,7 +103,7 @@ class WorkflowsIndex extends Component
 
     public function openEditWorkflow(int $workflowId): void
     {
-        $workflow = Workflow::query()->find($workflowId);
+        $workflow = Workflow::query()->with('includedByWorkflows')->find($workflowId);
 
         if (! $workflow) {
             return;
@@ -107,13 +114,16 @@ class WorkflowsIndex extends Component
         $this->editingWorkflowDescription = (string) $workflow->description;
         $this->editingWorkflowGroup = trim((string) $workflow->category) ?: 'custom';
         $this->editingWorkflowActive = (bool) $workflow->is_active;
+        $this->editingWorkflowLocked = (bool) $workflow->is_edit_locked;
+        $this->editingWorkflowIncluded = (bool) $workflow->is_included;
+        $this->editingWorkflowEffectiveLocked = (bool) $workflow->is_edit_locked;
         $this->showEditWorkflowModal = true;
     }
 
     public function saveEditWorkflow(): void
     {
         $workflow = $this->editingWorkflowId
-            ? Workflow::query()->find($this->editingWorkflowId)
+            ? Workflow::query()->with('includedByWorkflows')->find($this->editingWorkflowId)
             : null;
 
         if (! $workflow) {
@@ -125,7 +135,25 @@ class WorkflowsIndex extends Component
             'editingWorkflowDescription' => ['nullable', 'string', 'max:1000'],
             'editingWorkflowGroup' => ['required', 'string', 'max:80'],
             'editingWorkflowActive' => ['boolean'],
+            'editingWorkflowLocked' => ['boolean'],
         ]);
+
+        if ($workflow->is_included) {
+            session()->flash('error', 'Dieser Workflow ist in anderen Workflows enthalten und kann dort erst nach Entfernen der Referenz entsperrt werden.');
+
+            return;
+        }
+
+        if ($workflow->is_edit_locked) {
+            if (! $validated['editingWorkflowLocked']) {
+                $workflow->forceFill(['is_locked' => false])->save();
+                $this->editingWorkflowEffectiveLocked = false;
+                $this->showEditWorkflowModal = false;
+                session()->flash('success', 'Workflow wurde entsperrt.');
+            }
+
+            return;
+        }
 
         $group = $this->normalizeGroup($validated['editingWorkflowGroup']);
 
@@ -134,6 +162,7 @@ class WorkflowsIndex extends Component
             'description' => trim((string) ($validated['editingWorkflowDescription'] ?? '')),
             'category' => $group,
             'is_active' => (bool) $validated['editingWorkflowActive'],
+            'is_locked' => (bool) $validated['editingWorkflowLocked'],
         ])->save();
 
         $this->activeGroup = $group;
@@ -144,9 +173,15 @@ class WorkflowsIndex extends Component
 
     public function deleteWorkflow(int $workflowId): void
     {
-        $workflow = Workflow::query()->find($workflowId);
+        $workflow = Workflow::query()->with('includedByWorkflows')->find($workflowId);
 
         if (! $workflow) {
+            return;
+        }
+
+        if ($workflow->is_edit_locked) {
+            session()->flash('error', 'Gesperrte Workflows koennen nicht geloescht werden. '.$workflow->lock_reason);
+
             return;
         }
 

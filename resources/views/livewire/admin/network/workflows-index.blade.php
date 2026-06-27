@@ -25,6 +25,12 @@
         </div>
     @endif
 
+    @if (session()->has('error'))
+        <div class="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-900">
+            {{ session('error') }}
+        </div>
+    @endif
+
     <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <x-admin.stat label="Workflows" :value="$summary['workflows']" tone="slate" />
         <x-admin.stat label="Aktiv" :value="$summary['active_workflows']" tone="emerald" />
@@ -67,7 +73,16 @@
                         <tr wire:key="workflow-row-{{ $workflow->id }}" class="hover:bg-slate-50">
                             <td class="min-w-0 px-3 py-3">
                                 <div class="min-w-0">
-                                    <a href="{{ route('network.workflows.manage', $workflow) }}" class="block truncate text-sm font-semibold text-slate-900 hover:text-blue-700">{{ $workflow->name }}</a>
+                                    <div class="flex min-w-0 items-center gap-2">
+                                        <a href="{{ route('network.workflows.manage', $workflow) }}" class="block min-w-0 truncate text-sm font-semibold text-slate-900 hover:text-blue-700">{{ $workflow->name }}</a>
+                                        @if($workflow->is_edit_locked)
+                                            <span title="{{ $workflow->lock_reason }}" class="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-700" aria-label="Workflow gesperrt">
+                                                <svg class="h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 0 0-9 0v3.75m-.75 0h10.5A2.25 2.25 0 0 1 19.5 12.75v6A2.25 2.25 0 0 1 17.25 21H6.75a2.25 2.25 0 0 1-2.25-2.25v-6A2.25 2.25 0 0 1 6.75 10.5Z" />
+                                                </svg>
+                                            </span>
+                                        @endif
+                                    </div>
                                     <p class="mt-0.5 truncate text-xs text-slate-500">{{ $workflow->description ?: $workflow->slug }}</p>
                                 </div>
                             </td>
@@ -127,11 +142,17 @@
                 group-model="editingWorkflowGroup"
                 description-model="editingWorkflowDescription"
                 active-model="editingWorkflowActive"
+                lock-model="editingWorkflowLocked"
+                :disabled="$editingWorkflowEffectiveLocked"
+                :lock-disabled="$editingWorkflowIncluded"
+                :lock-help="$editingWorkflowIncluded ? 'Automatisch gesperrt, weil dieser Workflow in einem anderen Workflow enthalten ist.' : ($editingWorkflowEffectiveLocked ? 'Haken entfernen und speichern, um den Workflow zu entsperren.' : 'Gesperrte Workflows koennen im Manager nur getestet werden.')"
             />
         </x-slot>
         <x-slot name="footer">
             <button type="button" x-on:click="$dispatch('close')" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">Abbrechen</button>
-            <button type="button" wire:click="saveEditWorkflow" class="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">Speichern</button>
+            @if(! $editingWorkflowIncluded)
+                <button type="button" wire:click="saveEditWorkflow" class="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">{{ $editingWorkflowEffectiveLocked ? 'Entsperren' : 'Speichern' }}</button>
+            @endif
         </x-slot>
     </x-dialog-modal>
 </div>

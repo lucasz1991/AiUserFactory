@@ -4,6 +4,7 @@
 
 @php
     $browserWindow = trim((string) data_get($task, 'browser_window_name', data_get($task, 'browser_window', '')));
+    $isWorkflowTask = (string) data_get($task, 'runner') === 'workflow';
 @endphp
 
 <div {{ $attributes->merge(['class' => 'rounded-md border border-slate-200 bg-white px-3 py-2 shadow-sm transition hover:border-slate-300 hover:shadow-md']) }}>
@@ -28,6 +29,11 @@
     @if($browserWindow !== '')
         <div class="mt-2 inline-flex max-w-full items-center rounded border border-sky-100 bg-sky-50 px-2 py-0.5 text-[11px] font-semibold text-sky-800">
             <span class="truncate">Fenster: {{ $browserWindow }}</span>
+        </div>
+    @endif
+    @if($isWorkflowTask)
+        <div class="mt-2 inline-flex max-w-full items-center rounded border border-violet-200 bg-violet-50 px-2 py-0.5 text-[11px] font-semibold text-violet-800">
+            <span class="truncate">Eingebetteter Workflow</span>
         </div>
     @endif
 </div>

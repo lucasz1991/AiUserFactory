@@ -26,6 +26,8 @@ class WorkflowManager extends Component
 
     public bool $workflowActive = true;
 
+    public bool $workflowLocked = false;
+
     public string $newStepType = WorkflowStep::TYPE_PREPARATION;
 
     public string $newStepName = '';
@@ -162,12 +164,13 @@ class WorkflowManager extends Component
             ->get();
         $catalogPersons = $catalog->persons();
         $actions = array_slice($catalog->actions($catalogPersons, $this->actionPersonFilter, $this->actionTypeFilter), 0, 30);
-        $taskDefinitions = collect($taskCatalog->options());
+        $taskDefinitions = collect($taskCatalog->options())
+            ->concat($this->workflowTaskOptions($selectedWorkflow));
         $taskGroups = $taskDefinitions
             ->pluck('kind')
             ->unique()
             ->sortBy(function (string $kind): int {
-                $index = array_search($kind, ['browser', 'input', 'wait', 'data'], true);
+                $index = array_search($kind, ['browser', 'input', 'wait', 'data', 'workflow'], true);
 
                 return $index === false ? 99 : $index;
             })
@@ -203,7 +206,7 @@ class WorkflowManager extends Component
 
     public function saveWorkflow(): void
     {
-        $workflow = $this->selectedWorkflow();
+        $workflow = $this->editableWorkflow();
 
         if (! $workflow) {
             return;
@@ -214,6 +217,7 @@ class WorkflowManager extends Component
             'workflowDescription' => ['nullable', 'string', 'max:1000'],
             'workflowGroup' => ['required', 'string', 'max:80'],
             'workflowActive' => ['boolean'],
+            'workflowLocked' => ['boolean'],
         ]);
 
         $workflow->forceFill([
@@ -221,6 +225,7 @@ class WorkflowManager extends Component
             'description' => trim((string) ($validated['workflowDescription'] ?? '')),
             'category' => $this->normalizeGroup($validated['workflowGroup']),
             'is_active' => (bool) $validated['workflowActive'],
+            'is_locked' => (bool) $validated['workflowLocked'],
         ])->save();
 
         $this->showWorkflowModal = false;
@@ -230,7 +235,7 @@ class WorkflowManager extends Component
 
     public function deleteWorkflow(): void
     {
-        $workflow = $this->selectedWorkflow();
+        $workflow = $this->editableWorkflow();
 
         if (! $workflow) {
             return;
@@ -245,7 +250,7 @@ class WorkflowManager extends Component
 
     public function addStep(): void
     {
-        $workflow = $this->selectedWorkflow();
+        $workflow = $this->editableWorkflow();
 
         if (! $workflow) {
             return;
@@ -279,7 +284,7 @@ class WorkflowManager extends Component
     public function addActionStep(string $actionId): void
     {
         $catalog = app(PersonaActionWorkflowCatalog::class);
-        $workflow = $this->selectedWorkflow();
+        $workflow = $this->editableWorkflow();
         $action = $catalog->actionById($actionId);
 
         if (! $workflow || ! $action) {
@@ -404,7 +409,7 @@ class WorkflowManager extends Component
 
     public function reorderStep(mixed $item, mixed $position): void
     {
-        $workflow = $this->selectedWorkflow();
+        $workflow = $this->editableWorkflow();
 
         if (! $workflow) {
             return;
@@ -423,7 +428,7 @@ class WorkflowManager extends Component
 
     public function prepareTaskFromCatalog(int $stepId, string $taskKey, ?int $position = null): void
     {
-        if (! $this->stepForSelectedWorkflow($stepId) || ! app(WorkflowTaskCatalog::class)->task($taskKey)) {
+        if (! $this->stepForSelectedWorkflow($stepId) || ! $this->taskDefinition($taskKey)) {
             return;
         }
 
@@ -458,7 +463,7 @@ class WorkflowManager extends Component
 
     public function addTaskCard(): void
     {
-        $workflow = $this->selectedWorkflow();
+        $workflow = $this->editableWorkflow();
 
         if (! $workflow) {
             return;
@@ -468,7 +473,7 @@ class WorkflowManager extends Component
             'newTaskListId' => ['required', 'integer'],
             'newTaskCatalogKey' => ['required', 'string', 'max:120'],
             'newTaskTitle' => ['required', 'string', 'max:160'],
-            'newTaskKind' => ['required', 'string', 'in:browser,input,wait,data'],
+            'newTaskKind' => ['required', 'string', 'in:browser,input,wait,data,workflow'],
             'newTaskDescription' => ['nullable', 'string', 'max:1000'],
             'newTaskElementSelector' => ['nullable', 'string', 'max:1000'],
             'newTaskInputSelector' => ['nullable', 'string', 'max:1000'],
@@ -480,6 +485,14 @@ class WorkflowManager extends Component
             'newTaskSuccessTarget' => ['nullable', 'string', 'max:180'],
             'newTaskFailedTarget' => ['nullable', 'string', 'max:180'],
         ]);
+
+        $definition = $this->taskDefinition($validated['newTaskCatalogKey']);
+
+        if (! $definition) {
+            $this->addError('newTaskCatalogKey', 'Dieser Workflow oder Task ist nicht verfuegbar.');
+
+            return;
+        }
 
         $formConfig = $this->taskFormConfig($validated['newTaskCatalogKey']);
 
@@ -505,7 +518,7 @@ class WorkflowManager extends Component
             return;
         }
 
-        $task = app(WorkflowTaskCatalog::class)->cardFromDefinition($validated['newTaskCatalogKey'], [
+        $task = $this->taskCardFromDefinition($validated['newTaskCatalogKey'], [
             'key' => $key,
             'title' => trim($validated['newTaskTitle']),
             'description' => trim((string) ($validated['newTaskDescription'] ?? '')),
@@ -612,7 +625,7 @@ class WorkflowManager extends Component
         $validated = $this->validate([
             'editingTaskCatalogKey' => ['required', 'string', 'max:120'],
             'editingTaskTitle' => ['required', 'string', 'max:160'],
-            'editingTaskKind' => ['required', 'string', 'in:browser,input,wait,data'],
+            'editingTaskKind' => ['required', 'string', 'in:browser,input,wait,data,workflow'],
             'editingTaskDescription' => ['nullable', 'string', 'max:1000'],
             'editingTaskElementSelector' => ['nullable', 'string', 'max:1000'],
             'editingTaskInputSelector' => ['nullable', 'string', 'max:1000'],
@@ -625,6 +638,14 @@ class WorkflowManager extends Component
             'editingTaskSuccessTarget' => ['nullable', 'string', 'max:180'],
             'editingTaskFailedTarget' => ['nullable', 'string', 'max:180'],
         ]);
+
+        $definition = $this->taskDefinition($validated['editingTaskCatalogKey']);
+
+        if (! $definition) {
+            $this->addError('editingTaskCatalogKey', 'Dieser Workflow oder Task ist nicht verfuegbar.');
+
+            return;
+        }
 
         $formConfig = $this->taskFormConfig($validated['editingTaskCatalogKey']);
 
@@ -654,7 +675,7 @@ class WorkflowManager extends Component
                 $browserWindow = $this->normalizeBrowserWindowName((string) ($validated['editingTaskBrowserWindow'] ?? ''));
                 $task = array_replace(
                     $task,
-                    app(WorkflowTaskCatalog::class)->cardFromDefinition($validated['editingTaskCatalogKey'], [
+                    $this->taskCardFromDefinition($validated['editingTaskCatalogKey'], [
                         'key' => $this->editingTaskKey,
                     ]),
                     [
@@ -708,6 +729,12 @@ class WorkflowManager extends Component
 
                 if (! ($formConfig['mailbox_source'] ?? false)) {
                     unset($task['mailbox_source']);
+                }
+
+                if (($task['runner'] ?? null) === 'workflow') {
+                    unset($task['node_script'], $task['php_handler']);
+                } else {
+                    unset($task['workflow_id'], $task['workflow_slug']);
                 }
 
                 unset($task['on_partial']);
@@ -925,7 +952,26 @@ class WorkflowManager extends Component
             return null;
         }
 
-        return Workflow::query()->find($this->selectedWorkflowId);
+        return Workflow::query()
+            ->with(['includedByWorkflows', 'includedWorkflows'])
+            ->find($this->selectedWorkflowId);
+    }
+
+    protected function editableWorkflow(): ?Workflow
+    {
+        $workflow = $this->selectedWorkflow();
+
+        if (! $workflow) {
+            return null;
+        }
+
+        if ($workflow->is_edit_locked) {
+            session()->flash('error', 'Dieser Workflow ist gesperrt und kann nur getestet werden. '.$workflow->lock_reason);
+
+            return null;
+        }
+
+        return $workflow;
     }
 
     protected function previewWorkflowRun(): ?WorkflowRun
@@ -965,6 +1011,7 @@ class WorkflowManager extends Component
         $this->workflowDescription = (string) ($workflow?->description ?? '');
         $this->workflowGroup = trim((string) ($workflow?->category ?? 'custom')) ?: 'custom';
         $this->workflowActive = (bool) ($workflow?->is_active ?? true);
+        $this->workflowLocked = (bool) ($workflow?->is_locked ?? false);
     }
 
     protected function normalizeGroup(string $group): string
@@ -1121,7 +1168,7 @@ class WorkflowManager extends Component
 
     protected function applyTaskDefinitionToForm(string $prefix, string $taskKey, bool $replaceTitle): void
     {
-        $definition = app(WorkflowTaskCatalog::class)->task($taskKey);
+        $definition = $this->taskDefinition($taskKey);
 
         if (! $definition) {
             return;
@@ -1181,7 +1228,7 @@ class WorkflowManager extends Component
 
     protected function taskFormConfig(string $taskKey): array
     {
-        $definition = app(WorkflowTaskCatalog::class)->task($taskKey) ?? [];
+        $definition = $this->taskDefinition($taskKey) ?? [];
         $form = is_array($definition['form'] ?? null) ? $definition['form'] : [];
         $usesBrowserWindow = in_array((string) ($definition['kind'] ?? ''), ['browser', 'input', 'wait'], true)
             && $taskKey !== 'wait.seconds';
@@ -1217,7 +1264,93 @@ class WorkflowManager extends Component
             'input' => 'Eingaben',
             'wait' => 'Warten & Status',
             'data' => 'Daten',
+            'workflow' => 'Workflows',
         ];
+    }
+
+    protected function workflowTaskOptions(?Workflow $selectedWorkflow): array
+    {
+        if (! $selectedWorkflow) {
+            return [];
+        }
+
+        return Workflow::query()
+            ->whereKeyNot($selectedWorkflow->id)
+            ->where('is_active', true)
+            ->orderBy('name')
+            ->get()
+            ->reject(fn (Workflow $workflow): bool => $workflow->includesWorkflow($selectedWorkflow->id))
+            ->map(fn (Workflow $workflow): array => $this->workflowTaskDefinition($workflow))
+            ->values()
+            ->all();
+    }
+
+    protected function taskDefinition(string $taskKey): ?array
+    {
+        $definition = app(WorkflowTaskCatalog::class)->task($taskKey);
+
+        if ($definition) {
+            return $definition;
+        }
+
+        if (! preg_match('/^workflow\.include\.(\d+)$/', $taskKey, $matches)) {
+            return null;
+        }
+
+        $workflow = Workflow::query()->find((int) $matches[1]);
+        $selectedWorkflow = $this->selectedWorkflow();
+
+        if (
+            ! $workflow
+            || ! $workflow->is_active
+            || ! $selectedWorkflow
+            || (int) $workflow->id === (int) $selectedWorkflow->id
+            || $workflow->includesWorkflow($selectedWorkflow->id)
+        ) {
+            return null;
+        }
+
+        return ['task_key' => $taskKey, ...$this->workflowTaskDefinition($workflow)];
+    }
+
+    protected function workflowTaskDefinition(Workflow $workflow): array
+    {
+        return [
+            'key' => 'workflow.include.'.$workflow->id,
+            'label' => 'Workflow: '.$workflow->name,
+            'kind' => 'workflow',
+            'runner' => 'workflow',
+            'workflow_id' => $workflow->id,
+            'workflow_slug' => $workflow->slug,
+            'timeout_seconds' => 3600,
+            'description' => $workflow->description ?: 'Fuehrt den gesamten referenzierten Workflow an dieser Stelle aus.',
+            'form' => [],
+        ];
+    }
+
+    protected function taskCardFromDefinition(string $taskKey, array $overrides = []): array
+    {
+        $definition = $this->taskDefinition($taskKey);
+
+        if (! $definition || ($definition['runner'] ?? null) !== 'workflow') {
+            return app(WorkflowTaskCatalog::class)->cardFromDefinition($taskKey, $overrides);
+        }
+
+        $card = app(WorkflowTaskCatalog::class)->cardFromDefinition($taskKey, $overrides);
+        $card = array_replace($card, [
+            'task_key' => $taskKey,
+            'title' => (string) ($overrides['title'] ?? $definition['label']),
+            'description' => (string) ($overrides['description'] ?? $definition['description']),
+            'kind' => 'workflow',
+            'runner' => 'workflow',
+            'workflow_id' => (int) $definition['workflow_id'],
+            'workflow_slug' => (string) $definition['workflow_slug'],
+            'timeout_seconds' => max(0, (int) ($overrides['timeout_seconds'] ?? $definition['timeout_seconds'])),
+        ]);
+
+        unset($card['node_script'], $card['php_handler']);
+
+        return $card;
     }
 
     protected function validateTaskFieldRequirements(string $prefix, array $formConfig): bool
@@ -1568,7 +1701,7 @@ class WorkflowManager extends Component
     {
         $workflow = $this->selectedWorkflow();
 
-        if (! $workflow) {
+        if (! $workflow || $workflow->is_edit_locked) {
             return null;
         }
 

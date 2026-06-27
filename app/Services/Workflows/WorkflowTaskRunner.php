@@ -2,6 +2,7 @@
 
 namespace App\Services\Workflows;
 
+use App\Models\Workflow;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowStep;
 use App\Models\WorkflowStepRun;
@@ -14,8 +15,7 @@ class WorkflowTaskRunner
 {
     public function __construct(
         protected MailAccountRegistrationRunner $mailSettings,
-    ) {
-    }
+    ) {}
 
     public function start(WorkflowRun $run, WorkflowStep $step, WorkflowStepRun $stepRun, array $runtimeContext = []): array
     {
@@ -219,10 +219,119 @@ class WorkflowTaskRunner
 
     protected function runtimeTasks(WorkflowStep $step): array
     {
-        return collect($step->task_cards)
-            ->map(fn (array $task): array => $this->normalizeRuntimeTask($task))
-            ->values()
-            ->toArray();
+        return $this->expandRuntimeTasks(
+            $step->task_cards,
+            [(int) $step->workflow_id],
+        );
+    }
+
+    protected function expandRuntimeTasks(
+        array $tasks,
+        array $workflowStack,
+        ?string $parentTaskKey = null,
+        string $keyPrefix = '',
+    ): array {
+        $expanded = [];
+
+        foreach ($tasks as $task) {
+            if (! is_array($task)) {
+                continue;
+            }
+
+            if ((string) ($task['runner'] ?? '') !== 'workflow') {
+                $runtimeTask = $this->normalizeRuntimeTask($task);
+
+                if ($keyPrefix !== '') {
+                    $originalKey = trim((string) ($runtimeTask['key'] ?? 'task')) ?: 'task';
+                    $runtimeTask['key'] = Str::slug($keyPrefix.'-'.$originalKey);
+                }
+
+                if ($parentTaskKey !== null) {
+                    $runtimeTask['parent_task_key'] = $parentTaskKey;
+                }
+
+                $expanded[] = $runtimeTask;
+
+                continue;
+            }
+
+            $workflowId = (int) ($task['workflow_id'] ?? 0);
+            $taskKey = trim((string) ($task['key'] ?? 'workflow')) ?: 'workflow';
+            $rootTaskKey = $parentTaskKey ?? $taskKey;
+
+            if ($workflowId <= 0) {
+                throw new \RuntimeException('Die Workflow-Task "'.$taskKey.'" hat keine gueltige Workflow-Referenz.');
+            }
+
+            if (in_array($workflowId, $workflowStack, true)) {
+                throw new \RuntimeException('Zyklische Workflow-Einbindung erkannt (Workflow #'.$workflowId.').');
+            }
+
+            $workflow = Workflow::query()
+                ->with(['steps' => fn ($query) => $query->ordered()])
+                ->find($workflowId);
+
+            if (! $workflow) {
+                throw new \RuntimeException('Der eingebettete Workflow #'.$workflowId.' wurde nicht gefunden.');
+            }
+
+            if (! $workflow->is_active) {
+                throw new \RuntimeException('Der eingebettete Workflow "'.$workflow->name.'" ist deaktiviert.');
+            }
+
+            $steps = $workflow->steps->where('is_enabled', true)->values();
+
+            if ($steps->isEmpty()) {
+                throw new \RuntimeException('Der eingebettete Workflow "'.$workflow->name.'" hat keine aktiven Listen.');
+            }
+
+            foreach ($steps as $nestedStep) {
+                $nestedTasks = $nestedStep->task_cards;
+
+                if ($nestedTasks === [] && $nestedStep->type === WorkflowStep::TYPE_WAIT) {
+                    $nestedTasks = [app(WorkflowTaskCatalog::class)->cardFromDefinition('wait.seconds', [
+                        'key' => 'warten',
+                        'title' => $nestedStep->name,
+                        'value' => max(0, (int) data_get($nestedStep->config_json, 'seconds', $nestedStep->wait_after_seconds)),
+                    ])];
+                }
+
+                if ($nestedTasks === []) {
+                    throw new \RuntimeException(
+                        'Die Liste "'.$nestedStep->name.'" im eingebetteten Workflow "'.$workflow->name.'" enthaelt keine ausfuehrbare Task-Karte.'
+                    );
+                }
+
+                $nestedPrefix = trim($keyPrefix.'-workflow-'.$workflow->id.'-'.$taskKey.'-step-'.$nestedStep->id, '-');
+                $nestedExpanded = $this->expandRuntimeTasks(
+                    $nestedTasks,
+                    [...$workflowStack, $workflowId],
+                    $rootTaskKey,
+                    $nestedPrefix,
+                );
+
+                foreach ($nestedExpanded as $nestedTask) {
+                    $nestedTask['embedded_workflow_id'] = $workflow->id;
+                    $nestedTask['embedded_workflow_name'] = $workflow->name;
+                    $expanded[] = $nestedTask;
+                }
+
+                if ($nestedStep->type !== WorkflowStep::TYPE_WAIT && $nestedStep->wait_after_seconds > 0) {
+                    $waitTask = app(WorkflowTaskCatalog::class)->cardFromDefinition('wait.seconds', [
+                        'key' => 'wartezeit-nach-liste',
+                        'title' => 'Wartezeit nach '.$nestedStep->name,
+                        'value' => $nestedStep->wait_after_seconds,
+                    ]);
+                    $waitTask['key'] = Str::slug($nestedPrefix.'-wartezeit-nach-liste');
+                    $waitTask['parent_task_key'] = $rootTaskKey;
+                    $waitTask['embedded_workflow_id'] = $workflow->id;
+                    $waitTask['embedded_workflow_name'] = $workflow->name;
+                    $expanded[] = $waitTask;
+                }
+            }
+        }
+
+        return $expanded;
     }
 
     protected function normalizeRuntimeTask(array $task): array

@@ -13,16 +13,27 @@ class WorkflowStep extends Model
     use HasFactory;
 
     public const TYPE_MAIL_ACCOUNT_REGISTRATION = 'mail_account_registration';
+
     public const TYPE_WEBMAIL_LOGIN = 'webmail_login';
+
     public const TYPE_PLANNED_ACTION = 'planned_action';
+
     public const TYPE_WAIT = 'wait';
+
     public const TYPE_PREPARATION = 'preparation';
+
     public const TYPE_DATA_PROCESSING = 'data_processing';
+
     public const TYPE_BROWSER_CONTROL = 'browser_control';
+
     public const TYPE_INTERACTION = 'interaction';
+
     public const TYPE_DECISION = 'decision';
+
     public const TYPE_CLEANUP = 'cleanup';
+
     public const TYPE_BROWSER_TASK = 'browser_task';
+
     public const TYPE_DATA_TASK = 'data_task';
 
     protected $fillable = [
@@ -44,6 +55,16 @@ class WorkflowStep extends Model
         'retry_attempts' => 'integer',
         'wait_after_seconds' => 'integer',
     ];
+
+    protected static function booted(): void
+    {
+        $syncWorkflowReferences = static function (WorkflowStep $step): void {
+            Workflow::query()->find($step->workflow_id)?->syncIncludedWorkflowReferences();
+        };
+
+        static::saved($syncWorkflowReferences);
+        static::deleted($syncWorkflowReferences);
+    }
 
     public function workflow(): BelongsTo
     {
@@ -123,6 +144,8 @@ class WorkflowStep extends Model
                     'position' => $order,
                     'kind' => trim((string) ($task['kind'] ?? 'browser')),
                     'task_key' => trim((string) ($task['task_key'] ?? '')),
+                    'workflow_id' => (int) ($task['workflow_id'] ?? 0),
+                    'workflow_slug' => trim((string) ($task['workflow_slug'] ?? '')),
                     'runner' => trim((string) ($task['runner'] ?? '')),
                     'node_script' => trim((string) ($task['node_script'] ?? '')),
                     'php_handler' => trim((string) ($task['php_handler'] ?? '')),

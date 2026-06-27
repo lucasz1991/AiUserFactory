@@ -25,9 +25,11 @@
         @endif
 
         @if($deleteMethod)
-            <button type="button" wire:click="{{ $deleteMethod }}({{ $workflow->id }})" wire:confirm="Workflow samt Aufgaben, Tasks und Ausfuehrungen wirklich loeschen?" class="block w-full px-3 py-2 text-left text-sm font-semibold text-red-700 hover:bg-red-50">
-                Loeschen
-            </button>
+            @if(! $workflow->is_edit_locked)
+                <button type="button" wire:click="{{ $deleteMethod }}({{ $workflow->id }})" wire:confirm="Workflow samt Aufgaben, Tasks und Ausfuehrungen wirklich loeschen?" class="block w-full px-3 py-2 text-left text-sm font-semibold text-red-700 hover:bg-red-50">
+                    Loeschen
+                </button>
+            @endif
         @endif
     </x-slot>
 </x-dropdown>
