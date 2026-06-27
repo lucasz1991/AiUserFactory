@@ -851,6 +851,37 @@ class WorkflowManager extends Component
         $this->showRunPreviewModal = false;
     }
 
+    public function refreshRunPreview(): void
+    {
+        if (! $this->previewWorkflowRunId) {
+            return;
+        }
+
+        $run = WorkflowRun::query()->find($this->previewWorkflowRunId);
+
+        if (! $run || in_array($run->status, ['completed', 'failed', 'cancelled'], true)) {
+            return;
+        }
+
+        app(WorkflowExecutionService::class)->refresh($run);
+    }
+
+    public function cancelPreviewWorkflowRun(): void
+    {
+        if (! $this->previewWorkflowRunId) {
+            return;
+        }
+
+        $run = WorkflowRun::query()->find($this->previewWorkflowRunId);
+
+        if (! $run) {
+            return;
+        }
+
+        app(WorkflowExecutionService::class)->cancel($run, 'Workflow-Test wurde im Vorschau-Fenster gestoppt.');
+        session()->flash('success', 'Workflow-Test wurde gestoppt.');
+    }
+
     public function openLatestRunPreview(): void
     {
         $workflow = $this->selectedWorkflow();

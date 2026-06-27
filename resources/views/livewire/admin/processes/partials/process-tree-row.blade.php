@@ -2,6 +2,7 @@
     $depth = max(0, (int) ($depth ?? 0));
     $children = $process->children ?? collect();
     $hasChildren = $children->isNotEmpty();
+    $isWorkflowProcess = $process->process_type === 'workflow-run';
 @endphp
 
 <tr wire:key="managed-process-{{ $process->id }}" class="{{ $process->is_idle_suspect ? 'bg-amber-50/60' : '' }}">
@@ -49,7 +50,11 @@
         @endif
     </td>
     <td class="whitespace-nowrap px-4 py-3 text-right">
-        @if($process->isRunning())
+        @if($isWorkflowProcess && $process->isRunning())
+            <button type="button" wire:click="cancelWorkflowRun({{ abs((int) $process->pid) }})" wire:confirm="Workflow-Lauf #{{ abs((int) $process->pid) }} stoppen?" class="rounded border border-red-300 px-2 py-1 text-xs font-semibold text-red-700 hover:bg-red-50">
+                Stoppen
+            </button>
+        @elseif($process->isRunning())
             <button type="button" wire:click="terminate({{ $process->id }}, false)" wire:confirm="Prozess {{ $process->pid }} beenden?" class="rounded border border-amber-300 px-2 py-1 text-xs font-semibold text-amber-700 hover:bg-amber-50">
                 Beenden
             </button>

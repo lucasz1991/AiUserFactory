@@ -120,6 +120,79 @@ class WorkflowExecutionService
         }
     }
 
+    public function refresh(int|WorkflowRun $workflowRun): void
+    {
+        $run = $this->loadRun($workflowRun);
+
+        if ($this->isFinalStatus($run->status)) {
+            return;
+        }
+
+        $activeStepRun = $run->stepRuns()
+            ->whereIn('status', ['running', 'waiting'])
+            ->latest('id')
+            ->first();
+
+        if ($activeStepRun && trim((string) $activeStepRun->external_run_id) !== '') {
+            $this->monitorStepRun($activeStepRun->id);
+
+            return;
+        }
+
+        $this->advance($run);
+    }
+
+    public function cancel(int|WorkflowRun $workflowRun, string $message = 'Workflow-Lauf wurde manuell gestoppt.'): array
+    {
+        $run = $this->loadRun($workflowRun);
+
+        if ($this->isFinalStatus($run->status)) {
+            return ['ok' => true, 'message' => 'Workflow-Lauf ist bereits beendet.'];
+        }
+
+        $cancelledAt = now();
+        $stepRuns = $run->stepRuns()
+            ->whereIn('status', ['running', 'waiting'])
+            ->get();
+
+        foreach ($stepRuns as $stepRun) {
+            $this->cancelExternalRun($stepRun, $message);
+
+            $startedAt = $stepRun->started_at instanceof Carbon ? $stepRun->started_at : $cancelledAt;
+            $result = array_replace(is_array($stepRun->result_json) ? $stepRun->result_json : [], [
+                'ok' => false,
+                'status' => 'cancelled',
+                'statusLevel' => 'cancelled',
+                'statusMessage' => $message,
+                'cancelledAt' => $cancelledAt->toIso8601String(),
+            ]);
+
+            $stepRun->forceFill([
+                'status' => 'cancelled',
+                'finished_at' => $cancelledAt,
+                'duration_ms' => max(0, $startedAt->diffInMilliseconds($cancelledAt)),
+                'result_json' => $this->publicRunSnapshot($result),
+                'logs_json' => $this->logsFromExternalStatus($result),
+                'error_message' => $message,
+            ])->save();
+        }
+
+        $run->forceFill([
+            'status' => 'cancelled',
+            'current_workflow_step_id' => null,
+            'finished_at' => $cancelledAt,
+            'result_json' => array_replace(is_array($run->result_json) ? $run->result_json : [], [
+                'ok' => false,
+                'status' => 'cancelled',
+                'statusMessage' => $message,
+                'cancelledAt' => $cancelledAt->toIso8601String(),
+            ]),
+            'error_message' => $message,
+        ])->save();
+
+        return ['ok' => true, 'message' => $message, 'cancelledStepRuns' => $stepRuns->count()];
+    }
+
     public function monitorStepRun(int $workflowStepRunId): void
     {
         $stepRun = WorkflowStepRun::query()
@@ -841,6 +914,22 @@ class WorkflowExecutionService
         ) {
             $this->applyMailRegistrationResult($stepRun->workflowRun, $result);
         }
+    }
+
+    protected function cancelExternalRun(WorkflowStepRun $stepRun, string $message): void
+    {
+        $externalRunId = trim((string) $stepRun->external_run_id);
+
+        if ($externalRunId === '') {
+            return;
+        }
+
+        match ($stepRun->external_run_type) {
+            'mail-registration' => $this->mailRegistration->cancelRun($externalRunId, true, $message),
+            'webmail-session' => $this->webmailSession->cancelRun($externalRunId, true, $message),
+            'workflow-task' => $this->workflowTasks->cancelRun($externalRunId, true, $message),
+            default => null,
+        };
     }
 
     protected function applyMailRegistrationResult(WorkflowRun $run, array $result): void

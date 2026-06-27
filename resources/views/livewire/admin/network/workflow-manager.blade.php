@@ -385,7 +385,7 @@
         <x-dialog-modal wire:model="showRunPreviewModal" maxWidth="6xl">
             <x-slot name="title">Workflow-Vorschau</x-slot>
             <x-slot name="content">
-                <div @if($showRunPreviewModal) wire:poll.3s @endif>
+                <div @if($showRunPreviewModal) wire:poll.3s="refreshRunPreview" @endif>
                     @if($previewWorkflowRun)
                         <x-workflows.run-preview :workflow-run="$previewWorkflowRun" />
                     @else
@@ -396,6 +396,11 @@
                 </div>
             </x-slot>
             <x-slot name="footer">
+                @if($previewWorkflowRun && in_array($previewWorkflowRun->status, ['queued', 'running', 'waiting'], true))
+                    <button type="button" wire:click="cancelPreviewWorkflowRun" wire:confirm="Workflow-Test wirklich stoppen?" class="rounded-md border border-red-300 bg-white px-4 py-2 text-sm font-semibold text-red-700 shadow-sm hover:bg-red-50">
+                        Stoppen
+                    </button>
+                @endif
                 <button type="button" wire:click="closeRunPreview" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">
                     Schliessen
                 </button>

@@ -123,17 +123,33 @@
                                 </td>
                                 <td class="whitespace-nowrap px-4 py-3 text-right">
                                     @if($isWorkflowProcess && (int) data_get($process->metadata, 'workflow_run_db_id') > 0)
-                                        <button type="button" wire:click="openWorkflowPreview({{ (int) data_get($process->metadata, 'workflow_run_db_id') }})" class="rounded border border-blue-200 bg-white px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-50">
+                                        @php($workflowRunId = (int) data_get($process->metadata, 'workflow_run_db_id'))
+                                        <button type="button" wire:click="openWorkflowPreview({{ $workflowRunId }})" class="rounded border border-blue-200 bg-white px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-50">
                                             Vorschau
                                         </button>
+                                        @if($process->isRunning())
+                                            <button type="button" wire:click="cancelWorkflowRun({{ $workflowRunId }})" wire:confirm="Workflow-Lauf #{{ $workflowRunId }} stoppen?" class="ml-2 rounded border border-red-300 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50">
+                                                Stoppen
+                                            </button>
+                                        @endif
                                     @elseif($workflowRunPreview)
                                         <button type="button" wire:click="openWorkflowPreview({{ $workflowRunPreview->id }})" class="rounded border border-blue-200 bg-white px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-50">
                                             Workflow
                                         </button>
+                                        @if($process->isRunning())
+                                            <button type="button" wire:click="terminateProcess({{ $process->id }}, true)" wire:confirm="Prozess {{ $process->pid }} stoppen?" class="ml-2 rounded border border-red-300 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50">
+                                                Stoppen
+                                            </button>
+                                        @endif
                                     @elseif($process->is_root && $process->run_id && in_array($process->run_type, ['mail-registration', 'webmail-session'], true))
                                         <button type="button" wire:click="openPreview('{{ $process->run_id }}', '{{ $process->run_type }}')" class="rounded border border-blue-200 bg-white px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-50">
                                             Vorschau
                                         </button>
+                                        @if($process->isRunning())
+                                            <button type="button" wire:click="terminateProcess({{ $process->id }}, true)" wire:confirm="Prozess {{ $process->pid }} stoppen?" class="ml-2 rounded border border-red-300 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50">
+                                                Stoppen
+                                            </button>
+                                        @endif
                                     @else
                                         <span class="text-xs text-slate-400">-</span>
                                     @endif
@@ -259,6 +275,11 @@
         </x-slot>
 
         <x-slot name="footer">
+            @if(data_get($previewStatus, 'isRunning'))
+                <button type="button" wire:click="cancelPreviewRun" wire:confirm="Prozesslauf wirklich stoppen?" class="rounded-md border border-red-300 bg-white px-4 py-2 text-sm font-semibold text-red-700 shadow-sm hover:bg-red-50">
+                    Stoppen
+                </button>
+            @endif
             <button type="button" wire:click="closePreview" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">
                 Schliessen
             </button>
@@ -271,16 +292,23 @@
         </x-slot>
 
         <x-slot name="content">
-            @if($previewWorkflowRun)
-                <x-workflows.run-preview :workflow-run="$previewWorkflowRun" />
-            @else
-                <div class="rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
-                    Dieser Workflow-Lauf wurde nicht gefunden.
-                </div>
-            @endif
+            <div @if($showWorkflowPreviewModal) wire:poll.3s="refreshWorkflowPreview" @endif>
+                @if($previewWorkflowRun)
+                    <x-workflows.run-preview :workflow-run="$previewWorkflowRun" />
+                @else
+                    <div class="rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
+                        Dieser Workflow-Lauf wurde nicht gefunden.
+                    </div>
+                @endif
+            </div>
         </x-slot>
 
         <x-slot name="footer">
+            @if($previewWorkflowRun && in_array($previewWorkflowRun->status, ['queued', 'running', 'waiting'], true))
+                <button type="button" wire:click="cancelWorkflowPreview" wire:confirm="Workflow-Lauf wirklich stoppen?" class="rounded-md border border-red-300 bg-white px-4 py-2 text-sm font-semibold text-red-700 shadow-sm hover:bg-red-50">
+                    Stoppen
+                </button>
+            @endif
             <button type="button" wire:click="closeWorkflowPreview" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">
                 Schliessen
             </button>

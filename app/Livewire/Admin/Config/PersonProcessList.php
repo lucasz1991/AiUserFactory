@@ -8,6 +8,8 @@ use App\Models\WorkflowRun;
 use App\Models\WorkflowStepRun;
 use App\Services\Mail\MailAccountRegistrationRunner;
 use App\Services\Mail\WebmailSessionRunner;
+use App\Services\Processes\ManagedProcessInventory;
+use App\Services\Workflows\WorkflowExecutionService;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Schema;
 use Livewire\Component;
@@ -91,6 +93,24 @@ class PersonProcessList extends Component
         $this->showPreviewModal = false;
     }
 
+    public function cancelPreviewRun(): void
+    {
+        if (! $this->previewRunId || ! $this->previewRunType) {
+            return;
+        }
+
+        $message = 'Prozesslauf wurde im Vorschau-Fenster gestoppt.';
+        $result = match ($this->previewRunType) {
+            'mail-registration' => app(MailAccountRegistrationRunner::class)->cancelRun($this->previewRunId, true, $message),
+            'webmail-session' => app(WebmailSessionRunner::class)->cancelRun($this->previewRunId, true, $message),
+            default => ['ok' => false, 'message' => 'Unbekannter Prozesstyp.'],
+        };
+
+        $this->notice = (string) ($result['message'] ?? $message);
+        $this->refreshPreview();
+        $this->syncProcesses(false);
+    }
+
     public function openWorkflowPreview(int $workflowRunId): void
     {
         if ($workflowRunId <= 0) {
@@ -104,6 +124,60 @@ class PersonProcessList extends Component
     public function closeWorkflowPreview(): void
     {
         $this->showWorkflowPreviewModal = false;
+    }
+
+    public function refreshWorkflowPreview(): void
+    {
+        if (! $this->previewWorkflowRunId) {
+            return;
+        }
+
+        $run = WorkflowRun::query()->find($this->previewWorkflowRunId);
+
+        if (! $run || in_array($run->status, ['completed', 'failed', 'cancelled'], true)) {
+            return;
+        }
+
+        app(WorkflowExecutionService::class)->refresh($run);
+    }
+
+    public function cancelWorkflowRun(int $workflowRunId): void
+    {
+        $run = WorkflowRun::query()->find($workflowRunId);
+
+        if (! $run) {
+            $this->notice = 'Workflow-Lauf wurde nicht gefunden.';
+
+            return;
+        }
+
+        $result = app(WorkflowExecutionService::class)->cancel($run, 'Workflow-Lauf wurde ueber die Prozessliste gestoppt.');
+        $this->notice = (string) ($result['message'] ?? 'Workflow-Lauf wurde gestoppt.');
+        $this->syncProcesses(false);
+    }
+
+    public function cancelWorkflowPreview(): void
+    {
+        if (! $this->previewWorkflowRunId) {
+            return;
+        }
+
+        $this->cancelWorkflowRun($this->previewWorkflowRunId);
+    }
+
+    public function terminateProcess(int $processId, bool $force = true): void
+    {
+        $process = ManagedProcess::query()->find($processId);
+
+        if (! $process) {
+            $this->notice = 'Prozess wurde nicht gefunden.';
+
+            return;
+        }
+
+        $result = app(ManagedProcessInventory::class)->terminate($process, $force);
+        $this->notice = (string) ($result['message'] ?? 'Prozessaktion wurde ausgefuehrt.');
+        $this->syncProcesses(false);
     }
 
     public function syncProcesses(bool $showNotice = true): void

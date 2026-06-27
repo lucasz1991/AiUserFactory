@@ -165,6 +165,55 @@ class WebmailSessionRunner
         return $this->readJsonFile($resultPath);
     }
 
+    public function cancelRun(?string $runId, bool $force = true, string $message = 'Webmail-Sessionlauf wurde abgebrochen.'): array
+    {
+        $runId = trim((string) $runId);
+
+        if ($runId === '') {
+            return ['ok' => false, 'message' => 'Run-ID fehlt.'];
+        }
+
+        $runDirectory = $this->runDirectory($runId);
+        $statusPath = $runDirectory.DIRECTORY_SEPARATOR.'status.json';
+        $resultPath = $runDirectory.DIRECTORY_SEPARATOR.'result.json';
+        $status = $this->readJsonFile($statusPath) ?: [];
+        $pid = (int) ($status['pid'] ?? 0);
+
+        if ($pid > 1) {
+            $this->stopProcess($pid, $force);
+        }
+
+        $result = [
+            'ok' => false,
+            'status' => 'cancelled',
+            'statusMessage' => $message,
+            'cancelledAt' => now()->toIso8601String(),
+        ];
+        $events = is_array($status['events'] ?? null) ? $status['events'] : [];
+        $events[] = [
+            'at' => now()->toIso8601String(),
+            'stage' => 'cancelled',
+            'message' => $message,
+            'pid' => $pid ?: null,
+        ];
+
+        $status = array_replace($status, [
+            'runId' => $runId,
+            'state' => 'cancelled',
+            'stage' => 'cancelled',
+            'message' => $message,
+            'isRunning' => false,
+            'cancelledAt' => now()->toIso8601String(),
+            'at' => now()->toIso8601String(),
+            'events' => array_slice($events, -80),
+        ]);
+
+        $this->writeJsonFile($resultPath, $result);
+        $this->writeJsonFile($statusPath, $status);
+
+        return ['ok' => true, 'message' => $message, 'pid' => $pid ?: null];
+    }
+
     public function capture(array $account, string $scope = 'webmail'): array
     {
         $provider = $this->normalizeProvider($account['provider'] ?? null);
@@ -736,6 +785,27 @@ class WebmailSessionRunner
         $pid = (int) trim($result->output());
 
         return $pid > 0 ? $pid : null;
+    }
+
+    protected function stopProcess(int $pid, bool $force = true): void
+    {
+        if ($pid <= 1) {
+            return;
+        }
+
+        if (PHP_OS_FAMILY === 'Windows') {
+            Process::timeout(10)->run(array_values(array_filter([
+                'taskkill',
+                '/PID',
+                (string) $pid,
+                '/T',
+                $force ? '/F' : null,
+            ])));
+
+            return;
+        }
+
+        Process::timeout(10)->run(['kill', '-'.($force ? 'KILL' : 'TERM'), (string) $pid]);
     }
 
     protected function powershellQuote(string $value): string

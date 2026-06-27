@@ -7,6 +7,7 @@ use App\Jobs\TerminateManagedProcessJob;
 use App\Models\ManagedProcess;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowStepRun;
+use App\Services\Workflows\WorkflowExecutionService;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Schema;
 use Livewire\Component;
@@ -84,6 +85,12 @@ class ProcessMonitor extends Component
 
     public function terminate(int $processId, bool $force = false): void
     {
+        if ($processId < 0) {
+            $this->cancelWorkflowRun(abs($processId));
+
+            return;
+        }
+
         if (! Schema::hasTable('managed_processes')) {
             $this->notice = 'Die Tabelle managed_processes ist noch nicht migriert.';
 
@@ -101,6 +108,21 @@ class ProcessMonitor extends Component
         TerminateManagedProcessJob::dispatchSync($process->id, $force);
         $process->refresh();
         $this->notice = $process->action_message ?: 'Prozessaktion wurde ausgefuehrt.';
+        $this->syncProcesses(false);
+    }
+
+    public function cancelWorkflowRun(int $workflowRunId): void
+    {
+        $workflowRun = WorkflowRun::query()->find($workflowRunId);
+
+        if (! $workflowRun) {
+            $this->notice = 'Workflow-Lauf wurde nicht gefunden.';
+
+            return;
+        }
+
+        $result = app(WorkflowExecutionService::class)->cancel($workflowRun, 'Workflow-Lauf wurde ueber die Prozessliste gestoppt.');
+        $this->notice = (string) ($result['message'] ?? 'Workflow-Lauf wurde gestoppt.');
         $this->syncProcesses(false);
     }
 
