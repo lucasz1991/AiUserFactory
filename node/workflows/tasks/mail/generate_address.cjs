@@ -1,6 +1,7 @@
 'use strict';
 
 const { captureTaskPreview } = require('../lib/preview.cjs');
+const { fillFirstMatchingInput } = require('../lib/fill_input.cjs');
 
 function workflowContext(context = {}) {
   return context.workflow && typeof context.workflow === 'object' ? context.workflow : {};
@@ -85,28 +86,6 @@ function buildCandidates(person, domain) {
     }));
 }
 
-async function fillFirstMatching(page, selectors, value, timeout) {
-  for (const selector of selectors) {
-    try {
-      const locator = typeof page.locator === 'function' ? page.locator(selector).first() : null;
-
-      if (locator && await locator.count() > 0) {
-        await locator.fill(String(value), { timeout });
-        return selector;
-      }
-
-      if (typeof page.fill === 'function') {
-        await page.fill(selector, String(value), { timeout });
-        return selector;
-      }
-    } catch (error) {
-      // Try next selector.
-    }
-  }
-
-  return null;
-}
-
 async function run(context = {}) {
   const workflow = workflowContext(context);
   const input = context.input || {};
@@ -158,14 +137,18 @@ async function run(context = {}) {
     webmailUrl: provider.toLowerCase().includes('gmx') ? 'https://www.gmx.net' : 'https://mail.proton.me',
     generated: true,
   };
-  const selector = await fillFirstMatching(page, selectorsFromInput(input), context.account.username, timeout);
+  const fillResult = await fillFirstMatchingInput(page, selectorsFromInput(input), context.account.username, timeout);
 
-  if (!selector) {
+  if (!fillResult.ok) {
     return {
       ok: false,
       status: 'failed',
       statusMessage: 'Kein Username-/E-Mail-Feld konnte fuer den generierten Wert gefuellt werden.',
       candidateCount: candidates.length,
+      attemptedSelectors: fillResult.attemptedSelectors,
+      inputAttempts: fillResult.attempts,
+      matchedElementCount: fillResult.matchedElementCount,
+      lastFillError: fillResult.lastError || null,
     };
   }
 
@@ -173,7 +156,8 @@ async function run(context = {}) {
     ok: true,
     status: 'success',
     statusMessage: `Username-Kandidat wurde eingetragen: ${context.account.username}`,
-    selector,
+    selector: fillResult.selector,
+    frameUrl: fillResult.frameUrl,
     account: {
       provider: context.account.provider,
       username: context.account.username,

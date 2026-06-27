@@ -1,6 +1,7 @@
 'use strict';
 
 const { captureTaskPreview } = require('../lib/preview.cjs');
+const { fillFirstMatchingInput } = require('../lib/fill_input.cjs');
 
 function selectorsFromInput(input = {}) {
   return []
@@ -24,28 +25,6 @@ function currentAccount(context = {}) {
   return context.account || context.mailRegistration?.account || null;
 }
 
-async function fillFirstMatching(page, selectors, value, timeout) {
-  for (const selector of selectors) {
-    try {
-      const locator = typeof page.locator === 'function' ? page.locator(selector).first() : null;
-
-      if (locator && await locator.count() > 0) {
-        await locator.fill(String(value), { timeout });
-        return selector;
-      }
-
-      if (typeof page.fill === 'function') {
-        await page.fill(selector, String(value), { timeout });
-        return selector;
-      }
-    } catch (error) {
-      // Try next selector.
-    }
-  }
-
-  return null;
-}
-
 async function run(context = {}) {
   const page = context.page;
   const input = context.input || {};
@@ -63,13 +42,17 @@ async function run(context = {}) {
     return { ok: false, status: 'failed', statusMessage: 'Keine generierte Mailadresse zum Eintragen vorhanden.' };
   }
 
-  const selector = await fillFirstMatching(page, selectorsFromInput(input), value, timeout);
+  const fillResult = await fillFirstMatchingInput(page, selectorsFromInput(input), value, timeout);
 
-  if (!selector) {
+  if (!fillResult.ok) {
     return {
       ok: false,
       status: 'failed',
       statusMessage: 'Kein E-Mail-/Username-Feld konnte gefuellt werden.',
+      attemptedSelectors: fillResult.attemptedSelectors,
+      inputAttempts: fillResult.attempts,
+      matchedElementCount: fillResult.matchedElementCount,
+      lastFillError: fillResult.lastError || null,
     };
   }
 
@@ -77,7 +60,8 @@ async function run(context = {}) {
     ok: true,
     status: 'success',
     statusMessage: `Mailadresse wurde eingetragen: ${account.email || value}`,
-    selector,
+    selector: fillResult.selector,
+    frameUrl: fillResult.frameUrl,
     account: {
       provider: account.provider,
       username: account.username,

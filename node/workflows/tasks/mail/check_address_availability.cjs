@@ -1,6 +1,7 @@
 'use strict';
 
 const { captureTaskPreview } = require('../lib/preview.cjs');
+const { fillFirstMatchingInput } = require('../lib/fill_input.cjs');
 
 const DEFAULT_UNAVAILABLE_PATTERNS = [
   'already taken',
@@ -93,28 +94,6 @@ function advanceCandidate(context = {}) {
   return candidate;
 }
 
-async function fillFirstMatching(page, selectors, value, timeout) {
-  for (const selector of selectors) {
-    try {
-      const locator = typeof page.locator === 'function' ? page.locator(selector).first() : null;
-
-      if (locator && await locator.count() > 0) {
-        await locator.fill(String(value), { timeout });
-        return selector;
-      }
-
-      if (typeof page.fill === 'function') {
-        await page.fill(selector, String(value), { timeout });
-        return selector;
-      }
-    } catch (error) {
-      // Try next selector.
-    }
-  }
-
-  return null;
-}
-
 async function pageSnapshot(page) {
   return page.evaluate(() => ({
     url: window.location.href,
@@ -195,14 +174,18 @@ async function run(context = {}) {
     }
 
     const nextValue = useFullEmail ? next.email : next.username;
-    const selector = await fillFirstMatching(page, selectors, nextValue, timeout);
+    const fillResult = await fillFirstMatchingInput(page, selectors, nextValue, timeout);
 
-    if (!selector) {
+    if (!fillResult.ok) {
       return {
         ok: false,
         status: 'failed',
         statusMessage: 'Naechster Mailadress-Kandidat konnte nicht eingetragen werden.',
         tried,
+        attemptedSelectors: fillResult.attemptedSelectors,
+        inputAttempts: fillResult.attempts,
+        matchedElementCount: fillResult.matchedElementCount,
+        lastFillError: fillResult.lastError || null,
       };
     }
   }
