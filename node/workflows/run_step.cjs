@@ -285,6 +285,71 @@ function valueFromPath(source, keyPath) {
   return current;
 }
 
+function normalizeMailboxSource(value) {
+  const normalized = String(value ?? '').trim().toLowerCase();
+
+  return ['verification', 'verification_mailbox', 'veri-account', 'veri_account', 'main', 'master'].includes(normalized)
+    ? 'verification'
+    : 'person';
+}
+
+function scopedWorkflowContext(context = {}, mailboxSource = 'person') {
+  const source = normalizeMailboxSource(mailboxSource);
+  const workflow = runtime.workflow || {};
+
+  if (source !== 'verification') {
+    return context;
+  }
+
+  const verificationAccount = context.verificationMailbox
+    || context.verification_mailbox
+    || context.veri_account
+    || workflow.verificationMailbox
+    || workflow.verification_mailbox
+    || workflow.veri_account
+    || workflow['veri-account']
+    || null;
+
+  if (!verificationAccount || typeof verificationAccount !== 'object') {
+    return context;
+  }
+
+  const verificationPerson = {
+    ...(context.person || workflow.person || {}),
+    id: null,
+    displayName: 'Verification Mailbox',
+    firstName: '',
+    lastName: '',
+    email: verificationAccount.email || '',
+    username: verificationAccount.username || verificationAccount.email || '',
+    password: verificationAccount.password || '',
+    provider: verificationAccount.provider || '',
+    webmailUrl: verificationAccount.webmailUrl || verificationAccount.webmail_url || '',
+    webmail_url: verificationAccount.webmail_url || verificationAccount.webmailUrl || '',
+    hasPassword: verificationAccount.hasPassword ?? Boolean(verificationAccount.password),
+    loginUsername: verificationAccount.username || verificationAccount.email || '',
+    emailAccount: verificationAccount,
+    email_account: verificationAccount,
+    isVerificationMailbox: true,
+  };
+
+  return {
+    ...context,
+    person: verificationPerson,
+    account: verificationAccount,
+    verificationMailbox: verificationAccount,
+    verification_mailbox: verificationAccount,
+    veri_account: verificationAccount,
+    'veri-account': verificationAccount,
+    workflow: {
+      ...workflow,
+      person: verificationPerson,
+      account: verificationAccount,
+      email_account: verificationAccount,
+    },
+  };
+}
+
 function resolveString(value, context = {}) {
   const normalized = String(value ?? '').trim();
 
@@ -376,6 +441,8 @@ function resolveString(value, context = {}) {
 }
 
 function taskInput(task, context = {}) {
+  const mailboxSource = normalizeMailboxSource(task.mailbox_source || task.mailboxSource || 'person');
+  const valueContext = scopedWorkflowContext(context, mailboxSource);
   const browserWindow = normalizeBrowserWindowName(
     task.browser_window_name
     || task.browser_window
@@ -390,10 +457,12 @@ function taskInput(task, context = {}) {
     browserWindowName: browserWindow,
     browser_window: browserWindow,
     browser_window_name: browserWindow,
-    value: resolveString(task.value ?? task.input ?? '', context),
-    inputValue: resolveString(task.input ?? task.value ?? '', context),
-    input_value: resolveString(task.input ?? task.value ?? '', context),
-    url: resolveString(task.url ?? task.value ?? task.input ?? '', context),
+    mailboxSource,
+    mailbox_source: mailboxSource,
+    value: resolveString(task.value ?? task.input ?? '', valueContext),
+    inputValue: resolveString(task.input ?? task.value ?? '', valueContext),
+    input_value: resolveString(task.input ?? task.value ?? '', valueContext),
+    url: resolveString(task.url ?? task.value ?? task.input ?? '', valueContext),
     selector: task.selector || task.element_selector || task.input_selector || '',
     elementSelector: task.element_selector || task.selector || '',
     element_selector: task.element_selector || task.selector || '',
@@ -636,10 +705,12 @@ async function restoreBrowserWindowState(context, nextPage, windowName = 'main')
 }
 
 async function runDataTask(task, context = {}) {
-  const person = runtimePerson();
+  const mailboxSource = normalizeMailboxSource(task.mailbox_source || task.mailboxSource || 'person');
+  const scopedContext = scopedWorkflowContext(context, mailboxSource);
+  const person = scopedContext.person || runtimePerson();
   const account = person && typeof person === 'object' && person.emailAccount
     ? person.emailAccount
-    : runtime.workflow?.account || runtime.workflow?.email_account || null;
+    : scopedContext.account || scopedContext.workflow?.account || scopedContext.workflow?.email_account || runtime.workflow?.account || runtime.workflow?.email_account || null;
   const password = String(account?.password || '').trim();
   const hasPassword = account?.hasPassword === true || password !== '';
   const publicAccount = account ? {

@@ -17,7 +17,7 @@
         'url' => false,
         'url_label' => 'URL',
         'url_placeholder' => 'https://example.test',
-        'mailbox_source' => false,
+        'mailbox_source' => true,
         'mailbox_source_label' => 'Postfach',
         'mailbox_source_options' => [
             'person' => 'Bezugs-Person',

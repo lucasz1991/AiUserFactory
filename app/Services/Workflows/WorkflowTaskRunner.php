@@ -329,6 +329,7 @@ class WorkflowTaskRunner
         array $workflowStack,
         ?string $parentTaskKey = null,
         string $keyPrefix = '',
+        ?string $inheritedMailboxSource = null,
     ): array {
         $expanded = [];
 
@@ -339,6 +340,11 @@ class WorkflowTaskRunner
 
             if ((string) ($task['runner'] ?? '') !== 'workflow') {
                 $runtimeTask = $this->normalizeRuntimeTask($task);
+                $mailboxSource = $this->normalizeMailboxSource($inheritedMailboxSource);
+
+                if ($mailboxSource !== null) {
+                    $runtimeTask['mailbox_source'] = $mailboxSource;
+                }
 
                 if ($keyPrefix !== '') {
                     $originalKey = trim((string) ($runtimeTask['key'] ?? 'task')) ?: 'task';
@@ -357,6 +363,7 @@ class WorkflowTaskRunner
             $workflowId = (int) ($task['workflow_id'] ?? 0);
             $taskKey = trim((string) ($task['key'] ?? 'workflow')) ?: 'workflow';
             $rootTaskKey = $parentTaskKey ?? $taskKey;
+            $workflowMailboxSource = $inheritedMailboxSource ?? $this->normalizeMailboxSource($task['mailbox_source'] ?? null);
 
             if ($workflowId <= 0) {
                 throw new \RuntimeException('Die Workflow-Task "'.$taskKey.'" hat keine gueltige Workflow-Referenz.');
@@ -407,6 +414,7 @@ class WorkflowTaskRunner
                     [...$workflowStack, $workflowId],
                     $rootTaskKey,
                     $nestedPrefix,
+                    $workflowMailboxSource,
                 );
 
                 foreach ($nestedExpanded as $nestedTask) {
@@ -425,12 +433,28 @@ class WorkflowTaskRunner
                     $waitTask['parent_task_key'] = $rootTaskKey;
                     $waitTask['embedded_workflow_id'] = $workflow->id;
                     $waitTask['embedded_workflow_name'] = $workflow->name;
+                    if ($workflowMailboxSource !== null) {
+                        $waitTask['mailbox_source'] = $workflowMailboxSource;
+                    }
                     $expanded[] = $waitTask;
                 }
             }
         }
 
         return $expanded;
+    }
+
+    protected function normalizeMailboxSource(mixed $value): ?string
+    {
+        $value = strtolower(trim((string) $value));
+
+        if ($value === '') {
+            return null;
+        }
+
+        return in_array($value, ['verification', 'verification_mailbox', 'veri-account', 'veri_account', 'main', 'master'], true)
+            ? 'verification'
+            : 'person';
     }
 
     protected function normalizeRuntimeTask(array $task): array
