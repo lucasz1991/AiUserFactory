@@ -1,6 +1,11 @@
 'use strict';
 
 const { captureTaskPreview } = require('../lib/preview.cjs');
+const {
+  clickVisibleElement,
+  clickVisibleElementByText,
+  findVisibleElementByText,
+} = require('../lib/find_visible_element.cjs');
 
 function normalizeText(value) {
   return String(value ?? '').trim();
@@ -105,6 +110,91 @@ async function restoreStorage(page, session = {}) {
   }, storage).catch(() => false);
 }
 
+async function pageText(page) {
+  if (!page || typeof page.evaluate !== 'function') {
+    return '';
+  }
+
+  return page.evaluate(() => document.body ? document.body.innerText || '' : '').catch(() => '');
+}
+
+async function isLoggedInLandingPage(page) {
+  const url = typeof page.url === 'function' ? String(page.url() || '') : '';
+
+  if (/logoutlounge/i.test(url) && /status=session/i.test(url)) {
+    return true;
+  }
+
+  const text = await pageText(page);
+
+  return /sie bleiben eingeloggt/i.test(text);
+}
+
+async function openMailboxFromLoggedInLanding(page, timeout) {
+  const selectors = [
+    'a[href*="mail/showStartView"]',
+    'a[href*="weblink.gmx.net/mail"]',
+    'a[href*="/mail/"]:has-text("E-Mail")',
+    'button:has-text("Zum Postfach")',
+    'a:has-text("Zum Postfach")',
+  ];
+  const texts = [
+    'Zum Postfach',
+    'Zum Posteingang',
+    'Postfach öffnen',
+  ];
+
+  for (const selector of selectors) {
+    const clicked = await clickVisibleElement(page, selector, Math.min(timeout, 10000)).catch(() => null);
+
+    if (clicked) {
+      await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: Math.min(timeout, 30000) }).catch(() => {});
+
+      return {
+        clicked: true,
+        method: 'selector',
+        selector,
+        element: clicked,
+      };
+    }
+  }
+
+  for (const text of texts) {
+    const handle = await findVisibleElementByText(page, text, Math.min(timeout, 5000), {
+      selector: 'a,button,[role=button],input[type=button],input[type=submit]',
+    }).catch(() => null);
+
+    if (!handle) {
+      continue;
+    }
+
+    await handle.dispose?.().catch(() => {});
+
+    const clicked = await clickVisibleElementByText(page, text, Math.min(timeout, 10000)).catch(() => null);
+
+    if (clicked) {
+      await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: Math.min(timeout, 30000) }).catch(() => {});
+
+      return {
+        clicked: true,
+        method: 'text',
+        text,
+        element: clicked,
+      };
+    }
+  }
+
+  const fallbackUrl = 'https://weblink.gmx.net/mail/showStartView';
+
+  await page.goto(fallbackUrl, { waitUntil: 'domcontentloaded', timeout });
+
+  return {
+    clicked: false,
+    method: 'fallback-url',
+    url: fallbackUrl,
+  };
+}
+
 async function run(context = {}) {
   const page = context.page;
   const input = context.input || {};
@@ -153,15 +243,24 @@ async function run(context = {}) {
     }));
   }
 
+  let mailboxLandingAction = null;
+
+  if (await isLoggedInLandingPage(page)) {
+    mailboxLandingAction = await openMailboxFromLoggedInLanding(page, timeout);
+  }
+
   return captureTaskPreview(context, {
     ok: true,
     status: 'success',
-    statusMessage: 'Webmail-Session wurde geladen und das Webmailportal wurde geoeffnet.',
+    statusMessage: mailboxLandingAction
+      ? 'Webmail-Session wurde geladen und das Postfach wurde von der Eingeloggt-Zwischenseite geoeffnet.'
+      : 'Webmail-Session wurde geladen und das Webmailportal wurde geoeffnet.',
     url: typeof page.url === 'function' ? page.url() : targetUrl,
     mailboxSource,
     mailboxEmail: account.email || '',
     cookieCount: cookiesRestored,
     storageRestored,
+    mailboxLandingAction,
   });
 }
 
