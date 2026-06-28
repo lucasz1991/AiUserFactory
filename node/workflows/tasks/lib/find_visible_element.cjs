@@ -71,7 +71,6 @@ async function cssSelectorHandle(frame, selector, timeout) {
 
   return frame.waitForSelector(selector, {
     visible: true,
-    state: 'visible',
     timeout,
   }).catch(() => null);
 }

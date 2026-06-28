@@ -80,7 +80,7 @@ async function run(context = {}) {
   const selector = firstNonEmpty(input.elementSelector, input.element_selector, input.selector);
   const text = firstNonEmpty(input.text, input.label, input.value);
 
-  if (!page || typeof page.locator !== 'function') {
+  if (!page || (typeof page.frames !== 'function' && typeof page.mainFrame !== 'function')) {
     return { ok: false, status: 'failed', statusMessage: 'Kein Page-Handle fuer Klick-Task vorhanden.' };
   }
 
@@ -110,7 +110,7 @@ async function run(context = {}) {
     }
   }
 
-  if (text !== '' && typeof page.getByText === 'function') {
+  if (text !== '') {
     try {
       const clicked = await clickText(page, text, timeout);
 

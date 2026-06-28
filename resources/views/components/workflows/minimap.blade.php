@@ -30,6 +30,21 @@
         });
     $stepById = $steps->keyBy('id');
     $stepByAction = $steps->keyBy(fn ($step) => (string) $step->action_key);
+    $actionKeyForTask = static function (string $taskKey) use ($steps): string {
+        if ($taskKey === '') {
+            return '';
+        }
+
+        foreach ($steps as $step) {
+            foreach (collect($step->task_cards)->values() as $task) {
+                if ((string) ($task['key'] ?? '') === $taskKey) {
+                    return trim((string) $step->action_key);
+                }
+            }
+        }
+
+        return '';
+    };
     $nodePositions = [];
     $firstTaskNodeByStep = [];
     $taskLabelByNode = [];
@@ -139,6 +154,88 @@
         })
         ->filter()
         ->values();
+    $pendingRouteTargetCard = trim((string) data_get($workflowRun?->context_json, 'next_task_key', ''));
+    $pendingRouteOutcome = trim((string) data_get($workflowRun?->context_json, 'next_task_route_outcome', ''));
+    $pendingRouteSourceCard = trim((string) data_get($workflowRun?->context_json, 'next_task_route_source_key', ''));
+    $pendingRouteTargetAction = trim((string) data_get($workflowRun?->context_json, 'next_step_action_key', ''));
+    $pendingRouteSourceAction = $actionKeyForTask($pendingRouteSourceCard);
+
+    if ($pendingRouteTargetAction === '') {
+        $pendingRouteTargetAction = $actionKeyForTask($pendingRouteTargetCard);
+    }
+
+    if ($pendingRouteSourceAction === '') {
+        $pendingRouteSourceAction = $pendingRouteTargetAction;
+    }
+
+    if ($pendingRouteTargetCard !== '' && $pendingRouteOutcome !== '' && $pendingRouteTargetAction !== '') {
+        $sourceNode = $pendingRouteSourceAction !== '' && $pendingRouteSourceCard !== ''
+            ? $pendingRouteSourceAction.'::'.$pendingRouteSourceCard
+            : '';
+        $targetNode = $pendingRouteTargetAction.'::'.$pendingRouteTargetCard;
+        $direction = $routeDirection($sourceNode, $targetNode, 'card');
+        $pendingRouteEvent = [
+            'id' => 'route-pending',
+            'at' => '',
+            'outcome' => $pendingRouteOutcome,
+            'type' => 'card',
+            'direction' => $direction,
+            'directionLabel' => match ($direction) {
+                'back' => 'Aktiver Ruecksprung',
+                'forward' => 'Aktiver Weiterlauf',
+                'loop' => 'Aktive Schleife',
+                default => 'Aktive Route',
+            },
+            'lineTone' => match ($pendingRouteOutcome) {
+                'success' => 'success',
+                'failed', 'timeout' => 'failed',
+                'partial', 'waiting' => 'waiting',
+                default => 'default',
+            },
+            'sourceNode' => $sourceNode,
+            'targetNode' => $targetNode,
+            'sourceLabel' => $taskLabelByNode[$sourceNode] ?? $pendingRouteSourceCard,
+            'targetLabel' => $taskLabelByNode[$targetNode] ?? $pendingRouteTargetCard,
+            'routeLabel' => 'naechster Task: '.$pendingRouteTargetCard,
+            'pending' => true,
+        ];
+        $pendingRouteExists = $routeEvents->contains(fn (array $event): bool => ($event['sourceNode'] ?? '') === $sourceNode
+            && ($event['targetNode'] ?? '') === $targetNode
+            && ($event['outcome'] ?? '') === $pendingRouteOutcome);
+
+        if ($pendingRouteExists) {
+            $routeEvents = $routeEvents
+                ->map(fn (array $event): array => (($event['sourceNode'] ?? '') === $sourceNode
+                    && ($event['targetNode'] ?? '') === $targetNode
+                    && ($event['outcome'] ?? '') === $pendingRouteOutcome)
+                        ? array_merge($event, ['pending' => true, 'directionLabel' => $pendingRouteEvent['directionLabel'], 'routeLabel' => $pendingRouteEvent['routeLabel']])
+                        : $event)
+                ->values();
+        } else {
+            $routeEvents->push($pendingRouteEvent);
+        }
+    }
+    $routeBadgesByNode = [];
+
+    foreach ($routeEvents->slice(max(0, $routeEvents->count() - 8))->values() as $routeEvent) {
+        $isPending = (bool) ($routeEvent['pending'] ?? false);
+        $tone = (string) ($routeEvent['lineTone'] ?? 'default');
+
+        if (($routeEvent['sourceNode'] ?? '') !== '') {
+            $routeBadgesByNode[(string) $routeEvent['sourceNode']] = [
+                'label' => $isPending ? 'Quelle aktiv' : 'Quelle',
+                'tone' => $tone,
+            ];
+        }
+
+        if (($routeEvent['targetNode'] ?? '') !== '') {
+            $routeBadgesByNode[(string) $routeEvent['targetNode']] = [
+                'label' => $isPending ? 'Ziel aktiv' : 'Ziel',
+                'tone' => $tone,
+            ];
+        }
+    }
+
     $routeEventsForJs = $routeEvents->take(-16)->values()->all();
     $mapId = 'workflow-minimap-'.($workflowRun?->id ?? 'preview');
     $taskTone = static function (string $status, bool $active): string {
@@ -164,6 +261,14 @@
             'success' => 'bg-emerald-50 text-emerald-700 ring-emerald-200',
             'failed' => 'bg-red-50 text-red-700 ring-red-200',
             'waiting' => 'bg-amber-50 text-amber-700 ring-amber-200',
+            default => 'bg-slate-100 text-slate-600 ring-slate-200',
+        };
+    };
+    $routeBadgeClass = static function (array $badge): string {
+        return match ($badge['tone'] ?? 'default') {
+            'success' => 'bg-emerald-100 text-emerald-700 ring-emerald-200',
+            'failed' => 'bg-red-100 text-red-700 ring-red-200',
+            'waiting' => 'bg-amber-100 text-amber-700 ring-amber-200',
             default => 'bg-slate-100 text-slate-600 ring-slate-200',
         };
     };
@@ -285,7 +390,7 @@
                                 { x: sourceRect.right, y: sourceRect.centerY + 16 },
                             ];
 
-                            return { path: roundedPath(points, 8), tone, direction: routeEvent.direction || 'loop' };
+                            return { path: roundedPath(points, 8), tone, direction: routeEvent.direction || 'loop', pending: !!routeEvent.pending };
                         }
 
                         if (Math.abs(sourceRect.centerX - targetRect.centerX) < 12) {
@@ -297,7 +402,7 @@
                                 { x: targetRect.right, y: targetRect.centerY },
                             ];
 
-                            return { path: roundedPath(points), tone, direction: routeEvent.direction || 'route' };
+                            return { path: roundedPath(points), tone, direction: routeEvent.direction || 'route', pending: !!routeEvent.pending };
                         }
 
                         const goesBack = targetRect.centerX < sourceRect.centerX;
@@ -315,7 +420,7 @@
                             { x: targetX, y: targetRect.centerY },
                         ];
 
-                        return { path: roundedPath(points), tone, direction: routeEvent.direction || 'route' };
+                        return { path: roundedPath(points), tone, direction: routeEvent.direction || 'route', pending: !!routeEvent.pending };
                     };
                     const lines = this.routeEvents
                         .map((routeEvent, index) => lineFor(routeEvent, index))
@@ -334,9 +439,10 @@
                         }[line.tone] || '#94a3b8';
                         const marker = this.markerIds[line.tone] || this.markerIds.default;
                         const dash = line.tone === 'failed' || line.direction === 'back' ? ' stroke-dasharray=&quot;6 5&quot;' : '';
+                        const strokeWidth = line.pending ? '3.5' : '2.5';
                         const path = String(line.path || '').replace(/&/g, '&amp;').replace(/&quot;/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-                        return `<path d=&quot;${path}&quot; fill=&quot;none&quot; stroke-width=&quot;2.5&quot; stroke-linecap=&quot;round&quot; stroke-linejoin=&quot;round&quot; stroke=&quot;${color}&quot;${dash} marker-end=&quot;url(#${marker})&quot;></path>`;
+                        return `<path d=&quot;${path}&quot; fill=&quot;none&quot; stroke-width=&quot;${strokeWidth}&quot; stroke-linecap=&quot;round&quot; stroke-linejoin=&quot;round&quot; stroke=&quot;${color}&quot;${dash} marker-end=&quot;url(#${marker})&quot;></path>`;
                     }).join('');
                 },
             }"
@@ -379,6 +485,7 @@
                         $plannedOnlyStep = $step->type === \App\Models\WorkflowStep::TYPE_PLANNED_ACTION && trim((string) ($stepRun?->external_run_id ?? '')) === '';
                         $stepTone = $taskTone($stepStatus, $isActiveStep);
                         $stepNode = trim((string) $step->action_key).'::*';
+                        $stepRouteBadge = $routeBadgesByNode[$stepNode] ?? null;
                     @endphp
 
                     <div class="flex items-start">
@@ -388,6 +495,10 @@
                                 @if($stepRun?->status)
                                     <span class="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold {{ $stepTone }}">
                                         {{ $stepRun->status }}
+                                    </span>
+                                @elseif($stepRouteBadge)
+                                    <span class="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 {{ $routeBadgeClass($stepRouteBadge) }}">
+                                        {{ $stepRouteBadge['label'] }}
                                     </span>
                                 @endif
                             </div>
@@ -404,6 +515,7 @@
                                         $tone = $taskTone($taskStatus, $isTaskActive);
                                         $lineTone = $connectorTone($taskStatus, $isTaskActive);
                                         $taskNode = trim((string) $step->action_key).'::'.$taskKey;
+                                        $taskRouteBadge = $routeBadgesByNode[$taskNode] ?? null;
                                     @endphp
 
                                     @if(! $loop->first)
@@ -411,7 +523,12 @@
                                     @endif
 
                                     <div data-minimap-node="{{ $taskNode }}" class="relative rounded-md border px-2 py-1.5 text-[11px] shadow-sm {{ $tone }}">
-                                        <div class="truncate pr-2 font-semibold">{{ $task['title'] ?? 'Task' }}</div>
+                                        @if($taskRouteBadge)
+                                            <span class="absolute right-1 top-1 rounded-full px-1.5 py-0.5 text-[9px] font-semibold ring-1 {{ $routeBadgeClass($taskRouteBadge) }}">
+                                                {{ $taskRouteBadge['label'] }}
+                                            </span>
+                                        @endif
+                                        <div class="truncate {{ $taskRouteBadge ? 'pr-16' : 'pr-2' }} font-semibold">{{ $task['title'] ?? 'Task' }}</div>
                                         <div class="mt-0.5 truncate opacity-70">{{ $taskStatus }}</div>
                                     </div>
                                 @empty

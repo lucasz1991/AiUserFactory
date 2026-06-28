@@ -19,7 +19,7 @@ async function run(context = {}) {
     || 15000,
   ));
 
-  if (!page || typeof page.waitForSelector !== 'function') {
+  if (!page || (typeof page.frames !== 'function' && typeof page.mainFrame !== 'function')) {
     return { ok: false, status: 'failed', statusMessage: 'Kein Page-Handle fuer die IF-Element-Pruefung vorhanden.' };
   }
 

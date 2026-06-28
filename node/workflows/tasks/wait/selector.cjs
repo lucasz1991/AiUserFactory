@@ -9,7 +9,7 @@ async function run(context = {}) {
   const selector = String(input.elementSelector || input.element_selector || input.inputSelector || input.input_selector || input.selector || '').trim();
   const timeout = Number(input.timeoutMs || context.timeoutMs || 90000);
 
-  if (!page || typeof page.waitForSelector !== 'function') {
+  if (!page || (typeof page.frames !== 'function' && typeof page.mainFrame !== 'function')) {
     return { ok: false, status: 'failed', statusMessage: 'Kein Page-Handle fuer Selector-Wait vorhanden.' };
   }
 
