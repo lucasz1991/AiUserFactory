@@ -1,7 +1,10 @@
 'use strict';
 
 const { captureTaskPreview } = require('../lib/preview.cjs');
-const { findVisibleElement, framesForPage } = require('../lib/find_visible_element.cjs');
+const {
+  clickVisibleElement,
+  clickVisibleElementByText,
+} = require('../lib/find_visible_element.cjs');
 
 function firstNonEmpty(...values) {
   for (const value of values) {
@@ -16,80 +19,11 @@ function firstNonEmpty(...values) {
 }
 
 async function clickSelector(page, selector, timeout) {
-  const handle = await findVisibleElement(page, selector, timeout);
-
-  if (!handle) {
-    return false;
-  }
-
-  try {
-    await handle.click({ timeout });
-  } finally {
-    await handle.dispose?.().catch(() => {});
-  }
-
-  return true;
+  return clickVisibleElement(page, selector, timeout);
 }
 
 async function clickText(page, text, timeout) {
-  const normalizedText = String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
-
-  if (normalizedText === '') {
-    return false;
-  }
-
-  for (const frame of framesForPage(page)) {
-    const handle = await frame.evaluateHandle((needle) => {
-      const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
-      const deepQueryAll = (root, selector) => {
-        const results = [];
-        const visit = (node) => {
-          if (!node || typeof node.querySelectorAll !== 'function') {
-            return;
-          }
-
-          results.push(...Array.from(node.querySelectorAll(selector)));
-          Array.from(node.querySelectorAll('*')).forEach((element) => {
-            if (element.shadowRoot) {
-              visit(element.shadowRoot);
-            }
-          });
-        };
-
-        visit(root);
-
-        return Array.from(new Set(results));
-      };
-      const visible = (element) => {
-        const rect = element.getBoundingClientRect();
-        const style = window.getComputedStyle(element);
-
-        return rect.width > 0
-          && rect.height > 0
-          && style.visibility !== 'hidden'
-          && style.display !== 'none';
-      };
-      const candidates = deepQueryAll(document, 'a,button,[role=button],input[type=button],input[type=submit]');
-
-      return candidates.find((element) => visible(element) && normalize(element.innerText || element.value || '').includes(needle)) || null;
-    }, normalizedText).catch(() => null);
-    const element = handle && typeof handle.asElement === 'function' ? handle.asElement() : null;
-
-    if (!element) {
-      await handle?.dispose?.().catch(() => {});
-      continue;
-    }
-
-    try {
-      await element.click({ timeout });
-    } finally {
-      await element.dispose?.().catch(() => {});
-    }
-
-    return true;
-  }
-
-  return false;
+  return clickVisibleElementByText(page, text, timeout);
 }
 
 async function run(context = {}) {
@@ -113,6 +47,7 @@ async function run(context = {}) {
           status: 'success',
           statusMessage: 'Element wurde geklickt.',
           selector,
+          element: clicked,
           url: typeof page.url === 'function' ? page.url() : null,
         });
       }
@@ -139,6 +74,7 @@ async function run(context = {}) {
           status: 'success',
           statusMessage: 'Element wurde ueber Text geklickt.',
           text,
+          element: clicked,
           url: typeof page.url === 'function' ? page.url() : null,
         });
       }

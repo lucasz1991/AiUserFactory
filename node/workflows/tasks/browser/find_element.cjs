@@ -1,6 +1,11 @@
 'use strict';
 
 const { captureTaskPreview } = require('../lib/preview.cjs');
+const {
+  elementSnapshot,
+  findVisibleElement,
+  findVisibleElementByText,
+} = require('../lib/find_visible_element.cjs');
 
 function firstNonEmpty(...values) {
   for (const value of values) {
@@ -14,85 +19,12 @@ function firstNonEmpty(...values) {
   return '';
 }
 
-async function elementSnapshot(handle, selector) {
-  return handle.evaluate((element, fallbackSelector) => ({
-    selector: fallbackSelector,
-    tag: element.tagName.toLowerCase(),
-    id: element.id || '',
-    name: element.getAttribute('name') || '',
-    type: element.getAttribute('type') || '',
-    role: element.getAttribute('role') || '',
-    ariaLabel: element.getAttribute('aria-label') || '',
-    placeholder: element.getAttribute('placeholder') || '',
-    href: element.getAttribute('href') || '',
-    text: (element.innerText || element.textContent || '').trim().slice(0, 500),
-  }), selector);
-}
-
-async function trySelector(page, selector, timeout) {
-  if (typeof page.waitForSelector === 'function') {
-    const handle = await page.waitForSelector(selector, { visible: true, timeout }).catch(() => null);
-
-    if (!handle) {
-      return null;
-    }
-
-    try {
-      return await elementSnapshot(handle, selector);
-    } finally {
-      await handle.dispose?.().catch(() => {});
-    }
-  }
-
-  const handle = typeof page.$ === 'function' ? await page.$(selector).catch(() => null) : null;
-
-  if (!handle) {
-    return null;
-  }
-
+async function snapshotAndDispose(handle, selector) {
   try {
     return await elementSnapshot(handle, selector);
   } finally {
     await handle.dispose?.().catch(() => {});
   }
-}
-
-async function tryText(page, text) {
-  if (!page || typeof page.evaluate !== 'function') {
-    return null;
-  }
-
-  return page.evaluate((needle) => {
-    const normalizedNeedle = String(needle || '').toLowerCase();
-    const visible = (element) => {
-      const rect = element.getBoundingClientRect();
-      const style = window.getComputedStyle(element);
-
-      return rect.width > 0
-        && rect.height > 0
-        && style.visibility !== 'hidden'
-        && style.display !== 'none';
-    };
-    const element = Array.from(document.querySelectorAll('a,button,[role=button],input[type=button],input[type=submit],label,span,div'))
-      .find((candidate) => visible(candidate) && String(candidate.innerText || candidate.value || candidate.textContent || '').toLowerCase().includes(normalizedNeedle));
-
-    if (!element) {
-      return null;
-    }
-
-    return {
-      selector: `text=${needle}`,
-      tag: element.tagName.toLowerCase(),
-      id: element.id || '',
-      name: element.getAttribute('name') || '',
-      type: element.getAttribute('type') || '',
-      role: element.getAttribute('role') || '',
-      ariaLabel: element.getAttribute('aria-label') || '',
-      placeholder: element.getAttribute('placeholder') || '',
-      href: element.getAttribute('href') || '',
-      text: (element.innerText || element.textContent || '').trim().slice(0, 500),
-    };
-  }, text).catch(() => null);
 }
 
 async function run(context = {}) {
@@ -106,52 +38,41 @@ async function run(context = {}) {
     input.inputSelector,
     input.input_selector,
   );
-  const text = firstNonEmpty(input.text, input.label, input.name);
+  const text = firstNonEmpty(input.text, input.label, input.name, input.value);
 
-  if (!page || typeof page.locator !== 'function') {
+  if (!page || (typeof page.frames !== 'function' && typeof page.mainFrame !== 'function')) {
     return { ok: false, status: 'failed', statusMessage: 'Kein Page-Handle fuer Element-Suche vorhanden.' };
   }
 
   if (selector !== '') {
-    try {
-      const match = await trySelector(page, selector, timeout);
+    const handle = await findVisibleElement(page, selector, timeout);
 
-      if (match) {
-        return captureTaskPreview(context, { ok: true, status: 'success', statusMessage: 'Element wurde gefunden.', element: match });
-      }
-    } catch (error) {
-      if (text === '') {
-        return {
-          ok: false,
-          status: 'failed',
-          statusMessage: `Element-Selector konnte nicht gefunden werden: ${selector}`,
-          selector,
-          error: error.message,
-        };
-      }
+    if (handle) {
+      const match = await snapshotAndDispose(handle, selector);
+
+      return captureTaskPreview(context, {
+        ok: true,
+        status: 'success',
+        statusMessage: 'Element wurde gefunden.',
+        selector,
+        element: match,
+      });
     }
   }
 
   if (text !== '') {
-    try {
-      const match = await tryText(page, text);
+    const handle = await findVisibleElementByText(page, text, Math.min(timeout, 15000));
 
-      if (match) {
-        return captureTaskPreview(context, {
-          ok: true,
-          status: 'success',
-          statusMessage: 'Element wurde ueber Text gefunden.',
-          element: match,
-        });
-      }
-    } catch (error) {
-      return {
-        ok: false,
-        status: 'failed',
-        statusMessage: `Element-Text konnte nicht gefunden werden: ${text}`,
+    if (handle) {
+      const match = await snapshotAndDispose(handle, `text=${text}`);
+
+      return captureTaskPreview(context, {
+        ok: true,
+        status: 'success',
+        statusMessage: 'Element wurde ueber Text gefunden.',
         text,
-        error: error.message,
-      };
+        element: match,
+      });
     }
   }
 

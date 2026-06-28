@@ -1,7 +1,7 @@
 'use strict';
 
 const { captureTaskPreview } = require('../lib/preview.cjs');
-const { findVisibleElement } = require('../lib/find_visible_element.cjs');
+const { elementSnapshot, findVisibleElement } = require('../lib/find_visible_element.cjs');
 
 async function run(context = {}) {
   const page = context.page;
@@ -48,12 +48,7 @@ async function run(context = {}) {
   }
 
   try {
-    const element = await handle.evaluate((node, matchedSelector) => ({
-      selector: matchedSelector,
-      tag: node.tagName.toLowerCase(),
-      id: node.id || '',
-      text: String(node.innerText || node.textContent || '').trim().slice(0, 500),
-    }), selector);
+    const element = await elementSnapshot(handle, selector);
 
     return captureTaskPreview(context, {
       ok: true,

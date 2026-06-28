@@ -1,6 +1,7 @@
 'use strict';
 
 const { captureTaskPreview } = require('../lib/preview.cjs');
+const { findVisibleElement } = require('../lib/find_visible_element.cjs');
 
 async function run(context = {}) {
   const page = context.page;
@@ -20,10 +21,20 @@ async function run(context = {}) {
   await page.goto(url, { waitUntil, timeout });
 
   if (input.waitForSelector) {
-    await page.waitForSelector(input.waitForSelector, {
-      state: input.visible === false ? 'attached' : 'visible',
-      timeout: Number(input.selectorTimeoutMs || 30000),
-    });
+    const selectorTimeout = Number(input.selectorTimeoutMs || 30000);
+    const handle = await findVisibleElement(page, input.waitForSelector, selectorTimeout);
+
+    if (!handle) {
+      return captureTaskPreview(context, {
+        ok: false,
+        status: 'timeout',
+        statusMessage: `Selector wurde nach Navigation nicht gefunden: ${input.waitForSelector}`,
+        url: typeof page.url === 'function' ? page.url() : url,
+        selector: input.waitForSelector,
+      });
+    }
+
+    await handle.dispose?.().catch(() => {});
   }
 
   return captureTaskPreview(context, {
