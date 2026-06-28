@@ -23,15 +23,34 @@
     };
     $stepSuccessTarget = $routeNodeForStep(is_array(data_get($step->routes, 'success')) ? data_get($step->routes, 'success') : null);
     $stepFailedTarget = $routeNodeForStep(is_array(data_get($step->routes, 'failed')) ? data_get($step->routes, 'failed') : null);
+    $routeNodeForTask = static function (?array $route) use ($step): string {
+        if (! is_array($route)) {
+            return '';
+        }
+
+        $targetStep = trim((string) data_get($route, 'action_key', data_get($route, 'step', '')));
+        $targetCard = trim((string) data_get($route, 'card_key', data_get($route, 'card', '')));
+
+        if (in_array($targetStep, ['', 'next', 'end', 'fail'], true)) {
+            $targetStep = $targetCard !== '' ? $step->action_key : '';
+        }
+
+        if ($targetStep === '') {
+            return '';
+        }
+
+        return $targetStep.'::'.($targetCard !== '' ? $targetCard : '*');
+    };
 @endphp
 
 <div
+    data-workflow-step-column
     data-workflow-step-action="{{ $step->action_key }}"
     data-step-route-success="{{ $stepSuccessTarget }}"
     data-step-route-failed="{{ $stepFailedTarget }}"
-    {{ $attributes->merge(['class' => 'relative z-10 flex min-h-[300px] w-[296px] shrink-0 flex-col rounded-xl border '.$enabledClass]) }}
+    {{ $attributes->merge(['class' => 'relative flex min-h-[300px] w-[296px] min-w-[296px] max-w-[296px] shrink-0 flex-col rounded-xl border '.$enabledClass]) }}
 >
-    <div class="rounded-t-xl border-b border-slate-200 bg-slate-50/80 px-4 py-3">
+    <div class="relative z-20 rounded-t-xl border-b border-slate-200 bg-slate-50/95 px-4 py-3">
         <div class="flex items-start justify-between gap-3">
             <div class="min-w-0">
                 <div class="flex flex-wrap items-center gap-2">
@@ -87,49 +106,24 @@
                 }
             },
         }"
-        class="flex-1 space-y-0 px-3 pb-4 pt-2"
+        class="min-w-0 flex-1 space-y-0 px-3 pb-4 pt-2"
     >
-        <div @if(! $locked) x-sort="$dispatch('reorderWorkflowTaskCards', { targetStepId: {{ $step->id }}, item: $item, position: $position })" @endif class="space-y-0">
+        <div @if(! $locked) x-sort="$dispatch('reorderWorkflowTaskCards', { targetStepId: {{ $step->id }}, item: $item, position: $position })" @endif class="min-w-0 space-y-0">
             @foreach($step->task_cards as $task)
                 @php
                     $taskKey = trim((string) ($task['key'] ?? ''));
                     $sourceNode = $step->action_key.'::'.$taskKey;
-                    $routeNode = static function (?array $route) use ($step): string {
-                        if (! is_array($route)) {
-                            return '';
-                        }
-
-                        $targetStep = trim((string) data_get($route, 'action_key', data_get($route, 'step', '')));
-                        $targetCard = trim((string) data_get($route, 'card_key', data_get($route, 'card', '')));
-
-                        if (in_array($targetStep, ['', 'next', 'end', 'fail'], true)) {
-                            $targetStep = $targetCard !== '' ? $step->action_key : '';
-                        }
-
-                        if ($targetStep === '') {
-                            return '';
-                        }
-
-                        return $targetStep.'::'.($targetCard !== '' ? $targetCard : '*');
-                    };
-                    $successTarget = $routeNode(is_array($task['next'] ?? null) ? $task['next'] : null);
-                    $failedTarget = $routeNode(is_array($task['on_error'] ?? null) ? $task['on_error'] : null);
+                    $successTarget = $routeNodeForTask(is_array($task['next'] ?? null) ? $task['next'] : null);
+                    $failedTarget = $routeNodeForTask(is_array($task['on_error'] ?? null) ? $task['on_error'] : null);
+                    $previousTask = $loop->first ? null : ($step->task_cards[$loop->index - 1] ?? null);
+                    $previousTarget = is_array($previousTask)
+                        ? $routeNodeForTask(is_array($previousTask['next'] ?? null) ? $previousTask['next'] : null)
+                        : '';
+                    $connectsFromPrevious = ! $loop->first && ($previousTarget === '' || $previousTarget === $sourceNode);
                 @endphp
                 <div
                     @if(! $locked) x-sort:item="@js($step->id.'::'.($task['key'] ?? ''))" @endif
-                    data-workflow-task-node="{{ $sourceNode }}"
-                    data-workflow-step-action="{{ $step->action_key }}"
-                    data-route-success="{{ $successTarget }}"
-                    data-route-failed="{{ $failedTarget }}"
-                    @if(! $locked) x-on:dragstart.stop="
-                        $event.dataTransfer.setData('application/x-workflow-task-key', @js($task['key'] ?? ''));
-                        $event.dataTransfer.setData('application/x-workflow-source-step-id', @js((string) $step->id));
-                        $event.dataTransfer.effectAllowed = 'move';
-                    " @endif
-                    x-on:click.stop="focusedTask = @js($step->id.'::'.($task['key'] ?? ''))"
-                    @if(! $locked) x-on:dblclick.stop="$wire.openEditTaskCard({{ $step->id }}, @js($task['key'] ?? ''))" @endif
-                    x-bind:class="focusedTask === @js($step->id.'::'.($task['key'] ?? '')) ? 'ring-2 ring-slate-400 ring-offset-2 ring-offset-slate-100' : ''"
-                    class="rounded-lg"
+                    class="min-w-0 max-w-full"
                     wire:key="workflow-task-{{ $step->id }}-{{ $task['key'] ?? 'task' }}"
                 >
                     <div
@@ -137,17 +131,37 @@
                         x-on:drop.prevent.stop="dropTask($event, {{ $loop->index }})"
                         class="h-3 rounded border border-dashed border-transparent transition hover:h-8 hover:border-slate-300 hover:bg-slate-50"
                     ></div>
-                    @if(! $loop->first)
-                        <div class="ml-5 h-4 w-px bg-emerald-300"></div>
+                    @if($connectsFromPrevious)
+                        <div class="ml-5 flex h-5 w-3 justify-center" aria-hidden="true">
+                            <span class="relative h-4 w-px bg-emerald-400">
+                                <span class="absolute -bottom-1 -left-[3px] h-0 w-0 border-x-[4px] border-t-[5px] border-x-transparent border-t-emerald-500"></span>
+                            </span>
+                        </div>
                     @endif
-                    <x-workflows.task-card :task="$task">
-                        @if(! $locked)
-                            <x-slot name="actions">
-                                <button type="button" wire:click="openEditTaskCard({{ $step->id }}, @js($task['key'] ?? ''))" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-100">Bearbeiten</button>
-                                <button type="button" wire:click="removeTaskCard({{ $step->id }}, @js($task['key'] ?? ''))" wire:confirm="Step-Karte wirklich entfernen?" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-red-700 hover:bg-red-50">Entfernen</button>
-                            </x-slot>
-                        @endif
-                    </x-workflows.task-card>
+                    <div
+                        data-workflow-task-node="{{ $sourceNode }}"
+                        data-workflow-step-action="{{ $step->action_key }}"
+                        data-route-success="{{ $successTarget }}"
+                        data-route-failed="{{ $failedTarget }}"
+                        @if(! $locked) x-on:dragstart.stop="
+                            $event.dataTransfer.setData('application/x-workflow-task-key', @js($task['key'] ?? ''));
+                            $event.dataTransfer.setData('application/x-workflow-source-step-id', @js((string) $step->id));
+                            $event.dataTransfer.effectAllowed = 'move';
+                        " @endif
+                        x-on:click.stop="focusedTask = @js($step->id.'::'.($task['key'] ?? ''))"
+                        @if(! $locked) x-on:dblclick.stop="$wire.openEditTaskCard({{ $step->id }}, @js($task['key'] ?? ''))" @endif
+                        x-bind:class="focusedTask === @js($step->id.'::'.($task['key'] ?? '')) ? 'ring-2 ring-slate-400 ring-offset-2 ring-offset-slate-100' : ''"
+                        class="relative z-20 w-full min-w-0 max-w-full rounded-lg"
+                    >
+                        <x-workflows.task-card :task="$task" :show-ports="true">
+                            @if(! $locked)
+                                <x-slot name="actions">
+                                    <button type="button" wire:click="openEditTaskCard({{ $step->id }}, @js($task['key'] ?? ''))" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-100">Bearbeiten</button>
+                                    <button type="button" wire:click="removeTaskCard({{ $step->id }}, @js($task['key'] ?? ''))" wire:confirm="Step-Karte wirklich entfernen?" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-red-700 hover:bg-red-50">Entfernen</button>
+                                </x-slot>
+                            @endif
+                        </x-workflows.task-card>
+                    </div>
                 </div>
             @endforeach
         </div>
@@ -164,10 +178,6 @@
                     'kind' => $step->type === 'wait' ? 'wait' : 'data',
                 ]" />
             </div>
-        @endif
-
-        @if($step->task_cards !== [])
-            <div class="ml-5 h-4 w-px bg-emerald-300"></div>
         @endif
 
         <div

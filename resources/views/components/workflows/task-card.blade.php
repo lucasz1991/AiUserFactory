@@ -1,5 +1,6 @@
 @props([
     'task',
+    'showPorts' => false,
 ])
 
 @php
@@ -13,16 +14,24 @@
         'workflow' => 'bg-fuchsia-500',
         default => 'bg-slate-400',
     };
+    $hasFailedRoute = is_array(data_get($task, 'on_error'));
 @endphp
 
-<div {{ $attributes->merge(['class' => 'rounded-lg border border-slate-200 bg-white px-3 py-3 shadow-sm transition hover:-translate-y-px hover:border-slate-300 hover:shadow-md']) }}>
-    <div class="flex items-center justify-between gap-2">
-        <div class="flex min-w-0 items-center gap-2">
+<div {{ $attributes->merge(['class' => 'relative w-full min-w-0 max-w-full rounded-lg border border-slate-200 bg-white px-3 py-3 shadow-sm transition hover:-translate-y-px hover:border-slate-300 hover:shadow-md']) }}>
+    @if($showPorts)
+        <span class="absolute -left-[5px] top-1/2 z-30 h-2.5 w-2.5 -translate-y-1/2 rounded-full border-2 border-white bg-slate-400 shadow-sm" title="Eingang" aria-hidden="true"></span>
+        <span class="absolute -right-[5px] top-[40%] z-30 h-2.5 w-2.5 -translate-y-1/2 rounded-full border-2 border-white bg-emerald-500 shadow-sm" title="Erfolg" aria-hidden="true"></span>
+        @if($hasFailedRoute)
+            <span class="absolute -right-[5px] top-[68%] z-30 h-2.5 w-2.5 -translate-y-1/2 rounded-full border-2 border-white bg-rose-400 shadow-sm" title="Fehlschlag" aria-hidden="true"></span>
+        @endif
+    @endif
+    <div class="flex min-w-0 items-center justify-between gap-2">
+        <div class="flex min-w-0 flex-1 items-center gap-2">
             <div class="flex h-6 w-6 shrink-0 cursor-grab items-center justify-center rounded text-[10px] font-bold text-slate-400 hover:bg-slate-100 hover:text-slate-700 active:cursor-grabbing">
                 ::
             </div>
             <span class="h-2 w-2 shrink-0 rounded-full {{ $kindTone }}"></span>
-            <p class="min-w-0 line-clamp-2 text-sm font-semibold leading-5 text-slate-900">{{ $task['title'] ?? 'Task' }}</p>
+            <p class="min-w-0 break-words line-clamp-2 text-sm font-semibold leading-5 text-slate-900">{{ $task['title'] ?? 'Task' }}</p>
         </div>
         @isset($actions)
             <div class="relative shrink-0" x-data="{ open: false }">

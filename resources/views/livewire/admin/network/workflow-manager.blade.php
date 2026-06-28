@@ -135,6 +135,8 @@
                             const rect = element.getBoundingClientRect();
 
                             return {
+                                width: rect.width,
+                                height: rect.height,
                                 left: rect.left - surfaceRect.left + surface.scrollLeft,
                                 right: rect.right - surfaceRect.left + surface.scrollLeft,
                                 top: rect.top - surfaceRect.top + surface.scrollTop,
@@ -191,20 +193,25 @@
                             const targetStep = targetElement.dataset.workflowStepAction || '';
                             const sourceRect = relativeRect(source);
                             const targetRect = relativeRect(targetElement);
-                            const sourceStepElement = source.closest('[data-workflow-step-action]');
-                            const targetStepElement = targetElement.closest('[data-workflow-step-action]');
+                            const sourceStepElement = source.closest('[data-workflow-step-column]');
+                            const targetStepElement = targetElement.closest('[data-workflow-step-column]');
                             const sourceStepRect = sourceStepElement ? relativeRect(sourceStepElement) : sourceRect;
                             const targetStepRect = targetStepElement ? relativeRect(targetStepElement) : targetRect;
-                            const laneOffset = 10 + ((routeLane++ % 6) * 5);
+                            const laneIndex = routeLane++;
+                            const sourceY = type === 'failed'
+                                ? sourceRect.top + (sourceRect.height * 0.68)
+                                : sourceRect.top + (sourceRect.height * 0.4);
+                            const targetY = targetRect.centerY;
                             let points = [];
 
                             if (source === targetElement) {
-                                const loopX = sourceStepRect.right + 6;
+                                const loopX = sourceStepRect.right + 14 + ((laneIndex % 3) * 5);
                                 points = [
-                                    { x: sourceRect.right, y: sourceRect.centerY - 6 },
-                                    { x: loopX, y: sourceRect.centerY - 6 },
-                                    { x: loopX, y: sourceRect.centerY + 12 },
-                                    { x: sourceRect.right, y: sourceRect.centerY + 12 },
+                                    { x: sourceRect.right, y: sourceY },
+                                    { x: loopX, y: sourceY },
+                                    { x: loopX, y: targetY + 14 },
+                                    { x: sourceRect.right, y: targetY + 14 },
+                                    { x: sourceRect.right, y: targetY },
                                 ];
 
                                 return { path: roundedPath(points, 7), type };
@@ -217,39 +224,34 @@
                                 const sourceIndex = stepNodes.indexOf(source);
                                 const targetIndex = stepNodes.indexOf(targetElement);
 
-                                if (targetIndex === sourceIndex + 1) {
-                                    points = [
-                                        { x: sourceRect.centerX, y: sourceRect.bottom },
-                                        { x: targetRect.centerX, y: targetRect.top },
-                                    ];
-
-                                    return { path: roundedPath(points), type };
+                                if (type === 'success' && targetIndex === sourceIndex + 1) {
+                                    return null;
                                 }
 
-                                const sideX = sourceStepRect.right + 6;
+                                const sideX = sourceStepRect.right + 14 + ((laneIndex % 3) * 5);
                                 points = [
-                                    { x: sourceRect.right, y: sourceRect.centerY },
-                                    { x: sideX, y: sourceRect.centerY },
-                                    { x: sideX, y: targetRect.centerY },
-                                    { x: targetRect.right, y: targetRect.centerY },
+                                    { x: sourceRect.right, y: sourceY },
+                                    { x: sideX, y: sourceY },
+                                    { x: sideX, y: targetY },
+                                    { x: targetRect.right, y: targetY },
                                 ];
 
                                 return { path: roundedPath(points), type };
                             }
 
-                            const movesRight = targetStepRect.left >= sourceStepRect.right;
-                            const sourceAnchorX = movesRight ? sourceRect.right : sourceRect.left;
-                            const targetAnchorX = movesRight ? targetRect.left : targetRect.right;
-                            const sourceLaneX = movesRight ? sourceStepRect.right + 6 : sourceStepRect.left - 6;
-                            const targetLaneX = movesRight ? targetStepRect.left - 6 : targetStepRect.right + 6;
-                            const topLaneY = Math.max(8, Math.min(sourceStepRect.top, targetStepRect.top) - laneOffset);
+                            const sourceAnchorX = sourceRect.right;
+                            const targetAnchorX = targetRect.left;
+                            const laneInset = 14 + ((laneIndex % 3) * 5);
+                            const sourceLaneX = sourceStepRect.right + laneInset;
+                            const targetLaneX = targetStepRect.left - laneInset;
+                            const topLaneY = 18 + ((laneIndex % 7) * 7);
                             points = [
-                                { x: sourceAnchorX, y: sourceRect.centerY },
-                                { x: sourceLaneX, y: sourceRect.centerY },
+                                { x: sourceAnchorX, y: sourceY },
+                                { x: sourceLaneX, y: sourceY },
                                 { x: sourceLaneX, y: topLaneY },
                                 { x: targetLaneX, y: topLaneY },
-                                { x: targetLaneX, y: targetRect.centerY },
-                                { x: targetAnchorX, y: targetRect.centerY },
+                                { x: targetLaneX, y: targetY },
+                                { x: targetAnchorX, y: targetY },
                             ];
 
                             return { path: roundedPath(points), type };
@@ -305,7 +307,7 @@
                             const dash = line.type === 'failed' ? ' stroke-dasharray=&quot;6 5&quot;' : '';
                             const path = String(line.path || '').replace(/&/g, '&amp;').replace(/&quot;/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-                            return `<path d=&quot;${path}&quot; fill=&quot;none&quot; stroke-width=&quot;1.75&quot; stroke-linecap=&quot;round&quot; stroke-linejoin=&quot;round&quot; stroke=&quot;${color}&quot; stroke-opacity=&quot;0.82&quot;${dash} marker-end=&quot;${marker}&quot;></path>`;
+                            return `<path d=&quot;${path}&quot; fill=&quot;none&quot; stroke-width=&quot;2.15&quot; stroke-linecap=&quot;round&quot; stroke-linejoin=&quot;round&quot; stroke=&quot;${color}&quot; stroke-opacity=&quot;0.9&quot;${dash} marker-end=&quot;${marker}&quot;></path>`;
                         }).join('');
                     },
                 }"
@@ -336,26 +338,26 @@
                     <svg
                         x-cloak
                         x-show="showRoutes"
-                        class="pointer-events-none absolute left-0 top-0 z-0"
+                        class="pointer-events-none absolute left-0 top-0 z-10 overflow-visible"
                         x-bind:width="routeOverlay.width"
                         x-bind:height="routeOverlay.height"
                         x-bind:viewBox="`0 0 ${routeOverlay.width} ${routeOverlay.height}`"
                         aria-hidden="true"
                     >
                         <defs>
-                            <marker id="workflow-arrow-green" markerWidth="6" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
-                                <path d="M0,0 L0,6 L6,3 z" fill="#10b981"></path>
+                            <marker id="workflow-arrow-green" markerWidth="7" markerHeight="7" refX="6.5" refY="3.5" orient="auto" markerUnits="userSpaceOnUse">
+                                <path d="M0,0 L0,7 L7,3.5 z" fill="#10b981"></path>
                             </marker>
-                            <marker id="workflow-arrow-red" markerWidth="6" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
-                                <path d="M0,0 L0,6 L6,3 z" fill="#fb7185"></path>
+                            <marker id="workflow-arrow-red" markerWidth="7" markerHeight="7" refX="6.5" refY="3.5" orient="auto" markerUnits="userSpaceOnUse">
+                                <path d="M0,0 L0,7 L7,3.5 z" fill="#fb7185"></path>
                             </marker>
                         </defs>
                         <g x-html="routeSvgMarkup"></g>
                     </svg>
 
-                    <div @if(! $workflowLocked) x-sort="$dispatch('reorderWorkflowSteps', { item: $item, position: $position })" @endif class="relative z-10 flex min-h-[570px] items-start gap-8 p-5 pb-8">
+                    <div @if(! $workflowLocked) x-sort="$dispatch('reorderWorkflowSteps', { item: $item, position: $position })" @endif class="relative flex min-h-[570px] items-start gap-10 px-5 pb-8 pt-[76px]">
                         @forelse($steps as $step)
-                            <div class="flex items-start" @if(! $workflowLocked) x-sort:item="{{ $step->id }}" @endif wire:key="workflow-step-wrap-{{ $step->id }}">
+                            <div class="flex w-[296px] min-w-[296px] max-w-[296px] shrink-0 items-start" @if(! $workflowLocked) x-sort:item="{{ $step->id }}" @endif wire:key="workflow-step-wrap-{{ $step->id }}">
                                 <x-workflows.step-card :step="$step" :locked="$workflowLocked" wire:key="workflow-step-{{ $step->id }}">
                                     @if(! $workflowLocked)
                                         <x-slot name="actions">
