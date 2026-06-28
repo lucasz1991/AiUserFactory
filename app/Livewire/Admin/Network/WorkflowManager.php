@@ -1377,7 +1377,7 @@ class WorkflowManager extends Component
             'workflow_id' => $workflow->id,
             'workflow_slug' => $workflow->slug,
             'timeout_seconds' => 3600,
-            'description' => $workflow->description ?: 'Fuehrt den gesamten referenzierten Workflow an dieser Stelle aus.',
+            'description' => $workflow->description ?: 'Fuehrt den gesamten referenzierten Workflow aus, wartet auf dessen Ergebnis und nutzt danach die Erfolgs- oder Fehlerweiterleitung.',
             'form' => [
                 'mailbox_source' => true,
                 'mailbox_source_label' => 'Script-Bezugsperson',

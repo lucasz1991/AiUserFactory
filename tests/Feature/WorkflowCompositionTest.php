@@ -54,11 +54,14 @@ class WorkflowCompositionTest extends TestCase
 
         $tasks = $this->runtimeTasks($parentStep);
 
-        $this->assertCount(1, $tasks);
+        $this->assertCount(2, $tasks);
         $this->assertSame('node', $tasks[0]['runner']);
         $this->assertSame('child-workflow', $tasks[0]['parent_task_key']);
         $this->assertSame($child->id, $tasks[0]['embedded_workflow_id']);
         $this->assertStringContainsString((string) $childStep->id, $tasks[0]['key']);
+        $this->assertSame('workflow-boundary', $tasks[1]['runner']);
+        $this->assertSame('child-workflow', $tasks[1]['route_source_task_key']);
+        $this->assertSame($tasks[0]['embedded_workflow_frame_key'], $tasks[1]['embedded_workflow_frame_key']);
 
         $parentStep->forceFill(['config_json' => ['tasks' => []]])->save();
         $child->refresh();
@@ -150,6 +153,63 @@ class WorkflowCompositionTest extends TestCase
 
         $decisionTask = app(WorkflowTaskCatalog::class)->task('decision.element_exists');
         $this->assertSame('node/workflows/tasks/decision/element_exists.cjs', $decisionTask['node_script']);
+    }
+
+    public function test_embedded_workflow_boundary_preserves_success_and_failure_routes(): void
+    {
+        $parent = $this->workflow('parent-routes');
+        $child = $this->workflow('child-return');
+        $returnTask = app(WorkflowTaskCatalog::class)->cardFromDefinition('data.workflow_return', [
+            'key' => 'return-result',
+            'value' => 'true',
+        ]);
+        $this->step($child, 'Child return list', [$returnTask]);
+
+        $workflowTask = $this->workflowTask($child, 'child-workflow');
+        $workflowTask['next'] = [
+            'type' => 'card',
+            'action_key' => 'parent-list',
+            'card_key' => 'success-target',
+        ];
+        $workflowTask['on_error'] = [
+            'type' => 'card',
+            'action_key' => 'parent-list',
+            'card_key' => 'failure-target',
+            'max_attempts' => 2,
+        ];
+        $parentStep = $this->step($parent, 'Parent list', [
+            $workflowTask,
+            $this->waitTask('success-target'),
+            $this->waitTask('failure-target'),
+        ]);
+
+        $tasks = $this->runtimeTasks($parentStep);
+        $embeddedReturn = collect($tasks)->firstWhere('task_key', 'data.workflow_return');
+        $boundary = collect($tasks)->firstWhere('runner', 'workflow-boundary');
+
+        $this->assertNotNull($embeddedReturn);
+        $this->assertNotNull($boundary);
+        $this->assertSame($embeddedReturn['embedded_workflow_frame_key'], $boundary['embedded_workflow_frame_key']);
+        $this->assertSame('child-workflow', $boundary['parent_task_key']);
+        $this->assertSame('success-target', data_get($boundary, 'next.card_key'));
+        $this->assertSame('failure-target', data_get($boundary, 'on_error.card_key'));
+        $this->assertSame(2, data_get($boundary, 'on_error.max_attempts'));
+
+        $executionReflection = new ReflectionClass(WorkflowExecutionService::class);
+        $execution = $executionReflection->newInstanceWithoutConstructor();
+        $routeMethod = $executionReflection->getMethod('routeForResult');
+        $failedRoute = $routeMethod->invoke($execution, $parentStep, 'failed', [
+            'failedTaskKey' => $boundary['key'],
+            'tasks' => [[
+                'key' => $boundary['key'],
+                'parent_task_key' => $boundary['parent_task_key'],
+                'status' => 'failed',
+            ]],
+        ]);
+
+        $this->assertSame('failure-target', $failedRoute['card_key']);
+        $this->assertSame('child-workflow', $failedRoute['_source_card_key']);
+        $this->assertSame(2, $failedRoute['max_attempts']);
     }
 
     protected function workflow(string $slug): Workflow

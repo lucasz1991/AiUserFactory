@@ -330,6 +330,7 @@ class WorkflowTaskRunner
         ?string $parentTaskKey = null,
         string $keyPrefix = '',
         ?string $inheritedMailboxSource = null,
+        ?string $embeddedWorkflowFrameKey = null,
     ): array {
         $expanded = [];
 
@@ -354,6 +355,10 @@ class WorkflowTaskRunner
 
                 if ($parentTaskKey !== null) {
                     $runtimeTask['parent_task_key'] = $parentTaskKey;
+                }
+
+                if ($embeddedWorkflowFrameKey !== null) {
+                    $runtimeTask['embedded_workflow_frame_key'] = $embeddedWorkflowFrameKey;
                 }
 
                 $expanded[] = $runtimeTask;
@@ -393,6 +398,8 @@ class WorkflowTaskRunner
                 throw new \RuntimeException('Der eingebettete Workflow "'.$workflow->name.'" hat keine aktiven Listen.');
             }
 
+            $workflowFrameKey = Str::slug(trim($keyPrefix.'-workflow-'.$workflow->id.'-'.$taskKey, '-'));
+
             foreach ($steps as $nestedStep) {
                 $nestedTasks = $nestedStep->task_cards;
 
@@ -417,11 +424,12 @@ class WorkflowTaskRunner
                     $rootTaskKey,
                     $nestedPrefix,
                     $workflowMailboxSource,
+                    $workflowFrameKey,
                 );
 
                 foreach ($nestedExpanded as $nestedTask) {
-                    $nestedTask['embedded_workflow_id'] = $workflow->id;
-                    $nestedTask['embedded_workflow_name'] = $workflow->name;
+                    $nestedTask['embedded_workflow_id'] ??= $workflow->id;
+                    $nestedTask['embedded_workflow_name'] ??= $workflow->name;
                     $expanded[] = $nestedTask;
                 }
 
@@ -435,6 +443,7 @@ class WorkflowTaskRunner
                     $waitTask['parent_task_key'] = $rootTaskKey;
                     $waitTask['embedded_workflow_id'] = $workflow->id;
                     $waitTask['embedded_workflow_name'] = $workflow->name;
+                    $waitTask['embedded_workflow_frame_key'] = $workflowFrameKey;
                     if ($workflowMailboxSource !== null) {
                         $waitTask['mailbox_source'] = $workflowMailboxSource;
                         $waitTask['script_person_source'] = $workflowMailboxSource;
@@ -442,6 +451,28 @@ class WorkflowTaskRunner
                     $expanded[] = $waitTask;
                 }
             }
+
+            $boundaryTask = [
+                'key' => $workflowFrameKey.'-boundary',
+                'task_key' => 'workflow.boundary',
+                'title' => $task['title'] ?? $workflow->name,
+                'description' => 'Wartet auf den Abschluss des eingebetteten Workflows und wertet dessen Rueckgabewert aus.',
+                'kind' => 'workflow',
+                'runner' => 'workflow-boundary',
+                'parent_task_key' => $rootTaskKey,
+                'route_source_task_key' => $rootTaskKey,
+                'embedded_workflow_id' => $workflow->id,
+                'embedded_workflow_name' => $workflow->name,
+                'embedded_workflow_frame_key' => $workflowFrameKey,
+            ];
+
+            foreach (['next', 'on_error'] as $routeKey) {
+                if (is_array($task[$routeKey] ?? null)) {
+                    $boundaryTask[$routeKey] = $task[$routeKey];
+                }
+            }
+
+            $expanded[] = $boundaryTask;
         }
 
         return $expanded;

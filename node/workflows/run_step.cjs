@@ -31,6 +31,7 @@ const basePath = path.resolve(__dirname, '..', '..');
 const startedAt = new Date().toISOString();
 const taskResults = [];
 const events = [];
+const embeddedWorkflowResults = new Map();
 let browser = null;
 let browserDriver = '';
 let page = null;
@@ -1334,7 +1335,28 @@ async function run() {
     let result;
 
     try {
-      if (task.runner === 'php') {
+      if (task.runner === 'workflow-boundary') {
+        const frameKey = String(task.embedded_workflow_frame_key || '').trim();
+        const workflowResult = embeddedWorkflowResults.get(frameKey) || {
+          ok: true,
+          value: true,
+          explicit: false,
+        };
+        const workflowName = task.embedded_workflow_name || taskLabel;
+
+        result = {
+          ok: workflowResult.ok,
+          status: workflowResult.ok ? 'success' : 'failed',
+          statusMessage: workflowResult.explicit
+            ? `Eingebetteter Workflow "${workflowName}" hat ${workflowResult.ok ? 'true' : 'false'} zurueckgegeben.`
+            : `Eingebetteter Workflow "${workflowName}" wurde erfolgreich abgeschlossen.`,
+          workflow_return: workflowResult.value,
+          workflowReturn: workflowResult.value,
+          workflow_return_ok: workflowResult.ok,
+          embeddedWorkflowCompleted: true,
+          embeddedWorkflowReturnExplicit: workflowResult.explicit,
+        };
+      } else if (task.runner === 'php') {
         result = await runDataTask(task, context);
       } else if (task.runner !== 'node') {
         throw new Error(`Runner wird vom Node-Orchestrator nicht unterstuetzt: ${task.runner || '-'}`);
@@ -1534,6 +1556,41 @@ async function run() {
     pushEvent(ok ? 'task-completed' : 'task-failed', result.statusMessage || taskLabel, { taskKey: task.key, status });
     writeStatus('running', ok ? 'task-completed' : 'task-failed', result.statusMessage || taskLabel);
 
+    const embeddedWorkflowFrameKey = String(task.embedded_workflow_frame_key || '').trim();
+    const hasWorkflowReturn = (
+      Object.prototype.hasOwnProperty.call(result, 'workflow_return')
+      || Object.prototype.hasOwnProperty.call(result, 'workflowReturn')
+    );
+
+    if (task.runner !== 'workflow-boundary' && embeddedWorkflowFrameKey !== '' && hasWorkflowReturn) {
+      const workflowReturn = Object.prototype.hasOwnProperty.call(result, 'workflow_return')
+        ? result.workflow_return
+        : result.workflowReturn;
+      const workflowReturnOk = Object.prototype.hasOwnProperty.call(result, 'workflow_return_ok')
+        ? result.workflow_return_ok === true
+        : workflowReturn !== false;
+      const boundaryTaskIndex = runtimeTasks.findIndex((candidate, candidateIndex) => (
+        candidateIndex > taskIndex
+        && candidate.runner === 'workflow-boundary'
+        && String(candidate.embedded_workflow_frame_key || '').trim() === embeddedWorkflowFrameKey
+      ));
+
+      if (boundaryTaskIndex >= 0) {
+        embeddedWorkflowResults.set(embeddedWorkflowFrameKey, {
+          ok: workflowReturnOk,
+          value: workflowReturn,
+          explicit: true,
+        });
+        pushEvent('embedded-workflow-returned', `Eingebetteter Workflow hat ${workflowReturnOk ? 'true' : 'false'} zurueckgegeben.`, {
+          workflowFrameKey: embeddedWorkflowFrameKey,
+          workflowReturn,
+          workflowReturnOk,
+        });
+        taskIndex = boundaryTaskIndex;
+        continue;
+      }
+    }
+
     if (!ok) {
       const failurePreview = await captureTaskPreview(context, result, true).catch(() => ({}));
 
@@ -1592,7 +1649,10 @@ async function run() {
         continue;
       }
 
-      requestedSuccessRouteTask = task;
+      requestedSuccessRouteTask = {
+        ...task,
+        key: task.route_source_task_key || task.parent_task_key || task.key,
+      };
       break;
     }
 
