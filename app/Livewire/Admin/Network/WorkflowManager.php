@@ -466,6 +466,16 @@ class WorkflowManager extends Component
         $this->applyTaskDefinitionToForm('editingTask', $taskKey, false);
     }
 
+    public function updatedNewTaskMailboxSource(mixed $value = null): void
+    {
+        $this->newTaskMailboxSource = $this->normalizeMailboxSource((string) $this->newTaskMailboxSource);
+    }
+
+    public function updatedEditingTaskMailboxSource(mixed $value = null): void
+    {
+        $this->editingTaskMailboxSource = $this->normalizeMailboxSource((string) $this->editingTaskMailboxSource);
+    }
+
     public function addTaskCard(): void
     {
         $workflow = $this->editableWorkflow();

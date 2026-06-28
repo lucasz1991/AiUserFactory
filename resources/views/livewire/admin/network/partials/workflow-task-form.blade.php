@@ -164,7 +164,7 @@
     @if($form['mailbox_source'])
         <div>
             <label class="block text-sm font-medium text-gray-700">{{ $form['mailbox_source_label'] }}</label>
-            <select wire:model.defer="{{ $prefix }}MailboxSource" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+            <select wire:model.live="{{ $prefix }}MailboxSource" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
                 @foreach($form['mailbox_source_options'] as $mailboxSourceValue => $mailboxSourceLabel)
                     <option value="{{ $mailboxSourceValue }}">{{ $mailboxSourceLabel }}</option>
                 @endforeach
