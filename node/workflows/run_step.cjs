@@ -441,7 +441,7 @@ function resolveString(value, context = {}) {
 }
 
 function taskInput(task, context = {}) {
-  const mailboxSource = normalizeMailboxSource(task.mailbox_source || task.mailboxSource || 'person');
+  const mailboxSource = normalizeMailboxSource(task.script_person_source || task.scriptPersonSource || task.mailbox_source || task.mailboxSource || 'person');
   const valueContext = scopedWorkflowContext(context, mailboxSource);
   const browserWindow = normalizeBrowserWindowName(
     task.browser_window_name
@@ -459,6 +459,8 @@ function taskInput(task, context = {}) {
     browser_window_name: browserWindow,
     mailboxSource,
     mailbox_source: mailboxSource,
+    scriptPersonSource: mailboxSource,
+    script_person_source: mailboxSource,
     value: resolveString(task.value ?? task.input ?? '', valueContext),
     inputValue: resolveString(task.input ?? task.value ?? '', valueContext),
     input_value: resolveString(task.input ?? task.value ?? '', valueContext),
@@ -705,7 +707,7 @@ async function restoreBrowserWindowState(context, nextPage, windowName = 'main')
 }
 
 async function runDataTask(task, context = {}) {
-  const mailboxSource = normalizeMailboxSource(task.mailbox_source || task.mailboxSource || 'person');
+  const mailboxSource = normalizeMailboxSource(task.script_person_source || task.scriptPersonSource || task.mailbox_source || task.mailboxSource || 'person');
   const scopedContext = scopedWorkflowContext(context, mailboxSource);
   const person = scopedContext.person || runtimePerson();
   const account = person && typeof person === 'object' && person.emailAccount

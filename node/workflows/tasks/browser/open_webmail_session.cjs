@@ -55,7 +55,7 @@ function verificationAccountFromContext(context = {}) {
 }
 
 function accountFromContext(context = {}, input = {}) {
-  const mailboxSource = normalizeMailboxSource(input.mailbox_source || input.mailboxSource || input.account_source || input.accountSource || input.value || 'person');
+  const mailboxSource = normalizeMailboxSource(input.script_person_source || input.scriptPersonSource || input.mailbox_source || input.mailboxSource || input.account_source || input.accountSource || input.value || 'person');
   const account = mailboxSource === 'verification'
     ? verificationAccountFromContext(context)
     : personAccountFromContext(context);

@@ -344,6 +344,7 @@ class WorkflowTaskRunner
 
                 if ($mailboxSource !== null) {
                     $runtimeTask['mailbox_source'] = $mailboxSource;
+                    $runtimeTask['script_person_source'] = $mailboxSource;
                 }
 
                 if ($keyPrefix !== '') {
@@ -363,7 +364,8 @@ class WorkflowTaskRunner
             $workflowId = (int) ($task['workflow_id'] ?? 0);
             $taskKey = trim((string) ($task['key'] ?? 'workflow')) ?: 'workflow';
             $rootTaskKey = $parentTaskKey ?? $taskKey;
-            $workflowMailboxSource = $inheritedMailboxSource ?? $this->normalizeMailboxSource($task['mailbox_source'] ?? null);
+            $workflowMailboxSource = $inheritedMailboxSource
+                ?? $this->normalizeMailboxSource($task['script_person_source'] ?? $task['mailbox_source'] ?? null);
 
             if ($workflowId <= 0) {
                 throw new \RuntimeException('Die Workflow-Task "'.$taskKey.'" hat keine gueltige Workflow-Referenz.');
@@ -435,6 +437,7 @@ class WorkflowTaskRunner
                     $waitTask['embedded_workflow_name'] = $workflow->name;
                     if ($workflowMailboxSource !== null) {
                         $waitTask['mailbox_source'] = $workflowMailboxSource;
+                        $waitTask['script_person_source'] = $workflowMailboxSource;
                     }
                     $expanded[] = $waitTask;
                 }

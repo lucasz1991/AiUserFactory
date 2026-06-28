@@ -547,6 +547,7 @@ class WorkflowManager extends Component
             'value' => $value,
             'url' => ($formConfig['url'] ?? false) ? $value : null,
             'mailbox_source' => $mailboxSource,
+            'script_person_source' => $mailboxSource,
             'status' => 'configured',
         ]);
 
@@ -638,7 +639,7 @@ class WorkflowManager extends Component
             $task['value'] ?? null,
             $task['input'] ?? null,
         ])->first(fn (mixed $value): bool => $value !== null && trim((string) $value) !== '') ?? '');
-        $this->editingTaskMailboxSource = $this->normalizeMailboxSource((string) ($task['mailbox_source'] ?? 'person'));
+        $this->editingTaskMailboxSource = $this->normalizeMailboxSource((string) ($task['script_person_source'] ?? $task['mailbox_source'] ?? 'person'));
         $this->editingTaskBrowserWindow = $this->normalizeBrowserWindowName((string) ($task['browser_window_name'] ?? $task['browser_window'] ?? 'main'));
         $this->editingTaskSuccessPayload = $this->payloadToString($task['success_payload'] ?? null);
         $this->editingTaskFailurePayload = $this->payloadToString($task['failure_payload'] ?? null);
@@ -730,6 +731,7 @@ class WorkflowManager extends Component
                         'value' => $value,
                         'url' => ($formConfig['url'] ?? false) ? $value : null,
                         'mailbox_source' => $mailboxSource,
+                        'script_person_source' => $mailboxSource,
                         'timeout_seconds' => (int) $validated['editingTaskTimeoutSeconds'],
                     ],
                 );
@@ -1284,7 +1286,7 @@ class WorkflowManager extends Component
             'url_label' => 'URL',
             'url_placeholder' => 'https://example.test',
             'mailbox_source' => true,
-            'mailbox_source_label' => 'Postfach',
+            'mailbox_source_label' => 'Script-Bezugsperson',
             'mailbox_source_options' => [
                 'person' => 'Bezugs-Person',
                 'verification' => 'Haupt-Verifikationskonto',
@@ -1363,7 +1365,7 @@ class WorkflowManager extends Component
             'description' => $workflow->description ?: 'Fuehrt den gesamten referenzierten Workflow an dieser Stelle aus.',
             'form' => [
                 'mailbox_source' => true,
-                'mailbox_source_label' => 'Workflow ausfuehren fuer',
+                'mailbox_source_label' => 'Script-Bezugsperson',
                 'mailbox_source_options' => [
                     'person' => 'Bezugs-Person',
                     'verification' => 'Haupt-Verifikationskonto',
@@ -1390,6 +1392,7 @@ class WorkflowManager extends Component
             'workflow_id' => (int) $definition['workflow_id'],
             'workflow_slug' => (string) $definition['workflow_slug'],
             'mailbox_source' => $this->normalizeMailboxSource((string) ($overrides['mailbox_source'] ?? 'person')),
+            'script_person_source' => $this->normalizeMailboxSource((string) ($overrides['script_person_source'] ?? $overrides['mailbox_source'] ?? 'person')),
             'timeout_seconds' => max(0, (int) ($overrides['timeout_seconds'] ?? $definition['timeout_seconds'])),
         ]);
 
@@ -1422,7 +1425,7 @@ class WorkflowManager extends Component
         }
 
         if (($formConfig['mailbox_source'] ?? false) && ! in_array($this->normalizeMailboxSource((string) $this->{$mailboxSourceProperty}), ['person', 'verification'], true)) {
-            $this->addError($mailboxSourceProperty, 'Bitte ein Postfach auswaehlen.');
+            $this->addError($mailboxSourceProperty, 'Bitte eine Script-Bezugsperson auswaehlen.');
             $valid = false;
         }
 

@@ -18,7 +18,7 @@
         'url_label' => 'URL',
         'url_placeholder' => 'https://example.test',
         'mailbox_source' => true,
-        'mailbox_source_label' => 'Postfach',
+        'mailbox_source_label' => 'Script-Bezugsperson',
         'mailbox_source_options' => [
             'person' => 'Bezugs-Person',
             'verification' => 'Haupt-Verifikationskonto',
