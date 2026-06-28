@@ -159,6 +159,7 @@ class WorkflowStep extends Model
                     'input' => trim((string) ($task['input'] ?? '')),
                     'value' => trim((string) ($task['value'] ?? '')),
                     'url' => trim((string) ($task['url'] ?? '')),
+                    'mailbox_source' => trim((string) ($task['mailbox_source'] ?? '')),
                     'success_payload' => $task['success_payload'] ?? null,
                     'failure_payload' => $task['failure_payload'] ?? null,
                     'next' => is_array($task['next'] ?? null) ? $task['next'] : null,
