@@ -1604,6 +1604,35 @@ async function run() {
         };
       }
 
+      const failureRoute = task.on_error && typeof task.on_error === 'object'
+        ? task.on_error
+        : null;
+
+      if (failureRoute) {
+        const targetCardKey = String(failureRoute.card_key || failureRoute.card || '').trim();
+        const targetTaskIndex = targetCardKey === ''
+          ? -1
+          : runtimeTasks.findIndex((candidate) => String(candidate.key || '') === targetCardKey);
+
+        // Rueckspruenge bleiben beim PHP-Orchestrator. Dort wird max_attempts
+        // pro Workflow-Lauf gezaehlt und auch ueber mehrere Node-Laeufe eingehalten.
+        if (targetTaskIndex > taskIndex) {
+          routeTransitions += 1;
+
+          if (routeTransitions > Math.max(100, runtimeTasks.length * 20)) {
+            throw new Error('Zu viele Task-Routenwechsel. Moegliche Schleife in der Fehlerroute.');
+          }
+
+          pushEvent('task-error-route-followed', `Fehlerroute wird fortgesetzt: ${targetCardKey}.`, {
+            taskKey: task.key,
+            targetTaskKey: targetCardKey,
+            status,
+          });
+          taskIndex = targetTaskIndex;
+          continue;
+        }
+      }
+
       const failedResult = {
         ok: false,
         status,

@@ -25,36 +25,39 @@ function returnTask(key, value, frameKey = null) {
 }
 
 function executeEmbeddedWorkflow(workflowReturn) {
+  return executeTasks([
+    returnTask('embedded-return', workflowReturn, 'embedded-frame'),
+    {
+      key: 'embedded-boundary',
+      task_key: 'workflow.boundary',
+      title: 'Embedded workflow',
+      kind: 'workflow',
+      runner: 'workflow-boundary',
+      parent_task_key: 'embedded-workflow',
+      route_source_task_key: 'embedded-workflow',
+      embedded_workflow_name: 'Embedded workflow',
+      embedded_workflow_frame_key: 'embedded-frame',
+      next: {
+        type: 'card',
+        card_key: 'success-target',
+      },
+    },
+    returnTask('must-be-skipped', true),
+    returnTask('success-target', true),
+  ]);
+}
+
+function executeTasks(tasks) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workflow-boundary-'));
   const runtimePath = path.join(directory, 'runtime.json');
   const resultPath = path.join(directory, 'result.json');
   const statusPath = path.join(directory, 'status.json');
-  const frameKey = 'embedded-frame';
   const runtime = {
     resultPath,
     statusPath,
     runDirectory: directory,
     livePreviewEnabled: false,
-    tasks: [
-      returnTask('embedded-return', workflowReturn, frameKey),
-      {
-        key: 'embedded-boundary',
-        task_key: 'workflow.boundary',
-        title: 'Embedded workflow',
-        kind: 'workflow',
-        runner: 'workflow-boundary',
-        parent_task_key: 'embedded-workflow',
-        route_source_task_key: 'embedded-workflow',
-        embedded_workflow_name: 'Embedded workflow',
-        embedded_workflow_frame_key: frameKey,
-        next: {
-          type: 'card',
-          card_key: 'success-target',
-        },
-      },
-      returnTask('must-be-skipped', true),
-      returnTask('success-target', true),
-    ],
+    tasks,
   };
 
   fs.writeFileSync(runtimePath, JSON.stringify(runtime));
@@ -93,4 +96,28 @@ test('embedded workflow false return fails at the workflow boundary', () => {
   assert.equal(result.workflow_return_ok, false);
   assert.equal(result.failedTaskKey, 'embedded-boundary');
   assert.equal(result.tasks.at(-1).parent_task_key, 'embedded-workflow');
+});
+
+test('failed task follows a forward on_error route in the same Node run', () => {
+  const failedTask = returnTask('mailbox-not-found', false);
+  failedTask.on_error = {
+    type: 'card',
+    card_key: 'check-postbox-button',
+  };
+  const result = executeTasks([
+    failedTask,
+    returnTask('must-be-skipped-after-error', true),
+    returnTask('check-postbox-button', true),
+  ]);
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.tasks.map((task) => task.key), [
+    'mailbox-not-found',
+    'check-postbox-button',
+  ]);
+  assert.ok(result.events.some((event) => (
+    event.stage === 'task-error-route-followed'
+    && event.taskKey === 'mailbox-not-found'
+    && event.targetTaskKey === 'check-postbox-button'
+  )));
 });
