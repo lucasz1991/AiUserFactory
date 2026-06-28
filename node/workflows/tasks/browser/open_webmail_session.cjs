@@ -5,6 +5,7 @@ const {
   clickVisibleElement,
   clickVisibleElementByText,
   findVisibleElementByText,
+  framesForPage,
 } = require('../lib/find_visible_element.cjs');
 
 function normalizeText(value) {
@@ -130,6 +131,134 @@ async function isLoggedInLandingPage(page) {
   return /sie bleiben eingeloggt/i.test(text);
 }
 
+async function clickTopRightOverlayClose(page, timeout) {
+  const startedAt = Date.now();
+  const maxWait = Math.min(Number(timeout || 15000), 5000);
+
+  while (Date.now() - startedAt < maxWait) {
+    for (const frame of framesForPage(page)) {
+      const closed = await frame.evaluate(() => {
+        const visible = (element) => {
+          if (!element || typeof element.getBoundingClientRect !== 'function') {
+            return false;
+          }
+
+          const rect = element.getBoundingClientRect();
+          const style = window.getComputedStyle(element);
+
+          return rect.width > 0
+            && rect.height > 0
+            && style.visibility !== 'hidden'
+            && style.display !== 'none'
+            && style.opacity !== '0';
+        };
+        const textFor = (element) => String([
+          element.innerText,
+          element.textContent,
+          element.getAttribute?.('aria-label'),
+          element.getAttribute?.('title'),
+        ].filter(Boolean).join(' ')).replace(/\s+/g, ' ').trim().toLowerCase();
+        const clickableSelector = 'button,a,[role="button"],input[type="button"],input[type="submit"],[onclick]';
+        const overlaySelector = [
+          '[role="dialog"]',
+          '[aria-modal="true"]',
+          'dialog',
+          '[class*="overlay" i]',
+          '[class*="modal" i]',
+          '[class*="popup" i]',
+          '[class*="layer" i]',
+        ].join(',');
+        const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+        const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+        const fixedOverlays = Array.from(document.querySelectorAll('body *')).filter((element) => {
+          if (!visible(element)) {
+            return false;
+          }
+
+          const rect = element.getBoundingClientRect();
+          const style = window.getComputedStyle(element);
+          const zIndex = Number.parseInt(style.zIndex || '0', 10) || 0;
+
+          return ['fixed', 'sticky'].includes(style.position)
+            && zIndex >= 1000
+            && rect.width >= Math.min(260, viewportWidth * 0.35)
+            && rect.height >= Math.min(120, viewportHeight * 0.15);
+        });
+        const overlays = Array.from(new Set([
+          ...Array.from(document.querySelectorAll(overlaySelector)).filter(visible),
+          ...fixedOverlays,
+        ])).sort((first, second) => {
+          const firstZ = Number.parseInt(window.getComputedStyle(first).zIndex || '0', 10) || 0;
+          const secondZ = Number.parseInt(window.getComputedStyle(second).zIndex || '0', 10) || 0;
+
+          return secondZ - firstZ;
+        });
+
+        for (const overlay of overlays) {
+          const overlayRect = overlay.getBoundingClientRect();
+          const candidates = Array.from(overlay.querySelectorAll(clickableSelector))
+            .filter(visible)
+            .map((element) => {
+              const rect = element.getBoundingClientRect();
+              const text = textFor(element);
+              const nearTopRight = rect.left >= overlayRect.left + (overlayRect.width * 0.55)
+                && rect.top <= overlayRect.top + Math.min(96, overlayRect.height * 0.35);
+              const looksLikeClose = /(^|\s)(x|×)(\s|$)|schlie|close|nicht mehr anzeigen/.test(text);
+              const compact = rect.width <= 80 && rect.height <= 80;
+
+              return { element, rect, text, nearTopRight, looksLikeClose, compact };
+            })
+            .filter((candidate) => candidate.looksLikeClose || (candidate.nearTopRight && candidate.compact))
+            .sort((first, second) => {
+              if (first.looksLikeClose !== second.looksLikeClose) {
+                return first.looksLikeClose ? -1 : 1;
+              }
+
+              if (first.nearTopRight !== second.nearTopRight) {
+                return first.nearTopRight ? -1 : 1;
+              }
+
+              return (first.rect.top - second.rect.top) || (second.rect.left - first.rect.left);
+            });
+
+          const candidate = candidates[0];
+
+          if (!candidate) {
+            continue;
+          }
+
+          candidate.element.click();
+
+          return {
+            closed: true,
+            selector: 'top-right-overlay-close',
+            tag: String(candidate.element.tagName || '').toLowerCase(),
+            text: candidate.text,
+            rect: {
+              x: Math.round(candidate.rect.x),
+              y: Math.round(candidate.rect.y),
+              width: Math.round(candidate.rect.width),
+              height: Math.round(candidate.rect.height),
+            },
+          };
+        }
+
+        return null;
+      }).catch(() => null);
+
+      if (closed) {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+
+        return closed;
+      }
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+
+  return null;
+}
+
 async function closeLoggedInPopupIfVisible(page, timeout) {
   const closeSelectors = [
     '[data-testid*="close" i]',
@@ -161,7 +290,7 @@ async function closeLoggedInPopupIfVisible(page, timeout) {
     }
   }
 
-  return null;
+  return clickTopRightOverlayClose(page, timeout);
 }
 
 async function openMailboxViaAccountDropdown(page, timeout) {
