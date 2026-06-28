@@ -3,6 +3,7 @@
 namespace App\Services\Processes;
 
 use App\Models\ManagedProcess;
+use App\Models\WorkflowStepRun;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
@@ -12,6 +13,10 @@ use Illuminate\Support\Str;
 
 class ManagedProcessSupervisor
 {
+    private const OBSOLETE_FINAL_GRACE_SECONDS = 90;
+
+    private const ORPHAN_RUNNING_GRACE_SECONDS = 180;
+
     public function __construct(
         protected ManagedProcessInventory $inventory,
     ) {}
@@ -40,6 +45,7 @@ class ManagedProcessSupervisor
 
         $checked = 0;
         $restarted = 0;
+        $terminated = 0;
 
         foreach ($query->latest('last_seen_at')->limit(50)->get() as $process) {
             $checked++;
@@ -65,13 +71,118 @@ class ManagedProcessSupervisor
             }
         }
 
+        $terminated = $this->cleanupObsoleteProcesses($runId);
+
         return [
             'checked' => $checked,
             'restarted' => $restarted,
+            'terminated' => $terminated,
             'message' => $restarted > 0
                 ? $restarted.' Prozess(e) wurden neu gestartet.'
-                : 'Keine haengenden Prozesse gefunden.',
+                : ($terminated > 0
+                    ? $terminated.' nicht aktuelle Prozessfamilie(n) wurden beendet.'
+                    : 'Keine haengenden Prozesse gefunden.'),
         ];
+    }
+
+    protected function cleanupObsoleteProcesses(?string $runId = null): int
+    {
+        $query = ManagedProcess::query()
+            ->where('is_root', true)
+            ->whereIn('status', ['running', 'terminate_requested', 'kill_requested'])
+            ->whereIn('run_type', ['mail-registration', 'webmail-session', 'workflow-task'])
+            ->whereNotNull('run_id');
+
+        if ($runId !== null && trim($runId) !== '') {
+            $query->where('run_id', trim($runId));
+        }
+
+        $terminated = 0;
+
+        foreach ($query->latest('last_seen_at')->limit(100)->get() as $process) {
+            if (! $this->shouldTerminateObsoleteProcess($process)) {
+                $process->forceFill([
+                    'supervisor_checked_at' => now(),
+                ])->save();
+
+                continue;
+            }
+
+            $this->terminateProcessFamily($process, true, 'Prozessfamilie ist keinem aktuellen Workflow-Task mehr zugeordnet.');
+            $terminated++;
+        }
+
+        return $terminated;
+    }
+
+    protected function shouldTerminateObsoleteProcess(ManagedProcess $process): bool
+    {
+        $runType = trim((string) $process->run_type);
+        $externalRunId = trim((string) $process->run_id);
+
+        if ($runType !== 'workflow-task' || $externalRunId === '') {
+            $status = $this->readJsonFile((string) $process->status_path);
+            $state = trim((string) ($status['state'] ?? $status['status'] ?? ''));
+
+            return in_array($runType, ['mail-registration', 'webmail-session'], true)
+                && in_array($state, ['completed', 'failed', 'cancelled'], true)
+                && $this->statusAgeSeconds($process, $status) >= self::OBSOLETE_FINAL_GRACE_SECONDS;
+        }
+
+        $activeStepRun = WorkflowStepRun::query()
+            ->with('workflowRun')
+            ->where('external_run_type', 'workflow-task')
+            ->where('external_run_id', $externalRunId)
+            ->whereIn('status', ['running', 'waiting'])
+            ->first();
+
+        if (! $activeStepRun) {
+            $status = $this->readJsonFile((string) $process->status_path);
+            $state = trim((string) ($status['state'] ?? $status['status'] ?? ''));
+
+            if (in_array($state, ['completed', 'failed', 'cancelled'], true)) {
+                return $this->statusAgeSeconds($process, $status) >= self::OBSOLETE_FINAL_GRACE_SECONDS;
+            }
+
+            return (int) $process->elapsed_seconds >= self::ORPHAN_RUNNING_GRACE_SECONDS;
+        }
+
+        if (
+            $activeStepRun->workflowRun
+            && in_array((string) $activeStepRun->workflowRun->status, ['queued', 'running', 'waiting'], true)
+        ) {
+            return false;
+        }
+
+        return $this->statusAgeSeconds($process, $this->readJsonFile((string) $process->status_path)) >= self::OBSOLETE_FINAL_GRACE_SECONDS;
+    }
+
+    protected function statusAgeSeconds(ManagedProcess $process, array $status): int
+    {
+        $timestamp = $this->parseStatusTimestamp($status['finishedAt'] ?? $status['finished_at'] ?? $status['at'] ?? null);
+
+        if (! $timestamp && $process->heartbeat_at) {
+            $timestamp = $process->heartbeat_at;
+        }
+
+        if (! $timestamp && $process->started_at) {
+            $timestamp = $process->started_at;
+        }
+
+        return $timestamp ? max(0, (int) $timestamp->diffInSeconds(now())) : (int) $process->elapsed_seconds;
+    }
+
+    protected function parseStatusTimestamp(mixed $value): ?Carbon
+    {
+        if (! is_scalar($value) || trim((string) $value) === '') {
+            return null;
+        }
+
+        try {
+            return Carbon::parse((string) $value);
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     protected function shouldRestart(ManagedProcess $process, bool $force = false): bool
@@ -474,6 +585,62 @@ class ManagedProcessSupervisor
                 'message' => trim($result->errorOutput() ?: $result->output()),
             ]);
         }
+    }
+
+    protected function terminateProcessFamily(ManagedProcess $rootProcess, bool $force, string $message): void
+    {
+        $rootPid = (int) ($rootProcess->family_root_pid ?: $rootProcess->pid);
+
+        if ($rootPid <= 1) {
+            return;
+        }
+
+        $family = ManagedProcess::query()
+            ->where(function ($query) use ($rootPid): void {
+                $query->where('family_root_pid', $rootPid)
+                    ->orWhere('pid', $rootPid);
+            })
+            ->whereIn('status', ['running', 'terminate_requested', 'kill_requested'])
+            ->orderByRaw('CASE WHEN pid = ? THEN 1 ELSE 0 END', [$rootPid])
+            ->get();
+
+        $pids = $family
+            ->pluck('pid')
+            ->map(fn (mixed $pid): int => (int) $pid)
+            ->filter(fn (int $pid): bool => $pid > 1)
+            ->unique()
+            ->values();
+
+        if ($pids->isEmpty()) {
+            return;
+        }
+
+        if (PHP_OS_FAMILY === 'Windows') {
+            Process::timeout(10)->run(array_values(array_filter([
+                'taskkill',
+                '/PID',
+                (string) $rootPid,
+                '/T',
+                $force ? '/F' : null,
+            ])));
+        } else {
+            foreach ($pids as $pid) {
+                Process::timeout(5)->run([
+                    'kill',
+                    '-'.($force ? 'KILL' : 'TERM'),
+                    (string) $pid,
+                ]);
+            }
+        }
+
+        ManagedProcess::query()
+            ->whereIn('pid', $pids->all())
+            ->update([
+                'status' => $force ? 'killed' : 'terminated',
+                'exited_at' => now(),
+                'last_action_at' => now(),
+                'action_message' => $message,
+            ]);
     }
 
     protected function readJsonFile(string $path): array

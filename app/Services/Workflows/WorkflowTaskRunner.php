@@ -39,6 +39,7 @@ class WorkflowTaskRunner
 
         $runtime = [
             'runId' => $runId,
+            'processIdentity' => $this->processIdentity($runId, 'main', $run, $step, $stepRun),
             'workflow' => $runtimeContext,
             'workflowRunId' => $run->id,
             'workflowRunUuid' => $run->run_uuid,
@@ -65,9 +66,13 @@ class WorkflowTaskRunner
             'scriptName' => 'run_step.cjs',
         ];
 
+        $initialBrowserWindows = $this->browserWindowsFromRuntimeContext($runtimeContext);
+
         $this->writeJsonFile($statusPath, [
             'runId' => $runId,
             'workflow' => $this->publicRuntimeContext($runtimeContext),
+            'processKey' => 'workflow-task:'.$runId.':main',
+            'processIdentity' => $runtime['processIdentity'],
             'state' => 'queued',
             'stage' => 'queued',
             'message' => 'Workflow-Task-Lauf ist eingeplant.',
@@ -77,7 +82,7 @@ class WorkflowTaskRunner
             'livePreviewPollIntervalSeconds' => 3,
             'tasks' => $this->configuredTasks($tasks),
             'events' => [],
-            'browserWindows' => [],
+            'browserWindows' => $initialBrowserWindows,
             'at' => now()->toIso8601String(),
         ]);
         $this->writeJsonFile($configPath, $runtime);
@@ -100,12 +105,14 @@ class WorkflowTaskRunner
             $this->writeJsonFile($statusPath, [
                 'runId' => $runId,
                 'workflow' => $this->publicRuntimeContext($runtimeContext),
+                'processKey' => 'workflow-task:'.$runId.':main',
+                'processIdentity' => $runtime['processIdentity'],
                 'state' => 'failed',
                 'stage' => 'process-start-failed',
                 'message' => $exception->getMessage(),
                 'tasks' => $this->configuredTasks($tasks),
                 'events' => [],
-                'browserWindows' => [],
+                'browserWindows' => $initialBrowserWindows,
                 'at' => now()->toIso8601String(),
             ]);
 
@@ -236,6 +243,45 @@ class WorkflowTaskRunner
                     if (! array_key_exists('key', $window) && ! is_int($key)) {
                         $window['key'] = (string) $key;
                     }
+
+                    return $window;
+                })
+                ->filter()
+                ->values()
+                ->all();
+        }
+
+        return [];
+    }
+
+    protected function browserWindowsFromRuntimeContext(array $runtimeContext): array
+    {
+        foreach ([
+            $runtimeContext['browserWindows'] ?? null,
+            $runtimeContext['browser_windows'] ?? null,
+        ] as $candidate) {
+            if (! is_array($candidate) || $candidate === []) {
+                continue;
+            }
+
+            return collect($candidate)
+                ->map(function (mixed $window, int|string $key): ?array {
+                    if (! is_array($window)) {
+                        return null;
+                    }
+
+                    if (! array_key_exists('key', $window) && ! is_int($key)) {
+                        $window['key'] = (string) $key;
+                    }
+
+                    $windowKey = trim((string) ($window['key'] ?? $window['name'] ?? ''));
+
+                    if ($windowKey === '') {
+                        return null;
+                    }
+
+                    $window['key'] = $windowKey;
+                    $window['label'] = trim((string) ($window['label'] ?? $windowKey)) ?: $windowKey;
 
                     return $window;
                 })
@@ -432,6 +478,20 @@ class WorkflowTaskRunner
         }
 
         return $public;
+    }
+
+    protected function processIdentity(string $runId, string $role, WorkflowRun $run, WorkflowStep $step, WorkflowStepRun $stepRun): array
+    {
+        return [
+            'processKey' => 'workflow-task:'.$runId.':'.$role,
+            'runId' => $runId,
+            'runType' => 'workflow-task',
+            'role' => $role,
+            'workflowRunId' => $run->id,
+            'workflowRunUuid' => $run->run_uuid,
+            'workflowStepId' => $step->id,
+            'workflowStepRunId' => $stepRun->id,
+        ];
     }
 
     protected function publicRunStatus(array $status): array

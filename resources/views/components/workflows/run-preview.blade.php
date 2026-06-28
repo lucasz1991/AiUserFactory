@@ -56,6 +56,22 @@
             default => [],
         };
     };
+    $mergeLiveStatus = static function (array $storedResult, array $liveStatus): array {
+        $result = array_replace_recursive($storedResult, $liveStatus);
+
+        if (
+            is_array(data_get($storedResult, 'browserWindows'))
+            && data_get($storedResult, 'browserWindows') !== []
+            && (
+                ! is_array(data_get($liveStatus, 'browserWindows'))
+                || data_get($liveStatus, 'browserWindows') === []
+            )
+        ) {
+            $result['browserWindows'] = data_get($storedResult, 'browserWindows');
+        }
+
+        return $result;
+    };
     $jsonDownload = static function (array $payload): string {
         return 'data:application/json;base64,'.base64_encode(json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
     };
@@ -64,10 +80,10 @@
     };
     $stepRuns = $workflowRun?->stepRuns ?? collect();
     $screenshotPanels = collect($stepRuns)
-        ->flatMap(function ($stepRun) use ($publicUrl, $windowStatus, $liveStatusForStepRun) {
+        ->flatMap(function ($stepRun) use ($publicUrl, $windowStatus, $liveStatusForStepRun, $mergeLiveStatus) {
             $storedResult = is_array($stepRun->result_json) ? $stepRun->result_json : [];
             $liveStatus = $liveStatusForStepRun($stepRun);
-            $result = array_replace_recursive($storedResult, $liveStatus);
+            $result = $mergeLiveStatus($storedResult, $liveStatus);
             $hasNamedWindows = is_array(data_get($result, 'registrationWindowStatus')) || is_array(data_get($result, 'webmailWindowStatus'));
             $hasBrowserWindows = false;
             $panels = [];
@@ -120,19 +136,19 @@
         ->values();
     $latestStatusResult = collect($stepRuns)
         ->reverse()
-        ->map(function ($stepRun) use ($liveStatusForStepRun) {
+        ->map(function ($stepRun) use ($liveStatusForStepRun, $mergeLiveStatus) {
             $storedResult = is_array($stepRun->result_json) ? $stepRun->result_json : [];
 
-            return array_replace_recursive($storedResult, $liveStatusForStepRun($stepRun));
+            return $mergeLiveStatus($storedResult, $liveStatusForStepRun($stepRun));
         })
         ->first(fn (array $result): bool => $result !== []) ?? [];
     $stepDebugPanels = collect($stepRuns)
-        ->map(function ($stepRun) use ($liveStatusForStepRun) {
+        ->map(function ($stepRun) use ($liveStatusForStepRun, $mergeLiveStatus) {
             $step = $stepRun->workflowStep;
             $storedResult = is_array($stepRun->result_json) ? $stepRun->result_json : [];
             $storedLogs = is_array($stepRun->logs_json) ? $stepRun->logs_json : [];
             $liveStatus = $liveStatusForStepRun($stepRun);
-            $result = array_replace_recursive($storedResult, $liveStatus);
+            $result = $mergeLiveStatus($storedResult, $liveStatus);
             $resultTasks = collect(is_array(data_get($result, 'tasks')) ? data_get($result, 'tasks') : [])
                 ->filter(fn ($task) => is_array($task))
                 ->keyBy(fn ($task) => (string) data_get($task, 'key'));

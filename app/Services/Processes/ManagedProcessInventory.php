@@ -366,7 +366,7 @@ POWERSHELL;
         }
 
         return str_contains($normalized, $basePath)
-            && preg_match('/\b(mail_account|webmail_session|check_verification_webmail|scrape-instagram)[\w.-]*\.cjs\b/i', $command);
+            && preg_match('/\b(mail_account|webmail_session|check_verification_webmail|run_step|scrape-instagram)[\w.-]*\.cjs\b/i', $command);
     }
 
     private function isManagedCommand(string $command): bool
@@ -389,6 +389,7 @@ POWERSHELL;
             $scriptName === 'mail_account.cjs' => 'mail-registration',
             is_string($scriptName) && str_starts_with($scriptName, 'webmail_session') => 'webmail-session',
             is_string($scriptName) && str_starts_with($scriptName, 'check_verification_webmail') => 'verification-webmail-check',
+            $scriptName === 'run_step.cjs' => 'workflow-task',
             is_string($scriptName) && str_starts_with($scriptName, 'scrape-instagram') => 'instagram-scraper',
             preg_match('/\b(chrome|chromium|msedge|cloak)(?:\.exe)?\b/i', $command) === 1 => 'browser-child',
             preg_match('/\bnode(?:js)?(?:\.exe)?\b/i', $command) === 1 => 'node',
@@ -498,6 +499,7 @@ POWERSHELL;
         return match (true) {
             str_contains($path, '/mail-registration/') => 'mail-registration',
             str_contains($path, '/webmail-session/') => 'webmail-session',
+            str_contains($path, '/workflow-task-runs/') => 'workflow-task',
             default => null,
         };
     }

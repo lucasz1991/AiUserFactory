@@ -36,7 +36,7 @@ let browserDriver = '';
 let page = null;
 const browserWindowsByName = new Map();
 let previewTimer = null;
-let lastBrowserWindows = [];
+let lastBrowserWindows = initialBrowserWindowsFromWorkflow();
 let requestedBrowserEngine = null;
 let activeBrowserEngine = null;
 let browserFallbackReason = null;
@@ -416,6 +416,32 @@ function workflowHasBrowserWindows() {
   }
 
   return windows && typeof windows === 'object' && Object.keys(windows).length > 0;
+}
+
+function initialBrowserWindowsFromWorkflow() {
+  const workflow = runtime.workflow || {};
+  const windows = workflow.browserWindows || workflow.browser_windows || {};
+
+  if (Array.isArray(windows)) {
+    return windows.filter((windowEntry) => windowEntry && typeof windowEntry === 'object');
+  }
+
+  if (windows && typeof windows === 'object') {
+    return Object.entries(windows)
+      .map(([key, windowEntry]) => {
+        if (!windowEntry || typeof windowEntry !== 'object') {
+          return null;
+        }
+
+        return {
+          key: windowEntry.key || key,
+          ...windowEntry,
+        };
+      })
+      .filter(Boolean);
+  }
+
+  return [];
 }
 
 function pageTargetId(candidatePage) {
@@ -1052,8 +1078,8 @@ process.once('SIGINT', () => {
 });
 
 async function run() {
-  writeStatus('starting', 'starting', 'Workflow-Task-Runner startet.');
   pushEvent('starting', 'Workflow-Task-Runner startet.');
+  writeStatus('starting', 'starting', 'Workflow-Task-Runner startet.');
 
   const context = {
     workflow: runtime.workflow || {},
@@ -1070,8 +1096,8 @@ async function run() {
     livePreviewRelativePath: runtime.livePreviewRelativePath,
     timeoutMs: runtime.observationTimeoutMs || 90000,
     pages: [],
-    browserWindows: [],
-    windows: [],
+    browserWindows: lastBrowserWindows,
+    windows: lastBrowserWindows,
     activeBrowserWindow: 'main',
   };
 

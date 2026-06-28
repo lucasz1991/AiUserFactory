@@ -1278,10 +1278,11 @@ class WorkflowExecutionService
 
         if ($closedWindow !== '' && is_array($context['browser_windows'] ?? null)) {
             unset($context['browser_windows'][$closedWindow]);
+            $context['browserWindows'] = array_values($context['browser_windows']);
         }
 
         if ($closedBrowser) {
-            unset($context['browser_runtime'], $context['browser_ws_endpoint']);
+            unset($context['browser_runtime'], $context['browser_ws_endpoint'], $context['browser_windows'], $context['browserWindows']);
         } else {
             $wsEndpoint = trim((string) ($result['browserWsEndpoint'] ?? data_get($result, 'browser.wsEndpoint', '')));
 
@@ -1312,6 +1313,10 @@ class WorkflowExecutionService
                         'title' => trim((string) ($window['title'] ?? '')),
                         'targetId' => trim((string) ($window['targetId'] ?? $window['target_id'] ?? '')),
                         'capturedAt' => trim((string) ($window['capturedAt'] ?? now()->toIso8601String())),
+                        'livePreviewRelativePath' => trim((string) ($window['livePreviewRelativePath'] ?? $window['screenshotRelativePath'] ?? '')),
+                        'debugDomRelativePath' => trim((string) ($window['debugDomRelativePath'] ?? '')),
+                        'screenshotUrl' => trim((string) ($window['screenshotUrl'] ?? '')),
+                        'debugDomUrl' => trim((string) ($window['debugDomUrl'] ?? '')),
                     ],
                 ];
             })
@@ -1323,6 +1328,7 @@ class WorkflowExecutionService
 
         $existing = is_array($context['browser_windows'] ?? null) ? $context['browser_windows'] : [];
         $context['browser_windows'] = array_replace($existing, $windows);
+        $context['browserWindows'] = array_values($context['browser_windows']);
 
         return $context;
     }
