@@ -1280,6 +1280,7 @@ class WorkflowManager extends Component
             'selector_label' => 'Selector',
             'selector_placeholder' => 'button[type=submit], button:has(span:has-text("Login"))',
             'value' => false,
+            'value_required' => true,
             'value_label' => 'Wert',
             'value_placeholder' => 'person.email oder fester Wert',
             'url' => false,
@@ -1419,7 +1420,11 @@ class WorkflowManager extends Component
             $valid = false;
         }
 
-        if ((($formConfig['value'] ?? false) || ($formConfig['url'] ?? false)) && trim((string) $this->{$valueProperty}) === '') {
+        if (
+            (($formConfig['value'] ?? false) || ($formConfig['url'] ?? false))
+            && ($formConfig['value_required'] ?? true)
+            && trim((string) $this->{$valueProperty}) === ''
+        ) {
             $this->addError($valueProperty, ($formConfig['url'] ?? false) ? 'Bitte eine URL angeben.' : 'Bitte einen Wert oder eine Datenquelle angeben.');
             $valid = false;
         }

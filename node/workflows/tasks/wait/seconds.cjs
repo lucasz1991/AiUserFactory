@@ -33,6 +33,9 @@ async function run(context = {}) {
     await wait(milliseconds);
   }
 
+  context.lastWaitSeconds = seconds;
+  context.last_wait_seconds = seconds;
+
   return captureTaskPreview(context, {
     ok: true,
     status: 'success',

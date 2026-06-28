@@ -12,6 +12,7 @@
         'selector_label' => 'Selector',
         'selector_placeholder' => 'button[type=submit], button:has(span:has-text("Login"))',
         'value' => false,
+        'value_required' => true,
         'value_label' => 'Wert',
         'value_placeholder' => 'person.email oder fester Wert',
         'url' => false,

@@ -416,6 +416,8 @@ function resolveString(value, context = {}) {
   const lookupRoot = {
     ...workflow,
     workflow,
+    workflowVariables: context.workflowVariables || context.lastResult?.workflowVariables || {},
+    workflow_variables: context.workflow_variables || context.lastResult?.workflow_variables || {},
     person: personForLookup,
     account,
     email_account: account,
@@ -434,7 +436,7 @@ function resolveString(value, context = {}) {
   const resolved = valueFromPath(lookupRoot, normalized);
 
   if (resolved === undefined || resolved === null || resolved === '') {
-    return /^(person|account|email_account|workflow|verificationMailbox|verification_mailbox|veri_account|veri-account)\./.test(normalized) || directRuntimeKeys.includes(normalized) ? '' : value;
+    return /^(person|account|email_account|workflow|workflowVariables|workflow_variables|verificationMailbox|verification_mailbox|veri_account|veri-account)\./.test(normalized) || directRuntimeKeys.includes(normalized) ? '' : value;
   }
 
   return resolved;
@@ -1440,6 +1442,27 @@ async function run() {
           hasPassword: true,
         };
       }
+
+      const verificationCode = result.verification_code
+        || result.verificationCode
+        || result.workflow_variables?.verification_code
+        || result.workflowVariables?.verificationCode
+        || '';
+
+      if (verificationCode) {
+        context.verification_code = verificationCode;
+        context.verificationCode = verificationCode;
+        context.workflow_variables = {
+          ...(context.workflow_variables || {}),
+          verification_code: verificationCode,
+          verificationCode,
+        };
+        context.workflowVariables = {
+          ...(context.workflowVariables || {}),
+          verification_code: verificationCode,
+          verificationCode,
+        };
+      }
     } catch (error) {
       result = {
         ok: false,
@@ -1486,6 +1509,10 @@ async function run() {
         new_password: context.new_password || context.account?.password || null,
         generated_password: context.generated_password || context.new_password || context.account?.password || null,
         'generated-password': context.generated_password || context.new_password || context.account?.password || null,
+        verification_code: context.verification_code || context.verificationCode || null,
+        verificationCode: context.verificationCode || context.verification_code || null,
+        workflow_variables: context.workflow_variables || null,
+        workflowVariables: context.workflowVariables || null,
         tasks: taskResults,
         browserWindows: lastBrowserWindows,
         browserWsEndpoint: browserWsEndpoint(),
@@ -1538,6 +1565,10 @@ async function run() {
     new_password: context.new_password || context.account?.password || null,
     generated_password: context.generated_password || context.new_password || context.account?.password || null,
     'generated-password': context.generated_password || context.new_password || context.account?.password || null,
+    verification_code: context.verification_code || context.verificationCode || null,
+    verificationCode: context.verificationCode || context.verification_code || null,
+    workflow_variables: context.workflow_variables || null,
+    workflowVariables: context.workflowVariables || null,
     tasks: taskResults,
     browserWindows: lastBrowserWindows,
     browserWsEndpoint: browserWsEndpoint(),
