@@ -1,10 +1,10 @@
 @php($workflowLocked = (bool) ($selectedWorkflow?->is_edit_locked ?? false))
-<div class="space-y-6" wire:loading.class="opacity-60 pointer-events-none">
-    <div class="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
+<div class="space-y-5" wire:loading.class="opacity-60 pointer-events-none">
+    <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
         <div class="flex flex-wrap items-start justify-between gap-4">
             <div class="min-w-0">
                 <div class="flex flex-wrap items-center gap-2">
-                    <a href="{{ route('network.workflows') }}" class="text-sm font-semibold text-blue-700 hover:text-blue-900">Workflows</a>
+                    <a href="{{ route('network.workflows') }}" class="text-sm font-semibold text-slate-700 hover:text-slate-950">Workflows</a>
                     <span class="text-sm text-slate-400">/</span>
                     <span class="text-sm text-slate-500">Management</span>
                 </div>
@@ -38,8 +38,7 @@
                     </button>
                     @if(! $workflowLocked)
                         <button type="button" wire:click="$set('showWorkflowModal', true)" class="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">Workflow</button>
-                        <button type="button" wire:click="$set('showAddStepModal', true)" class="rounded-md border border-blue-200 bg-white px-3 py-2 text-sm font-semibold text-blue-700 shadow-sm hover:bg-blue-50">Liste</button>
-                        <button type="button" wire:click="$set('showTaskPanel', true)" class="rounded-md border border-emerald-200 bg-white px-3 py-2 text-sm font-semibold text-emerald-700 shadow-sm hover:bg-emerald-50">Tasks</button>
+                        <button type="button" wire:click="$set('showAddStepModal', true)" class="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">Liste</button>
                         <button type="button" wire:click="$set('showActionLibraryModal', true)" class="rounded-md border border-amber-200 bg-white px-3 py-2 text-sm font-semibold text-amber-700 shadow-sm hover:bg-amber-50">Aktionen</button>
                         <a href="{{ route('processes.index') }}" class="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">Prozesse</a>
                         <button type="button" wire:click="deleteWorkflow" wire:confirm="Workflow samt Aufgaben, Tasks und Ausfuehrungen wirklich loeschen?" class="rounded-md border border-red-300 bg-white px-3 py-2 text-sm font-semibold text-red-700 shadow-sm hover:bg-red-50">Loeschen</button>
@@ -80,6 +79,7 @@
             <div
                 x-data="{
                     focusedTask: '',
+                    showRoutes: true,
                     routeLines: [],
                     routeOverlay: { width: 0, height: 0 },
                     routeSvgMarkup: '',
@@ -300,81 +300,106 @@
                         };
                         this.routeLines = lines;
                         this.routeSvgMarkup = lines.map((line, index) => {
-                            const color = line.type === 'failed' ? '#fca5a5' : '#bbf7d0';
+                            const color = line.type === 'failed' ? '#fb7185' : '#10b981';
                             const marker = line.type === 'failed' ? 'url(#workflow-arrow-red)' : 'url(#workflow-arrow-green)';
                             const dash = line.type === 'failed' ? ' stroke-dasharray=&quot;6 5&quot;' : '';
                             const path = String(line.path || '').replace(/&/g, '&amp;').replace(/&quot;/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-                            return `<path d=&quot;${path}&quot; fill=&quot;none&quot; stroke-width=&quot;2&quot; stroke-linecap=&quot;round&quot; stroke-linejoin=&quot;round&quot; stroke=&quot;${color}&quot;${dash} marker-end=&quot;${marker}&quot;></path>`;
+                            return `<path d=&quot;${path}&quot; fill=&quot;none&quot; stroke-width=&quot;1.75&quot; stroke-linecap=&quot;round&quot; stroke-linejoin=&quot;round&quot; stroke=&quot;${color}&quot; stroke-opacity=&quot;0.82&quot;${dash} marker-end=&quot;${marker}&quot;></path>`;
                         }).join('');
                     },
                 }"
                 x-init="refreshRouteLines()"
-                x-on:scroll.debounce.100ms="refreshRouteLines()"
-                x-ref="routeSurface"
-                class="relative max-h-[calc(100vh-220px)] overflow-auto rounded-md border border-blue-600 bg-blue-400 p-4 shadow-sm"
+                class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm"
             >
-                <svg
-                    class="pointer-events-none absolute left-0 top-0 z-30"
-                    x-bind:width="routeOverlay.width"
-                    x-bind:height="routeOverlay.height"
-                    x-bind:viewBox="`0 0 ${routeOverlay.width} ${routeOverlay.height}`"
-                    aria-hidden="true"
-                >
-                    <defs>
-                        <marker id="workflow-arrow-green" markerWidth="5" markerHeight="5" refX="4.5" refY="2.5" orient="auto" markerUnits="userSpaceOnUse">
-                            <path d="M0,0 L0,5 L5,2.5 z" fill="#bbf7d0"></path>
-                        </marker>
-                        <marker id="workflow-arrow-red" markerWidth="5" markerHeight="5" refX="4.5" refY="2.5" orient="auto" markerUnits="userSpaceOnUse">
-                            <path d="M0,0 L0,5 L5,2.5 z" fill="#fca5a5"></path>
-                        </marker>
-                    </defs>
-                    <g x-html="routeSvgMarkup"></g>
-                </svg>
-
-                <div class="relative z-10 mb-4 flex items-center justify-between gap-3">
+                <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-5 py-4">
                     <div class="min-w-0">
-                        <p class="text-sm font-semibold text-white">{{ $selectedWorkflow->name }}</p>
-                        <p class="text-xs text-blue-100">Tasks aus dem rechten Panel auf eine Liste ziehen.</p>
+                        <p class="text-sm font-semibold text-slate-900">{{ $selectedWorkflow->name }}</p>
+                        <p class="mt-0.5 text-xs text-slate-500">Listen horizontal anordnen, Tasks verschieben oder aus der Bibliothek hineinziehen.</p>
                     </div>
-                    @if(! $workflowLocked)
-                        <button type="button" wire:click="$set('showTaskPanel', true)" class="rounded-md bg-white/95 px-3 py-2 text-sm font-semibold text-slate-800 shadow-sm hover:bg-white">Task-Bibliothek</button>
-                    @endif
+                    <div class="flex flex-wrap items-center gap-3">
+                        <div x-show="showRoutes" class="flex items-center gap-4 text-[11px] font-semibold text-slate-500">
+                            <span class="inline-flex items-center gap-1.5"><span class="h-0.5 w-5 rounded-full bg-emerald-500"></span>Erfolg</span>
+                            <span class="inline-flex items-center gap-1.5"><span class="h-0.5 w-5 border-t-2 border-dashed border-rose-400"></span>Fehlschlag</span>
+                        </div>
+                        <button type="button" x-on:click="showRoutes = ! showRoutes" class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900">
+                            <span x-text="showRoutes ? 'Routen ausblenden' : 'Routen einblenden'"></span>
+                        </button>
+                    </div>
                 </div>
 
-                <div @if(! $workflowLocked) x-sort="$dispatch('reorderWorkflowSteps', { item: $item, position: $position })" @endif class="relative z-10 flex min-h-[560px] items-start gap-0 pb-2">
-                    @forelse($steps as $step)
-                        <div class="flex items-start" @if(! $workflowLocked) x-sort:item="{{ $step->id }}" @endif wire:key="workflow-step-wrap-{{ $step->id }}">
-                            <x-workflows.step-card :step="$step" :locked="$workflowLocked" wire:key="workflow-step-{{ $step->id }}">
-                                @if(! $workflowLocked)
-                                    <x-slot name="actions">
-                                        <button type="button" wire:click="openEditStep({{ $step->id }})" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-100">Bearbeiten</button>
-                                        <button type="button" wire:click="toggleStep({{ $step->id }})" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-100">{{ $step->is_enabled ? 'Pausieren' : 'Aktivieren' }}</button>
-                                        <button type="button" wire:click="removeStep({{ $step->id }})" wire:confirm="Liste samt Tasks wirklich entfernen?" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-red-700 hover:bg-red-50">Entfernen</button>
-                                    </x-slot>
-                                @endif
-                            </x-workflows.step-card>
-                            @if(! $loop->last)
-                                <div class="w-4 shrink-0"></div>
-                            @endif
-                        </div>
-                    @empty
-                        <div class="rounded-md border border-dashed border-white/40 bg-white/90 p-6 text-center text-sm text-slate-600">
-                            Keine Listen. Nutze oben den Button "Liste".
-                        </div>
-                    @endforelse
+                <div
+                    x-ref="routeSurface"
+                    x-on:scroll.debounce.100ms="refreshRouteLines()"
+                    class="relative isolate max-h-[calc(100vh-260px)] min-h-[570px] overflow-auto bg-slate-100/80"
+                >
+                    <svg
+                        x-cloak
+                        x-show="showRoutes"
+                        class="pointer-events-none absolute left-0 top-0 z-0"
+                        x-bind:width="routeOverlay.width"
+                        x-bind:height="routeOverlay.height"
+                        x-bind:viewBox="`0 0 ${routeOverlay.width} ${routeOverlay.height}`"
+                        aria-hidden="true"
+                    >
+                        <defs>
+                            <marker id="workflow-arrow-green" markerWidth="6" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+                                <path d="M0,0 L0,6 L6,3 z" fill="#10b981"></path>
+                            </marker>
+                            <marker id="workflow-arrow-red" markerWidth="6" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+                                <path d="M0,0 L0,6 L6,3 z" fill="#fb7185"></path>
+                            </marker>
+                        </defs>
+                        <g x-html="routeSvgMarkup"></g>
+                    </svg>
 
-                    @if(! $workflowLocked)
-                        <button type="button" wire:click="$set('showAddStepModal', true)" class="flex min-h-[220px] w-[260px] shrink-0 items-start rounded-md border border-dashed border-white/45 bg-transparent p-3 text-left text-sm font-semibold text-blue-50 transition hover:border-white hover:bg-white/10 hover:text-white">+ Neue Liste rechts anlegen</button>
-                    @endif
+                    <div @if(! $workflowLocked) x-sort="$dispatch('reorderWorkflowSteps', { item: $item, position: $position })" @endif class="relative z-10 flex min-h-[570px] items-start gap-8 p-5 pb-8">
+                        @forelse($steps as $step)
+                            <div class="flex items-start" @if(! $workflowLocked) x-sort:item="{{ $step->id }}" @endif wire:key="workflow-step-wrap-{{ $step->id }}">
+                                <x-workflows.step-card :step="$step" :locked="$workflowLocked" wire:key="workflow-step-{{ $step->id }}">
+                                    @if(! $workflowLocked)
+                                        <x-slot name="actions">
+                                            <button type="button" wire:click="openEditStep({{ $step->id }})" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-100">Bearbeiten</button>
+                                            <button type="button" wire:click="toggleStep({{ $step->id }})" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-100">{{ $step->is_enabled ? 'Pausieren' : 'Aktivieren' }}</button>
+                                            <button type="button" wire:click="removeStep({{ $step->id }})" wire:confirm="Liste samt Tasks wirklich entfernen?" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-red-700 hover:bg-red-50">Entfernen</button>
+                                        </x-slot>
+                                    @endif
+                                </x-workflows.step-card>
+                            </div>
+                        @empty
+                            <div class="rounded-xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-600 shadow-sm">
+                                Keine Listen. Nutze oben den Button "Liste".
+                            </div>
+                        @endforelse
+
+                        @if(! $workflowLocked)
+                            <button type="button" wire:click="$set('showAddStepModal', true)" class="flex min-h-[180px] w-[280px] shrink-0 items-center justify-center rounded-xl border border-dashed border-slate-300 bg-white/70 p-5 text-center text-sm font-semibold text-slate-600 transition hover:border-slate-400 hover:bg-white hover:text-slate-900 hover:shadow-sm">+ Neue Liste anlegen</button>
+                        @endif
+                    </div>
                 </div>
-
             </div>
         </x-admin.panel>
 
+        @if(! $workflowLocked && ! $showTaskPanel)
+            <button
+                type="button"
+                wire:click="$set('showTaskPanel', true)"
+                class="fixed right-0 top-1/2 z-40 flex -translate-y-1/2 items-center gap-2 rounded-l-xl border border-r-0 border-slate-700 bg-slate-900 px-3 py-3 text-sm font-semibold text-white shadow-xl transition hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:ring-offset-2"
+                aria-label="Task-Bibliothek oeffnen"
+            >
+                <svg class="h-5 w-5 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                    <rect x="3" y="3" width="7" height="7" rx="1.5"></rect>
+                    <rect x="14" y="3" width="7" height="7" rx="1.5"></rect>
+                    <rect x="3" y="14" width="7" height="7" rx="1.5"></rect>
+                    <path d="M17.5 14v7M14 17.5h7"></path>
+                </svg>
+                <span>Task-Bibliothek</span>
+            </button>
+        @endif
+
         @if($showTaskPanel && ! $workflowLocked)
-            <div x-data="{}" class="fixed inset-y-0 right-0 z-40 flex w-full max-w-sm flex-col border-l border-slate-200 bg-white shadow-2xl">
-                <div class="flex items-start justify-between gap-3 border-b border-slate-200 p-4">
+            <div x-data="{}" class="fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col border-l border-slate-200 bg-white shadow-2xl">
+                <div class="flex items-start justify-between gap-3 border-b border-slate-200 bg-slate-50/80 p-5">
                     <div>
                         <h2 class="text-base font-semibold text-slate-900">Task-Bibliothek</h2>
                         <p class="mt-1 text-xs text-slate-500">Task auf eine Liste ziehen, danach oeffnet sich das Formular.</p>
@@ -390,7 +415,7 @@
                                 type="button"
                                 data-task-group-tab="{{ $taskGroup }}"
                                 wire:click="$set('activeTaskGroup', @js($taskGroup))"
-                                class="whitespace-nowrap border-b-2 py-3 text-sm font-semibold {{ $activeTaskGroup === $taskGroup ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700' }}"
+                                class="whitespace-nowrap border-b-2 py-3 text-sm font-semibold {{ $activeTaskGroup === $taskGroup ? 'border-slate-900 text-slate-900' : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700' }}"
                             >
                                 {{ $taskGroupLabels[$taskGroup] ?? $taskGroup }}
                                 <span class="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{{ collect($taskDefinitions)->where('kind', $taskGroup)->count() }}</span>
@@ -403,7 +428,7 @@
                         <div
                             draggable="true"
                             x-on:dragstart.stop="$event.dataTransfer.setData('application/x-workflow-task-catalog', @js($taskDefinition['key'])); $event.dataTransfer.setData('text/plain', @js($taskDefinition['key'])); $event.dataTransfer.effectAllowed = 'copy'"
-                            class="cursor-grab rounded-md border border-slate-200 bg-white p-3 shadow-sm transition hover:border-blue-300 hover:shadow-md active:cursor-grabbing"
+                            class="cursor-grab rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-slate-400 hover:shadow-md active:cursor-grabbing"
                         >
                             <div class="flex items-start justify-between gap-3">
                                 <p class="text-sm font-semibold text-slate-900">{{ $taskDefinition['label'] }}</p>

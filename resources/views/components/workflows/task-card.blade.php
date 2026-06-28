@@ -5,15 +5,24 @@
 @php
     $browserWindow = trim((string) data_get($task, 'browser_window_name', data_get($task, 'browser_window', '')));
     $isWorkflowTask = (string) data_get($task, 'runner') === 'workflow';
+    $kind = trim((string) data_get($task, 'kind', 'data')) ?: 'data';
+    $kindTone = match ($kind) {
+        'browser' => 'bg-sky-500',
+        'input' => 'bg-violet-500',
+        'wait' => 'bg-amber-500',
+        'workflow' => 'bg-fuchsia-500',
+        default => 'bg-slate-400',
+    };
 @endphp
 
-<div {{ $attributes->merge(['class' => 'rounded-md border border-slate-200 bg-white px-3 py-2 shadow-sm transition hover:border-slate-300 hover:shadow-md']) }}>
+<div {{ $attributes->merge(['class' => 'rounded-lg border border-slate-200 bg-white px-3 py-3 shadow-sm transition hover:-translate-y-px hover:border-slate-300 hover:shadow-md']) }}>
     <div class="flex items-center justify-between gap-2">
         <div class="flex min-w-0 items-center gap-2">
             <div class="flex h-6 w-6 shrink-0 cursor-grab items-center justify-center rounded text-[10px] font-bold text-slate-400 hover:bg-slate-100 hover:text-slate-700 active:cursor-grabbing">
                 ::
             </div>
-            <p class="min-w-0 truncate text-sm font-semibold text-slate-900">{{ $task['title'] ?? 'Task' }}</p>
+            <span class="h-2 w-2 shrink-0 rounded-full {{ $kindTone }}"></span>
+            <p class="min-w-0 line-clamp-2 text-sm font-semibold leading-5 text-slate-900">{{ $task['title'] ?? 'Task' }}</p>
         </div>
         @isset($actions)
             <div class="relative shrink-0" x-data="{ open: false }">
@@ -27,7 +36,7 @@
         @endisset
     </div>
     @if($browserWindow !== '')
-        <div class="mt-2 inline-flex max-w-full items-center rounded border border-sky-100 bg-sky-50 px-2 py-0.5 text-[11px] font-semibold text-sky-800">
+        <div class="mt-2 inline-flex max-w-full items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
             <span class="truncate">Fenster: {{ $browserWindow }}</span>
         </div>
     @endif
