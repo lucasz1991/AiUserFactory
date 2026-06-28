@@ -1112,6 +1112,8 @@ async function ensurePage(context, windowName = 'main', label = '') {
   const existingPage = await existingPageForWindow(currentBrowser, normalizedName);
 
   if (existingPage) {
+    await restoreBrowserWindowState(context, existingPage, normalizedName);
+
     pushEvent('workflow-browser-window-active', 'Workflow-Browserfenster ist aktiv.', {
       browserWindow: normalizedName,
       url: typeof existingPage.url === 'function' ? existingPage.url() : '',
