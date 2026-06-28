@@ -210,26 +210,62 @@ async function frameDomSnapshot(frame) {
           && style.visibility !== 'hidden'
           && style.display !== 'none';
       };
+      const elementField = (element, index) => ({
+        index,
+        tag: String(element.tagName || '').toLowerCase(),
+        type: element.getAttribute('type') || '',
+        id: element.id || '',
+        name: element.getAttribute('name') || '',
+        className: typeof element.className === 'string' ? element.className : '',
+        role: element.getAttribute('role') || '',
+        autocomplete: element.getAttribute('autocomplete') || '',
+        placeholder: element.getAttribute('placeholder') || '',
+        ariaLabel: element.getAttribute('aria-label') || '',
+        disabled: element.disabled === true || element.getAttribute('aria-disabled') === 'true',
+        readOnly: element.readOnly === true,
+        visible: visible(element),
+        value: fieldValue(element),
+      });
+      const shadowRoots = [];
+      let remainingShadowHtmlCharacters = 250000;
+      const collectShadowRoots = (root, hostPath = []) => {
+        if (!root || typeof root.querySelectorAll !== 'function' || shadowRoots.length >= 20) {
+          return;
+        }
+
+        Array.from(root.querySelectorAll('*')).forEach((element) => {
+          if (!element.shadowRoot || shadowRoots.length >= 20) {
+            return;
+          }
+
+          const host = `${String(element.tagName || '').toLowerCase()}${element.id ? `#${element.id}` : ''}`;
+          const path = [...hostPath, host];
+          const shadowHtml = String(element.shadowRoot.innerHTML || '');
+          const shadowText = String(element.shadowRoot.textContent || '').replace(/\s+/g, ' ').trim();
+          const capturedHtml = shadowHtml.slice(0, Math.max(0, remainingShadowHtmlCharacters));
+          remainingShadowHtmlCharacters -= capturedHtml.length;
+          shadowRoots.push({
+            host,
+            path,
+            mode: element.shadowRoot.mode || 'open',
+            text: shadowText.slice(0, 20000),
+            html: capturedHtml,
+            truncated: capturedHtml.length < shadowHtml.length || shadowText.length > 20000,
+            fields: Array.from(element.shadowRoot.querySelectorAll(inputSelector)).map(elementField),
+          });
+          collectShadowRoots(element.shadowRoot, path);
+        });
+      };
+
+      collectShadowRoots(document);
 
       return {
         url: window.location.href,
         title: document.title || '',
         text: document.body ? document.body.innerText || '' : '',
         html: document.documentElement ? document.documentElement.outerHTML || '' : '',
-        fields: Array.from(document.querySelectorAll(inputSelector)).map((element, index) => ({
-          index,
-          tag: String(element.tagName || '').toLowerCase(),
-          type: element.getAttribute('type') || '',
-          id: element.id || '',
-          name: element.getAttribute('name') || '',
-          autocomplete: element.getAttribute('autocomplete') || '',
-          placeholder: element.getAttribute('placeholder') || '',
-          ariaLabel: element.getAttribute('aria-label') || '',
-          disabled: element.disabled === true || element.getAttribute('aria-disabled') === 'true',
-          readOnly: element.readOnly === true,
-          visible: visible(element),
-          value: fieldValue(element),
-        })),
+        fields: Array.from(document.querySelectorAll(inputSelector)).map(elementField),
+        shadowRoots,
       };
     });
   } catch (error) {

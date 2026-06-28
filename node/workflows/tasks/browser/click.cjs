@@ -4,6 +4,7 @@ const { captureTaskPreview } = require('../lib/preview.cjs');
 const {
   clickVisibleElement,
   clickVisibleElementByText,
+  selectorDiagnostics,
 } = require('../lib/find_visible_element.cjs');
 
 function firstNonEmpty(...values) {
@@ -24,6 +25,36 @@ async function clickSelector(page, selector, timeout) {
 
 async function clickText(page, text, timeout) {
   return clickVisibleElementByText(page, text, timeout);
+}
+
+function diagnosticMessage(selector, diagnostics = {}) {
+  const candidates = Array.isArray(diagnostics.candidates) ? diagnostics.candidates : [];
+  const candidateLabels = candidates
+    .map((candidate) => String(candidate.text || candidate.ariaLabel || '').trim())
+    .filter(Boolean)
+    .filter((label, index, labels) => labels.indexOf(label) === index)
+    .slice(0, 6);
+  const details = candidateLabels.length > 0
+    ? ` Sichtbare ${diagnostics.candidateSelector || 'Kandidaten'}: ${candidateLabels.map((label) => `"${label}"`).join(', ')}.`
+    : ` Keine sichtbaren Kandidaten in ${Number(diagnostics.frameCount || 0)} Frames.`;
+
+  return `Element wurde im aktuellen Live-DOM nicht gefunden: ${selector}.${details}`;
+}
+
+async function selectorFailure(page, selector, error = null) {
+  const diagnostics = await selectorDiagnostics(page, selector).catch((diagnosticError) => ({
+    selector,
+    diagnosticError: diagnosticError.message,
+  }));
+
+  return {
+    ok: false,
+    status: 'failed',
+    statusMessage: diagnosticMessage(selector, diagnostics),
+    selector,
+    selectorDiagnostics: diagnostics,
+    ...(error ? { error: error.message } : {}),
+  };
 }
 
 async function run(context = {}) {
@@ -53,13 +84,7 @@ async function run(context = {}) {
       }
     } catch (error) {
       if (text === '') {
-        return captureTaskPreview(context, {
-          ok: false,
-          status: 'failed',
-          statusMessage: `Element konnte nicht geklickt werden: ${selector}`,
-          selector,
-          error: error.message,
-        });
+        return captureTaskPreview(context, await selectorFailure(page, selector, error));
       }
     }
   }
@@ -87,6 +112,13 @@ async function run(context = {}) {
         error: error.message,
       });
     }
+  }
+
+  if (selector !== '') {
+    return captureTaskPreview(context, {
+      ...(await selectorFailure(page, selector)),
+      text,
+    });
   }
 
   return captureTaskPreview(context, {

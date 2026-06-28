@@ -2,11 +2,13 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const { run: runClickTask } = require('../browser/click.cjs');
 
 const {
   clickVisibleElement,
   findVisibleElement,
   framesForPage,
+  selectorDiagnostics,
 } = require('./find_visible_element.cjs');
 
 function elementHandle(click) {
@@ -95,4 +97,68 @@ test('click retries with a fresh handle after GMX replaces the frame', async () 
     tag: 'button',
     text: 'Zum Postfach',
   });
+});
+
+test('selector diagnostics report visible alternatives from shadow DOM searches', async () => {
+  const frame = {
+    detached: false,
+    url: () => 'https://www.gmx.net/logoutlounge?status=session',
+    async evaluate(_callback, css, expectedText) {
+      assert.equal(css, 'button');
+      assert.equal(expectedText, 'zum postfach');
+
+      return [{
+        tag: 'button',
+        className: 'account-avatar__button lux-button',
+        text: 'Zur Startseite',
+        matchesText: false,
+        shadowPath: ['account-avatar', 'appa-account-avatar'],
+      }];
+    },
+  };
+
+  const diagnostics = await selectorDiagnostics(
+    { frames: () => [frame] },
+    'button:has-text("Zum Postfach")',
+  );
+
+  assert.equal(diagnostics.frameCount, 1);
+  assert.equal(diagnostics.candidates[0].text, 'Zur Startseite');
+  assert.deepEqual(diagnostics.candidates[0].shadowPath, ['account-avatar', 'appa-account-avatar']);
+});
+
+test('click failure explains which shadow DOM button is actually visible', async () => {
+  const frame = {
+    detached: false,
+    url: () => 'https://www.gmx.net/logoutlounge?status=session',
+    async evaluateHandle() {
+      return {
+        asElement: () => null,
+        async dispose() {},
+      };
+    },
+    async evaluate() {
+      return [{
+        tag: 'button',
+        className: 'account-avatar__button lux-button',
+        text: 'Zur Startseite',
+        matchesText: false,
+        shadowPath: ['account-avatar', 'appa-account-avatar'],
+      }];
+    },
+  };
+  const page = { frames: () => [frame] };
+
+  const result = await runClickTask({
+    page,
+    input: {
+      elementSelector: 'button:has-text("Zum Postfach")',
+      timeoutMs: 20,
+    },
+    livePreviewEnabled: false,
+  });
+
+  assert.equal(result.ok, false);
+  assert.match(result.statusMessage, /Zur Startseite/);
+  assert.equal(result.selectorDiagnostics.candidates[0].shadowPath[0], 'account-avatar');
 });

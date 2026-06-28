@@ -52,6 +52,14 @@ function wait(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
+function frameUrl(frame) {
+  try {
+    return typeof frame?.url === 'function' ? frame.url() : '';
+  } catch {
+    return '';
+  }
+}
+
 function parseTextSelector(selector) {
   const value = String(selector || '').trim();
   const match = value.match(/^(text|has-text|text-is)\s*=\s*(.+)$/i);
@@ -471,6 +479,125 @@ async function clickWithFreshHandle(findHandle, snapshotSelector, timeout) {
   return null;
 }
 
+async function selectorDiagnostics(page, selector, limit = 12) {
+  const extendedSelector = parseExtendedSelector(selector);
+  const textSelector = parseTextSelector(selector);
+  const candidateSelector = extendedSelector?.css
+    || (textSelector ? 'a,button,[role="button"],input[type="button"],input[type="submit"]' : String(selector || '').trim())
+    || '*';
+  const expectedText = normalizeText(extendedSelector?.text || textSelector?.text || '');
+  const exact = extendedSelector?.exact === true || textSelector?.exact === true;
+  const frames = framesForPage(page);
+  const diagnostics = {
+    selector,
+    candidateSelector,
+    expectedText,
+    frameCount: frames.length,
+    candidates: [],
+    frameErrors: [],
+  };
+
+  for (const [frameIndex, frame] of frames.entries()) {
+    try {
+      const frameCandidates = await frame.evaluate((css, expected, mustMatchExactly, maxCandidates) => {
+        const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+        const deepQueryAll = (root, targetSelector) => {
+          const results = [];
+          const visit = (node) => {
+            if (!node || typeof node.querySelectorAll !== 'function') {
+              return;
+            }
+
+            try {
+              results.push(...Array.from(node.querySelectorAll(targetSelector)));
+            } catch {
+              return;
+            }
+
+            Array.from(node.querySelectorAll('*')).forEach((element) => {
+              if (element.shadowRoot) {
+                visit(element.shadowRoot);
+              }
+            });
+          };
+
+          visit(root);
+
+          return Array.from(new Set(results));
+        };
+        const visible = (element) => {
+          const rect = element.getBoundingClientRect();
+          const style = window.getComputedStyle(element);
+
+          return rect.width > 0
+            && rect.height > 0
+            && style.visibility !== 'hidden'
+            && style.display !== 'none'
+            && style.opacity !== '0';
+        };
+        const textsFor = (element) => Array.from(new Set([
+          element.innerText,
+          element.value,
+          element.textContent,
+          element.getAttribute('aria-label'),
+          element.getAttribute('title'),
+        ].map(normalize).filter(Boolean)));
+        const shadowPath = (element) => {
+          const hosts = [];
+          let root = element.getRootNode?.();
+
+          while (root?.host) {
+            const host = root.host;
+            hosts.unshift(`${String(host.tagName || '').toLowerCase()}${host.id ? `#${host.id}` : ''}`);
+            root = host.getRootNode?.();
+          }
+
+          return hosts;
+        };
+
+        return deepQueryAll(document, css)
+          .filter(visible)
+          .slice(0, maxCandidates)
+          .map((element) => {
+            const texts = textsFor(element);
+
+            return {
+              tag: String(element.tagName || '').toLowerCase(),
+              id: element.id || '',
+              className: typeof element.className === 'string' ? element.className : '',
+              role: element.getAttribute('role') || '',
+              ariaLabel: element.getAttribute('aria-label') || '',
+              text: String(element.innerText || element.value || element.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 300),
+              matchesText: expected === '' || texts.some((actual) => (
+                mustMatchExactly ? actual === expected : actual.includes(expected)
+              )),
+              shadowPath: shadowPath(element),
+            };
+          });
+      }, candidateSelector, expectedText, exact, Math.max(1, Number(limit || 12)));
+
+      diagnostics.candidates.push(...frameCandidates.map((candidate) => ({
+        ...candidate,
+        frameIndex,
+        frameUrl: frameUrl(frame),
+      })));
+    } catch (error) {
+      diagnostics.frameErrors.push({
+        frameIndex,
+        frameUrl: frameUrl(frame),
+        error: error.message,
+      });
+    }
+  }
+
+  diagnostics.candidates.sort((left, right) => (
+    Number(right.matchesText === true) - Number(left.matchesText === true)
+    || Number((right.shadowPath || []).length > 0) - Number((left.shadowPath || []).length > 0)
+  ));
+
+  return diagnostics;
+}
+
 async function clickVisibleElement(page, selector, timeout = 15000) {
   return clickWithFreshHandle(
     (remaining) => findVisibleElement(page, selector, remaining),
@@ -510,4 +637,5 @@ module.exports = {
   findVisibleElement,
   findVisibleElementByText,
   framesForPage,
+  selectorDiagnostics,
 };
