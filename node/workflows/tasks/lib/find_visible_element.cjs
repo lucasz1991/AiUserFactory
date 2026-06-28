@@ -6,16 +6,50 @@ function normalizeText(value) {
   return String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
+function frameIsDetached(frame) {
+  if (!frame) {
+    return true;
+  }
+
+  try {
+    return frame.detached === true
+      || (typeof frame.isDetached === 'function' && frame.isDetached());
+  } catch {
+    return true;
+  }
+}
+
 function framesForPage(page) {
   if (page && typeof page.frames === 'function') {
-    return page.frames().filter(Boolean);
+    return page.frames().filter((frame) => !frameIsDetached(frame));
   }
 
   if (page && typeof page.mainFrame === 'function') {
-    return [page.mainFrame()].filter(Boolean);
+    return [page.mainFrame()].filter((frame) => !frameIsDetached(frame));
   }
 
   return page ? [page] : [];
+}
+
+function isTransientDomError(error) {
+  const message = String(error?.message || error || '').toLowerCase();
+
+  return [
+    'detached frame',
+    'frame was detached',
+    'execution context was destroyed',
+    'cannot find context with specified id',
+    'node is detached',
+    'not attached to the dom',
+  ].some((part) => message.includes(part));
+}
+
+function remainingTimeout(deadline) {
+  return Math.max(0, deadline - Date.now());
+}
+
+function wait(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function parseTextSelector(selector) {
@@ -322,20 +356,18 @@ async function cssSelectorHandle(frame, selector, timeout) {
 }
 
 async function visibleElementInFrame(frame, selector, timeout) {
+  if (frameIsDetached(frame)) {
+    return null;
+  }
+
   const textSelector = parseTextSelector(selector);
 
   if (textSelector) {
-    const textHandle = await textElementHandle(frame, textSelector.text, { exact: textSelector.exact });
-
-    if (textHandle) {
-      return textHandle;
-    }
+    return textElementHandle(frame, textSelector.text, { exact: textSelector.exact });
   }
 
-  const extendedHandle = await extendedSelectorHandle(frame, selector);
-
-  if (extendedHandle) {
-    return extendedHandle;
+  if (parseExtendedSelector(selector)) {
+    return extendedSelectorHandle(frame, selector);
   }
 
   const deepHandle = await deepCssSelectorHandle(frame, selector);
@@ -348,11 +380,18 @@ async function visibleElementInFrame(frame, selector, timeout) {
 }
 
 async function findVisibleElement(page, selector, timeout = 15000) {
-  const startedAt = Date.now();
-  const frameTimeout = Math.max(250, Math.min(2500, Number(timeout || 15000)));
+  const normalizedTimeout = Math.max(1, Number(timeout || 15000));
+  const deadline = Date.now() + normalizedTimeout;
 
-  while (Date.now() - startedAt < timeout) {
+  while (remainingTimeout(deadline) > 0) {
     for (const frame of framesForPage(page)) {
+      const remaining = remainingTimeout(deadline);
+
+      if (remaining <= 0) {
+        return null;
+      }
+
+      const frameTimeout = Math.max(1, Math.min(2500, remaining));
       const handle = await visibleElementInFrame(frame, selector, frameTimeout);
 
       if (handle) {
@@ -360,17 +399,22 @@ async function findVisibleElement(page, selector, timeout = 15000) {
       }
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    await wait(Math.min(150, remainingTimeout(deadline)));
   }
 
   return null;
 }
 
 async function findVisibleElementByText(page, text, timeout = 15000, options = {}) {
-  const startedAt = Date.now();
+  const normalizedTimeout = Math.max(1, Number(timeout || 15000));
+  const deadline = Date.now() + normalizedTimeout;
 
-  while (Date.now() - startedAt < timeout) {
+  while (remainingTimeout(deadline) > 0) {
     for (const frame of framesForPage(page)) {
+      if (remainingTimeout(deadline) <= 0) {
+        return null;
+      }
+
       const handle = await textElementHandle(frame, text, options);
 
       if (handle) {
@@ -378,59 +422,72 @@ async function findVisibleElementByText(page, text, timeout = 15000, options = {
       }
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    await wait(Math.min(150, remainingTimeout(deadline)));
+  }
+
+  return null;
+}
+
+async function clickWithFreshHandle(findHandle, snapshotSelector, timeout) {
+  const normalizedTimeout = Math.max(1, Number(timeout || 15000));
+  const deadline = Date.now() + normalizedTimeout;
+  let lastTransientError = null;
+
+  while (remainingTimeout(deadline) > 0) {
+    const handle = await findHandle(remainingTimeout(deadline));
+
+    if (!handle) {
+      break;
+    }
+
+    const clickableHandle = await clickableHandleFor(handle);
+
+    try {
+      const snapshot = await elementSnapshot(clickableHandle, snapshotSelector).catch(() => ({ selector: snapshotSelector }));
+      await clickableHandle.click({ timeout: Math.max(1, remainingTimeout(deadline)) });
+
+      return snapshot;
+    } catch (error) {
+      if (!isTransientDomError(error)) {
+        throw error;
+      }
+
+      lastTransientError = error;
+    } finally {
+      if (clickableHandle !== handle) {
+        await clickableHandle.dispose?.().catch(() => {});
+      }
+
+      await handle.dispose?.().catch(() => {});
+    }
+
+    await wait(Math.min(100, remainingTimeout(deadline)));
+  }
+
+  if (lastTransientError) {
+    throw lastTransientError;
   }
 
   return null;
 }
 
 async function clickVisibleElement(page, selector, timeout = 15000) {
-  const handle = await findVisibleElement(page, selector, timeout);
-
-  if (!handle) {
-    return null;
-  }
-
-  const clickableHandle = await clickableHandleFor(handle);
-
-  try {
-    const snapshot = await elementSnapshot(clickableHandle, selector).catch(() => ({ selector }));
-    await clickableHandle.click({ timeout });
-
-    return snapshot;
-  } finally {
-    if (clickableHandle !== handle) {
-      await clickableHandle.dispose?.().catch(() => {});
-    }
-
-    await handle.dispose?.().catch(() => {});
-  }
+  return clickWithFreshHandle(
+    (remaining) => findVisibleElement(page, selector, remaining),
+    selector,
+    timeout,
+  );
 }
 
 async function clickVisibleElementByText(page, text, timeout = 15000, options = {}) {
-  const handle = await findVisibleElementByText(page, text, timeout, {
-    selector: 'a,button,[role=button],input[type=button],input[type=submit]',
-    ...options,
-  });
-
-  if (!handle) {
-    return null;
-  }
-
-  const clickableHandle = await clickableHandleFor(handle);
-
-  try {
-    const snapshot = await elementSnapshot(clickableHandle, `text=${text}`).catch(() => ({ selector: `text=${text}` }));
-    await clickableHandle.click({ timeout });
-
-    return snapshot;
-  } finally {
-    if (clickableHandle !== handle) {
-      await clickableHandle.dispose?.().catch(() => {});
-    }
-
-    await handle.dispose?.().catch(() => {});
-  }
+  return clickWithFreshHandle(
+    (remaining) => findVisibleElementByText(page, text, remaining, {
+      selector: 'a,button,[role=button],input[type=button],input[type=submit]',
+      ...options,
+    }),
+    `text=${text}`,
+    timeout,
+  );
 }
 
 async function countVisibleElements(page, selector, timeout = 1500) {
