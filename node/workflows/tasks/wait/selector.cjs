@@ -19,7 +19,15 @@ async function run(context = {}) {
 
   try {
     startTaskPreview(context);
-    const handle = await findVisibleElement(page, selector, timeout);
+    let handle = await findVisibleElement(page, selector, timeout);
+
+    if (!handle && typeof context.refreshActivePage === 'function') {
+      const refreshedPage = await context.refreshActivePage().catch(() => null);
+
+      if (refreshedPage && refreshedPage !== page) {
+        handle = await findVisibleElement(refreshedPage, selector, Math.min(timeout, 15000));
+      }
+    }
 
     if (!handle) {
       return captureTaskPreview(context, {

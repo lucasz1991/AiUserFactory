@@ -481,13 +481,35 @@ async function existingPageForWindow(currentBrowser, windowName = 'main') {
   }
 
   if (/^https?:\/\//i.test(url)) {
-    return openPages.find((candidatePage) => (
+    const exactUrlPage = openPages.find((candidatePage) => (
       typeof candidatePage.url === 'function'
       && String(candidatePage.url() || '') === url
-    )) || null;
+    ));
+
+    if (exactUrlPage) {
+      return exactUrlPage;
+    }
   }
 
-  return openPages.find((candidatePage) => String(candidatePage.url?.() || '') === 'about:blank') || null;
+  return openPages.find((candidatePage) => /^https?:\/\//i.test(String(candidatePage.url?.() || '')))
+    || openPages.find((candidatePage) => String(candidatePage.url?.() || '') === 'about:blank')
+    || null;
+}
+
+async function pageIsUsable(candidatePage) {
+  if (
+    !candidatePage
+    || typeof candidatePage.screenshot !== 'function'
+    || (candidatePage.isClosed && candidatePage.isClosed())
+  ) {
+    return false;
+  }
+
+  if (typeof candidatePage.evaluate !== 'function') {
+    return true;
+  }
+
+  return candidatePage.evaluate(() => document.readyState).then(() => true).catch(() => false);
 }
 
 async function restoreBrowserWindowState(context, nextPage, windowName = 'main') {
@@ -906,7 +928,14 @@ async function ensurePage(context, windowName = 'main', label = '') {
     && typeof registered.page.screenshot === 'function'
     && (!registered.page.isClosed || !registered.page.isClosed())
   ) {
-    return registerBrowserWindow(context, registered.page, normalizedName, registered.label || label);
+    if (await pageIsUsable(registered.page)) {
+      return registerBrowserWindow(context, registered.page, normalizedName, registered.label || label);
+    }
+
+    browserWindowsByName.delete(normalizedName);
+    pushEvent('workflow-browser-window-stale', 'Gespeicherter Page-Handle ist nicht mehr nutzbar; Browserfenster wird neu zugeordnet.', {
+      browserWindow: normalizedName,
+    });
   }
 
   const currentBrowser = await loadBrowser();
@@ -1168,6 +1197,12 @@ async function run() {
         context.activeBrowserWindow = targetBrowserWindow;
         context.input = input;
         context.timeoutMs = Math.max(1000, Number(task.timeout_seconds || 60) * 1000);
+        context.refreshActivePage = async () => {
+          const refreshedPage = await ensurePage(context, targetBrowserWindow, targetBrowserWindow === 'main' ? 'Main' : taskLabel);
+          context.page = browserWindowsByName.get(targetBrowserWindow)?.page || refreshedPage || page;
+
+          return context.page;
+        };
 
         if (task.task_key === 'browser.close' && preserveBrowserForFailureRoute) {
           pushEvent('browser-close-skipped', 'Browserfenster bleibt offen, weil diese Task ueber eine Fehlerroute erreicht wurde.', {

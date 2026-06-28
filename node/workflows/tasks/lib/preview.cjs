@@ -307,6 +307,15 @@ async function captureWindow(windowConfig, context = {}, force = false) {
   const debugDom = await captureDebugDom(windowConfig, { url, title, targetId }).catch((error) => ({
     debugDomError: error.message,
   }));
+  Object.assign(windowConfig, {
+    url,
+    title,
+    targetId,
+    liveScreenshotPath: windowConfig.livePreviewPath,
+    livePreviewRelativePath: windowConfig.livePreviewRelativePath || null,
+    ...debugDom,
+    capturedAt: new Date(now).toISOString(),
+  });
 
   return {
     key: windowConfig.key,
@@ -337,6 +346,16 @@ async function captureTaskPreview(context = {}, result = {}, force = true) {
       captures.push({
         key: windowConfig.key,
         label: windowConfig.label,
+        url: windowConfig.url || null,
+        title: windowConfig.title || '',
+        targetId: windowConfig.targetId || '',
+        liveScreenshotPath: windowConfig.liveScreenshotPath || windowConfig.livePreviewPath || null,
+        livePreviewPath: windowConfig.livePreviewPath || null,
+        livePreviewRelativePath: windowConfig.livePreviewRelativePath || null,
+        debugDomPath: windowConfig.debugDomPath || null,
+        debugDomRelativePath: windowConfig.debugDomRelativePath || null,
+        capturedAt: windowConfig.capturedAt || null,
+        stale: true,
         error: error.message,
       });
     }

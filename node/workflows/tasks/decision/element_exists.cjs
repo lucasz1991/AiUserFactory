@@ -27,7 +27,15 @@ async function run(context = {}) {
     return { ok: false, status: 'failed', statusMessage: 'Kein Selector fuer die IF-Element-Pruefung angegeben.' };
   }
 
-  const handle = await findVisibleElement(page, selector, timeout);
+  let handle = await findVisibleElement(page, selector, timeout);
+
+  if (!handle && typeof context.refreshActivePage === 'function') {
+    const refreshedPage = await context.refreshActivePage().catch(() => null);
+
+    if (refreshedPage && refreshedPage !== page) {
+      handle = await findVisibleElement(refreshedPage, selector, Math.min(timeout, 5000));
+    }
+  }
 
   if (!handle) {
     return captureTaskPreview(context, {
