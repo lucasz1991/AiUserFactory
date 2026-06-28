@@ -41,6 +41,25 @@ async function clickText(page, text, timeout) {
   for (const frame of framesForPage(page)) {
     const handle = await frame.evaluateHandle((needle) => {
       const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      const deepQueryAll = (root, selector) => {
+        const results = [];
+        const visit = (node) => {
+          if (!node || typeof node.querySelectorAll !== 'function') {
+            return;
+          }
+
+          results.push(...Array.from(node.querySelectorAll(selector)));
+          Array.from(node.querySelectorAll('*')).forEach((element) => {
+            if (element.shadowRoot) {
+              visit(element.shadowRoot);
+            }
+          });
+        };
+
+        visit(root);
+
+        return Array.from(new Set(results));
+      };
       const visible = (element) => {
         const rect = element.getBoundingClientRect();
         const style = window.getComputedStyle(element);
@@ -50,7 +69,7 @@ async function clickText(page, text, timeout) {
           && style.visibility !== 'hidden'
           && style.display !== 'none';
       };
-      const candidates = Array.from(document.querySelectorAll('a,button,[role=button],input[type=button],input[type=submit]'));
+      const candidates = deepQueryAll(document, 'a,button,[role=button],input[type=button],input[type=submit]');
 
       return candidates.find((element) => visible(element) && normalize(element.innerText || element.value || '').includes(needle)) || null;
     }, normalizedText).catch(() => null);

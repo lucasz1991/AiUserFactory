@@ -647,6 +647,7 @@ async function loadBrowser() {
 
   requestedBrowserEngine = resolveBrowserEngine(runtime);
   const existingRuntime = workflowBrowserRuntime();
+  let staleWorkflowBrowserEndpoint = false;
 
   if (existingRuntime.wsEndpoint) {
     try {
@@ -662,14 +663,21 @@ async function loadBrowser() {
 
       return browser;
     } catch (error) {
+      const connectError = String(error?.message || error);
       pushEvent('browser-connect-failed', 'Workflow-Browser konnte nicht erreicht werden.', {
-        browserConnectError: String(error?.message || error).slice(0, 1200),
+        browserConnectError: connectError.slice(0, 1200),
       });
-      throw new Error('Workflow-Browser ist nicht erreichbar. Das Browserfenster wird nicht automatisch neu geoeffnet, weil es workflow-weit aktiv bleiben muss.');
+
+      if (!/(ECONNREFUSED|ECONNRESET|socket hang up|connect|closed|refused)/i.test(connectError)) {
+        throw new Error('Workflow-Browser ist nicht erreichbar. Das Browserfenster wird nicht automatisch neu geoeffnet, weil es workflow-weit aktiv bleiben muss.');
+      }
+
+      staleWorkflowBrowserEndpoint = true;
+      pushEvent('workflow-browser-recovering', 'Gespeicherter Workflow-Browser ist nicht erreichbar; Browser wird aus dem Workflow-Kontext wiederhergestellt.');
     }
   }
 
-  if (workflowHasBrowserWindows()) {
+  if (workflowHasBrowserWindows() && !staleWorkflowBrowserEndpoint) {
     throw new Error('Workflow-Kontext enthaelt aktive Browserfenster, aber keinen erreichbaren Workflow-Browser. Bitte das Browserfenster per Task schliessen oder den Workflow neu starten.');
   }
 

@@ -24,6 +24,30 @@ async function extendedSelectorHandle(frame, selector) {
   const handle = await frame.evaluateHandle((css, descendantCss, text, exact) => {
     const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
     const expected = normalize(text);
+    const deepQueryAll = (root, selector) => {
+      const results = [];
+      const visit = (node) => {
+        if (!node || typeof node.querySelectorAll !== 'function') {
+          return;
+        }
+
+        try {
+          results.push(...Array.from(node.querySelectorAll(selector)));
+        } catch {
+          return;
+        }
+
+        Array.from(node.querySelectorAll('*')).forEach((element) => {
+          if (element.shadowRoot) {
+            visit(element.shadowRoot);
+          }
+        });
+      };
+
+      visit(root);
+
+      return Array.from(new Set(results));
+    };
     const visible = (element) => {
       const rect = element.getBoundingClientRect();
       const style = window.getComputedStyle(element);
@@ -34,13 +58,13 @@ async function extendedSelectorHandle(frame, selector) {
         && style.display !== 'none';
     };
 
-    return Array.from(document.querySelectorAll(css)).find((element) => {
+    return deepQueryAll(document, css).find((element) => {
       if (!visible(element)) {
         return false;
       }
 
       const textElements = descendantCss
-        ? Array.from(element.querySelectorAll(descendantCss))
+        ? deepQueryAll(element, descendantCss)
         : [element];
 
       return textElements.some((textElement) => {
@@ -64,6 +88,56 @@ async function extendedSelectorHandle(frame, selector) {
   return element;
 }
 
+async function deepCssSelectorHandle(frame, selector) {
+  if (typeof frame.evaluateHandle !== 'function') {
+    return null;
+  }
+
+  const handle = await frame.evaluateHandle((css) => {
+    const deepQueryAll = (root, selector) => {
+      const results = [];
+      const visit = (node) => {
+        if (!node || typeof node.querySelectorAll !== 'function') {
+          return;
+        }
+
+        try {
+          results.push(...Array.from(node.querySelectorAll(selector)));
+        } catch {
+          return;
+        }
+
+        Array.from(node.querySelectorAll('*')).forEach((element) => {
+          if (element.shadowRoot) {
+            visit(element.shadowRoot);
+          }
+        });
+      };
+      visit(root);
+
+      return Array.from(new Set(results));
+    };
+    const visible = (element) => {
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+
+      return rect.width > 0
+        && rect.height > 0
+        && style.visibility !== 'hidden'
+        && style.display !== 'none';
+    };
+
+    return deepQueryAll(document, css).find((element) => visible(element)) || null;
+  }, selector).catch(() => null);
+  const element = handle && typeof handle.asElement === 'function' ? handle.asElement() : null;
+
+  if (!element) {
+    await handle?.dispose?.().catch(() => {});
+  }
+
+  return element;
+}
+
 async function cssSelectorHandle(frame, selector, timeout) {
   if (typeof frame.waitForSelector !== 'function') {
     return null;
@@ -80,6 +154,12 @@ async function visibleElementInFrame(frame, selector, timeout) {
 
   if (extendedHandle) {
     return extendedHandle;
+  }
+
+  const deepHandle = await deepCssSelectorHandle(frame, selector);
+
+  if (deepHandle) {
+    return deepHandle;
   }
 
   return cssSelectorHandle(frame, selector, timeout);

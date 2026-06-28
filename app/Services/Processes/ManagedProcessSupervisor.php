@@ -3,6 +3,7 @@
 namespace App\Services\Processes;
 
 use App\Models\ManagedProcess;
+use App\Models\WorkflowRun;
 use App\Models\WorkflowStepRun;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\File;
@@ -140,6 +141,10 @@ class ManagedProcessSupervisor
             $status = $this->readJsonFile((string) $process->status_path);
             $state = trim((string) ($status['state'] ?? $status['status'] ?? ''));
 
+            if ($this->isKeepingBrowserForActiveWorkflow($process, $status)) {
+                return false;
+            }
+
             if (in_array($state, ['completed', 'failed', 'cancelled'], true)) {
                 return $this->statusAgeSeconds($process, $status) >= self::OBSOLETE_FINAL_GRACE_SECONDS;
             }
@@ -155,6 +160,37 @@ class ManagedProcessSupervisor
         }
 
         return $this->statusAgeSeconds($process, $this->readJsonFile((string) $process->status_path)) >= self::OBSOLETE_FINAL_GRACE_SECONDS;
+    }
+
+    protected function isKeepingBrowserForActiveWorkflow(ManagedProcess $process, array $status): bool
+    {
+        $state = trim((string) ($status['state'] ?? $status['status'] ?? ''));
+        $stage = trim((string) ($status['stage'] ?? ''));
+
+        if (! in_array($state, ['completed', 'running'], true) || ! str_contains($stage, 'browser-kept-active')) {
+            return false;
+        }
+
+        $workflowRunId = (int) (
+            data_get($status, 'workflow.workflowRunId')
+            ?: data_get($status, 'workflowRunId')
+            ?: data_get($process->metadata, 'workflow_context.workflowRunId')
+            ?: data_get($process->metadata, 'process_identity.workflowRunId')
+            ?: 0
+        );
+
+        if ($workflowRunId <= 0) {
+            return false;
+        }
+
+        $run = WorkflowRun::query()->find($workflowRunId);
+
+        if (! $run || in_array((string) $run->status, ['completed', 'failed', 'cancelled'], true)) {
+            return false;
+        }
+
+        return is_array(data_get($run->context_json, 'browser_windows'))
+            && data_get($run->context_json, 'browser_windows') !== [];
     }
 
     protected function statusAgeSeconds(ManagedProcess $process, array $status): int
