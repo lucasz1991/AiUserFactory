@@ -10,6 +10,11 @@
             <div class="text-sm text-gray-500">Keine Person gefunden.</div>
         </x-admin.panel>
     @else
+        @php
+            $storedEmailAccount = is_array(data_get($person->metadata, 'email_account')) ? data_get($person->metadata, 'email_account') : [];
+            $storedWebmailSession = is_array(data_get($storedEmailAccount, 'webmail_session')) ? data_get($storedEmailAccount, 'webmail_session') : [];
+        @endphp
+
         <x-admin.panel title="E-Mail-Account" description="Zugangsdaten und technische Verbindungsdaten fuer die Persona-Mailbox.">
             <x-slot name="actions">
                 <div class="flex flex-wrap gap-2">
@@ -88,6 +93,29 @@
                     @error('webmailUrl') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
                 </div>
             </div>
+
+            @if($storedWebmailSession !== [])
+                <div class="mt-4 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-950">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <div class="font-semibold">Webmail-Session gespeichert</div>
+                        <div class="text-xs text-emerald-800">{{ data_get($storedWebmailSession, 'updated_at', data_get($storedWebmailSession, 'captured_at', '-')) }}</div>
+                    </div>
+                    <div class="mt-2 grid gap-2 text-xs md:grid-cols-3">
+                        <div>
+                            <div class="font-semibold text-emerald-900">Cookies</div>
+                            <div>{{ (int) data_get($storedWebmailSession, 'cookie_count', 0) }}</div>
+                        </div>
+                        <div>
+                            <div class="font-semibold text-emerald-900">Portal</div>
+                            <div class="break-all">{{ data_get($storedWebmailSession, 'final_url', '-') }}</div>
+                        </div>
+                        <div>
+                            <div class="font-semibold text-emerald-900">Script</div>
+                            <div>{{ data_get($storedWebmailSession, 'script_name', '-') }} v{{ data_get($storedWebmailSession, 'script_version', '-') }}</div>
+                        </div>
+                    </div>
+                </div>
+            @endif
         </x-admin.panel>
 
         @if($webmailSessionResult !== [])

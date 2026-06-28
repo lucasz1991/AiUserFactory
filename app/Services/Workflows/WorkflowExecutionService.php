@@ -16,6 +16,7 @@ use App\Services\Workflows\Tasks\PersistWebmailSessionTask;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\File;
 use Illuminate\Support\Str;
 
 class WorkflowExecutionService
@@ -256,7 +257,7 @@ class WorkflowExecutionService
             return;
         }
 
-        $result = $this->readExternalResult($stepRun, $status);
+        $result = $this->prepareExternalResult($stepRun, $this->readExternalResult($stepRun, $status));
 
         if (! $this->externalSucceeded($stepRun->workflowStep, $status, $result)) {
             $message = (string) (
@@ -281,7 +282,7 @@ class WorkflowExecutionService
             return;
         }
 
-        $this->applyExternalResult($stepRun, $result);
+        $result = $this->applyExternalResult($stepRun, $result);
         $outcome = $this->resultOutcome($result);
         $this->completeStepRun($stepRun, $result, 'completed');
         $this->continueAfterStep($stepRun->workflowRun, $stepRun, $result, $outcome, max(0, (int) $stepRun->workflowStep->wait_after_seconds));
@@ -1002,18 +1003,33 @@ class WorkflowExecutionService
         return false;
     }
 
-    protected function applyExternalResult(WorkflowStepRun $stepRun, array $result): void
+    protected function prepareExternalResult(WorkflowStepRun $stepRun, array $result): array
+    {
+        if (
+            $stepRun->external_run_type === 'workflow-task'
+            && (
+                trim((string) data_get($result, 'webmailSessionFilePath', '')) !== ''
+                || trim((string) data_get($result, 'encryptedSessionPayload', '')) !== ''
+            )
+        ) {
+            return $this->finalizeWorkflowWebmailSessionResult($result);
+        }
+
+        return $result;
+    }
+
+    protected function applyExternalResult(WorkflowStepRun $stepRun, array $result): array
     {
         if ($stepRun->external_run_type === 'mail-registration') {
             $this->applyMailRegistrationResult($stepRun->workflowRun, $result);
 
-            return;
+            return $result;
         }
 
         if ($stepRun->external_run_type === 'webmail-session') {
             $this->applyWebmailSessionResult($stepRun->workflowRun, $result);
 
-            return;
+            return $result;
         }
 
         if (
@@ -1025,6 +1041,19 @@ class WorkflowExecutionService
         ) {
             $this->applyMailRegistrationResult($stepRun->workflowRun, $result);
         }
+
+        if (
+            $stepRun->external_run_type === 'workflow-task'
+            && (
+                trim((string) data_get($result, 'webmailSessionFilePath', '')) !== ''
+                || trim((string) data_get($result, 'encryptedSessionPayload', '')) !== ''
+            )
+        ) {
+            $result = $this->finalizeWorkflowWebmailSessionResult($result);
+            $this->applyWebmailSessionResult($stepRun->workflowRun, $result);
+        }
+
+        return $result;
     }
 
     protected function cancelExternalRun(WorkflowStepRun $stepRun, string $message): void
@@ -1060,11 +1089,64 @@ class WorkflowExecutionService
         $person = $this->personForRun($run);
         $encryptedPayload = trim((string) ($result['encryptedSessionPayload'] ?? ''));
 
-        if (! $person || $encryptedPayload === '') {
+        if ($encryptedPayload === '') {
             return;
         }
 
-        app(PersistWebmailSessionTask::class)->handle($person, $result);
+        $mailboxSource = trim((string) ($result['mailboxSource'] ?? $result['mailbox_source'] ?? 'person'));
+
+        if ($person && ! in_array($mailboxSource, ['verification', 'verification_mailbox', 'veri-account', 'veri_account', 'main', 'master'], true)) {
+            app(PersistWebmailSessionTask::class)->handle($person, $result);
+
+            return;
+        }
+
+        app(PersistWebmailSessionTask::class)->handleVerificationMailbox($result);
+    }
+
+    protected function finalizeWorkflowWebmailSessionResult(array $result): array
+    {
+        if (trim((string) ($result['encryptedSessionPayload'] ?? '')) !== '') {
+            return $result;
+        }
+
+        $sessionFilePath = trim((string) ($result['webmailSessionFilePath'] ?? $result['webmail_session_file_path'] ?? ''));
+
+        if ($sessionFilePath === '' || ! File::exists($sessionFilePath)) {
+            $result['ok'] = false;
+            $result['status'] = 'failed';
+            $result['statusMessage'] = 'Webmail-Session-Datei wurde nicht gefunden.';
+
+            return $result;
+        }
+
+        $sessionPayload = trim((string) File::get($sessionFilePath));
+
+        if ($sessionPayload === '') {
+            File::delete($sessionFilePath);
+            $result['ok'] = false;
+            $result['status'] = 'failed';
+            $result['statusMessage'] = 'Webmail-Session-Datei ist leer.';
+
+            return $result;
+        }
+
+        $decodedSession = json_decode($sessionPayload, true);
+        $summary = is_array($result['sessionSummary'] ?? null) ? $result['sessionSummary'] : [];
+
+        $result['encryptedSessionPayload'] = Crypt::encryptString($sessionPayload);
+        $result['sessionPayloadHash'] = (string) ($result['sessionPayloadHash'] ?? hash('sha256', $sessionPayload));
+        $result['sessionSummary'] = array_replace([
+            'capturedAt' => is_array($decodedSession) ? ($decodedSession['capturedAt'] ?? now()->toIso8601String()) : now()->toIso8601String(),
+            'finalUrl' => is_array($decodedSession) ? ($decodedSession['finalUrl'] ?? null) : null,
+            'origin' => is_array($decodedSession) ? ($decodedSession['origin'] ?? null) : null,
+            'cookieCount' => is_array($decodedSession) && is_array($decodedSession['cookies'] ?? null) ? count($decodedSession['cookies']) : 0,
+        ], $summary);
+        $result['sessionFinalized'] = true;
+
+        File::delete($sessionFilePath);
+
+        return $result;
     }
 
     protected function mailRegistrationSubject(WorkflowRun $run, WorkflowStep $step): array
@@ -1418,6 +1500,12 @@ class WorkflowExecutionService
             $payload['passwordEncrypted'],
             $payload['browserWsEndpoint'],
             $payload['browser_ws_endpoint'],
+            $payload['webmailSessionFilePath'],
+            $payload['webmail_session_file_path'],
+            $payload['webmailSessionPayload'],
+            $payload['webmail_session_payload'],
+            $payload['sessionPayload'],
+            $payload['session_payload'],
         );
 
         foreach (['account', 'email_account', 'verificationMailbox', 'verification_mailbox', 'veri_account', 'veri-account'] as $key) {
@@ -1445,6 +1533,16 @@ class WorkflowExecutionService
                 if (! is_array($taskPayload)) {
                     continue;
                 }
+
+                unset(
+                    $taskPayload['webmailSessionFilePath'],
+                    $taskPayload['webmail_session_file_path'],
+                    $taskPayload['webmailSessionPayload'],
+                    $taskPayload['webmail_session_payload'],
+                    $taskPayload['sessionPayload'],
+                    $taskPayload['session_payload'],
+                    $taskPayload['encryptedSessionPayload']
+                );
 
                 foreach (['account', 'email_account', 'verificationMailbox', 'verification_mailbox', 'veri_account', 'veri-account'] as $key) {
                     if (isset($taskPayload[$key]) && is_array($taskPayload[$key])) {

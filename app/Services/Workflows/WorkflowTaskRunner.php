@@ -50,6 +50,7 @@ class WorkflowTaskRunner
             'tasks' => $tasks,
             'statusPath' => $statusPath,
             'resultPath' => $resultPath,
+            'runDirectory' => $runDirectory,
             'livePreviewEnabled' => true,
             'livePreviewIntervalSeconds' => 3,
             'livePreviewIntervalMs' => 3000,
@@ -439,6 +440,7 @@ class WorkflowTaskRunner
             'data.resolve_person' => 'node/workflows/tasks/data/resolve_person.cjs',
             'data.read_login_data' => 'node/workflows/tasks/data/read_login_data.cjs',
             'data.persist_mail_account' => 'node/workflows/tasks/data/persist_mail_account.cjs',
+            'data.persist_webmail_session' => 'node/workflows/tasks/data/persist_webmail_session.cjs',
             default => null,
         };
 

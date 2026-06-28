@@ -127,7 +127,19 @@ function redactPublicSecrets(value) {
     }
 
     for (const key of Object.keys(item)) {
-      if (['password', 'passwordEncrypted', 'password_encrypted', 'webmailSession', 'webmail_session'].includes(key)) {
+      if ([
+        'password',
+        'passwordEncrypted',
+        'password_encrypted',
+        'webmailSession',
+        'webmail_session',
+        'webmailSessionPayload',
+        'webmail_session_payload',
+        'sessionPayload',
+        'session_payload',
+        'webmailSessionFilePath',
+        'webmail_session_file_path',
+      ].includes(key)) {
         delete item[key];
         continue;
       }
@@ -282,6 +294,8 @@ function resolveString(value, context = {}) {
     'generated-password',
     'new_mail_username',
     'new_mail_address',
+    'verification_code',
+    'verificationCode',
   ];
 
   if ((!normalized.includes('.') && !directRuntimeKeys.includes(normalized)) || normalized.includes('://')) {
@@ -349,6 +363,8 @@ function resolveString(value, context = {}) {
     'generated-password': context.generated_password || context.new_password || account?.password || context.lastResult?.['generated-password'] || context.lastResult?.generated_password || context.lastResult?.new_password || '',
     new_mail_username: account?.username || context.lastResult?.account?.username || '',
     new_mail_address: account?.email || context.lastResult?.account?.email || '',
+    verification_code: context.verification_code || context.verificationCode || context.lastResult?.verification_code || context.lastResult?.verificationCode || '',
+    verificationCode: context.verificationCode || context.verification_code || context.lastResult?.verificationCode || context.lastResult?.verification_code || '',
   };
   const resolved = valueFromPath(lookupRoot, normalized);
 
@@ -1203,6 +1219,8 @@ async function run() {
     livePreviewIntervalSeconds: runtime.livePreviewIntervalSeconds || 3,
     livePreviewPath: runtime.livePreviewPath,
     livePreviewRelativePath: runtime.livePreviewRelativePath,
+    runDirectory: runtime.runDirectory || path.dirname(runtime.resultPath),
+    workflowTaskRunDirectory: runtime.runDirectory || path.dirname(runtime.resultPath),
     timeoutMs: runtime.observationTimeoutMs || 90000,
     pages: [],
     browserWindows: lastBrowserWindows,
@@ -1257,7 +1275,7 @@ async function run() {
 
         if (task.task_key === 'browser.close') {
           selectExistingPage(context, targetBrowserWindow);
-        } else if (task.kind !== 'data') {
+        } else if (task.kind !== 'data' || ['data.persist_webmail_session'].includes(String(task.task_key || ''))) {
           await ensurePage(context, targetBrowserWindow, targetBrowserWindow === 'main' ? 'Main' : taskLabel);
           startPreviewLoop(context);
         }
