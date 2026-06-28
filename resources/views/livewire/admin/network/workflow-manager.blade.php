@@ -592,7 +592,14 @@
             </x-slot>
             <x-slot name="footer">
                 <button type="button" x-on:click="$dispatch('close')" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">Abbrechen</button>
-                <button type="button" wire:click="addTaskCard" class="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">Hinzufuegen</button>
+                <button
+                    type="button"
+                    x-on:click.prevent="
+                        const source = document.querySelector('[data-workflow-task-mailbox-source=&quot;newTask&quot;]')?.value || 'person';
+                        $wire.addTaskCard(source);
+                    "
+                    class="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800"
+                >Hinzufuegen</button>
             </x-slot>
         </x-dialog-modal>
 
@@ -607,7 +614,14 @@
             </x-slot>
             <x-slot name="footer">
                 <button type="button" x-on:click="$dispatch('close')" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">Abbrechen</button>
-                <button type="button" wire:click="saveEditTaskCard" class="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">Speichern</button>
+                <button
+                    type="button"
+                    x-on:click.prevent="
+                        const source = document.querySelector('[data-workflow-task-mailbox-source=&quot;editingTask&quot;]')?.value || 'person';
+                        $wire.saveEditTaskCard(source);
+                    "
+                    class="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700"
+                >Speichern</button>
             </x-slot>
         </x-dialog-modal>
 

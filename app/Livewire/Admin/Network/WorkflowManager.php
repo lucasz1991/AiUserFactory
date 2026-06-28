@@ -476,7 +476,7 @@ class WorkflowManager extends Component
         $this->editingTaskMailboxSource = $this->normalizeMailboxSource((string) $this->editingTaskMailboxSource);
     }
 
-    public function addTaskCard(): void
+    public function addTaskCard(?string $mailboxSourceOverride = null): void
     {
         $workflow = $this->editableWorkflow();
 
@@ -527,7 +527,7 @@ class WorkflowManager extends Component
         $key = $this->uniqueTaskKey($tasks, $validated['newTaskTitle']);
         $selector = trim((string) ($validated['newTaskElementSelector'] ?? ''));
         $value = trim((string) ($validated['newTaskInputValue'] ?? ''));
-        $mailboxSource = $this->normalizeMailboxSource((string) ($validated['newTaskMailboxSource'] ?? 'person'));
+        $mailboxSource = $this->normalizeMailboxSource((string) ($mailboxSourceOverride ?: ($validated['newTaskMailboxSource'] ?? 'person')));
         $browserWindow = $this->normalizeBrowserWindowName((string) ($validated['newTaskBrowserWindow'] ?? ''));
 
         if (! $this->validateBrowserWindowState($validated['newTaskCatalogKey'], $browserWindow, 'newTaskBrowserWindow')) {
@@ -650,7 +650,7 @@ class WorkflowManager extends Component
         $this->showEditTaskModal = true;
     }
 
-    public function saveEditTaskCard(): void
+    public function saveEditTaskCard(?string $mailboxSourceOverride = null): void
     {
         $step = $this->editingTaskStepId ? $this->stepForSelectedWorkflow($this->editingTaskStepId) : null;
 
@@ -700,7 +700,7 @@ class WorkflowManager extends Component
         $tasks = collect(is_array($config['tasks'] ?? null) ? $config['tasks'] : []);
 
         $config['tasks'] = $tasks
-            ->map(function (array $task) use ($validated, $step): array {
+            ->map(function (array $task) use ($validated, $step, $mailboxSourceOverride): array {
                 if ((string) ($task['key'] ?? '') !== $this->editingTaskKey) {
                     return $task;
                 }
@@ -708,7 +708,7 @@ class WorkflowManager extends Component
                 $formConfig = $this->taskFormConfig($validated['editingTaskCatalogKey']);
                 $selector = trim((string) ($validated['editingTaskElementSelector'] ?? ''));
                 $value = trim((string) ($validated['editingTaskInputValue'] ?? ''));
-                $mailboxSource = $this->normalizeMailboxSource((string) ($validated['editingTaskMailboxSource'] ?? 'person'));
+                $mailboxSource = $this->normalizeMailboxSource((string) ($mailboxSourceOverride ?: ($validated['editingTaskMailboxSource'] ?? 'person')));
                 $browserWindow = $this->normalizeBrowserWindowName((string) ($validated['editingTaskBrowserWindow'] ?? ''));
                 $task = array_replace(
                     $task,
