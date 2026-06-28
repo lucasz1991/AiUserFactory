@@ -80,6 +80,9 @@
                 x-data="{
                     focusedTask: '',
                     showRoutes: true,
+                    isFullscreen: false,
+                    bodyOverflowBeforeFullscreen: null,
+                    htmlOverflowBeforeFullscreen: null,
                     routeLines: [],
                     routeOverlay: { width: 0, height: 0 },
                     routeSvgMarkup: '',
@@ -91,6 +94,42 @@
                         window.addEventListener('resize', this._refreshWorkflowRoutes);
                         document.addEventListener('livewire:updated', this._refreshWorkflowRoutes);
                         document.addEventListener('livewire:navigated', this._refreshWorkflowRoutes);
+                    },
+                    setFullscreen(active) {
+                        const nextState = Boolean(active);
+
+                        if (nextState === this.isFullscreen) {
+                            return;
+                        }
+
+                        this.isFullscreen = nextState;
+
+                        if (nextState) {
+                            this.bodyOverflowBeforeFullscreen = document.body.style.overflow;
+                            this.htmlOverflowBeforeFullscreen = document.documentElement.style.overflow;
+                            document.body.style.overflow = 'hidden';
+                            document.documentElement.style.overflow = 'hidden';
+                        } else {
+                            document.body.style.overflow = this.bodyOverflowBeforeFullscreen ?? '';
+                            document.documentElement.style.overflow = this.htmlOverflowBeforeFullscreen ?? '';
+                            this.bodyOverflowBeforeFullscreen = null;
+                            this.htmlOverflowBeforeFullscreen = null;
+                        }
+
+                        this.$nextTick(() => {
+                            this.refreshRouteLines();
+                            setTimeout(() => this.refreshRouteLines(), 150);
+                        });
+                    },
+                    destroy() {
+                        window.removeEventListener('resize', this._refreshWorkflowRoutes);
+                        document.removeEventListener('livewire:updated', this._refreshWorkflowRoutes);
+                        document.removeEventListener('livewire:navigated', this._refreshWorkflowRoutes);
+
+                        if (this.isFullscreen) {
+                            document.body.style.overflow = this.bodyOverflowBeforeFullscreen ?? '';
+                            document.documentElement.style.overflow = this.htmlOverflowBeforeFullscreen ?? '';
+                        }
                     },
                     refreshRouteLines() {
                         const surface = this.$refs.routeSurface;
@@ -312,12 +351,17 @@
                     },
                 }"
                 x-init="refreshRouteLines()"
-                class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm"
+                x-on:keydown.escape.window="setFullscreen(false)"
+                x-bind:class="isFullscreen ? 'fixed inset-0 z-[60] flex flex-col rounded-none border-0' : 'rounded-xl border border-slate-200'"
+                class="overflow-hidden bg-white shadow-sm"
             >
-                <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-5 py-4">
+                <div class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-5 py-4">
                     <div class="min-w-0">
                         <p class="text-sm font-semibold text-slate-900">{{ $selectedWorkflow->name }}</p>
-                        <p class="mt-0.5 text-xs text-slate-500">Listen horizontal anordnen, Tasks verschieben oder aus der Bibliothek hineinziehen.</p>
+                        <p class="mt-0.5 text-xs text-slate-500">
+                            <span x-show="! isFullscreen">Listen horizontal anordnen, Tasks verschieben oder aus der Bibliothek hineinziehen.</span>
+                            <span x-cloak x-show="isFullscreen">Vollbildansicht · Mit Esc beenden.</span>
+                        </p>
                     </div>
                     <div class="flex flex-wrap items-center gap-3">
                         <div x-show="showRoutes" class="flex items-center gap-4 text-[11px] font-semibold text-slate-500">
@@ -327,13 +371,30 @@
                         <button type="button" x-on:click="showRoutes = ! showRoutes" class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900">
                             <span x-text="showRoutes ? 'Routen ausblenden' : 'Routen einblenden'"></span>
                         </button>
+                        <button
+                            type="button"
+                            x-on:click="setFullscreen(! isFullscreen)"
+                            x-bind:aria-pressed="isFullscreen"
+                            x-bind:aria-label="isFullscreen ? 'Vollbildansicht beenden' : 'Workflow im Vollbild anzeigen'"
+                            x-bind:title="isFullscreen ? 'Vollbild beenden (Esc)' : 'Workflow im Vollbild anzeigen'"
+                            class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:border-slate-400 hover:bg-slate-50 hover:text-slate-950 focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:ring-offset-2"
+                        >
+                            <svg x-show="! isFullscreen" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                                <path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"></path>
+                            </svg>
+                            <svg x-cloak x-show="isFullscreen" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                                <path d="M8 8H3V3M16 8h5V3M8 16H3v5M16 16h5v5"></path>
+                            </svg>
+                            <span x-text="isFullscreen ? 'Vollbild beenden' : 'Vollbild'"></span>
+                        </button>
                     </div>
                 </div>
 
                 <div
                     x-ref="routeSurface"
                     x-on:scroll.debounce.100ms="refreshRouteLines()"
-                    class="relative isolate max-h-[calc(100vh-260px)] min-h-[570px] overflow-auto bg-slate-100/80"
+                    x-bind:class="isFullscreen ? 'min-h-0 flex-1 max-h-none' : 'max-h-[calc(100vh-260px)] min-h-[570px]'"
+                    class="relative isolate overflow-auto bg-slate-100/80"
                 >
                     <svg
                         x-cloak
@@ -355,7 +416,11 @@
                         <g x-html="routeSvgMarkup"></g>
                     </svg>
 
-                    <div @if(! $workflowLocked) x-sort="$dispatch('reorderWorkflowSteps', { item: $item, position: $position })" @endif class="relative flex min-h-[570px] items-start gap-10 px-5 pb-8 pt-[76px]">
+                    <div
+                        @if(! $workflowLocked) x-sort="$dispatch('reorderWorkflowSteps', { item: $item, position: $position })" @endif
+                        x-bind:class="isFullscreen ? 'gap-5 px-3' : 'gap-10 px-5'"
+                        class="relative flex min-h-[570px] items-start pb-8 pt-[76px]"
+                    >
                         @forelse($steps as $step)
                             <div class="flex w-[296px] min-w-[296px] max-w-[296px] shrink-0 items-start" @if(! $workflowLocked) x-sort:item="{{ $step->id }}" @endif wire:key="workflow-step-wrap-{{ $step->id }}">
                                 <x-workflows.step-card :step="$step" :locked="$workflowLocked" wire:key="workflow-step-{{ $step->id }}">
@@ -375,7 +440,7 @@
                         @endforelse
 
                         @if(! $workflowLocked)
-                            <button type="button" wire:click="$set('showAddStepModal', true)" class="flex min-h-[180px] w-[280px] shrink-0 items-center justify-center rounded-xl border border-dashed border-slate-300 bg-white/70 p-5 text-center text-sm font-semibold text-slate-600 transition hover:border-slate-400 hover:bg-white hover:text-slate-900 hover:shadow-sm">+ Neue Liste anlegen</button>
+                            <button x-show="! isFullscreen" type="button" wire:click="$set('showAddStepModal', true)" class="flex min-h-[180px] w-[280px] shrink-0 items-center justify-center rounded-xl border border-dashed border-slate-300 bg-white/70 p-5 text-center text-sm font-semibold text-slate-600 transition hover:border-slate-400 hover:bg-white hover:text-slate-900 hover:shadow-sm">+ Neue Liste anlegen</button>
                         @endif
                     </div>
                 </div>
@@ -386,7 +451,7 @@
             <button
                 type="button"
                 wire:click="$set('showTaskPanel', true)"
-                class="fixed right-0 top-1/2 z-40 flex -translate-y-1/2 items-center gap-2 rounded-l-xl border border-r-0 border-slate-700 bg-slate-900 px-3 py-3 text-sm font-semibold text-white shadow-xl transition hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:ring-offset-2"
+                class="fixed right-0 top-1/2 z-[65] flex -translate-y-1/2 items-center gap-2 rounded-l-xl border border-r-0 border-slate-700 bg-slate-900 px-3 py-3 text-sm font-semibold text-white shadow-xl transition hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:ring-offset-2"
                 aria-label="Task-Bibliothek oeffnen"
             >
                 <svg class="h-5 w-5 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
@@ -400,7 +465,7 @@
         @endif
 
         @if($showTaskPanel && ! $workflowLocked)
-            <div x-data="{}" class="fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col border-l border-slate-200 bg-white shadow-2xl">
+            <div x-data="{}" class="fixed inset-y-0 right-0 z-[70] flex w-full max-w-md flex-col border-l border-slate-200 bg-white shadow-2xl">
                 <div class="flex items-start justify-between gap-3 border-b border-slate-200 bg-slate-50/80 p-5">
                     <div>
                         <h2 class="text-base font-semibold text-slate-900">Task-Bibliothek</h2>
