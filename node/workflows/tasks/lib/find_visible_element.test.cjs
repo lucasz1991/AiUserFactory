@@ -60,6 +60,39 @@ test('button:has-text searches the button text in the current frame', async () =
   });
 });
 
+test('button:has-text also finds a link explicitly styled as a button', async () => {
+  const selectors = [];
+  const linkHandle = elementHandle(async () => {});
+  const frame = {
+    detached: false,
+    async evaluateHandle(_callback, css) {
+      selectors.push(css);
+      const handle = css === 'button' ? null : linkHandle;
+
+      return {
+        asElement: () => handle,
+        async dispose() {},
+      };
+    },
+  };
+  let synchronized = 0;
+  const page = {
+    frames: () => [frame],
+    async evaluate() {
+      synchronized += 1;
+    },
+  };
+
+  const found = await findVisibleElement(page, 'button:has-text("Zur Startseite")', 100);
+
+  assert.equal(found, linkHandle);
+  assert.equal(synchronized, 1);
+  assert.deepEqual(selectors, [
+    'button',
+    'button,a[data-component="button"],[role="button"],input[type="button"],input[type="submit"]',
+  ]);
+});
+
 test('detached frames are ignored before searching', () => {
   const detachedFrame = { detached: true };
   const activeFrame = { detached: false };

@@ -2,6 +2,8 @@
 
 const { parseExtendedSelector } = require('../../lib/selector.cjs');
 
+const buttonLikeSelector = 'button,a[data-component="button"],[role="button"],input[type="button"],input[type="submit"]';
+
 function normalizeText(value) {
   return String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
 }
@@ -50,6 +52,32 @@ function remainingTimeout(deadline) {
 
 function wait(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function synchronizeLiveDom(page) {
+  if (!page || typeof page.evaluate !== 'function') {
+    return;
+  }
+
+  await page.evaluate(() => new Promise((resolve) => {
+    let finished = false;
+    const finish = () => {
+      if (!finished) {
+        finished = true;
+        resolve();
+      }
+    };
+
+    setTimeout(finish, 100);
+
+    if (typeof requestAnimationFrame !== 'function') {
+      finish();
+
+      return;
+    }
+
+    requestAnimationFrame(() => requestAnimationFrame(finish));
+  })).catch(() => {});
 }
 
 function parseTextSelector(selector) {
@@ -130,7 +158,7 @@ async function clickableHandleFor(handle) {
   return nextElement;
 }
 
-async function extendedSelectorHandle(frame, selector) {
+async function extendedSelectorHandle(frame, selector, cssOverride = '') {
   const extendedSelector = parseExtendedSelector(selector);
 
   if (!extendedSelector || typeof frame.evaluateHandle !== 'function') {
@@ -206,7 +234,7 @@ async function extendedSelectorHandle(frame, selector) {
         return exact ? actual === expected : actual.includes(expected);
       });
     }) || null;
-  }, extendedSelector.css, extendedSelector.descendantCss || null, extendedSelector.text, extendedSelector.exact).catch(() => null);
+  }, cssOverride || extendedSelector.css, extendedSelector.descendantCss || null, extendedSelector.text, extendedSelector.exact).catch(() => null);
 
   if (!handle) {
     return null;
@@ -367,7 +395,21 @@ async function visibleElementInFrame(frame, selector, timeout) {
   }
 
   if (parseExtendedSelector(selector)) {
-    return extendedSelectorHandle(frame, selector);
+    const extendedSelector = parseExtendedSelector(selector);
+    const handle = await extendedSelectorHandle(frame, selector);
+
+    if (handle) {
+      return handle;
+    }
+
+    if (
+      String(extendedSelector.css || '').trim().toLowerCase() === 'button'
+      && !extendedSelector.descendantCss
+    ) {
+      return extendedSelectorHandle(frame, selector, buttonLikeSelector);
+    }
+
+    return null;
   }
 
   const deepHandle = await deepCssSelectorHandle(frame, selector);
@@ -382,6 +424,8 @@ async function visibleElementInFrame(frame, selector, timeout) {
 async function findVisibleElement(page, selector, timeout = 15000) {
   const normalizedTimeout = Math.max(1, Number(timeout || 15000));
   const deadline = Date.now() + normalizedTimeout;
+
+  await synchronizeLiveDom(page);
 
   while (remainingTimeout(deadline) > 0) {
     for (const frame of framesForPage(page)) {
@@ -408,6 +452,8 @@ async function findVisibleElement(page, selector, timeout = 15000) {
 async function findVisibleElementByText(page, text, timeout = 15000, options = {}) {
   const normalizedTimeout = Math.max(1, Number(timeout || 15000));
   const deadline = Date.now() + normalizedTimeout;
+
+  await synchronizeLiveDom(page);
 
   while (remainingTimeout(deadline) > 0) {
     for (const frame of framesForPage(page)) {
