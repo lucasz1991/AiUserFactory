@@ -10,6 +10,8 @@ use App\Services\Workflows\PersonaActionWorkflowCatalog;
 use App\Services\Workflows\WorkflowExecutionService;
 use App\Services\Workflows\WorkflowTaskCatalog;
 use App\Services\Workflows\WorkflowTaskOrderingService;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Livewire\Attributes\On;
 use Livewire\Component;
@@ -33,6 +35,10 @@ class WorkflowManager extends Component
     public string $newStepType = WorkflowStep::TYPE_PREPARATION;
 
     public string $newStepName = '';
+
+    public string $newStepCreationMode = 'new';
+
+    public string $importWorkflowId = '';
 
     public string $newTaskListId = '';
 
@@ -199,6 +205,7 @@ class WorkflowManager extends Component
             'taskDefinitions' => $taskDefinitions->values()->toArray(),
             'taskGroups' => $taskGroups->values()->toArray(),
             'taskGroupLabels' => $this->taskGroupLabels(),
+            'importableWorkflows' => $this->importableWorkflows($selectedWorkflow),
             'visibleTaskDefinitions' => $taskDefinitions
                 ->where('kind', $this->activeTaskGroup)
                 ->values()
@@ -289,6 +296,71 @@ class WorkflowManager extends Component
         $this->showAddStepModal = false;
 
         session()->flash('success', 'Workflow-Liste wurde hinzugefuegt.');
+    }
+
+    public function importWorkflowSteps(): void
+    {
+        $workflow = $this->editableWorkflow();
+
+        if (! $workflow) {
+            return;
+        }
+
+        $validated = $this->validate([
+            'importWorkflowId' => ['required', 'integer', 'exists:workflows,id'],
+        ]);
+
+        $sourceWorkflow = Workflow::query()
+            ->with(['steps' => fn ($query) => $query->ordered()])
+            ->find((int) $validated['importWorkflowId']);
+
+        if (! $sourceWorkflow || (int) $sourceWorkflow->id === (int) $workflow->id) {
+            $this->addError('importWorkflowId', 'Bitte einen anderen Workflow auswaehlen.');
+
+            return;
+        }
+
+        if ($sourceWorkflow->includesWorkflow($workflow->id)) {
+            $this->addError('importWorkflowId', 'Dieser Workflow enthaelt den aktuellen Workflow und kann deshalb nicht importiert werden.');
+
+            return;
+        }
+
+        if ($sourceWorkflow->steps->isEmpty()) {
+            $this->addError('importWorkflowId', 'Dieser Workflow hat keine Listen zum Importieren.');
+
+            return;
+        }
+
+        $importedCount = DB::transaction(function () use ($workflow, $sourceWorkflow): int {
+            $sourceSteps = $sourceWorkflow->steps->values();
+            $actionKeyMap = $this->importedStepActionKeyMap($workflow, $sourceSteps);
+            $basePosition = (int) $workflow->steps()->max('position');
+
+            foreach ($sourceSteps as $index => $sourceStep) {
+                $sourceActionKey = trim((string) $sourceStep->action_key);
+                $config = is_array($sourceStep->config_json) ? $sourceStep->config_json : [];
+
+                $workflow->steps()->create([
+                    'name' => $sourceStep->name,
+                    'type' => $sourceStep->type,
+                    'action_key' => $actionKeyMap[$sourceActionKey] ?? $actionKeyMap['__step:'.$sourceStep->id],
+                    'position' => $basePosition + (($index + 1) * 10),
+                    'is_enabled' => (bool) $sourceStep->is_enabled,
+                    'config_json' => $this->remapImportedWorkflowReferences($config, $actionKeyMap),
+                    'retry_attempts' => max(0, (int) $sourceStep->retry_attempts),
+                    'wait_after_seconds' => max(0, (int) $sourceStep->wait_after_seconds),
+                ]);
+            }
+
+            return $sourceSteps->count();
+        });
+
+        $this->importWorkflowId = '';
+        $this->newStepCreationMode = 'new';
+        $this->showAddStepModal = false;
+
+        session()->flash('success', $importedCount.' Listen aus "'.$sourceWorkflow->name.'" wurden importiert.');
     }
 
     public function addActionStep(string $actionId): void
@@ -1347,6 +1419,33 @@ class WorkflowManager extends Component
             ->all();
     }
 
+    protected function importableWorkflows(?Workflow $selectedWorkflow): array
+    {
+        if (! $selectedWorkflow) {
+            return [];
+        }
+
+        return Workflow::query()
+            ->with(['steps' => fn ($query) => $query->ordered()])
+            ->whereKeyNot($selectedWorkflow->id)
+            ->orderBy('category')
+            ->orderBy('subcategory')
+            ->orderBy('name')
+            ->get()
+            ->reject(fn (Workflow $workflow): bool => $workflow->includesWorkflow($selectedWorkflow->id))
+            ->map(fn (Workflow $workflow): array => [
+                'id' => $workflow->id,
+                'name' => $workflow->name,
+                'category' => trim((string) $workflow->category) ?: 'custom',
+                'subcategory' => trim((string) $workflow->subcategory),
+                'steps_count' => $workflow->steps->count(),
+                'task_cards' => $workflow->steps->sum(fn (WorkflowStep $step): int => count($step->task_cards)),
+                'is_active' => (bool) $workflow->is_active,
+            ])
+            ->values()
+            ->all();
+    }
+
     protected function taskDefinition(string $taskKey): ?array
     {
         $definition = app(WorkflowTaskCatalog::class)->task($taskKey);
@@ -1821,6 +1920,75 @@ class WorkflowManager extends Component
         }
 
         return $payload;
+    }
+
+    protected function importedStepActionKeyMap(Workflow $targetWorkflow, Collection $sourceSteps): array
+    {
+        $usedActionKeys = $targetWorkflow->steps()
+            ->pluck('action_key')
+            ->map(fn (mixed $actionKey): string => trim((string) $actionKey))
+            ->filter()
+            ->values()
+            ->all();
+        $map = [];
+
+        foreach ($sourceSteps as $sourceStep) {
+            if (! $sourceStep instanceof WorkflowStep) {
+                continue;
+            }
+
+            $sourceActionKey = trim((string) $sourceStep->action_key);
+            $newActionKey = $this->uniqueImportedActionKey(
+                $usedActionKeys,
+                $sourceActionKey ?: $sourceStep->name,
+            );
+
+            $usedActionKeys[] = $newActionKey;
+            $map['__step:'.$sourceStep->id] = $newActionKey;
+
+            if ($sourceActionKey !== '') {
+                $map[$sourceActionKey] = $newActionKey;
+            }
+        }
+
+        return $map;
+    }
+
+    protected function uniqueImportedActionKey(array $usedActionKeys, string $base): string
+    {
+        $base = Str::slug($base) ?: 'workflow-liste';
+        $base = substr($base, 0, 170);
+        $candidate = $base;
+        $counter = 2;
+
+        while (in_array($candidate, $usedActionKeys, true)) {
+            $suffix = '-'.$counter++;
+            $candidate = substr($base, 0, 191 - strlen($suffix)).$suffix;
+        }
+
+        return $candidate;
+    }
+
+    protected function remapImportedWorkflowReferences(mixed $value, array $actionKeyMap): mixed
+    {
+        if (! is_array($value)) {
+            return $value;
+        }
+
+        $remapped = [];
+
+        foreach ($value as $key => $item) {
+            if (in_array($key, ['action_key', 'step'], true)) {
+                $actionKey = trim((string) $item);
+                $remapped[$key] = $actionKeyMap[$actionKey] ?? $item;
+
+                continue;
+            }
+
+            $remapped[$key] = $this->remapImportedWorkflowReferences($item, $actionKeyMap);
+        }
+
+        return $remapped;
     }
 
     protected function uniqueTaskKey(array $tasks, string $title): string

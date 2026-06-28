@@ -83,6 +83,100 @@ class WorkflowCompositionTest extends TestCase
         $this->assertSame('Manuell gesperrt.', $workflow->lock_reason);
     }
 
+    public function test_workflow_manager_imports_existing_workflow_lists_and_tasks(): void
+    {
+        $target = $this->workflow('import-target');
+        $existingStep = $this->step($target, 'Existing collision', [$this->waitTask('existing')]);
+        $existingStep->forceFill(['action_key' => 'imported-start'])->save();
+
+        $source = $this->workflow('import-source');
+        $startTask = $this->waitTask('start');
+        $startTask['next'] = [
+            'type' => 'card',
+            'action_key' => 'imported-start',
+            'step' => 'imported-start',
+            'card_key' => 'check',
+            'card' => 'check',
+        ];
+        $checkTask = $this->waitTask('check');
+        $checkTask['next'] = [
+            'type' => 'step',
+            'action_key' => 'imported-finish',
+            'step' => 'imported-finish',
+        ];
+        $checkTask['on_error'] = [
+            'type' => 'card',
+            'action_key' => 'imported-start',
+            'step' => 'imported-start',
+            'card_key' => 'start',
+            'card' => 'start',
+            'max_attempts' => 2,
+        ];
+
+        $source->steps()->create([
+            'name' => 'Imported start',
+            'type' => WorkflowStep::TYPE_DATA_PROCESSING,
+            'action_key' => 'imported-start',
+            'position' => 10,
+            'is_enabled' => true,
+            'config_json' => [
+                'tasks' => [$startTask, $checkTask],
+                'routes' => [
+                    'success' => [
+                        'type' => 'step',
+                        'action_key' => 'imported-finish',
+                        'step' => 'imported-finish',
+                    ],
+                ],
+            ],
+        ]);
+        $source->steps()->create([
+            'name' => 'Imported finish',
+            'type' => WorkflowStep::TYPE_CLEANUP,
+            'action_key' => 'imported-finish',
+            'position' => 20,
+            'is_enabled' => false,
+            'config_json' => [
+                'tasks' => [$this->waitTask('finish')],
+                'routes' => [
+                    'success' => ['type' => 'end', 'step' => 'end'],
+                ],
+            ],
+            'wait_after_seconds' => 4,
+        ]);
+
+        Livewire::test(WorkflowManager::class, ['workflow' => $target])
+            ->set('newStepCreationMode', 'import')
+            ->set('importWorkflowId', (string) $source->id)
+            ->call('importWorkflowSteps')
+            ->assertHasNoErrors();
+
+        $steps = $target->steps()->ordered()->get();
+        $importedStart = $target->steps()->where('name', 'Imported start')->first();
+        $importedFinish = $target->steps()->where('name', 'Imported finish')->first();
+
+        $this->assertCount(3, $steps);
+        $this->assertNotNull($importedStart);
+        $this->assertNotNull($importedFinish);
+        $this->assertSame('imported-start-2', $importedStart->action_key);
+        $this->assertSame('imported-finish', $importedFinish->action_key);
+        $this->assertFalse($importedFinish->is_enabled);
+        $this->assertSame(4, $importedFinish->wait_after_seconds);
+        $this->assertSame($importedFinish->action_key, data_get($importedStart->config_json, 'routes.success.action_key'));
+        $this->assertSame($importedFinish->action_key, data_get($importedStart->config_json, 'routes.success.step'));
+
+        $copiedStartTask = collect($importedStart->task_cards)->firstWhere('key', 'start');
+        $copiedCheckTask = collect($importedStart->task_cards)->firstWhere('key', 'check');
+
+        $this->assertSame($importedStart->action_key, data_get($copiedStartTask, 'next.action_key'));
+        $this->assertSame($importedStart->action_key, data_get($copiedStartTask, 'next.step'));
+        $this->assertSame('check', data_get($copiedStartTask, 'next.card_key'));
+        $this->assertSame($importedFinish->action_key, data_get($copiedCheckTask, 'next.action_key'));
+        $this->assertSame($importedStart->action_key, data_get($copiedCheckTask, 'on_error.action_key'));
+        $this->assertSame('start', data_get($copiedCheckTask, 'on_error.card_key'));
+        $this->assertSame(2, data_get($copiedCheckTask, 'on_error.max_attempts'));
+    }
+
     public function test_task_error_routes_resume_at_the_target_card_and_detect_back_routes(): void
     {
         $workflow = $this->workflow('task-routes');

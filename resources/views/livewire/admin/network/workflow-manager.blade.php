@@ -579,28 +579,71 @@
         <x-dialog-modal wire:model="showAddStepModal" maxWidth="2xl">
             <x-slot name="title">Liste / Aufgabe hinzufuegen</x-slot>
             <x-slot name="content">
-                <div class="grid gap-4 md:grid-cols-2">
-                    <div>
-                        <label for="workflow-new-step-type" class="block text-sm font-medium text-gray-700">Aufgabentyp</label>
-                        <select id="workflow-new-step-type" wire:model.live="newStepType" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
-                            <option value="preparation">Vorbereitung</option>
-                            <option value="data_processing">Daten verarbeiten</option>
-                            <option value="browser_control">Browsersteuerung</option>
-                            <option value="interaction">Interaktion</option>
-                            <option value="decision">Status pruefen</option>
-                            <option value="cleanup">Abschluss</option>
-                        </select>
+                <div class="space-y-4">
+                    <div class="grid gap-2 rounded-lg bg-slate-100 p-1 sm:grid-cols-2">
+                        <button
+                            type="button"
+                            wire:click="$set('newStepCreationMode', 'new')"
+                            class="rounded-md px-3 py-2 text-sm font-semibold transition {{ $newStepCreationMode === 'new' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:bg-white/70 hover:text-slate-900' }}"
+                        >
+                            Neue Liste
+                        </button>
+                        <button
+                            type="button"
+                            wire:click="$set('newStepCreationMode', 'import')"
+                            class="rounded-md px-3 py-2 text-sm font-semibold transition {{ $newStepCreationMode === 'import' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:bg-white/70 hover:text-slate-900' }}"
+                        >
+                            Workflow importieren
+                        </button>
                     </div>
-                    <div>
-                        <label for="workflow-new-step-name" class="block text-sm font-medium text-gray-700">Listenname</label>
-                        <input id="workflow-new-step-name" type="text" wire:model.defer="newStepName" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
-                        @error('newStepName') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
-                    </div>
+
+                    @if($newStepCreationMode === 'import')
+                        <div>
+                            <label for="workflow-import-source" class="block text-sm font-medium text-gray-700">Workflow</label>
+                            <select id="workflow-import-source" wire:model.defer="importWorkflowId" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                                <option value="">Workflow auswaehlen</option>
+                                @foreach($importableWorkflows as $importableWorkflow)
+                                    <option value="{{ $importableWorkflow['id'] }}">
+                                        {{ $importableWorkflow['name'] }} ({{ $importableWorkflow['steps_count'] }} Listen, {{ $importableWorkflow['task_cards'] }} Tasks{{ $importableWorkflow['is_active'] ? '' : ', inaktiv' }})
+                                    </option>
+                                @endforeach
+                            </select>
+                            @error('importWorkflowId') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                            @if($importableWorkflows === [])
+                                <div class="mt-3 rounded-md border border-dashed border-slate-300 bg-slate-50 p-3 text-sm text-slate-500">
+                                    Keine importierbaren Workflows verfuegbar.
+                                </div>
+                            @endif
+                        </div>
+                    @else
+                        <div class="grid gap-4 md:grid-cols-2">
+                            <div>
+                                <label for="workflow-new-step-type" class="block text-sm font-medium text-gray-700">Aufgabentyp</label>
+                                <select id="workflow-new-step-type" wire:model.live="newStepType" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                                    <option value="preparation">Vorbereitung</option>
+                                    <option value="data_processing">Daten verarbeiten</option>
+                                    <option value="browser_control">Browsersteuerung</option>
+                                    <option value="interaction">Interaktion</option>
+                                    <option value="decision">Status pruefen</option>
+                                    <option value="cleanup">Abschluss</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label for="workflow-new-step-name" class="block text-sm font-medium text-gray-700">Listenname</label>
+                                <input id="workflow-new-step-name" type="text" wire:model.defer="newStepName" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                                @error('newStepName') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                            </div>
+                        </div>
+                    @endif
                 </div>
             </x-slot>
             <x-slot name="footer">
                 <button type="button" x-on:click="$dispatch('close')" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">Abbrechen</button>
-                <button type="button" wire:click="addStep" class="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">Hinzufuegen</button>
+                @if($newStepCreationMode === 'import')
+                    <button type="button" wire:click="importWorkflowSteps" class="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">Importieren</button>
+                @else
+                    <button type="button" wire:click="addStep" class="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">Hinzufuegen</button>
+                @endif
             </x-slot>
         </x-dialog-modal>
 
