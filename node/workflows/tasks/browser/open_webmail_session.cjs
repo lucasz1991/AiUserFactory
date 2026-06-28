@@ -154,7 +154,7 @@ async function openMailboxViaAccountDropdown(page, timeout) {
       continue;
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await new Promise((resolve) => setTimeout(resolve, 1000));
 
     for (const mailboxButtonSelector of mailboxButtonSelectors) {
       const mailboxClicked = await clickVisibleElement(page, mailboxButtonSelector, Math.min(timeout, 10000)).catch(() => null);
