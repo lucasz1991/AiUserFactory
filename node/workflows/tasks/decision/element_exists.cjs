@@ -1,7 +1,11 @@
 'use strict';
 
 const { captureTaskPreview } = require('../lib/preview.cjs');
-const { elementSnapshot, findVisibleElement } = require('../lib/find_visible_element.cjs');
+const {
+  elementSnapshot,
+  findVisibleElement,
+  framesForPage,
+} = require('../lib/find_visible_element.cjs');
 
 async function run(context = {}) {
   const page = context.page;
@@ -28,7 +32,10 @@ async function run(context = {}) {
     return { ok: false, status: 'failed', statusMessage: 'Kein Selector fuer die IF-Element-Pruefung angegeben.' };
   }
 
+  let searchedFrames = framesForPage(page).length;
   let handle = await findVisibleElement(page, selector, timeout);
+
+  searchedFrames = Math.max(searchedFrames, framesForPage(page).length);
 
   if (!handle && typeof context.refreshActivePage === 'function') {
     const refreshedPage = await context.refreshActivePage().catch(() => null);
@@ -36,6 +43,7 @@ async function run(context = {}) {
 
     if (refreshedPage && refreshedPage !== page && remainingTimeout > 0) {
       handle = await findVisibleElement(refreshedPage, selector, remainingTimeout);
+      searchedFrames = Math.max(searchedFrames, framesForPage(refreshedPage).length);
     }
   }
 
@@ -46,6 +54,8 @@ async function run(context = {}) {
       statusMessage: `IF-Bedingung nicht erfuellt: Element nicht gefunden (${selector}).`,
       selector,
       elementExists: false,
+      searchedFrames,
+      searchedOpenShadowDom: true,
       branchOutcome: 'failed',
     };
   }
@@ -59,6 +69,8 @@ async function run(context = {}) {
       statusMessage: 'IF-Bedingung erfuellt: Element wurde gefunden.',
       selector,
       elementExists: true,
+      searchedFrames,
+      searchedOpenShadowDom: true,
       element,
     });
   } finally {

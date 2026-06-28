@@ -21,16 +21,78 @@ function frameIsDetached(frame) {
   }
 }
 
+function childFramesFor(frame) {
+  if (!frame) {
+    return [];
+  }
+
+  try {
+    const children = typeof frame.childFrames === 'function'
+      ? frame.childFrames()
+      : frame.childFrames;
+
+    return Array.isArray(children) ? children.filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
 function framesForPage(page) {
-  if (page && typeof page.frames === 'function') {
-    return page.frames().filter((frame) => !frameIsDetached(frame));
+  if (!page) {
+    return [];
   }
 
-  if (page && typeof page.mainFrame === 'function') {
-    return [page.mainFrame()].filter((frame) => !frameIsDetached(frame));
+  const candidates = [];
+
+  if (typeof page.mainFrame === 'function') {
+    try {
+      candidates.push(page.mainFrame());
+    } catch {
+      // A navigation can briefly replace the main frame. The next polling pass retries it.
+    }
   }
 
-  return page ? [page] : [];
+  if (typeof page.frames === 'function') {
+    try {
+      const pageFrames = page.frames();
+
+      if (Array.isArray(pageFrames)) {
+        candidates.push(...pageFrames);
+      }
+    } catch {
+      // Keep already collected frames and retry with a fresh frame tree on the next pass.
+    }
+  }
+
+  if (
+    candidates.length === 0
+    && (typeof page.evaluateHandle === 'function' || typeof page.waitForSelector === 'function')
+  ) {
+    candidates.push(page);
+  }
+
+  const frames = [];
+  const queue = candidates.filter(Boolean);
+  const seen = new Set();
+
+  while (queue.length > 0) {
+    const frame = queue.shift();
+
+    if (!frame || seen.has(frame)) {
+      continue;
+    }
+
+    seen.add(frame);
+
+    if (frameIsDetached(frame)) {
+      continue;
+    }
+
+    frames.push(frame);
+    queue.push(...childFramesFor(frame));
+  }
+
+  return frames;
 }
 
 function isTransientDomError(error) {
@@ -421,6 +483,39 @@ async function visibleElementInFrame(frame, selector, timeout) {
   return cssSelectorHandle(frame, selector, timeout);
 }
 
+async function firstHandleAcrossFrames(frames, findInFrame) {
+  if (!Array.isArray(frames) || frames.length === 0) {
+    return null;
+  }
+
+  const handles = await Promise.all(frames.map(async (frame) => {
+    if (frameIsDetached(frame)) {
+      return null;
+    }
+
+    try {
+      return await findInFrame(frame);
+    } catch (error) {
+      if (isTransientDomError(error)) {
+        return null;
+      }
+
+      return null;
+    }
+  }));
+  const winner = handles.find(Boolean) || null;
+
+  await Promise.all(handles.map(async (handle) => {
+    if (!handle || handle === winner) {
+      return;
+    }
+
+    await handle.dispose?.().catch(() => {});
+  }));
+
+  return winner;
+}
+
 async function findVisibleElement(page, selector, timeout = 15000) {
   const normalizedTimeout = Math.max(1, Number(timeout || 15000));
   const deadline = Date.now() + normalizedTimeout;
@@ -428,22 +523,19 @@ async function findVisibleElement(page, selector, timeout = 15000) {
   await synchronizeLiveDom(page);
 
   while (remainingTimeout(deadline) > 0) {
-    for (const frame of framesForPage(page)) {
-      const remaining = remainingTimeout(deadline);
+    const remaining = remainingTimeout(deadline);
+    const frames = framesForPage(page);
+    const frameTimeout = Math.max(1, Math.min(100, remaining));
+    const handle = await firstHandleAcrossFrames(
+      frames,
+      (frame) => visibleElementInFrame(frame, selector, frameTimeout),
+    );
 
-      if (remaining <= 0) {
-        return null;
-      }
-
-      const frameTimeout = Math.max(1, Math.min(2500, remaining));
-      const handle = await visibleElementInFrame(frame, selector, frameTimeout);
-
-      if (handle) {
-        return handle;
-      }
+    if (handle) {
+      return handle;
     }
 
-    await wait(Math.min(150, remainingTimeout(deadline)));
+    await wait(Math.min(100, remainingTimeout(deadline)));
   }
 
   return null;
@@ -456,19 +548,17 @@ async function findVisibleElementByText(page, text, timeout = 15000, options = {
   await synchronizeLiveDom(page);
 
   while (remainingTimeout(deadline) > 0) {
-    for (const frame of framesForPage(page)) {
-      if (remainingTimeout(deadline) <= 0) {
-        return null;
-      }
+    const frames = framesForPage(page);
+    const handle = await firstHandleAcrossFrames(
+      frames,
+      (frame) => textElementHandle(frame, text, options),
+    );
 
-      const handle = await textElementHandle(frame, text, options);
-
-      if (handle) {
-        return handle;
-      }
+    if (handle) {
+      return handle;
     }
 
-    await wait(Math.min(150, remainingTimeout(deadline)));
+    await wait(Math.min(100, remainingTimeout(deadline)));
   }
 
   return null;
