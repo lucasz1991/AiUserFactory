@@ -1166,13 +1166,20 @@ class WorkflowExecutionService
     protected function workflowRuntimeContext(WorkflowRun $run, WorkflowStep $step, WorkflowStepRun $stepRun): array
     {
         $person = $this->personForRun($run, $step);
+        $settings = $this->mailRegistration->settings();
+        $verificationMailbox = $this->workflowVerificationMailbox($settings['verification_mailbox'] ?? []);
         $emailAccount = $person && is_array(data_get($person->metadata, 'email_account'))
             ? data_get($person->metadata, 'email_account')
             : [];
         $accountEmail = trim((string) ($emailAccount['email'] ?? $person?->person_email ?? ''));
         $accountUsername = trim((string) ($emailAccount['username'] ?? $accountEmail));
         $accountProvider = (string) ($emailAccount['provider'] ?? 'proton');
-        $accountPassword = (string) ($this->decryptString($emailAccount['password_encrypted'] ?? null) ?? '');
+        $accountPassword = trim((string) ($emailAccount['password'] ?? ''));
+
+        if ($accountPassword === '') {
+            $accountPassword = (string) ($this->decryptString($emailAccount['password_encrypted'] ?? null) ?? '');
+        }
+
         $webmailSessionPayload = $this->decryptedWebmailSessionPayload($emailAccount);
         $accountPayload = [
             'provider' => $accountProvider,
@@ -1184,11 +1191,56 @@ class WorkflowExecutionService
             'hasWebmailSession' => is_array($webmailSessionPayload),
             'webmailSession' => $webmailSessionPayload,
         ];
+        $effectiveAccount = $person ? $accountPayload : $verificationMailbox;
+        $effectiveAccountEmail = trim((string) ($effectiveAccount['email'] ?? ''));
+        $effectiveAccountUsername = trim((string) ($effectiveAccount['username'] ?? $effectiveAccountEmail));
+        $effectiveAccountPassword = (string) ($effectiveAccount['password'] ?? '');
+        $personPayload = null;
+
+        if ($person) {
+            $personPayload = [
+                'id' => $person->id,
+                'displayName' => $person->display_name,
+                'firstName' => $person->person_first_name,
+                'lastName' => $person->person_last_name,
+                'email' => $effectiveAccountEmail ?: $person->person_email,
+                'username' => $effectiveAccountUsername,
+                'password' => $effectiveAccountPassword,
+                'provider' => $effectiveAccount['provider'] ?? $accountProvider,
+                'webmailUrl' => $effectiveAccount['webmailUrl'] ?? $effectiveAccount['webmail_url'] ?? '',
+                'hasPassword' => (bool) ($effectiveAccount['hasPassword'] ?? ($effectiveAccountPassword !== '')),
+                'phone' => $person->person_phone,
+                'country' => $person->person_country,
+                'city' => $person->person_city,
+                'timezone' => $person->person_timezone,
+                'loginUsername' => $person->login_username,
+                'emailAccount' => $effectiveAccount,
+            ];
+        } elseif ($effectiveAccountEmail !== '') {
+            $personPayload = [
+                'id' => null,
+                'displayName' => 'Verification Mailbox',
+                'firstName' => '',
+                'lastName' => '',
+                'email' => $effectiveAccountEmail,
+                'username' => $effectiveAccountUsername,
+                'password' => $effectiveAccountPassword,
+                'provider' => $effectiveAccount['provider'] ?? 'proton',
+                'webmailUrl' => $effectiveAccount['webmailUrl'] ?? $effectiveAccount['webmail_url'] ?? '',
+                'hasPassword' => (bool) ($effectiveAccount['hasPassword'] ?? ($effectiveAccountPassword !== '')),
+                'phone' => '',
+                'country' => '',
+                'city' => '',
+                'timezone' => '',
+                'loginUsername' => $effectiveAccountUsername,
+                'emailAccount' => $effectiveAccount,
+                'isVerificationMailbox' => true,
+            ];
+        }
+
         $context = is_array($run->context_json) ? $run->context_json : [];
         $browserWindows = is_array($context['browser_windows'] ?? null) ? $context['browser_windows'] : [];
         $browserRuntime = is_array($context['browser_runtime'] ?? null) ? $context['browser_runtime'] : [];
-        $settings = $this->mailRegistration->settings();
-        $verificationMailbox = $this->workflowVerificationMailbox($settings['verification_mailbox'] ?? []);
 
         return [
             'workflowRunId' => $run->id,
@@ -1210,25 +1262,13 @@ class WorkflowExecutionService
             'browser_windows' => $browserWindows,
             'browser' => $browserRuntime,
             'browser_runtime' => $browserRuntime,
-            'account' => $person ? $accountPayload : null,
-            'email_account' => $person ? $accountPayload : null,
+            'account' => $effectiveAccountEmail !== '' ? $effectiveAccount : null,
+            'email_account' => $effectiveAccountEmail !== '' ? $effectiveAccount : null,
             'verificationMailbox' => $verificationMailbox,
             'verification_mailbox' => $verificationMailbox,
             'veri_account' => $verificationMailbox,
             'veri-account' => $verificationMailbox,
-            'person' => $person ? [
-                'id' => $person->id,
-                'displayName' => $person->display_name,
-                'firstName' => $person->person_first_name,
-                'lastName' => $person->person_last_name,
-                'email' => $person->person_email,
-                'phone' => $person->person_phone,
-                'country' => $person->person_country,
-                'city' => $person->person_city,
-                'timezone' => $person->person_timezone,
-                'loginUsername' => $person->login_username,
-                'emailAccount' => $accountPayload,
-            ] : null,
+            'person' => $personPayload,
         ];
     }
 
@@ -1241,6 +1281,12 @@ class WorkflowExecutionService
         $username = trim((string) ($mailbox['username'] ?? '')) ?: $email;
         $webmailUrl = trim((string) ($mailbox['webmail_url'] ?? $mailbox['webmailUrl'] ?? ''))
             ?: $this->defaultWebmailUrl($provider);
+        $password = trim((string) ($mailbox['password'] ?? ''));
+
+        if ($password === '') {
+            $password = (string) ($this->decryptString($mailbox['password_encrypted'] ?? null) ?? '');
+        }
+
         $webmailSessionPayload = $this->decryptedWebmailSessionPayload($mailbox);
 
         return [
@@ -1248,9 +1294,10 @@ class WorkflowExecutionService
             'email' => $email,
             'provider' => $provider,
             'username' => $username,
+            'password' => $password,
             'webmailUrl' => $webmailUrl,
             'webmail_url' => $webmailUrl,
-            'hasPassword' => trim((string) ($mailbox['password_encrypted'] ?? '')) !== '',
+            'hasPassword' => $password !== '',
             'hasWebmailSession' => is_array($webmailSessionPayload),
             'webmailSession' => $webmailSessionPayload,
             'webmail_session' => $webmailSessionPayload,
@@ -1379,6 +1426,49 @@ class WorkflowExecutionService
             }
         }
 
+        if (isset($payload['person']) && is_array($payload['person'])) {
+            unset($payload['person']['password'], $payload['person']['passwordEncrypted'], $payload['person']['password_encrypted']);
+
+            if (isset($payload['person']['emailAccount']) && is_array($payload['person']['emailAccount'])) {
+                unset(
+                    $payload['person']['emailAccount']['password'],
+                    $payload['person']['emailAccount']['passwordEncrypted'],
+                    $payload['person']['emailAccount']['password_encrypted'],
+                    $payload['person']['emailAccount']['webmailSession'],
+                    $payload['person']['emailAccount']['webmail_session'],
+                );
+            }
+        }
+
+        if (isset($payload['tasks']) && is_array($payload['tasks'])) {
+            foreach ($payload['tasks'] as &$taskPayload) {
+                if (! is_array($taskPayload)) {
+                    continue;
+                }
+
+                foreach (['account', 'email_account', 'verificationMailbox', 'verification_mailbox', 'veri_account', 'veri-account'] as $key) {
+                    if (isset($taskPayload[$key]) && is_array($taskPayload[$key])) {
+                        unset($taskPayload[$key]['password'], $taskPayload[$key]['passwordEncrypted'], $taskPayload[$key]['password_encrypted'], $taskPayload[$key]['webmailSession'], $taskPayload[$key]['webmail_session']);
+                    }
+                }
+
+                if (isset($taskPayload['person']) && is_array($taskPayload['person'])) {
+                    unset($taskPayload['person']['password'], $taskPayload['person']['passwordEncrypted'], $taskPayload['person']['password_encrypted']);
+
+                    if (isset($taskPayload['person']['emailAccount']) && is_array($taskPayload['person']['emailAccount'])) {
+                        unset(
+                            $taskPayload['person']['emailAccount']['password'],
+                            $taskPayload['person']['emailAccount']['passwordEncrypted'],
+                            $taskPayload['person']['emailAccount']['password_encrypted'],
+                            $taskPayload['person']['emailAccount']['webmailSession'],
+                            $taskPayload['person']['emailAccount']['webmail_session'],
+                        );
+                    }
+                }
+            }
+            unset($taskPayload);
+        }
+
         if (isset($payload['workflow']) && is_array($payload['workflow'])) {
             unset(
                 $payload['workflow']['browser'],
@@ -1400,6 +1490,14 @@ class WorkflowExecutionService
                     $payload['workflow']['person']['emailAccount']['password_encrypted'],
                     $payload['workflow']['person']['emailAccount']['webmailSession'],
                     $payload['workflow']['person']['emailAccount']['webmail_session'],
+                );
+            }
+
+            if (isset($payload['workflow']['person']) && is_array($payload['workflow']['person'])) {
+                unset(
+                    $payload['workflow']['person']['password'],
+                    $payload['workflow']['person']['passwordEncrypted'],
+                    $payload['workflow']['person']['password_encrypted'],
                 );
             }
         }

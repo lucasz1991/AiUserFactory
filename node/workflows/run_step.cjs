@@ -114,6 +114,33 @@ function publicAccount(account = null, includePassword = false) {
   return copy;
 }
 
+function redactPublicSecrets(value) {
+  const copy = cleanForJson(value);
+
+  const scrub = (item) => {
+    if (!item || typeof item !== 'object') {
+      return item;
+    }
+
+    if (Array.isArray(item)) {
+      return item.map(scrub);
+    }
+
+    for (const key of Object.keys(item)) {
+      if (['password', 'passwordEncrypted', 'password_encrypted', 'webmailSession', 'webmail_session'].includes(key)) {
+        delete item[key];
+        continue;
+      }
+
+      item[key] = scrub(item[key]);
+    }
+
+    return item;
+  };
+
+  return scrub(copy);
+}
+
 function publicWorkflow(workflow = null) {
   if (!workflow || typeof workflow !== 'object') {
     return null;
@@ -143,10 +170,18 @@ function publicWorkflow(workflow = null) {
     delete copy.person.emailAccount.webmail_session;
   }
 
+  if (copy.person && typeof copy.person === 'object') {
+    delete copy.person.password;
+    delete copy.person.passwordEncrypted;
+    delete copy.person.password_encrypted;
+  }
+
   return copy;
 }
 
 function statusPayload(state, stage, message, extra = {}) {
+  const publicExtra = redactPublicSecrets(extra);
+
   return {
     runId: runtime.runId,
     workflow: publicWorkflow(runtime.workflow || null),
@@ -178,14 +213,14 @@ function statusPayload(state, stage, message, extra = {}) {
       const result = taskResults.find((candidate) => candidate.key === task.key);
 
       if (result) {
-        return { ...task, ...result };
+        return redactPublicSecrets({ ...task, ...result });
       }
 
-      return { ...task, status: task.status || 'configured' };
+      return redactPublicSecrets({ ...task, status: task.status || 'configured' });
     }),
-    events,
+    events: redactPublicSecrets(events),
     browserWindows: lastBrowserWindows,
-    ...extra,
+    ...publicExtra,
   };
 }
 
@@ -262,21 +297,58 @@ function resolveString(value, context = {}) {
     || workflow.veri_account
     || workflow['veri-account']
     || null;
+  const basePerson = context.person || workflow.person || null;
+  const personEmailAccount = (basePerson && typeof basePerson === 'object'
+    ? (basePerson.emailAccount || basePerson.email_account || null)
+    : null);
+  const workflowAccount = workflow.account || workflow.email_account || null;
+  const account = context.account
+    || context.lastResult?.account
+    || personEmailAccount
+    || workflowAccount
+    || verificationAccount
+    || null;
+  const personAccount = personEmailAccount || (basePerson ? (workflowAccount || context.account || verificationAccount) : account);
+  const personForLookup = basePerson && typeof basePerson === 'object'
+    ? {
+      ...basePerson,
+      email: personAccount?.email || basePerson.email || '',
+      username: personAccount?.username || basePerson.username || basePerson.loginUsername || '',
+      password: personAccount?.password || basePerson.password || '',
+      provider: personAccount?.provider || basePerson.provider || '',
+      webmailUrl: personAccount?.webmailUrl || personAccount?.webmail_url || basePerson.webmailUrl || basePerson.webmail_url || '',
+      webmail_url: personAccount?.webmail_url || personAccount?.webmailUrl || basePerson.webmail_url || basePerson.webmailUrl || '',
+      hasPassword: personAccount?.hasPassword ?? basePerson.hasPassword ?? Boolean(personAccount?.password || basePerson.password),
+      emailAccount: personAccount || basePerson.emailAccount || basePerson.email_account || null,
+      email_account: personAccount || basePerson.email_account || basePerson.emailAccount || null,
+    }
+    : (account ? {
+      email: account.email || '',
+      username: account.username || '',
+      password: account.password || '',
+      provider: account.provider || '',
+      webmailUrl: account.webmailUrl || account.webmail_url || '',
+      webmail_url: account.webmail_url || account.webmailUrl || '',
+      hasPassword: account.hasPassword ?? Boolean(account.password),
+      emailAccount: account,
+      email_account: account,
+      isVerificationMailbox: account === verificationAccount,
+    } : null);
   const lookupRoot = {
     ...workflow,
     workflow,
-    person: context.person || workflow.person || null,
-    account: context.account || context.lastResult?.account || workflow.account || null,
-    email_account: context.account || context.lastResult?.account || workflow.email_account || null,
+    person: personForLookup,
+    account,
+    email_account: account,
     verificationMailbox: verificationAccount,
     verification_mailbox: verificationAccount,
     veri_account: verificationAccount,
     'veri-account': verificationAccount,
-    new_password: context.new_password || context.generated_password || context.account?.password || context.lastResult?.new_password || '',
-    generated_password: context.generated_password || context.new_password || context.account?.password || context.lastResult?.generated_password || context.lastResult?.new_password || '',
-    'generated-password': context.generated_password || context.new_password || context.account?.password || context.lastResult?.['generated-password'] || context.lastResult?.generated_password || context.lastResult?.new_password || '',
-    new_mail_username: context.account?.username || context.lastResult?.account?.username || '',
-    new_mail_address: context.account?.email || context.lastResult?.account?.email || '',
+    new_password: context.new_password || context.generated_password || account?.password || context.lastResult?.new_password || '',
+    generated_password: context.generated_password || context.new_password || account?.password || context.lastResult?.generated_password || context.lastResult?.new_password || '',
+    'generated-password': context.generated_password || context.new_password || account?.password || context.lastResult?.['generated-password'] || context.lastResult?.generated_password || context.lastResult?.new_password || '',
+    new_mail_username: account?.username || context.lastResult?.account?.username || '',
+    new_mail_address: account?.email || context.lastResult?.account?.email || '',
   };
   const resolved = valueFromPath(lookupRoot, normalized);
 

@@ -477,6 +477,10 @@ class WorkflowTaskRunner
             unset($public['person']['emailAccount']['password'], $public['person']['emailAccount']['passwordEncrypted'], $public['person']['emailAccount']['password_encrypted'], $public['person']['emailAccount']['webmailSession'], $public['person']['emailAccount']['webmail_session']);
         }
 
+        if (isset($public['person']) && is_array($public['person'])) {
+            unset($public['person']['password'], $public['person']['passwordEncrypted'], $public['person']['password_encrypted']);
+        }
+
         return $public;
     }
 

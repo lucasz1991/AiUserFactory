@@ -440,7 +440,7 @@
                 <div>
                     <label for="workflow-run-person" class="block text-sm font-medium text-gray-700">Person</label>
                     <select id="workflow-run-person" wire:model.defer="runPersonId" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
-                        <option value="">Keine Person binden</option>
+                        <option value="">Haupt-Verifikationskonto aus Einstellungen</option>
                         @foreach($persons as $person)
                             <option value="{{ $person->id }}">{{ $person->display_name }} - {{ $person->profile_key }}</option>
                         @endforeach

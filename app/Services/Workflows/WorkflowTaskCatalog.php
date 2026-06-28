@@ -142,7 +142,7 @@ class WorkflowTaskCatalog
                     'selector_placeholder' => 'input[name=email], #password',
                     'value' => true,
                     'value_label' => 'Datenquelle oder Wert',
-                    'value_placeholder' => 'person.email, account.password oder fester Wert',
+                    'value_placeholder' => 'person.email, person.password oder fester Wert',
                     'url' => false,
                     'success_payload' => true,
                     'failure_payload' => true,
