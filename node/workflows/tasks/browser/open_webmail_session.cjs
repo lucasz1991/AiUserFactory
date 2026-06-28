@@ -130,6 +130,40 @@ async function isLoggedInLandingPage(page) {
   return /sie bleiben eingeloggt/i.test(text);
 }
 
+async function closeLoggedInPopupIfVisible(page, timeout) {
+  const closeSelectors = [
+    '[data-testid*="close" i]',
+    '[data-test*="close" i]',
+    '[aria-label*="schlie" i]',
+    '[aria-label*="close" i]',
+    '[title*="schlie" i]',
+    '[title*="close" i]',
+    '.notification button[aria-label]',
+    '.notification [role="button"][aria-label]',
+    '.lux-notification button[aria-label]',
+    '.lux-notification [role="button"][aria-label]',
+    'button:has-text("Schließen")',
+    'button:has-text("Schliessen")',
+    'button:has-text("Close")',
+  ];
+
+  for (const selector of closeSelectors) {
+    const closed = await clickVisibleElement(page, selector, Math.min(timeout, 1500)).catch(() => null);
+
+    if (closed) {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      return {
+        closed: true,
+        selector,
+        element: closed,
+      };
+    }
+  }
+
+  return null;
+}
+
 async function openMailboxViaAccountDropdown(page, timeout) {
   const avatarSelectors = [
     'section.appa-user-icon__initials',
@@ -146,6 +180,7 @@ async function openMailboxViaAccountDropdown(page, timeout) {
     '.account-avatar__button:has-text("Zum Postfach")',
     'button:has-text("Zum Postfach")',
   ];
+  const closedPopup = await closeLoggedInPopupIfVisible(page, timeout);
 
   for (const avatarSelector of avatarSelectors) {
     const avatarClicked = await clickVisibleElement(page, avatarSelector, Math.min(timeout, 10000)).catch(() => null);
@@ -167,6 +202,7 @@ async function openMailboxViaAccountDropdown(page, timeout) {
           method: 'account-dropdown',
           avatarSelector,
           mailboxButtonSelector,
+          closedPopup,
           avatarElement: avatarClicked,
           mailboxElement: mailboxClicked,
         };
@@ -184,6 +220,7 @@ async function openMailboxViaAccountDropdown(page, timeout) {
         clicked: true,
         method: 'account-dropdown-text',
         avatarSelector,
+        closedPopup,
         avatarElement: avatarClicked,
         mailboxElement: mailboxTextClicked,
       };
