@@ -26,6 +26,11 @@
         ],
         'success_payload' => false,
         'failure_payload' => false,
+        'timeout' => false,
+        'timeout_label' => 'Timeout in Sekunden',
+        'timeout_help' => '',
+        'timeout_min' => 0,
+        'timeout_max' => 3600,
     ], is_array($selectedDefinition['form'] ?? null) ? $selectedDefinition['form'] : []);
     $currentBrowserWindow = $isEdit ? ($editingTaskBrowserWindow ?? 'main') : ($newTaskBrowserWindow ?? 'main');
     $browserWindowOptions = collect(['main'])
@@ -100,11 +105,14 @@
             @error($prefix.'Title') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
         </div>
 
-        @if($isEdit)
+        @if($isEdit || $form['timeout'])
             <div>
-                <label class="block text-sm font-medium text-gray-700">Timeout</label>
-                <input type="number" min="0" max="3600" wire:model.defer="editingTaskTimeoutSeconds" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
-                @error('editingTaskTimeoutSeconds') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                <label class="block text-sm font-medium text-gray-700">{{ $form['timeout'] ? $form['timeout_label'] : 'Timeout in Sekunden' }}</label>
+                <input type="number" min="{{ $form['timeout'] ? $form['timeout_min'] : 0 }}" max="{{ $form['timeout_max'] }}" wire:model.defer="{{ $prefix }}TimeoutSeconds" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                @if($form['timeout'] && $form['timeout_help'] !== '')
+                    <p class="mt-1 text-xs text-slate-500">{{ $form['timeout_help'] }}</p>
+                @endif
+                @error($prefix.'TimeoutSeconds') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
             </div>
         @endif
 

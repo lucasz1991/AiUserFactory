@@ -1315,6 +1315,7 @@ async function run() {
   const runtimeTasks = runtime.tasks || [];
   let taskIndex = 0;
   let requestedSuccessRouteTask = null;
+  let requestedFailureRouteTask = null;
   let routeTransitions = 0;
   const preserveBrowserForFailureRoute = startedFromFailureRoute();
 
@@ -1545,6 +1546,8 @@ async function run() {
       lastBrowserWindows = result.browserWindows;
     }
 
+    const branchOutcome = String(result.branchOutcome || result.branch_outcome || '').trim().toLowerCase();
+    const branchFailed = branchOutcome === 'failed';
     const ok = result.ok !== false && !['failed', 'timeout'].includes(String(result.status || ''));
     const status = ok ? String(result.status || 'success') : String(result.status || 'failed');
     const current = taskResults.find((candidate) => candidate.key === task.key);
@@ -1555,8 +1558,11 @@ async function run() {
       finishedAt: now(),
     });
 
-    pushEvent(ok ? 'task-completed' : 'task-failed', result.statusMessage || taskLabel, { taskKey: task.key, status });
-    writeStatus('running', ok ? 'task-completed' : 'task-failed', result.statusMessage || taskLabel);
+    const taskEventStage = branchFailed
+      ? 'task-condition-not-met'
+      : (ok ? 'task-completed' : 'task-failed');
+    pushEvent(taskEventStage, result.statusMessage || taskLabel, { taskKey: task.key, status, branchOutcome });
+    writeStatus('running', taskEventStage, result.statusMessage || taskLabel);
 
     const embeddedWorkflowFrameKey = String(task.embedded_workflow_frame_key || '').trim();
     const hasWorkflowReturn = (
@@ -1593,8 +1599,10 @@ async function run() {
       }
     }
 
-    if (!ok) {
-      const failurePreview = await captureTaskPreview(context, result, true).catch(() => ({}));
+    if (!ok || branchFailed) {
+      const failurePreview = branchFailed
+        ? {}
+        : await captureTaskPreview(context, result, true).catch(() => ({}));
 
       if (Array.isArray(failurePreview.browserWindows)) {
         lastBrowserWindows = failurePreview.browserWindows;
@@ -1623,7 +1631,7 @@ async function run() {
             throw new Error('Zu viele Task-Routenwechsel. Moegliche Schleife in der Fehlerroute.');
           }
 
-          pushEvent('task-error-route-followed', `Fehlerroute wird fortgesetzt: ${targetCardKey}.`, {
+          pushEvent(branchFailed ? 'task-branch-route-followed' : 'task-error-route-followed', `Fehlerroute wird fortgesetzt: ${targetCardKey}.`, {
             taskKey: task.key,
             targetTaskKey: targetCardKey,
             status,
@@ -1631,6 +1639,14 @@ async function run() {
           taskIndex = targetTaskIndex;
           continue;
         }
+      }
+
+      if (branchFailed) {
+        requestedFailureRouteTask = {
+          ...task,
+          key: task.route_source_task_key || task.parent_task_key || task.key,
+        };
+        break;
       }
 
       const failedResult = {
@@ -1716,9 +1732,10 @@ async function run() {
     browserWsEndpoint: browserWsEndpoint(),
     events,
     finishedAt: now(),
-    ...(requestedSuccessRouteTask ? {
+    ...((requestedFailureRouteTask || requestedSuccessRouteTask) ? {
       routeRequested: true,
-      completedTaskKey: requestedSuccessRouteTask.key,
+      completedTaskKey: (requestedFailureRouteTask || requestedSuccessRouteTask).key,
+      routeOutcome: requestedFailureRouteTask ? 'failed' : 'success',
     } : {}),
   };
 

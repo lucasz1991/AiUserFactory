@@ -10,6 +10,7 @@ const test = require('node:test');
 const basePath = path.resolve(__dirname, '..', '..');
 const runnerPath = path.join(__dirname, 'run_step.cjs');
 const returnScript = 'node/workflows/tasks/data/workflow_return.cjs';
+const branchScript = 'tests/Fixtures/Workflows/branch_result.cjs';
 
 function returnTask(key, value, frameKey = null) {
   return {
@@ -21,6 +22,18 @@ function returnTask(key, value, frameKey = null) {
     node_script: returnScript,
     value,
     ...(frameKey ? { embedded_workflow_frame_key: frameKey } : {}),
+  };
+}
+
+function branchTask(key, onError) {
+  return {
+    key,
+    task_key: 'test.branch_result',
+    title: key,
+    kind: 'data',
+    runner: 'node',
+    node_script: branchScript,
+    on_error: onError,
   };
 }
 
@@ -120,4 +133,41 @@ test('failed task follows a forward on_error route in the same Node run', () => 
     && event.taskKey === 'mailbox-not-found'
     && event.targetTaskKey === 'check-postbox-button'
   )));
+});
+
+test('unmatched condition follows on_error without marking the task as failed', () => {
+  const result = executeTasks([
+    branchTask('condition-not-met', {
+      type: 'card',
+      card_key: 'failure-target',
+    }),
+    returnTask('must-be-skipped-after-condition', true),
+    returnTask('failure-target', true),
+  ]);
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.tasks.map((task) => task.key), [
+    'condition-not-met',
+    'failure-target',
+  ]);
+  assert.ok(result.events.some((event) => event.stage === 'task-condition-not-met'));
+  assert.ok(result.events.some((event) => event.stage === 'task-branch-route-followed'));
+  assert.equal(result.events.some((event) => (
+    event.stage === 'task-failed' && event.taskKey === 'condition-not-met'
+  )), false);
+});
+
+test('unmatched condition requests an external failure route without failing Node execution', () => {
+  const result = executeTasks([
+    branchTask('condition-not-met', {
+      type: 'card',
+      card_key: 'earlier-task-not-in-runtime-slice',
+    }),
+  ]);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.routeRequested, true);
+  assert.equal(result.routeOutcome, 'failed');
+  assert.equal(result.completedTaskKey, 'condition-not-met');
+  assert.equal(result.events.some((event) => event.stage === 'task-failed'), false);
 });

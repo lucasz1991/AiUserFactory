@@ -18,6 +18,7 @@ async function run(context = {}) {
     || context.timeoutMs
     || 15000,
   ));
+  const deadline = Date.now() + timeout;
 
   if (!page || (typeof page.frames !== 'function' && typeof page.mainFrame !== 'function')) {
     return { ok: false, status: 'failed', statusMessage: 'Kein Page-Handle fuer die IF-Element-Pruefung vorhanden.' };
@@ -31,20 +32,22 @@ async function run(context = {}) {
 
   if (!handle && typeof context.refreshActivePage === 'function') {
     const refreshedPage = await context.refreshActivePage().catch(() => null);
+    const remainingTimeout = Math.max(0, deadline - Date.now());
 
-    if (refreshedPage && refreshedPage !== page) {
-      handle = await findVisibleElement(refreshedPage, selector, Math.min(timeout, 5000));
+    if (refreshedPage && refreshedPage !== page && remainingTimeout > 0) {
+      handle = await findVisibleElement(refreshedPage, selector, remainingTimeout);
     }
   }
 
   if (!handle) {
-    return captureTaskPreview(context, {
-      ok: false,
+    return {
+      ok: true,
       status: 'not_found',
       statusMessage: `IF-Bedingung nicht erfuellt: Element nicht gefunden (${selector}).`,
       selector,
       elementExists: false,
-    });
+      branchOutcome: 'failed',
+    };
   }
 
   try {

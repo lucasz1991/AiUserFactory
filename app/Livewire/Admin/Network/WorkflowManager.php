@@ -58,6 +58,8 @@ class WorkflowManager extends Component
 
     public string $newTaskFailurePayload = '';
 
+    public int $newTaskTimeoutSeconds = 0;
+
     public string $newTaskSuccessTarget = '';
 
     public string $newTaskFailedTarget = 'fail';
@@ -453,6 +455,7 @@ class WorkflowManager extends Component
         $this->newTaskSuccessTarget = '';
         $this->newTaskFailedTarget = 'fail';
         $this->newTaskFailedRetryLimit = 3;
+        $this->newTaskTimeoutSeconds = max(0, (int) data_get($this->taskDefinition($taskKey), 'timeout_seconds', 0));
         $this->applyTaskDefinitionToForm('newTask', $taskKey, true);
         $this->newTaskBrowserWindow = $this->defaultBrowserWindowNameForTask($taskKey);
         $this->showAddTaskModal = true;
@@ -462,12 +465,14 @@ class WorkflowManager extends Component
     public function updatedNewTaskCatalogKey(string $taskKey): void
     {
         $this->applyTaskDefinitionToForm('newTask', $taskKey, false);
+        $this->newTaskTimeoutSeconds = max(0, (int) data_get($this->taskDefinition($taskKey), 'timeout_seconds', 0));
         $this->newTaskBrowserWindow = $this->defaultBrowserWindowNameForTask($taskKey);
     }
 
     public function updatedEditingTaskCatalogKey(string $taskKey): void
     {
         $this->applyTaskDefinitionToForm('editingTask', $taskKey, false);
+        $this->editingTaskTimeoutSeconds = max(0, (int) data_get($this->taskDefinition($taskKey), 'timeout_seconds', 0));
     }
 
     public function updatedNewTaskMailboxSource(mixed $value = null): void
@@ -501,6 +506,7 @@ class WorkflowManager extends Component
             'newTaskBrowserWindow' => ['nullable', 'string', 'max:80'],
             'newTaskSuccessPayload' => ['nullable', 'string', 'max:4000'],
             'newTaskFailurePayload' => ['nullable', 'string', 'max:4000'],
+            'newTaskTimeoutSeconds' => ['required', 'integer', 'min:0', 'max:3600'],
             'newTaskSuccessTarget' => ['nullable', 'string', 'max:180'],
             'newTaskFailedTarget' => ['nullable', 'string', 'max:180'],
             'newTaskFailedRetryLimit' => ['required', 'integer', 'min:0', 'max:20'],
@@ -552,6 +558,7 @@ class WorkflowManager extends Component
             'url' => ($formConfig['url'] ?? false) ? $value : null,
             'mailbox_source' => $mailboxSource,
             'script_person_source' => $mailboxSource,
+            'timeout_seconds' => (int) $validated['newTaskTimeoutSeconds'],
             'status' => 'configured',
         ]);
 
@@ -606,6 +613,7 @@ class WorkflowManager extends Component
         $this->newTaskBrowserWindow = 'main';
         $this->newTaskSuccessPayload = '';
         $this->newTaskFailurePayload = '';
+        $this->newTaskTimeoutSeconds = 0;
         $this->newTaskSuccessTarget = '';
         $this->newTaskFailedTarget = 'fail';
         $this->newTaskFailedRetryLimit = 3;

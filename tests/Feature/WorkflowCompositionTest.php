@@ -125,6 +125,23 @@ class WorkflowCompositionTest extends TestCase
         ]);
         $this->assertSame('end', $successRoute['type']);
 
+        $branchRoute = $routeMethod->invoke($execution, $step, 'failed', [
+            'ok' => true,
+            'routeRequested' => true,
+            'routeOutcome' => 'failed',
+            'completedTaskKey' => 'second',
+        ]);
+        $this->assertSame('first', $branchRoute['card_key']);
+        $this->assertSame('second', $branchRoute['_source_card_key']);
+
+        $outcomeMethod = $executionReflection->getMethod('resultOutcome');
+        $this->assertSame('failed', $outcomeMethod->invoke($execution, [
+            'ok' => true,
+            'status' => 'success',
+            'routeRequested' => true,
+            'routeOutcome' => 'failed',
+        ]));
+
         $backRouteMethod = $executionReflection->getMethod('isBackRoute');
         $this->assertTrue($backRouteMethod->invoke($execution, $run, $step, $route));
 
@@ -153,6 +170,8 @@ class WorkflowCompositionTest extends TestCase
 
         $decisionTask = app(WorkflowTaskCatalog::class)->task('decision.element_exists');
         $this->assertSame('node/workflows/tasks/decision/element_exists.cjs', $decisionTask['node_script']);
+        $this->assertTrue((bool) data_get($decisionTask, 'form.timeout'));
+        $this->assertSame('Suchdauer in Sekunden', data_get($decisionTask, 'form.timeout_label'));
     }
 
     public function test_embedded_workflow_boundary_preserves_success_and_failure_routes(): void

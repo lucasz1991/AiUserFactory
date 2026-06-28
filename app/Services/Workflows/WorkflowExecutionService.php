@@ -661,11 +661,15 @@ class WorkflowExecutionService
 
     protected function routeForResult(WorkflowStep $step, string $outcome, array $result): ?array
     {
-        if ($outcome === 'success' && (bool) ($result['routeRequested'] ?? false)) {
+        if ((bool) ($result['routeRequested'] ?? false)) {
             $completedTaskKey = trim((string) ($result['completedTaskKey'] ?? $result['completed_task_key'] ?? ''));
             $sourceTask = collect($step->task_cards)
                 ->first(fn (array $task): bool => (string) ($task['key'] ?? '') === $completedTaskKey);
-            $route = is_array($sourceTask) ? ($sourceTask['next'] ?? null) : null;
+            $route = is_array($sourceTask)
+                ? ($outcome === 'success'
+                    ? ($sourceTask['next'] ?? null)
+                    : ($sourceTask['on_error'] ?? data_get($sourceTask, 'status_routes.'.$outcome)))
+                : null;
 
             if (is_array($route)) {
                 $route['_source_card_key'] = $completedTaskKey;
@@ -769,6 +773,12 @@ class WorkflowExecutionService
 
     protected function resultOutcome(array $result): string
     {
+        $requestedRouteOutcome = strtolower(trim((string) ($result['routeOutcome'] ?? $result['route_outcome'] ?? '')));
+
+        if ((bool) ($result['routeRequested'] ?? false) && in_array($requestedRouteOutcome, ['success', 'failed', 'timeout'], true)) {
+            return $requestedRouteOutcome;
+        }
+
         if (strtolower(trim((string) ($result['status'] ?? $result['statusLevel'] ?? ''))) === 'timeout') {
             return 'timeout';
         }
