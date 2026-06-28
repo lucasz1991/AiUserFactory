@@ -58,6 +58,44 @@ async function elementSnapshot(handle, selector = '') {
   }, selector);
 }
 
+async function clickableHandleFor(handle) {
+  if (!handle || typeof handle.evaluateHandle !== 'function') {
+    return handle;
+  }
+
+  const nextHandle = await handle.evaluateHandle((element) => {
+    if (!element) {
+      return element;
+    }
+
+    const clickableSelector = 'button,a,[role="button"],input[type="button"],input[type="submit"]';
+    const ownClickable = typeof element.closest === 'function'
+      ? element.closest(clickableSelector)
+      : null;
+
+    if (ownClickable) {
+      return ownClickable;
+    }
+
+    const root = typeof element.getRootNode === 'function' ? element.getRootNode() : null;
+    const host = root && root.host ? root.host : null;
+    const hostClickable = host && typeof host.closest === 'function'
+      ? host.closest(clickableSelector)
+      : null;
+
+    return hostClickable || host || element;
+  }).catch(() => null);
+  const nextElement = nextHandle && typeof nextHandle.asElement === 'function' ? nextHandle.asElement() : null;
+
+  if (!nextElement) {
+    await nextHandle?.dispose?.().catch(() => {});
+
+    return handle;
+  }
+
+  return nextElement;
+}
+
 async function extendedSelectorHandle(frame, selector) {
   const extendedSelector = parseExtendedSelector(selector);
 
@@ -353,12 +391,18 @@ async function clickVisibleElement(page, selector, timeout = 15000) {
     return null;
   }
 
+  const clickableHandle = await clickableHandleFor(handle);
+
   try {
-    const snapshot = await elementSnapshot(handle, selector).catch(() => ({ selector }));
-    await handle.click({ timeout });
+    const snapshot = await elementSnapshot(clickableHandle, selector).catch(() => ({ selector }));
+    await clickableHandle.click({ timeout });
 
     return snapshot;
   } finally {
+    if (clickableHandle !== handle) {
+      await clickableHandle.dispose?.().catch(() => {});
+    }
+
     await handle.dispose?.().catch(() => {});
   }
 }
@@ -373,12 +417,18 @@ async function clickVisibleElementByText(page, text, timeout = 15000, options = 
     return null;
   }
 
+  const clickableHandle = await clickableHandleFor(handle);
+
   try {
-    const snapshot = await elementSnapshot(handle, `text=${text}`).catch(() => ({ selector: `text=${text}` }));
-    await handle.click({ timeout });
+    const snapshot = await elementSnapshot(clickableHandle, `text=${text}`).catch(() => ({ selector: `text=${text}` }));
+    await clickableHandle.click({ timeout });
 
     return snapshot;
   } finally {
+    if (clickableHandle !== handle) {
+      await clickableHandle.dispose?.().catch(() => {});
+    }
+
     await handle.dispose?.().catch(() => {});
   }
 }

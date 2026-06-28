@@ -130,7 +130,76 @@ async function isLoggedInLandingPage(page) {
   return /sie bleiben eingeloggt/i.test(text);
 }
 
+async function openMailboxViaAccountDropdown(page, timeout) {
+  const avatarSelectors = [
+    'section.appa-user-icon__initials',
+    '.appa-user-icon__initials',
+    'appa-account-avatar section.appa-user-icon__initials',
+    'account-avatar section.appa-user-icon__initials',
+    '[class*="user-icon__initials"]',
+    '[aria-label*="Account" i]',
+    '[aria-label*="Profil" i]',
+    '[aria-label*="Benutzer" i]',
+  ];
+  const mailboxButtonSelectors = [
+    'button.account-avatar__button:has-text("Zum Postfach")',
+    '.account-avatar__button:has-text("Zum Postfach")',
+    'button:has-text("Zum Postfach")',
+  ];
+
+  for (const avatarSelector of avatarSelectors) {
+    const avatarClicked = await clickVisibleElement(page, avatarSelector, Math.min(timeout, 10000)).catch(() => null);
+
+    if (!avatarClicked) {
+      continue;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    for (const mailboxButtonSelector of mailboxButtonSelectors) {
+      const mailboxClicked = await clickVisibleElement(page, mailboxButtonSelector, Math.min(timeout, 10000)).catch(() => null);
+
+      if (mailboxClicked) {
+        await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: Math.min(timeout, 30000) }).catch(() => {});
+
+        return {
+          clicked: true,
+          method: 'account-dropdown',
+          avatarSelector,
+          mailboxButtonSelector,
+          avatarElement: avatarClicked,
+          mailboxElement: mailboxClicked,
+        };
+      }
+    }
+
+    const mailboxTextClicked = await clickVisibleElementByText(page, 'Zum Postfach', Math.min(timeout, 10000), {
+      selector: 'button.account-avatar__button,button,a,[role=button]',
+    }).catch(() => null);
+
+    if (mailboxTextClicked) {
+      await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: Math.min(timeout, 30000) }).catch(() => {});
+
+      return {
+        clicked: true,
+        method: 'account-dropdown-text',
+        avatarSelector,
+        avatarElement: avatarClicked,
+        mailboxElement: mailboxTextClicked,
+      };
+    }
+  }
+
+  return null;
+}
+
 async function openMailboxFromLoggedInLanding(page, timeout) {
+  const dropdownAction = await openMailboxViaAccountDropdown(page, timeout);
+
+  if (dropdownAction) {
+    return dropdownAction;
+  }
+
   const selectors = [
     'a[href*="mail/showStartView"]',
     'a[href*="weblink.gmx.net/mail"]',
