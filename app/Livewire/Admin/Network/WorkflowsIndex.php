@@ -10,11 +10,15 @@ class WorkflowsIndex extends Component
 {
     public string $activeGroup = 'all';
 
+    public string $activeSubcategory = 'all';
+
     public string $newWorkflowName = '';
 
     public string $newWorkflowDescription = '';
 
     public string $newWorkflowGroup = 'custom';
+
+    public string $newWorkflowSubcategory = '';
 
     public bool $showCreateWorkflowModal = false;
 
@@ -27,6 +31,8 @@ class WorkflowsIndex extends Component
     public string $editingWorkflowDescription = '';
 
     public string $editingWorkflowGroup = 'custom';
+
+    public string $editingWorkflowSubcategory = '';
 
     public bool $editingWorkflowActive = true;
 
@@ -42,6 +48,7 @@ class WorkflowsIndex extends Component
             ->with(['steps', 'includedByWorkflows'])
             ->withCount(['steps', 'runs'])
             ->orderBy('category')
+            ->orderBy('subcategory')
             ->orderBy('name')
             ->get();
         $groups = $workflows
@@ -50,14 +57,31 @@ class WorkflowsIndex extends Component
             ->unique()
             ->sort()
             ->values();
-        $visibleWorkflows = $this->activeGroup === 'all'
+        $groupWorkflows = $this->activeGroup === 'all'
             ? $workflows
             : $workflows->where('category', $this->activeGroup)->values();
+        $subcategories = $groupWorkflows
+            ->pluck('subcategory')
+            ->map(fn (mixed $subcategory): string => trim((string) $subcategory))
+            ->filter()
+            ->unique()
+            ->sort()
+            ->values();
+
+        if ($this->activeSubcategory !== 'all' && ! $subcategories->contains($this->activeSubcategory)) {
+            $this->activeSubcategory = 'all';
+        }
+
+        $visibleWorkflows = $this->activeSubcategory === 'all'
+            ? $groupWorkflows
+            : $groupWorkflows->where('subcategory', $this->activeSubcategory)->values();
 
         return view('livewire.admin.network.workflows-index', [
             'workflows' => $workflows,
+            'groupWorkflows' => $groupWorkflows,
             'visibleWorkflows' => $visibleWorkflows,
             'groups' => $groups,
+            'subcategories' => $subcategories,
             'groupLabels' => $this->groupLabels($groups),
             'summary' => [
                 'workflows' => $workflows->count(),
@@ -68,20 +92,29 @@ class WorkflowsIndex extends Component
         ])->layout('layouts.master');
     }
 
+    public function selectWorkflowGroup(string $group): void
+    {
+        $this->activeGroup = trim($group) !== '' ? trim($group) : 'all';
+        $this->activeSubcategory = 'all';
+    }
+
     public function createWorkflow(): void
     {
         $validated = $this->validate([
             'newWorkflowName' => ['required', 'string', 'max:160'],
             'newWorkflowDescription' => ['nullable', 'string', 'max:1000'],
             'newWorkflowGroup' => ['required', 'string', 'max:80'],
+            'newWorkflowSubcategory' => ['nullable', 'string', 'max:80'],
         ]);
 
         $group = $this->normalizeGroup($validated['newWorkflowGroup']);
+        $subcategory = $this->normalizeSubcategory($validated['newWorkflowSubcategory'] ?? '');
         $workflow = Workflow::query()->create([
             'name' => trim($validated['newWorkflowName']),
             'slug' => $this->uniqueSlug($validated['newWorkflowName']),
             'description' => trim((string) ($validated['newWorkflowDescription'] ?? '')),
             'category' => $group,
+            'subcategory' => $subcategory,
             'is_active' => true,
             'is_locked' => false,
             'trigger_type' => 'manual',
@@ -93,8 +126,10 @@ class WorkflowsIndex extends Component
         $this->newWorkflowName = '';
         $this->newWorkflowDescription = '';
         $this->newWorkflowGroup = 'custom';
+        $this->newWorkflowSubcategory = '';
         $this->showCreateWorkflowModal = false;
         $this->activeGroup = $group;
+        $this->activeSubcategory = $subcategory ?: 'all';
 
         session()->flash('success', 'Workflow wurde erstellt.');
 
@@ -113,6 +148,7 @@ class WorkflowsIndex extends Component
         $this->editingWorkflowName = $workflow->name;
         $this->editingWorkflowDescription = (string) $workflow->description;
         $this->editingWorkflowGroup = trim((string) $workflow->category) ?: 'custom';
+        $this->editingWorkflowSubcategory = trim((string) $workflow->subcategory);
         $this->editingWorkflowActive = (bool) $workflow->is_active;
         $this->editingWorkflowLocked = (bool) $workflow->is_edit_locked;
         $this->editingWorkflowIncluded = (bool) $workflow->is_included;
@@ -134,6 +170,7 @@ class WorkflowsIndex extends Component
             'editingWorkflowName' => ['required', 'string', 'max:160'],
             'editingWorkflowDescription' => ['nullable', 'string', 'max:1000'],
             'editingWorkflowGroup' => ['required', 'string', 'max:80'],
+            'editingWorkflowSubcategory' => ['nullable', 'string', 'max:80'],
             'editingWorkflowActive' => ['boolean'],
             'editingWorkflowLocked' => ['boolean'],
         ]);
@@ -156,16 +193,19 @@ class WorkflowsIndex extends Component
         }
 
         $group = $this->normalizeGroup($validated['editingWorkflowGroup']);
+        $subcategory = $this->normalizeSubcategory($validated['editingWorkflowSubcategory'] ?? '');
 
         $workflow->forceFill([
             'name' => trim($validated['editingWorkflowName']),
             'description' => trim((string) ($validated['editingWorkflowDescription'] ?? '')),
             'category' => $group,
+            'subcategory' => $subcategory,
             'is_active' => (bool) $validated['editingWorkflowActive'],
             'is_locked' => (bool) $validated['editingWorkflowLocked'],
         ])->save();
 
         $this->activeGroup = $group;
+        $this->activeSubcategory = $subcategory ?: 'all';
         $this->showEditWorkflowModal = false;
 
         session()->flash('success', 'Workflow wurde gespeichert.');
@@ -213,6 +253,13 @@ class WorkflowsIndex extends Component
         $group = Str::slug($group, '_');
 
         return $group !== '' ? $group : 'custom';
+    }
+
+    protected function normalizeSubcategory(string $subcategory): ?string
+    {
+        $subcategory = Str::slug($subcategory, '_');
+
+        return $subcategory !== '' ? $subcategory : null;
     }
 
     protected function groupLabels($groups): array

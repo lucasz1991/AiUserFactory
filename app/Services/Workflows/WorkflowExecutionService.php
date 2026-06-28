@@ -259,6 +259,10 @@ class WorkflowExecutionService
 
         $result = $this->prepareExternalResult($stepRun, $this->readExternalResult($stepRun, $status));
 
+        if ($stepRun->external_run_type === 'workflow-task') {
+            $this->applyWorkflowVariablesResult($stepRun->workflowRun, $result);
+        }
+
         if (! $this->externalSucceeded($stepRun->workflowStep, $status, $result)) {
             $message = (string) (
                 data_get($result, 'statusMessage')
@@ -1020,6 +1024,10 @@ class WorkflowExecutionService
 
     protected function applyExternalResult(WorkflowStepRun $stepRun, array $result): array
     {
+        if ($stepRun->external_run_type === 'workflow-task') {
+            $this->applyWorkflowVariablesResult($stepRun->workflowRun, $result);
+        }
+
         if ($stepRun->external_run_type === 'mail-registration') {
             $this->applyMailRegistrationResult($stepRun->workflowRun, $result);
 
@@ -1054,6 +1062,49 @@ class WorkflowExecutionService
         }
 
         return $result;
+    }
+
+    protected function applyWorkflowVariablesResult(WorkflowRun $run, array $result): void
+    {
+        $variables = array_filter([
+            ...(is_array($result['workflow_variables'] ?? null) ? $result['workflow_variables'] : []),
+            ...(is_array($result['workflowVariables'] ?? null) ? $result['workflowVariables'] : []),
+        ], fn (mixed $value): bool => $value !== null);
+
+        if (array_key_exists('workflow_return', $result) || array_key_exists('workflowReturn', $result)) {
+            $variables['workflow_return'] = array_key_exists('workflow_return', $result)
+                ? $result['workflow_return']
+                : $result['workflowReturn'];
+        }
+
+        if (array_key_exists('workflow_return_ok', $result)) {
+            $variables['workflow_return_ok'] = (bool) $result['workflow_return_ok'];
+        }
+
+        if ($variables === []) {
+            return;
+        }
+
+        $context = is_array($run->context_json) ? $run->context_json : [];
+        $context['workflow_variables'] = array_replace(
+            is_array($context['workflow_variables'] ?? null) ? $context['workflow_variables'] : [],
+            $variables,
+        );
+        $context['workflowVariables'] = array_replace(
+            is_array($context['workflowVariables'] ?? null) ? $context['workflowVariables'] : [],
+            $variables,
+        );
+
+        if (array_key_exists('workflow_return', $variables)) {
+            $context['workflow_return'] = $variables['workflow_return'];
+            $context['workflowReturn'] = $variables['workflow_return'];
+        }
+
+        if (array_key_exists('workflow_return_ok', $variables)) {
+            $context['workflow_return_ok'] = (bool) $variables['workflow_return_ok'];
+        }
+
+        $run->forceFill(['context_json' => $context])->save();
     }
 
     protected function cancelExternalRun(WorkflowStepRun $stepRun, string $message): void

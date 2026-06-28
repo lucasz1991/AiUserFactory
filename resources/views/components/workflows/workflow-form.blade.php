@@ -1,6 +1,7 @@
 @props([
     'nameModel',
     'groupModel',
+    'subcategoryModel' => null,
     'descriptionModel',
     'activeModel' => null,
     'lockModel' => null,
@@ -10,7 +11,7 @@
 ])
 
 <div class="space-y-4">
-    <div class="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(180px,240px)]">
+    <div class="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(180px,240px)_minmax(180px,240px)]">
         <div>
             <label for="{{ $nameModel }}" class="block text-sm font-medium text-gray-700">Name</label>
             <input id="{{ $nameModel }}" type="text" wire:model.defer="{{ $nameModel }}" @disabled($disabled) class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 disabled:cursor-not-allowed disabled:bg-slate-100">
@@ -22,6 +23,14 @@
             <input id="{{ $groupModel }}" type="text" wire:model.defer="{{ $groupModel }}" @disabled($disabled) placeholder="custom, mail, browser" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 disabled:cursor-not-allowed disabled:bg-slate-100">
             @error($groupModel) <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
         </div>
+
+        @if($subcategoryModel)
+            <div>
+                <label for="{{ $subcategoryModel }}" class="block text-sm font-medium text-gray-700">Unterkategorie</label>
+                <input id="{{ $subcategoryModel }}" type="text" wire:model.defer="{{ $subcategoryModel }}" @disabled($disabled) placeholder="gmx, login, mailbox" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 disabled:cursor-not-allowed disabled:bg-slate-100">
+                @error($subcategoryModel) <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+            </div>
+        @endif
     </div>
 
     <div>

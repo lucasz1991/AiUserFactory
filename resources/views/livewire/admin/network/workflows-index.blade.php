@@ -41,18 +41,33 @@
     <x-admin.panel title="Workflow-Gruppen">
         <div class="border-b border-slate-200">
             <nav class="-mb-px flex gap-4 overflow-x-auto" aria-label="Workflow Gruppen">
-                <button type="button" wire:click="$set('activeGroup', 'all')" class="whitespace-nowrap border-b-2 px-1 py-3 text-sm font-semibold {{ $activeGroup === 'all' ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700' }}">
+                <button type="button" wire:click="selectWorkflowGroup('all')" class="whitespace-nowrap border-b-2 px-1 py-3 text-sm font-semibold {{ $activeGroup === 'all' ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700' }}">
                     Alle
                     <span class="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{{ $workflows->count() }}</span>
                 </button>
                 @foreach($groups as $group)
-                    <button type="button" wire:click="$set('activeGroup', @js($group))" class="whitespace-nowrap border-b-2 px-1 py-3 text-sm font-semibold {{ $activeGroup === $group ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700' }}">
+                    <button type="button" wire:click="selectWorkflowGroup(@js($group))" class="whitespace-nowrap border-b-2 px-1 py-3 text-sm font-semibold {{ $activeGroup === $group ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700' }}">
                         {{ $groupLabels[$group] ?? $group }}
                         <span class="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{{ $workflows->where('category', $group)->count() }}</span>
                     </button>
                 @endforeach
             </nav>
         </div>
+
+        @if($subcategories->isNotEmpty())
+            <div class="flex flex-wrap gap-2 border-b border-slate-100 py-3">
+                <button type="button" wire:click="$set('activeSubcategory', 'all')" class="rounded-md px-2.5 py-1.5 text-xs font-semibold ring-1 {{ $activeSubcategory === 'all' ? 'bg-slate-900 text-white ring-slate-900' : 'bg-white text-slate-600 ring-slate-200 hover:bg-slate-50' }}">
+                    Alle Unterkategorien
+                    <span class="ml-1 opacity-75">{{ $groupWorkflows->count() }}</span>
+                </button>
+                @foreach($subcategories as $subcategory)
+                    <button type="button" wire:click="$set('activeSubcategory', @js($subcategory))" class="rounded-md px-2.5 py-1.5 text-xs font-semibold ring-1 {{ $activeSubcategory === $subcategory ? 'bg-blue-600 text-white ring-blue-600' : 'bg-white text-slate-600 ring-slate-200 hover:bg-slate-50' }}">
+                        {{ $groupLabels[$subcategory] ?? str($subcategory)->replace(['_', '-'], ' ')->title() }}
+                        <span class="ml-1 opacity-75">{{ $groupWorkflows->where('subcategory', $subcategory)->count() }}</span>
+                    </button>
+                @endforeach
+            </div>
+        @endif
 
         <div class="overflow-visible">
             <table class="w-full table-fixed divide-y divide-slate-200">
@@ -90,6 +105,11 @@
                                 <span class="inline-flex max-w-full truncate rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">
                                     {{ $groupLabels[$workflow->category] ?? $workflow->category }}
                                 </span>
+                                @if(trim((string) $workflow->subcategory) !== '')
+                                    <span class="mt-1 inline-flex max-w-full truncate rounded-full bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-700 ring-1 ring-blue-200">
+                                        {{ $groupLabels[$workflow->subcategory] ?? str($workflow->subcategory)->replace(['_', '-'], ' ')->title() }}
+                                    </span>
+                                @endif
                             </td>
                             <td class="px-3 py-3">
                                 <div class="flex flex-wrap gap-1.5">
@@ -125,6 +145,7 @@
             <x-workflows.workflow-form
                 name-model="newWorkflowName"
                 group-model="newWorkflowGroup"
+                subcategory-model="newWorkflowSubcategory"
                 description-model="newWorkflowDescription"
             />
         </x-slot>
@@ -140,6 +161,7 @@
             <x-workflows.workflow-form
                 name-model="editingWorkflowName"
                 group-model="editingWorkflowGroup"
+                subcategory-model="editingWorkflowSubcategory"
                 description-model="editingWorkflowDescription"
                 active-model="editingWorkflowActive"
                 lock-model="editingWorkflowLocked"

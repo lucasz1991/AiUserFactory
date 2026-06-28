@@ -361,6 +361,9 @@ function resolveString(value, context = {}) {
     'new_mail_address',
     'verification_code',
     'verificationCode',
+    'workflow_return',
+    'workflowReturn',
+    'workflow_return_ok',
   ];
 
   if ((!normalized.includes('.') && !directRuntimeKeys.includes(normalized)) || normalized.includes('://')) {
@@ -432,6 +435,9 @@ function resolveString(value, context = {}) {
     new_mail_address: account?.email || context.lastResult?.account?.email || '',
     verification_code: context.verification_code || context.verificationCode || context.lastResult?.verification_code || context.lastResult?.verificationCode || '',
     verificationCode: context.verificationCode || context.verification_code || context.lastResult?.verificationCode || context.lastResult?.verification_code || '',
+    workflow_return: context.workflow_return ?? context.workflowReturn ?? context.lastResult?.workflow_return ?? context.lastResult?.workflowReturn ?? '',
+    workflowReturn: context.workflowReturn ?? context.workflow_return ?? context.lastResult?.workflowReturn ?? context.lastResult?.workflow_return ?? '',
+    workflow_return_ok: context.workflow_return_ok ?? context.lastResult?.workflow_return_ok ?? '',
   };
   const resolved = valueFromPath(lookupRoot, normalized);
 
@@ -1427,6 +1433,45 @@ async function run() {
       result = cleanForJson(result || {});
       context.lastResult = result;
 
+      const resultWorkflowVariables = {
+        ...(result.workflow_variables && typeof result.workflow_variables === 'object' ? result.workflow_variables : {}),
+        ...(result.workflowVariables && typeof result.workflowVariables === 'object' ? result.workflowVariables : {}),
+      };
+
+      if (Object.keys(resultWorkflowVariables).length > 0) {
+        context.workflow_variables = {
+          ...(context.workflow_variables || {}),
+          ...resultWorkflowVariables,
+        };
+        context.workflowVariables = {
+          ...(context.workflowVariables || {}),
+          ...resultWorkflowVariables,
+        };
+      }
+
+      if (Object.prototype.hasOwnProperty.call(result, 'workflow_return') || Object.prototype.hasOwnProperty.call(result, 'workflowReturn')) {
+        const workflowReturn = Object.prototype.hasOwnProperty.call(result, 'workflow_return')
+          ? result.workflow_return
+          : result.workflowReturn;
+        const workflowReturnOk = Object.prototype.hasOwnProperty.call(result, 'workflow_return_ok')
+          ? result.workflow_return_ok
+          : workflowReturn !== false;
+
+        context.workflow_return = workflowReturn;
+        context.workflowReturn = workflowReturn;
+        context.workflow_return_ok = workflowReturnOk;
+        context.workflow_variables = {
+          ...(context.workflow_variables || {}),
+          workflow_return: workflowReturn,
+          workflow_return_ok: workflowReturnOk,
+        };
+        context.workflowVariables = {
+          ...(context.workflowVariables || {}),
+          workflow_return: workflowReturn,
+          workflow_return_ok: workflowReturnOk,
+        };
+      }
+
       const generatedPassword = result.generated_password
         || result['generated-password']
         || result.new_password
@@ -1511,6 +1556,9 @@ async function run() {
         'generated-password': context.generated_password || context.new_password || context.account?.password || null,
         verification_code: context.verification_code || context.verificationCode || null,
         verificationCode: context.verificationCode || context.verification_code || null,
+        workflow_return: context.workflow_return ?? context.workflowReturn ?? null,
+        workflowReturn: context.workflowReturn ?? context.workflow_return ?? null,
+        workflow_return_ok: context.workflow_return_ok ?? null,
         workflow_variables: context.workflow_variables || null,
         workflowVariables: context.workflowVariables || null,
         tasks: taskResults,
@@ -1567,6 +1615,9 @@ async function run() {
     'generated-password': context.generated_password || context.new_password || context.account?.password || null,
     verification_code: context.verification_code || context.verificationCode || null,
     verificationCode: context.verificationCode || context.verification_code || null,
+    workflow_return: context.workflow_return ?? context.workflowReturn ?? null,
+    workflowReturn: context.workflowReturn ?? context.workflow_return ?? null,
+    workflow_return_ok: context.workflow_return_ok ?? null,
     workflow_variables: context.workflow_variables || null,
     workflowVariables: context.workflowVariables || null,
     tasks: taskResults,

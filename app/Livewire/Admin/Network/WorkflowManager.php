@@ -24,6 +24,8 @@ class WorkflowManager extends Component
 
     public string $workflowGroup = 'custom';
 
+    public string $workflowSubcategory = '';
+
     public bool $workflowActive = true;
 
     public bool $workflowLocked = false;
@@ -220,6 +222,7 @@ class WorkflowManager extends Component
             'workflowName' => ['required', 'string', 'max:160'],
             'workflowDescription' => ['nullable', 'string', 'max:1000'],
             'workflowGroup' => ['required', 'string', 'max:80'],
+            'workflowSubcategory' => ['nullable', 'string', 'max:80'],
             'workflowActive' => ['boolean'],
             'workflowLocked' => ['boolean'],
         ]);
@@ -228,6 +231,7 @@ class WorkflowManager extends Component
             'name' => trim($validated['workflowName']),
             'description' => trim((string) ($validated['workflowDescription'] ?? '')),
             'category' => $this->normalizeGroup($validated['workflowGroup']),
+            'subcategory' => $this->normalizeSubcategory($validated['workflowSubcategory'] ?? ''),
             'is_active' => (bool) $validated['workflowActive'],
             'is_locked' => (bool) $validated['workflowLocked'],
         ])->save();
@@ -1049,6 +1053,7 @@ class WorkflowManager extends Component
         $this->workflowName = (string) ($workflow?->name ?? '');
         $this->workflowDescription = (string) ($workflow?->description ?? '');
         $this->workflowGroup = trim((string) ($workflow?->category ?? 'custom')) ?: 'custom';
+        $this->workflowSubcategory = trim((string) ($workflow?->subcategory ?? ''));
         $this->workflowActive = (bool) ($workflow?->is_active ?? true);
         $this->workflowLocked = (bool) ($workflow?->is_locked ?? false);
     }
@@ -1058,6 +1063,13 @@ class WorkflowManager extends Component
         $group = Str::slug($group, '_');
 
         return $group !== '' ? $group : 'custom';
+    }
+
+    protected function normalizeSubcategory(string $subcategory): ?string
+    {
+        $subcategory = Str::slug($subcategory, '_');
+
+        return $subcategory !== '' ? $subcategory : null;
     }
 
     protected function defaultStepName(string $type): string
@@ -1317,6 +1329,8 @@ class WorkflowManager extends Component
         return Workflow::query()
             ->whereKeyNot($selectedWorkflow->id)
             ->where('is_active', true)
+            ->orderBy('category')
+            ->orderBy('subcategory')
             ->orderBy('name')
             ->get()
             ->reject(fn (Workflow $workflow): bool => $workflow->includesWorkflow($selectedWorkflow->id))
@@ -1415,7 +1429,7 @@ class WorkflowManager extends Component
             $valid = false;
         }
 
-        if (($formConfig['selector'] ?? false) && trim((string) $this->{$selectorProperty}) === '') {
+        if (($formConfig['selector'] ?? false) && ($formConfig['selector_required'] ?? true) && trim((string) $this->{$selectorProperty}) === '') {
             $this->addError($selectorProperty, 'Bitte einen Selector angeben.');
             $valid = false;
         }

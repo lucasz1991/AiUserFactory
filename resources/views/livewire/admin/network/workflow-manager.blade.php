@@ -422,6 +422,7 @@
                 <x-workflows.workflow-form
                     name-model="workflowName"
                     group-model="workflowGroup"
+                    subcategory-model="workflowSubcategory"
                     description-model="workflowDescription"
                     active-model="workflowActive"
                     lock-model="workflowLocked"

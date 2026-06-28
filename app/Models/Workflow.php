@@ -16,6 +16,7 @@ class Workflow extends Model
         'slug',
         'description',
         'category',
+        'subcategory',
         'is_active',
         'is_locked',
         'trigger_type',
