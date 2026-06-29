@@ -331,8 +331,10 @@ class WorkflowTaskRunner
         string $keyPrefix = '',
         ?string $inheritedMailboxSource = null,
         ?string $embeddedWorkflowFrameKey = null,
+        ?string $embeddedBrowserWindowName = null,
     ): array {
         $expanded = [];
+        $embeddedBrowserWindowName = $this->normalizeBrowserWindowName($embeddedBrowserWindowName);
 
         foreach ($tasks as $task) {
             if (! is_array($task)) {
@@ -342,10 +344,17 @@ class WorkflowTaskRunner
             if ((string) ($task['runner'] ?? '') !== 'workflow') {
                 $runtimeTask = $this->normalizeRuntimeTask($task);
                 $mailboxSource = $this->normalizeMailboxSource($inheritedMailboxSource);
+                $browserWindow = $this->mappedEmbeddedBrowserWindowName($embeddedBrowserWindowName, $runtimeTask);
 
                 if ($mailboxSource !== null) {
                     $runtimeTask['mailbox_source'] = $mailboxSource;
                     $runtimeTask['script_person_source'] = $mailboxSource;
+                }
+
+                if ($browserWindow !== null) {
+                    $runtimeTask['browser_window'] = $browserWindow;
+                    $runtimeTask['browser_window_name'] = $browserWindow;
+                    $runtimeTask['embedded_workflow_browser_window'] = $embeddedBrowserWindowName;
                 }
 
                 if ($keyPrefix !== '') {
@@ -371,6 +380,13 @@ class WorkflowTaskRunner
             $rootTaskKey = $parentTaskKey ?? $taskKey;
             $workflowMailboxSource = $inheritedMailboxSource
                 ?? $this->normalizeMailboxSource($task['script_person_source'] ?? $task['mailbox_source'] ?? null);
+            $workflowBrowserWindow = $this->mappedEmbeddedBrowserWindowName(
+                $embeddedBrowserWindowName,
+                [
+                    'browser_window_name' => $task['browser_window_name'] ?? null,
+                    'browser_window' => $task['browser_window'] ?? null,
+                ],
+            ) ?? $embeddedBrowserWindowName;
 
             if ($workflowId <= 0) {
                 throw new \RuntimeException('Die Workflow-Task "'.$taskKey.'" hat keine gueltige Workflow-Referenz.');
@@ -425,6 +441,7 @@ class WorkflowTaskRunner
                     $nestedPrefix,
                     $workflowMailboxSource,
                     $workflowFrameKey,
+                    $workflowBrowserWindow,
                 );
 
                 foreach ($nestedExpanded as $nestedTask) {
@@ -444,6 +461,11 @@ class WorkflowTaskRunner
                     $waitTask['embedded_workflow_id'] = $workflow->id;
                     $waitTask['embedded_workflow_name'] = $workflow->name;
                     $waitTask['embedded_workflow_frame_key'] = $workflowFrameKey;
+                    if ($workflowBrowserWindow !== null) {
+                        $waitTask['browser_window'] = $workflowBrowserWindow;
+                        $waitTask['browser_window_name'] = $workflowBrowserWindow;
+                        $waitTask['embedded_workflow_browser_window'] = $workflowBrowserWindow;
+                    }
                     if ($workflowMailboxSource !== null) {
                         $waitTask['mailbox_source'] = $workflowMailboxSource;
                         $waitTask['script_person_source'] = $workflowMailboxSource;
@@ -464,6 +486,7 @@ class WorkflowTaskRunner
                 'embedded_workflow_id' => $workflow->id,
                 'embedded_workflow_name' => $workflow->name,
                 'embedded_workflow_frame_key' => $workflowFrameKey,
+                'embedded_workflow_browser_window' => $workflowBrowserWindow,
             ];
 
             foreach (['next', 'on_error'] as $routeKey) {
@@ -476,6 +499,47 @@ class WorkflowTaskRunner
         }
 
         return $expanded;
+    }
+
+    protected function mappedEmbeddedBrowserWindowName(?string $embeddedBrowserWindowName, array $task): ?string
+    {
+        $embeddedBrowserWindowName = $this->normalizeBrowserWindowName($embeddedBrowserWindowName);
+        $taskBrowserWindow = $this->normalizeBrowserWindowName(
+            $task['browser_window_name']
+            ?? $task['browser_window']
+            ?? $task['browserWindowName']
+            ?? $task['browserWindow']
+            ?? null,
+        );
+
+        if ($embeddedBrowserWindowName === null) {
+            return $taskBrowserWindow;
+        }
+
+        if ($taskBrowserWindow === null || $taskBrowserWindow === 'main') {
+            return $embeddedBrowserWindowName;
+        }
+
+        if ($taskBrowserWindow === $embeddedBrowserWindowName || str_starts_with($taskBrowserWindow, $embeddedBrowserWindowName.'-')) {
+            return $taskBrowserWindow;
+        }
+
+        return $this->normalizeBrowserWindowName($embeddedBrowserWindowName.'-'.$taskBrowserWindow);
+    }
+
+    protected function normalizeBrowserWindowName(mixed $value): ?string
+    {
+        $name = trim((string) $value);
+
+        if ($name === '') {
+            return null;
+        }
+
+        $name = preg_replace('/\s+/', '-', $name) ?? '';
+        $name = preg_replace('/[^A-Za-z0-9._-]+/', '', $name) ?? '';
+        $name = strtolower(substr($name, 0, 80));
+
+        return $name !== '' ? $name : null;
     }
 
     protected function normalizeMailboxSource(mixed $value): ?string

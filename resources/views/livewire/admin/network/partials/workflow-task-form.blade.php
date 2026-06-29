@@ -6,6 +6,7 @@
     $usesBrowserWindow = in_array($selectedDefinition['kind'] ?? '', ['browser', 'input', 'wait'], true) && $catalogKey !== 'wait.seconds';
     $form = array_replace([
         'browser_window' => $usesBrowserWindow,
+        'browser_window_create' => false,
         'browser_window_label' => $catalogKey === 'browser.open' ? 'Fenstername' : 'Browserfenster',
         'browser_window_placeholder' => $catalogKey === 'browser.open' ? 'main, registrierung, webmail' : 'Fenster auswaehlen',
         'selector' => false,
@@ -119,7 +120,7 @@
         @if($form['browser_window'])
             <div class="{{ $isEdit ? '' : 'md:col-span-2' }}">
                 <label class="block text-sm font-medium text-gray-700">{{ $form['browser_window_label'] }}</label>
-                @if($catalogKey === 'browser.open')
+                @if($catalogKey === 'browser.open' || ($form['browser_window_create'] ?? false))
                     <input
                         type="text"
                         list="{{ $browserWindowDatalistId }}"

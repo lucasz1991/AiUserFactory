@@ -376,6 +376,49 @@ class WorkflowCompositionTest extends TestCase
         $this->assertSame(2, $failedRoute['max_attempts']);
     }
 
+    public function test_embedded_workflow_browser_windows_are_mapped_to_parent_identifier(): void
+    {
+        $parent = $this->workflow('parent-browser');
+        $child = $this->workflow('child-browser');
+        $this->step($child, 'Child browser list', [
+            [
+                'key' => 'open-main',
+                'task_key' => 'browser.open',
+                'title' => 'Open main',
+                'kind' => 'browser',
+                'runner' => 'node',
+                'node_script' => 'node/workflows/tasks/browser/open.cjs',
+                'browser_window' => 'main',
+                'browser_window_name' => 'main',
+            ],
+            [
+                'key' => 'open-popup',
+                'task_key' => 'browser.open_url',
+                'title' => 'Open popup',
+                'kind' => 'browser',
+                'runner' => 'node',
+                'node_script' => 'node/workflows/tasks/browser/open_url.cjs',
+                'browser_window' => 'popup',
+                'browser_window_name' => 'popup',
+                'url' => 'https://example.test',
+            ],
+        ]);
+
+        $workflowTask = $this->workflowTask($child, 'child-workflow');
+        $workflowTask['browser_window'] = 'child-session';
+        $workflowTask['browser_window_name'] = 'child-session';
+        $parentStep = $this->step($parent, 'Parent list', [$workflowTask]);
+
+        $tasks = $this->runtimeTasks($parentStep);
+        $openMain = collect($tasks)->firstWhere('task_key', 'browser.open');
+        $openPopup = collect($tasks)->firstWhere('task_key', 'browser.open_url');
+        $boundary = collect($tasks)->firstWhere('runner', 'workflow-boundary');
+
+        $this->assertSame('child-session', $openMain['browser_window_name']);
+        $this->assertSame('child-session-popup', $openPopup['browser_window_name']);
+        $this->assertSame('child-session', $boundary['embedded_workflow_browser_window']);
+    }
+
     protected function workflow(string $slug): Workflow
     {
         return Workflow::query()->create([

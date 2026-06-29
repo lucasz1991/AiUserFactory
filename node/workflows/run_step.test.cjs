@@ -37,7 +37,7 @@ function branchTask(key, onError) {
   };
 }
 
-function executeEmbeddedWorkflow(workflowReturn) {
+function executeEmbeddedWorkflow(workflowReturn, workflow = {}) {
   return executeTasks([
     returnTask('embedded-return', workflowReturn, 'embedded-frame'),
     {
@@ -57,10 +57,10 @@ function executeEmbeddedWorkflow(workflowReturn) {
     },
     returnTask('must-be-skipped', true),
     returnTask('success-target', true),
-  ]);
+  ], workflow);
 }
 
-function executeTasks(tasks) {
+function executeTasks(tasks, workflow = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workflow-boundary-'));
   const runtimePath = path.join(directory, 'runtime.json');
   const resultPath = path.join(directory, 'result.json');
@@ -70,6 +70,7 @@ function executeTasks(tasks) {
     statusPath,
     runDirectory: directory,
     livePreviewEnabled: false,
+    workflow,
     tasks,
   };
 
@@ -99,6 +100,21 @@ test('embedded workflow true return follows the workflow task success route', ()
     'embedded-boundary',
     'success-target',
   ]);
+});
+
+test('embedded workflow boundary preserves browser windows for parent workflow', () => {
+  const browserWindows = [
+    {
+      key: 'child-session',
+      label: 'Child session',
+      url: 'https://example.test',
+    },
+  ];
+  const result = executeEmbeddedWorkflow(true, { browserWindows });
+  const boundary = result.tasks.find((task) => task.runner === 'workflow-boundary');
+
+  assert.deepEqual(boundary.browserWindows, browserWindows);
+  assert.deepEqual(result.browserWindows, browserWindows);
 });
 
 test('embedded workflow false return fails at the workflow boundary', () => {

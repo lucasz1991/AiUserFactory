@@ -728,7 +728,8 @@ class WorkflowManager extends Component
             $task['input'] ?? null,
         ])->first(fn (mixed $value): bool => $value !== null && trim((string) $value) !== '') ?? '');
         $this->editingTaskMailboxSource = $this->normalizeMailboxSource((string) ($task['script_person_source'] ?? $task['mailbox_source'] ?? 'person'));
-        $this->editingTaskBrowserWindow = $this->normalizeBrowserWindowName((string) ($task['browser_window_name'] ?? $task['browser_window'] ?? 'main'));
+        $existingBrowserWindow = trim((string) ($task['browser_window_name'] ?? $task['browser_window'] ?? ''));
+        $this->editingTaskBrowserWindow = $this->normalizeBrowserWindowName($existingBrowserWindow ?: $this->defaultBrowserWindowNameForTask($this->editingTaskCatalogKey));
         $this->editingTaskSuccessPayload = $this->payloadToString($task['success_payload'] ?? null);
         $this->editingTaskFailurePayload = $this->payloadToString($task['failure_payload'] ?? null);
         $this->editingTaskTimeoutSeconds = max(0, (int) ($task['timeout_seconds'] ?? 0));
@@ -1499,6 +1500,10 @@ class WorkflowManager extends Component
             'timeout_seconds' => 3600,
             'description' => $workflow->description ?: 'Fuehrt den gesamten referenzierten Workflow aus, wartet auf dessen Ergebnis und nutzt danach die Erfolgs- oder Fehlerweiterleitung.',
             'form' => [
+                'browser_window' => true,
+                'browser_window_create' => true,
+                'browser_window_label' => 'Browserfenster nach Einbettung',
+                'browser_window_placeholder' => 'registrierung, webmail, child-flow',
                 'mailbox_source' => true,
                 'mailbox_source_label' => 'Script-Bezugsperson',
                 'mailbox_source_options' => [
@@ -1594,6 +1599,13 @@ class WorkflowManager extends Component
     {
         if ($taskKey === 'browser.open') {
             return $this->nextBrowserWindowName();
+        }
+
+        if (preg_match('/^workflow\.include\.(\d+)$/', $taskKey, $matches)) {
+            $workflow = Workflow::query()->find((int) $matches[1]);
+            $base = trim((string) ($workflow?->slug ?: $workflow?->name ?: 'workflow'));
+
+            return $this->normalizeBrowserWindowName('workflow-'.$base);
         }
 
         return $this->lastActiveBrowserWindowName() ?: 'main';

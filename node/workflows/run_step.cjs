@@ -1358,6 +1358,9 @@ async function run() {
           workflow_return_ok: workflowResult.ok,
           embeddedWorkflowCompleted: true,
           embeddedWorkflowReturnExplicit: workflowResult.explicit,
+          embeddedWorkflowBrowserWindow: task.embedded_workflow_browser_window || null,
+          browserWindows: lastBrowserWindows,
+          browserWsEndpoint: browserWsEndpoint(),
         };
       } else if (task.runner === 'php') {
         result = await runDataTask(task, context);
