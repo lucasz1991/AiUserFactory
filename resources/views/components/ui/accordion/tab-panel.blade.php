@@ -9,16 +9,19 @@
     $panelFor = (string) $for;
     $activeTab = (string) ($active ?? '');
     $groupKey = (string) ($group ?? '');
+    $isInitiallyActive = $activeTab === '' || $activeTab === $panelFor;
 @endphp
 
 <div
     x-data="{ localOpenTab: @js($activeTab) }"
-    x-init="if (typeof openTab !== 'undefined' && openTab !== null) { localOpenTab = openTab; $watch('openTab', value => localOpenTab = value); }"
+    x-init="$nextTick(() => { if (typeof openTab !== 'undefined' && openTab !== null) { localOpenTab = openTab; $watch('openTab', value => localOpenTab = value); } })"
     x-show="localOpenTab === @js($panelFor)"
+    x-collapse
     x-on:ui-tab-selected.window="if (@js($groupKey) === '' || $event.detail.group === @js($groupKey)) localOpenTab = $event.detail.tab"
     x-cloak
     role="tabpanel"
     :aria-hidden="(localOpenTab !== @js($panelFor)).toString()"
+    @unless($isInitiallyActive) style="display: none;" @endunless
     class="{{ $panelClass }}"
 >
     {{ $slot }}
