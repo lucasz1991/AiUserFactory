@@ -77,12 +77,29 @@
     $extraFieldGroups = collect(is_array($form['extra_fields'] ?? null) ? $form['extra_fields'] : [])
         ->filter(fn ($field) => is_array($field) && trim((string) ($field['name'] ?? '')) !== '')
         ->groupBy(fn ($field) => trim((string) ($field['tab'] ?? 'Einstellungen')) ?: 'Einstellungen');
-    $extraFieldTabs = $extraFieldGroups->keys()->values();
-    $defaultExtraTab = (string) ($extraFieldTabs->first() ?? '');
+    $extraFieldTabIds = [];
+    $extraFieldTabOptions = [];
+
+    foreach ($extraFieldGroups->keys()->values() as $index => $tabLabel) {
+        $tabLabel = (string) $tabLabel;
+        $baseTabId = \Illuminate\Support\Str::slug($tabLabel) ?: 'tab-'.$index;
+        $tabId = $baseTabId;
+        $suffix = 2;
+
+        while (in_array($tabId, $extraFieldTabIds, true)) {
+            $tabId = $baseTabId.'-'.$suffix;
+            $suffix++;
+        }
+
+        $extraFieldTabIds[$tabLabel] = $tabId;
+        $extraFieldTabOptions[$tabId] = $tabLabel;
+    }
+
+    $defaultExtraTab = (string) (array_key_first($extraFieldTabOptions) ?? '');
     $browserWindowDatalistId = 'workflow-'.$prefix.'-browser-windows';
 @endphp
 
-<div class="space-y-4" x-data="{ failedTarget: @entangle($prefix.'FailedTarget').live, extraTab: @js($defaultExtraTab) }">
+<div class="space-y-4" x-data="{ failedTarget: @entangle($prefix.'FailedTarget').live }">
     <div class="grid gap-4 md:grid-cols-2">
         @if(! $isEdit)
             <div>
@@ -182,26 +199,16 @@
     @endif
 
     @if($extraFieldGroups->isNotEmpty())
-        <div class="space-y-4">
-            @if($extraFieldTabs->count() > 1)
-                <div class="flex flex-wrap gap-2 rounded-lg bg-slate-100 p-1">
-                    @foreach($extraFieldTabs as $tabLabel)
-                        <button
-                            type="button"
-                            x-on:click="extraTab = @js($tabLabel)"
-                            class="rounded-md px-3 py-1.5 text-sm font-semibold transition"
-                            x-bind:class="extraTab === @js($tabLabel) ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:bg-white/70 hover:text-slate-900'"
-                        >
-                            {{ $tabLabel }}
-                        </button>
-                    @endforeach
-                </div>
-            @endif
-
+        <x-ui.accordion.tabs
+            :tabs="$extraFieldTabOptions"
+            :default="$defaultExtraTab"
+            :persist="false"
+            collapse-at="md"
+        >
             @foreach($extraFieldGroups as $tabLabel => $fields)
-                <div
-                    class="grid gap-4 md:grid-cols-2"
-                    @if($extraFieldTabs->count() > 1) x-show="extraTab === @js($tabLabel)" x-cloak @endif
+                <x-ui.accordion.tab-panel
+                    :for="$extraFieldTabIds[(string) $tabLabel] ?? ''"
+                    panel-class="grid gap-4 rounded-b-lg border border-slate-200 bg-white p-4 md:grid-cols-2"
                 >
                     @foreach($fields as $field)
                         @php
@@ -236,9 +243,9 @@
                             </div>
                         @endif
                     @endforeach
-                </div>
+                </x-ui.accordion.tab-panel>
             @endforeach
-        </div>
+        </x-ui.accordion.tabs>
     @endif
 
     @if($form['mailbox_source'])
