@@ -26,7 +26,11 @@
             'verification' => 'Haupt-Verifikationskonto',
         ],
         'success_payload' => false,
+        'success_payload_label' => 'Daten bei Erfolg',
+        'success_payload_placeholder' => '{"email":"person.email"} oder Textwert',
         'failure_payload' => false,
+        'failure_payload_label' => 'Daten bei Fehler',
+        'failure_payload_placeholder' => '{"reason":"element_not_found"} oder Textwert',
         'timeout' => false,
         'timeout_label' => 'Timeout in Sekunden',
         'timeout_help' => '',
@@ -187,15 +191,15 @@
         <div class="grid gap-4 {{ ($form['success_payload'] && $form['failure_payload']) ? 'md:grid-cols-2' : '' }}">
             @if($form['success_payload'])
                 <div>
-                    <label class="block text-sm font-medium text-gray-700">Daten bei Erfolg</label>
-                    <textarea rows="3" wire:model.defer="{{ $prefix }}SuccessPayload" placeholder='{"email":"person.email"} oder Textwert' class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"></textarea>
+                    <label class="block text-sm font-medium text-gray-700">{{ $form['success_payload_label'] }}</label>
+                    <textarea rows="3" wire:model.defer="{{ $prefix }}SuccessPayload" placeholder='{{ $form['success_payload_placeholder'] }}' class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"></textarea>
                     @error($prefix.'SuccessPayload') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
                 </div>
             @endif
             @if($form['failure_payload'])
                 <div>
-                    <label class="block text-sm font-medium text-gray-700">Daten bei Fehler</label>
-                    <textarea rows="3" wire:model.defer="{{ $prefix }}FailurePayload" placeholder='{"reason":"element_not_found"} oder Textwert' class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"></textarea>
+                    <label class="block text-sm font-medium text-gray-700">{{ $form['failure_payload_label'] }}</label>
+                    <textarea rows="3" wire:model.defer="{{ $prefix }}FailurePayload" placeholder='{{ $form['failure_payload_placeholder'] }}' class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"></textarea>
                     @error($prefix.'FailurePayload') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
                 </div>
             @endif
