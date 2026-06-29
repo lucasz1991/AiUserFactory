@@ -64,6 +64,8 @@ class WorkflowManager extends Component
 
     public string $newTaskFailurePayload = '';
 
+    public array $newTaskExtra = [];
+
     public int $newTaskTimeoutSeconds = 0;
 
     public string $newTaskSuccessTarget = '';
@@ -147,6 +149,8 @@ class WorkflowManager extends Component
     public string $editingTaskSuccessPayload = '';
 
     public string $editingTaskFailurePayload = '';
+
+    public array $editingTaskExtra = [];
 
     public int $editingTaskTimeoutSeconds = 0;
 
@@ -528,6 +532,7 @@ class WorkflowManager extends Component
         $this->newTaskBrowserWindow = 'main';
         $this->newTaskSuccessPayload = '';
         $this->newTaskFailurePayload = '';
+        $this->newTaskExtra = [];
         $this->newTaskSuccessTarget = '';
         $this->newTaskFailedTarget = 'fail';
         $this->newTaskFailedRetryLimit = 3;
@@ -582,6 +587,8 @@ class WorkflowManager extends Component
             'newTaskBrowserWindow' => ['nullable', 'string', 'max:80'],
             'newTaskSuccessPayload' => ['nullable', 'string', 'max:4000'],
             'newTaskFailurePayload' => ['nullable', 'string', 'max:4000'],
+            'newTaskExtra' => ['array'],
+            'newTaskExtra.*' => ['nullable', 'string', 'max:4000'],
             'newTaskTimeoutSeconds' => ['required', 'integer', 'min:0', 'max:3600'],
             'newTaskSuccessTarget' => ['nullable', 'string', 'max:180'],
             'newTaskFailedTarget' => ['nullable', 'string', 'max:180'],
@@ -649,6 +656,8 @@ class WorkflowManager extends Component
             $task['failure_payload'] = $failurePayload;
         }
 
+        $task = $this->applyTaskExtraFields($task, $formConfig, $this->newTaskExtra);
+
         $successRoute = $this->taskRouteTargetFromValue(
             (string) ($validated['newTaskSuccessTarget'] ?? ''),
             $step,
@@ -689,6 +698,7 @@ class WorkflowManager extends Component
         $this->newTaskBrowserWindow = 'main';
         $this->newTaskSuccessPayload = '';
         $this->newTaskFailurePayload = '';
+        $this->newTaskExtra = [];
         $this->newTaskTimeoutSeconds = 0;
         $this->newTaskSuccessTarget = '';
         $this->newTaskFailedTarget = 'fail';
@@ -737,6 +747,7 @@ class WorkflowManager extends Component
         $this->editingTaskFailedTarget = $this->routeValueFromTarget($task['on_error'] ?? null);
         $this->editingTaskFailedRetryLimit = max(0, (int) data_get($task, 'on_error.max_attempts', 0));
         $this->applyTaskDefinitionToForm('editingTask', $this->editingTaskCatalogKey, false);
+        $this->editingTaskExtra = $this->taskExtraFieldsFromTask($this->taskFormConfig($this->editingTaskCatalogKey), $task);
         $this->showEditTaskModal = true;
     }
 
@@ -760,6 +771,8 @@ class WorkflowManager extends Component
             'editingTaskBrowserWindow' => ['nullable', 'string', 'max:80'],
             'editingTaskSuccessPayload' => ['nullable', 'string', 'max:4000'],
             'editingTaskFailurePayload' => ['nullable', 'string', 'max:4000'],
+            'editingTaskExtra' => ['array'],
+            'editingTaskExtra.*' => ['nullable', 'string', 'max:4000'],
             'editingTaskTimeoutSeconds' => ['required', 'integer', 'min:0', 'max:3600'],
             'editingTaskSuccessTarget' => ['nullable', 'string', 'max:180'],
             'editingTaskFailedTarget' => ['nullable', 'string', 'max:180'],
@@ -867,7 +880,7 @@ class WorkflowManager extends Component
 
                 unset($task['on_partial']);
 
-                return $task;
+                return $this->applyTaskExtraFields($task, $formConfig, $this->editingTaskExtra);
             })
             ->values()
             ->toArray();
@@ -1329,6 +1342,7 @@ class WorkflowManager extends Component
         $browserWindowProperty = $prefix.'BrowserWindow';
         $successPayloadProperty = $prefix.'SuccessPayload';
         $failurePayloadProperty = $prefix.'FailurePayload';
+        $extraProperty = $prefix.'Extra';
         $formConfig = $this->taskFormConfig($taskKey);
 
         if ($replaceTitle || trim((string) $this->{$titleProperty}) === '') {
@@ -1369,6 +1383,8 @@ class WorkflowManager extends Component
         if (! ($formConfig['failure_payload'] ?? false)) {
             $this->{$failurePayloadProperty} = '';
         }
+
+        $this->{$extraProperty} = $this->taskExtraFieldDefaults($formConfig);
     }
 
     protected function taskFormConfig(string $taskKey): array
@@ -1399,8 +1415,87 @@ class WorkflowManager extends Component
                 'verification' => 'Haupt-Verifikationskonto',
             ],
             'success_payload' => false,
+            'success_payload_label' => 'Daten bei Erfolg',
+            'success_payload_placeholder' => '{"email":"person.email"} oder Textwert',
             'failure_payload' => false,
+            'failure_payload_label' => 'Daten bei Fehler',
+            'failure_payload_placeholder' => '{"reason":"element_not_found"} oder Textwert',
+            'extra_fields' => [],
         ], $form);
+    }
+
+    protected function taskExtraFields(array $formConfig): array
+    {
+        return collect(is_array($formConfig['extra_fields'] ?? null) ? $formConfig['extra_fields'] : [])
+            ->filter(fn (mixed $field): bool => is_array($field) && trim((string) ($field['name'] ?? '')) !== '')
+            ->map(function (array $field): array {
+                $field['name'] = preg_replace('/[^A-Za-z0-9_.-]+/', '', (string) ($field['name'] ?? '')) ?: '';
+
+                return $field;
+            })
+            ->filter(fn (array $field): bool => $field['name'] !== '')
+            ->values()
+            ->all();
+    }
+
+    protected function taskExtraFieldDefaults(array $formConfig): array
+    {
+        return collect($this->taskExtraFields($formConfig))
+            ->mapWithKeys(fn (array $field): array => [
+                $field['name'] => (string) ($field['default'] ?? ''),
+            ])
+            ->all();
+    }
+
+    protected function taskExtraFieldsFromTask(array $formConfig, array $task): array
+    {
+        return collect($this->taskExtraFields($formConfig))
+            ->mapWithKeys(function (array $field) use ($task): array {
+                $name = $field['name'];
+                $value = data_get($task, $name, $field['default'] ?? '');
+
+                if (is_array($value) || is_object($value)) {
+                    $value = json_encode($value, JSON_UNESCAPED_SLASHES);
+                }
+
+                return [$name => (string) $value];
+            })
+            ->all();
+    }
+
+    protected function applyTaskExtraFields(array $task, array $formConfig, array $values): array
+    {
+        foreach ($this->knownTaskExtraFieldNames() as $knownName) {
+            unset($task[$knownName]);
+        }
+
+        foreach ($this->taskExtraFields($formConfig) as $field) {
+            $name = $field['name'];
+            $value = trim((string) ($values[$name] ?? ''));
+
+            if ($value === '') {
+                unset($task[$name]);
+
+                continue;
+            }
+
+            $task[$name] = $value;
+        }
+
+        return $task;
+    }
+
+    protected function knownTaskExtraFieldNames(): array
+    {
+        return collect(app(WorkflowTaskCatalog::class)->all())
+            ->flatMap(fn (array $definition): array => is_array(data_get($definition, 'form.extra_fields'))
+                ? data_get($definition, 'form.extra_fields')
+                : [])
+            ->map(fn (array $field): string => preg_replace('/[^A-Za-z0-9_.-]+/', '', (string) ($field['name'] ?? '')) ?: '')
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
     }
 
     protected function taskGroupLabels(): array
@@ -1548,6 +1643,7 @@ class WorkflowManager extends Component
         $valueProperty = $prefix.'InputValue';
         $mailboxSourceProperty = $prefix.'MailboxSource';
         $browserWindowProperty = $prefix.'BrowserWindow';
+        $extraProperty = $prefix.'Extra';
 
         if (($formConfig['browser_window'] ?? false) && trim((string) $this->{$browserWindowProperty}) === '') {
             $this->addError($browserWindowProperty, 'Bitte ein Browserfenster angeben.');
@@ -1571,6 +1667,22 @@ class WorkflowManager extends Component
         if (($formConfig['mailbox_source'] ?? false) && ! in_array($this->normalizeMailboxSource((string) $this->{$mailboxSourceProperty}), ['person', 'verification'], true)) {
             $this->addError($mailboxSourceProperty, 'Bitte eine Script-Bezugsperson auswaehlen.');
             $valid = false;
+        }
+
+        foreach ($this->taskExtraFields($formConfig) as $field) {
+            $name = $field['name'];
+            $fieldValue = trim((string) (($this->{$extraProperty} ?? [])[$name] ?? ''));
+            $fieldLabel = (string) ($field['label'] ?? $name);
+
+            if (($field['required'] ?? false) && $fieldValue === '') {
+                $this->addError($extraProperty.'.'.$name, 'Bitte '.$fieldLabel.' angeben.');
+                $valid = false;
+            }
+
+            if (($field['type'] ?? 'text') === 'number' && $fieldValue !== '' && ! is_numeric($fieldValue)) {
+                $this->addError($extraProperty.'.'.$name, $fieldLabel.' muss eine Zahl sein.');
+                $valid = false;
+            }
         }
 
         return $valid;

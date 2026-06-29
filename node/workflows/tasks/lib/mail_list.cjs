@@ -113,6 +113,65 @@ function parseJsonObject(value) {
   }
 }
 
+function parseListLiteral(text) {
+  const normalized = normalizeText(text);
+
+  if (!normalized.startsWith('[') || !normalized.endsWith(']')) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(normalized);
+
+    if (Array.isArray(parsed)) {
+      return parsed.map(normalizeText).filter(Boolean);
+    }
+  } catch {
+    // The UI accepts compact PHP/JS-like examples such as ['queued', 'running'].
+  }
+
+  const body = normalized.slice(1, -1);
+  const values = [];
+  const pattern = /'([^']*)'|"([^"]*)"|([^,\s][^,]*)/g;
+  let match;
+
+  while ((match = pattern.exec(body)) !== null) {
+    const value = normalizeText(match[1] ?? match[2] ?? match[3] ?? '');
+
+    if (value) {
+      values.push(value);
+    }
+  }
+
+  return values;
+}
+
+function stringListFrom(value, fallback = [], splitComma = true) {
+  if (Array.isArray(value)) {
+    return value.map(normalizeText).filter(Boolean);
+  }
+
+  const literalValues = parseListLiteral(value);
+
+  if (literalValues) {
+    return literalValues;
+  }
+
+  const text = normalizeText(value);
+
+  if (!text) {
+    return fallback;
+  }
+
+  const separator = splitComma ? /\r?\n|;|,/ : /\r?\n|;/;
+
+  return text
+    .split(separator)
+    .map((item) => item.replace(/^['"]|['"]$/g, ''))
+    .map(normalizeText)
+    .filter(Boolean);
+}
+
 function scalarInputValue(input = {}) {
   const value = input.value ?? input.inputValue ?? input.input_value ?? '';
 
@@ -217,6 +276,12 @@ function optionBoolean(options = {}, input = {}, keys = [], fallback = false) {
 function selectorsFrom(value, fallback = []) {
   if (Array.isArray(value)) {
     return value.map(normalizeText).filter(Boolean);
+  }
+
+  const literalValues = parseListLiteral(value);
+
+  if (literalValues) {
+    return literalValues;
   }
 
   const objectValue = parseJsonObject(value);
@@ -350,6 +415,14 @@ async function scanMailList(page, options = {}) {
   const subjectSelectors = selectorsFrom(options.subjectSelector || options.subject_selector, DEFAULT_SUBJECT_SELECTORS);
   const senderSelectors = selectorsFrom(options.senderSelector || options.sender_selector, DEFAULT_SENDER_SELECTORS);
   const dateSelectors = selectorsFrom(options.dateSelector || options.date_selector, DEFAULT_DATE_SELECTORS);
+  const dateAttributes = stringListFrom(options.dateAttribute || options.date_attribute || options.dateAttributes || options.date_attributes, [
+    'datetime',
+    'title',
+    'aria-label',
+    'data-date',
+    'data-time',
+    'text',
+  ]);
   const previewSelectors = selectorsFrom(options.previewSelector || options.preview_selector, DEFAULT_PREVIEW_SELECTORS);
   const limit = Math.max(1, Math.min(200, Number(options.maxItems || options.max_items || options.limit || 50)));
   const tokenPrefix = normalizeText(options.tokenPrefix || options.token_prefix || `wf-mail-${Date.now()}`);
@@ -402,23 +475,51 @@ async function scanMailList(page, options = {}) {
           && style.display !== 'none'
           && Number(style.opacity || 1) > 0;
       };
-      const textFor = (element, selectors) => {
+      const attributeText = (element, attribute) => {
+        const normalizedAttribute = normalize(attribute).toLowerCase();
+
+        if (!element || !normalizedAttribute) {
+          return '';
+        }
+
+        if (['text', 'innertext'].includes(normalizedAttribute)) {
+          return normalize(element.innerText || element.textContent);
+        }
+
+        if (['textcontent', 'content'].includes(normalizedAttribute)) {
+          return normalize(element.textContent);
+        }
+
+        if (['html', 'innerhtml'].includes(normalizedAttribute)) {
+          return normalize(element.innerHTML);
+        }
+
+        return normalize(element.getAttribute?.(attribute));
+      };
+      const textFor = (element, selectors, attributes = ['aria-label', 'title', 'datetime', 'text']) => {
         for (const selector of selectors || []) {
           const match = deepQueryAll(selector, element).find(visible);
-          const text = normalize([
-            match?.getAttribute?.('aria-label'),
-            match?.getAttribute?.('title'),
-            match?.getAttribute?.('datetime'),
-            match?.innerText,
-            match?.textContent,
-          ].filter(Boolean).join(' '));
+
+          if (!match) {
+            continue;
+          }
+
+          for (const attribute of attributes || []) {
+            const text = attributeText(match, attribute);
+
+            if (text) {
+              return { text, attribute };
+            }
+          }
+
+          const text = normalize(match.innerText || match.textContent);
 
           if (text) {
-            return text;
+            return { text, attribute: 'text' };
           }
         }
 
-        return '';
+        return { text: '', attribute: '' };
       };
       const containers = payload.listSelectors
         .flatMap((selector) => deepQueryAll(selector).filter(visible));
@@ -447,10 +548,14 @@ async function scanMailList(page, options = {}) {
             }
 
             const rect = element.getBoundingClientRect();
-            const subject = textFor(element, payload.subjectSelectors);
-            const sender = textFor(element, payload.senderSelectors);
-            const dateText = textFor(element, payload.dateSelectors);
-            const preview = textFor(element, payload.previewSelectors);
+            const subjectMatch = textFor(element, payload.subjectSelectors);
+            const senderMatch = textFor(element, payload.senderSelectors);
+            const dateMatch = textFor(element, payload.dateSelectors, payload.dateAttributes);
+            const previewMatch = textFor(element, payload.previewSelectors);
+            const subject = subjectMatch.text;
+            const sender = senderMatch.text;
+            const dateText = dateMatch.text;
+            const preview = previewMatch.text;
             const key = `${Math.round(rect.top)}:${Math.round(rect.left)}:${rawText.slice(0, 160)}`;
 
             if (seen.has(key)) {
@@ -474,6 +579,8 @@ async function scanMailList(page, options = {}) {
               subject,
               sender,
               dateText,
+              dateAttribute: dateMatch.attribute,
+              date_attribute: dateMatch.attribute,
               preview,
               text: rawText,
               unread: /(^|\s)(unread|ungelesen)(\s|$)/i.test(rawText)
@@ -495,6 +602,7 @@ async function scanMailList(page, options = {}) {
       subjectSelectors,
       senderSelectors,
       dateSelectors,
+      dateAttributes,
       previewSelectors,
       limit,
       minTextLength: Math.max(0, Number(options.minTextLength || options.min_text_length || 4)),
@@ -921,6 +1029,7 @@ module.exports = {
   scanMailList,
   selectorsFrom,
   setWorkflowVariable,
+  stringListFrom,
   taskOptions,
   valueFromPath,
   variableName,

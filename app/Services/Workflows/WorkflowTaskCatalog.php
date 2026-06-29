@@ -119,10 +119,68 @@ class WorkflowTaskCatalog
                     'value_label' => 'Listitem-Selector',
                     'value_placeholder' => '[role=row], li, tr oder leer fuer Fallbacks',
                     'url' => false,
-                    'success_payload' => true,
-                    'success_payload_label' => 'Scan-Optionen JSON',
-                    'success_payload_placeholder' => '{"output_array_name":"inbox_mails","max_age_minutes":15,"max_items":30,"subject_selector":"[class*=subject]"}',
+                    'success_payload' => false,
                     'failure_payload' => false,
+                    'extra_fields' => [
+                        [
+                            'name' => 'output_array_name',
+                            'label' => 'Ausgabe-Array',
+                            'placeholder' => 'inbox_mails',
+                            'default' => 'inbox_mails',
+                        ],
+                        [
+                            'name' => 'subject_selector',
+                            'label' => 'Betreff-Selector',
+                            'placeholder' => '[class*=subject]',
+                        ],
+                        [
+                            'name' => 'subject_filter',
+                            'label' => 'Betreff muss enthalten',
+                            'placeholder' => "['queued', 'running', 'waiting'] oder queued",
+                            'help' => 'Mehrere Werte als Array-Schreibweise, durch Komma oder je Zeile. Mindestens ein Wert muss im Betreff vorkommen.',
+                            'span' => 'full',
+                        ],
+                        [
+                            'name' => 'date_selector',
+                            'label' => 'Datum-Selector',
+                            'placeholder' => 'time, [title], [class*=date]',
+                        ],
+                        [
+                            'name' => 'date_attribute',
+                            'label' => 'Datum-Attribut',
+                            'placeholder' => "title oder ['datetime', 'title']",
+                            'help' => 'Attribut am Datumselement, z.B. title, datetime, data-date. Leer nutzt Text und Standardattribute.',
+                        ],
+                        [
+                            'name' => 'max_age_minutes',
+                            'label' => 'Mail maximal alt (Minuten)',
+                            'type' => 'number',
+                            'min' => 0,
+                            'max' => 10080,
+                            'step' => 1,
+                            'placeholder' => '15',
+                        ],
+                        [
+                            'name' => 'wait_for_new_mail_seconds',
+                            'label' => 'Auf neue Mail warten (Sekunden)',
+                            'type' => 'number',
+                            'min' => 0,
+                            'max' => 3600,
+                            'step' => 5,
+                            'placeholder' => '60',
+                            'help' => 'Der Scan wiederholt sich im 5-Sekunden-Takt, bis eine neue passende Mail gefunden wurde oder die Zeit ablaeuft.',
+                        ],
+                        [
+                            'name' => 'max_items',
+                            'label' => 'Maximale Treffer',
+                            'type' => 'number',
+                            'min' => 1,
+                            'max' => 200,
+                            'step' => 1,
+                            'placeholder' => '30',
+                            'default' => '50',
+                        ],
+                    ],
                 ],
             ],
             'mail.list_search_loop' => [
@@ -580,6 +638,24 @@ class WorkflowTaskCatalog
 
         foreach (['node_script', 'php_handler', 'workflow_id', 'workflow_slug', 'browser_window', 'browser_window_name', 'selector', 'element_selector', 'input_selector', 'input', 'value', 'url', 'mailbox_source', 'script_person_source', 'success_payload', 'failure_payload', 'next', 'on_partial', 'on_error', 'status_routes'] as $key) {
             $value = Arr::get($overrides, $key, Arr::get($definition, $key));
+
+            if ($value !== null && $value !== '') {
+                $card[$key] = $value;
+            }
+        }
+
+        foreach (is_array(data_get($definition, 'form.extra_fields')) ? data_get($definition, 'form.extra_fields') : [] as $field) {
+            if (! is_array($field)) {
+                continue;
+            }
+
+            $key = preg_replace('/[^A-Za-z0-9_.-]+/', '', (string) ($field['name'] ?? '')) ?: '';
+
+            if ($key === '') {
+                continue;
+            }
+
+            $value = Arr::get($overrides, $key, Arr::get($definition, $key, $field['default'] ?? null));
 
             if ($value !== null && $value !== '') {
                 $card[$key] = $value;

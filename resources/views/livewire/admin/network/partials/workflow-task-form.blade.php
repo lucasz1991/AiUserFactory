@@ -31,6 +31,7 @@
         'failure_payload' => false,
         'failure_payload_label' => 'Daten bei Fehler',
         'failure_payload_placeholder' => '{"reason":"element_not_found"} oder Textwert',
+        'extra_fields' => [],
         'timeout' => false,
         'timeout_label' => 'Timeout in Sekunden',
         'timeout_help' => '',
@@ -172,6 +173,44 @@
                     @error($prefix.'InputValue') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
                 </div>
             @endif
+        </div>
+    @endif
+
+    @if(! empty($form['extra_fields']))
+        <div class="grid gap-4 md:grid-cols-2">
+            @foreach($form['extra_fields'] as $field)
+                @php
+                    $fieldName = (string) ($field['name'] ?? '');
+                    $fieldType = (string) ($field['type'] ?? 'text');
+                    $fieldLabel = (string) ($field['label'] ?? $fieldName);
+                    $fieldPlaceholder = (string) ($field['placeholder'] ?? '');
+                    $fieldHelp = (string) ($field['help'] ?? '');
+                    $fieldRows = max(2, (int) ($field['rows'] ?? 2));
+                    $fieldClass = ($field['span'] ?? '') === 'full' ? 'md:col-span-2' : '';
+                @endphp
+                @if($fieldName !== '')
+                    <div class="{{ $fieldClass }}">
+                        <label class="block text-sm font-medium text-gray-700">{{ $fieldLabel }}</label>
+                        @if($fieldType === 'textarea')
+                            <textarea rows="{{ $fieldRows }}" wire:model.defer="{{ $prefix }}Extra.{{ $fieldName }}" placeholder="{{ $fieldPlaceholder }}" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"></textarea>
+                        @else
+                            <input
+                                type="{{ $fieldType === 'number' ? 'number' : 'text' }}"
+                                @if(isset($field['min'])) min="{{ $field['min'] }}" @endif
+                                @if(isset($field['max'])) max="{{ $field['max'] }}" @endif
+                                @if(isset($field['step'])) step="{{ $field['step'] }}" @endif
+                                wire:model.defer="{{ $prefix }}Extra.{{ $fieldName }}"
+                                placeholder="{{ $fieldPlaceholder }}"
+                                class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                            >
+                        @endif
+                        @if($fieldHelp !== '')
+                            <p class="mt-1 text-xs text-slate-500">{{ $fieldHelp }}</p>
+                        @endif
+                        @error($prefix.'Extra.'.$fieldName) <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                    </div>
+                @endif
+            @endforeach
         </div>
     @endif
 

@@ -10,9 +10,30 @@ const {
   scalarInputValue,
   scanMailList,
   setWorkflowVariable,
+  stringListFrom,
   taskOptions,
   variableName,
+  wait,
 } = require('../lib/mail_list.cjs');
+
+function candidateKey(candidate = {}) {
+  return [
+    candidate.subject || '',
+    candidate.sender || '',
+    candidate.dateText || '',
+    String(candidate.text || '').slice(0, 240),
+  ].join('|').toLowerCase();
+}
+
+function subjectMatches(candidate = {}, filters = []) {
+  if (filters.length === 0) {
+    return true;
+  }
+
+  const subject = normalizeText(candidate.subject || candidate.text).toLowerCase();
+
+  return filters.some((filter) => subject.includes(normalizeText(filter).toLowerCase()));
+}
 
 async function run(context = {}) {
   const page = context.page;
@@ -25,29 +46,60 @@ async function run(context = {}) {
   const includeUnknownAge = optionBoolean(options, input, ['include_unknown_age', 'includeUnknownAge'], true);
   const maximumAgeSeconds = maxAgeSeconds(options, input, 0);
   const maxItems = Math.max(1, Math.min(200, optionNumber(options, input, ['max_items', 'maxItems', 'limit'], 50)));
+  const waitForNewMailSeconds = Math.max(0, Math.min(3600, optionNumber(options, input, ['wait_for_new_mail_seconds', 'waitForNewMailSeconds', 'wait_seconds', 'waitSeconds'], 0)));
+  const subjectFilters = stringListFrom(optionString(options, input, ['subject_filter', 'subjectFilter', 'subject_must_contain', 'subjectMustContain'], ''), []);
 
   if (!page || (typeof page.frames !== 'function' && typeof page.evaluate !== 'function')) {
     return { ok: false, status: 'failed', statusMessage: 'Kein Page-Handle fuer den Mail-Inbox-Scan vorhanden.' };
   }
 
-  const candidates = await scanMailList(page, {
-    ...options,
-    list_selector: listSelector,
-    list_item_selector: listItemSelector,
-    max_items: maxItems,
-  });
-  const filtered = candidates
-    .filter((candidate) => {
+  const collectFiltered = async () => {
+    const candidates = await scanMailList(page, {
+      ...options,
+      list_selector: listSelector,
+      list_item_selector: listItemSelector,
+      max_items: maxItems,
+    });
+
+    return candidates.filter((candidate) => {
       if (!maximumAgeSeconds) {
-        return true;
+        return subjectMatches(candidate, subjectFilters);
       }
 
       if (candidate.ageSeconds === null || candidate.ageSeconds === undefined) {
-        return includeUnknownAge;
+        return includeUnknownAge && subjectMatches(candidate, subjectFilters);
       }
 
-      return Number(candidate.ageSeconds) <= maximumAgeSeconds;
-    })
+      return Number(candidate.ageSeconds) <= maximumAgeSeconds && subjectMatches(candidate, subjectFilters);
+    });
+  };
+
+  const byKey = new Map();
+  let pollCount = 0;
+
+  for (const candidate of await collectFiltered()) {
+    byKey.set(candidateKey(candidate), candidate);
+  }
+
+  const initialCount = byKey.size;
+  const deadline = Date.now() + (waitForNewMailSeconds * 1000);
+
+  while (waitForNewMailSeconds > 0 && Date.now() < deadline) {
+    await wait(Math.min(5000, Math.max(0, deadline - Date.now())));
+    pollCount += 1;
+
+    const before = byKey.size;
+
+    for (const candidate of await collectFiltered()) {
+      byKey.set(candidateKey(candidate), candidate);
+    }
+
+    if (byKey.size > before && byKey.size > initialCount) {
+      break;
+    }
+  }
+
+  const filtered = Array.from(byKey.values())
     .slice(0, maxItems)
     .map((candidate, index) => ({ ...candidate, index }));
 
@@ -67,6 +119,12 @@ async function run(context = {}) {
     list_selector: listSelector,
     listItemSelector,
     list_item_selector: listItemSelector,
+    subjectFilters,
+    subject_filters: subjectFilters,
+    waitForNewMailSeconds,
+    wait_for_new_mail_seconds: waitForNewMailSeconds,
+    pollCount,
+    poll_count: pollCount,
     workflowVariables: context.workflowVariables,
     workflow_variables: context.workflow_variables,
   }, true);
