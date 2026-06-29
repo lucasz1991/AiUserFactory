@@ -457,7 +457,39 @@ class WorkflowCompositionTest extends TestCase
         $this->assertNotNull($boundary);
         $this->assertSame($runtimeSecond['key'], data_get($runtimeFirst, 'next.card_key'));
         $this->assertSame($boundary['key'], data_get($runtimeSecond, 'next.card_key'));
+        $this->assertSame($boundary['key'], $runtimeFirst['embedded_workflow_boundary_key']);
+        $this->assertSame($boundary['key'], $runtimeSecond['embedded_workflow_boundary_key']);
         $this->assertSame('parent-after-child', data_get($boundary, 'next.card_key'));
+    }
+
+    public function test_unresolved_embedded_workflow_routes_are_not_silently_treated_as_success(): void
+    {
+        $parent = $this->workflow('parent-unresolved-child-route');
+        $child = $this->workflow('child-unresolved-route');
+        $first = $this->waitTask('child-first');
+        $first['next'] = [
+            'type' => 'card',
+            'action_key' => 'child-unresolved-list',
+            'step' => 'child-unresolved-list',
+            'card_key' => 'missing-child-task',
+            'card' => 'missing-child-task',
+        ];
+        $this->step($child, 'Child unresolved list', [$first]);
+
+        $parentStep = $this->step($parent, 'Parent list', [
+            $this->workflowTask($child, 'child-workflow'),
+            $this->waitTask('parent-after-child'),
+        ]);
+
+        $tasks = $this->runtimeTasks($parentStep);
+        $runtimeFirst = collect($tasks)->first(fn (array $task): bool => str_ends_with((string) $task['key'], 'child-first'));
+        $boundary = collect($tasks)->firstWhere('runner', 'workflow-boundary');
+
+        $this->assertNotNull($runtimeFirst);
+        $this->assertNotNull($boundary);
+        $this->assertSame('missing-child-task', data_get($runtimeFirst, 'next.card_key'));
+        $this->assertNotSame($boundary['key'], data_get($runtimeFirst, 'next.card_key'));
+        $this->assertSame($boundary['key'], $runtimeFirst['embedded_workflow_boundary_key']);
     }
 
     protected function workflow(string $slug): Workflow

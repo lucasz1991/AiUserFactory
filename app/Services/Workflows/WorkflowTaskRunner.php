@@ -380,6 +380,10 @@ class WorkflowTaskRunner
                     $runtimeTask['embedded_workflow_frame_key'] = $embeddedWorkflowFrameKey;
                 }
 
+                if ($embeddedBoundaryTaskKey !== null) {
+                    $runtimeTask['embedded_workflow_boundary_key'] = $embeddedBoundaryTaskKey;
+                }
+
                 $expanded[] = $runtimeTask;
 
                 continue;
@@ -528,6 +532,14 @@ class WorkflowTaskRunner
                 'embedded_workflow_browser_window' => $workflowBrowserWindow,
             ];
 
+            if ($embeddedWorkflowFrameKey !== null) {
+                $boundaryTask['enclosing_embedded_workflow_frame_key'] = $embeddedWorkflowFrameKey;
+            }
+
+            if ($embeddedBoundaryTaskKey !== null) {
+                $boundaryTask['enclosing_embedded_workflow_boundary_key'] = $embeddedBoundaryTaskKey;
+            }
+
             foreach (['next', 'on_error'] as $routeKey) {
                 if (is_array($task[$routeKey] ?? null)) {
                     $boundaryTask[$routeKey] = $this->remapEmbeddedRoute(
@@ -624,29 +636,39 @@ class WorkflowTaskRunner
             return $route;
         }
 
-        $type = trim((string) ($route['type'] ?? ''));
+        $type = strtolower(trim((string) ($route['type'] ?? '')));
         $step = trim((string) ($route['action_key'] ?? $route['step'] ?? ''));
+        $reservedStep = strtolower($step);
         $card = trim((string) ($route['card_key'] ?? $route['card'] ?? ''));
         $targetTaskKey = null;
+        $hasExplicitTarget = $card !== ''
+            || ($step !== '' && ! in_array($reservedStep, ['next', 'end', 'fail'], true))
+            || $type === 'card';
 
-        if ($type === 'end' || $step === 'end') {
+        if ($type === 'end' || $reservedStep === 'end') {
             $targetTaskKey = $boundaryTaskKey;
-        } elseif ($step === 'next') {
-            $nextStep = trim((string) data_get($routeMap, 'next_steps.'.$sourceStepActionKey, ''));
+        } elseif ($reservedStep === 'next') {
+            $nextStep = trim((string) ($routeMap['next_steps'][$sourceStepActionKey ?? ''] ?? ''));
             $targetTaskKey = $nextStep !== ''
-                ? data_get($routeMap, 'first_tasks.'.$nextStep)
+                ? ($routeMap['first_tasks'][$nextStep] ?? null)
                 : $boundaryTaskKey;
         } elseif ($card !== '') {
-            $targetStep = (! in_array($step, ['', 'next', 'end', 'fail'], true))
+            $targetStep = ($step !== '' && ! in_array($reservedStep, ['next', 'end', 'fail'], true))
                 ? $step
                 : (string) $sourceStepActionKey;
-            $targetTaskKey = data_get($routeMap, 'cards.'.$targetStep.'.'.$card);
-        } elseif (! in_array($step, ['', 'end', 'fail'], true)) {
-            $targetTaskKey = data_get($routeMap, 'first_tasks.'.$step);
+            $targetTaskKey = $routeMap['cards'][$targetStep][$card] ?? null;
+        } elseif ($step !== '' && ! in_array($reservedStep, ['end', 'fail'], true)) {
+            $targetTaskKey = $routeMap['first_tasks'][$step] ?? null;
         }
 
         if ($targetTaskKey === null || trim((string) $targetTaskKey) === '') {
-            if ($routeKey === 'next' && $boundaryTaskKey !== null && ! in_array($step, ['fail'], true) && $type !== 'fail') {
+            if (
+                $routeKey === 'next'
+                && $boundaryTaskKey !== null
+                && ! $hasExplicitTarget
+                && ! in_array($reservedStep, ['fail'], true)
+                && $type !== 'fail'
+            ) {
                 $targetTaskKey = $boundaryTaskKey;
             } else {
                 return $route;

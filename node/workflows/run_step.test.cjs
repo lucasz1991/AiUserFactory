@@ -10,6 +10,7 @@ const test = require('node:test');
 const basePath = path.resolve(__dirname, '..', '..');
 const runnerPath = path.join(__dirname, 'run_step.cjs');
 const returnScript = 'node/workflows/tasks/data/workflow_return.cjs';
+const waitScript = 'node/workflows/tasks/wait/seconds.cjs';
 const branchScript = 'tests/Fixtures/Workflows/branch_result.cjs';
 
 function returnTask(key, value, frameKey = null) {
@@ -25,7 +26,21 @@ function returnTask(key, value, frameKey = null) {
   };
 }
 
-function branchTask(key, onError) {
+function waitTask(key, frameKey = null, extra = {}) {
+  return {
+    key,
+    task_key: 'wait.seconds',
+    title: key,
+    kind: 'wait',
+    runner: 'node',
+    node_script: waitScript,
+    value: 0,
+    ...(frameKey ? { embedded_workflow_frame_key: frameKey } : {}),
+    ...extra,
+  };
+}
+
+function branchTask(key, onError, frameKey = null, extra = {}) {
   return {
     key,
     task_key: 'test.branch_result',
@@ -34,6 +49,8 @@ function branchTask(key, onError) {
     runner: 'node',
     node_script: branchScript,
     on_error: onError,
+    ...(frameKey ? { embedded_workflow_frame_key: frameKey } : {}),
+    ...extra,
   };
 }
 
@@ -186,4 +203,76 @@ test('unmatched condition requests an external failure route without failing Nod
   assert.equal(result.routeOutcome, 'failed');
   assert.equal(result.completedTaskKey, 'condition-not-met');
   assert.equal(result.events.some((event) => event.stage === 'task-failed'), false);
+});
+
+test('unresolved embedded success route bubbles to the parent failure route', () => {
+  const result = executeTasks([
+    waitTask('embedded-task', 'embedded-frame', {
+      parent_task_key: 'embedded-workflow',
+      route_source_task_key: 'embedded-workflow',
+      embedded_workflow_boundary_key: 'embedded-boundary',
+      next: {
+        type: 'card',
+        card_key: 'missing-child-task',
+      },
+    }),
+    {
+      key: 'embedded-boundary',
+      task_key: 'workflow.boundary',
+      title: 'Embedded workflow',
+      kind: 'workflow',
+      runner: 'workflow-boundary',
+      parent_task_key: 'embedded-workflow',
+      route_source_task_key: 'embedded-workflow',
+      embedded_workflow_name: 'Embedded workflow',
+      embedded_workflow_frame_key: 'embedded-frame',
+    },
+  ]);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.routeRequested, true);
+  assert.equal(result.routeOutcome, 'failed');
+  assert.equal(result.completedTaskKey, 'embedded-workflow');
+  assert.match(result.statusMessage, /Interne Erfolgsroute/);
+  assert.deepEqual(result.tasks.map((task) => task.key), ['embedded-task']);
+});
+
+test('embedded workflow follows backward on_error routes until max attempts is reached', () => {
+  const result = executeTasks([
+    waitTask('embedded-first', 'embedded-frame', {
+      parent_task_key: 'embedded-workflow',
+      embedded_workflow_boundary_key: 'embedded-boundary',
+    }),
+    branchTask('embedded-check', {
+      type: 'card',
+      card_key: 'embedded-first',
+      max_attempts: 1,
+    }, 'embedded-frame', {
+      parent_task_key: 'embedded-workflow',
+      route_source_task_key: 'embedded-workflow',
+      embedded_workflow_boundary_key: 'embedded-boundary',
+    }),
+    {
+      key: 'embedded-boundary',
+      task_key: 'workflow.boundary',
+      title: 'Embedded workflow',
+      kind: 'workflow',
+      runner: 'workflow-boundary',
+      parent_task_key: 'embedded-workflow',
+      route_source_task_key: 'embedded-workflow',
+      embedded_workflow_name: 'Embedded workflow',
+      embedded_workflow_frame_key: 'embedded-frame',
+    },
+  ]);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.routeRequested, true);
+  assert.equal(result.routeOutcome, 'failed');
+  assert.equal(result.completedTaskKey, 'embedded-workflow');
+  assert.match(result.statusMessage, /zu oft wiederholt/);
+  assert.equal(result.events.filter((event) => (
+    event.stage === 'task-branch-route-followed'
+    && event.taskKey === 'embedded-check'
+    && event.targetTaskKey === 'embedded-first'
+  )).length, 1);
 });

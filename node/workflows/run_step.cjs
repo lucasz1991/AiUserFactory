@@ -1286,6 +1286,91 @@ process.once('SIGINT', () => {
   handleShutdownSignal('SIGINT').catch(() => process.exit(0));
 });
 
+function embeddedFrameKeyForTask(task = {}) {
+  return String(task?.embedded_workflow_frame_key || '').trim();
+}
+
+function embeddedBoundaryKeyForTask(task = {}) {
+  return String(task?.embedded_workflow_boundary_key || '').trim();
+}
+
+function enclosingEmbeddedBoundaryKeyForTask(task = {}) {
+  return String(task?.enclosing_embedded_workflow_boundary_key || '').trim();
+}
+
+function routeTargetCardKey(route = {}) {
+  return String(route?.card_key || route?.card || '').trim();
+}
+
+function routeStepKey(route = {}) {
+  return String(route?.action_key || route?.step || '').trim();
+}
+
+function routeType(route = {}) {
+  return String(route?.type || route?.action_key || route?.step || '').trim().toLowerCase();
+}
+
+function routeHasExplicitTarget(route = {}) {
+  const type = String(route?.type || '').trim().toLowerCase();
+  const step = routeStepKey(route).toLowerCase();
+
+  return routeTargetCardKey(route) !== ''
+    || (step !== '' && !['next', 'end', 'fail'].includes(step))
+    || type === 'card';
+}
+
+function routeMaxAttempts(route = {}) {
+  const attempts = Number(route?.max_attempts ?? route?.retry_limit ?? 0);
+
+  return Number.isFinite(attempts) ? Math.max(0, Math.floor(attempts)) : 0;
+}
+
+function routeAttemptKey(task = {}, route = {}, targetCardKey = '') {
+  return [
+    embeddedFrameKeyForTask(task),
+    String(task?.key || ''),
+    routeType(route),
+    routeStepKey(route),
+    targetCardKey,
+  ].join(':');
+}
+
+function workflowBoundaryIndex(runtimeTasks = [], frameKey = '', fromIndex = -1, boundaryKey = '') {
+  const normalizedBoundaryKey = String(boundaryKey || '').trim();
+
+  if (normalizedBoundaryKey !== '') {
+    const keyedBoundaryIndex = runtimeTasks.findIndex((candidate) => (
+      String(candidate?.key || '') === normalizedBoundaryKey
+      && candidate?.runner === 'workflow-boundary'
+    ));
+
+    if (keyedBoundaryIndex >= 0) {
+      return keyedBoundaryIndex;
+    }
+  }
+
+  const normalizedFrameKey = String(frameKey || '').trim();
+
+  if (normalizedFrameKey === '') {
+    return -1;
+  }
+
+  return runtimeTasks.findIndex((candidate, candidateIndex) => (
+    candidateIndex > fromIndex
+    && candidate?.runner === 'workflow-boundary'
+    && embeddedFrameKeyForTask(candidate) === normalizedFrameKey
+  ));
+}
+
+function embeddedBoundaryIndexForTask(runtimeTasks = [], task = {}, taskIndex = -1) {
+  return workflowBoundaryIndex(
+    runtimeTasks,
+    embeddedFrameKeyForTask(task),
+    taskIndex,
+    embeddedBoundaryKeyForTask(task) || enclosingEmbeddedBoundaryKeyForTask(task),
+  );
+}
+
 async function run() {
   pushEvent('starting', 'Workflow-Task-Runner startet.');
   writeStatus('starting', 'starting', 'Workflow-Task-Runner startet.');
@@ -1316,7 +1401,9 @@ async function run() {
   let taskIndex = 0;
   let requestedSuccessRouteTask = null;
   let requestedFailureRouteTask = null;
+  let requestedRouteMessage = null;
   let routeTransitions = 0;
+  const routeAttemptCounts = new Map();
   const preserveBrowserForFailureRoute = startedFromFailureRoute();
 
   while (taskIndex < runtimeTasks.length) {
@@ -1567,7 +1654,7 @@ async function run() {
     pushEvent(taskEventStage, result.statusMessage || taskLabel, { taskKey: task.key, status, branchOutcome });
     writeStatus('running', taskEventStage, result.statusMessage || taskLabel);
 
-    const embeddedWorkflowFrameKey = String(task.embedded_workflow_frame_key || '').trim();
+    const embeddedWorkflowFrameKey = embeddedFrameKeyForTask(task);
     const hasWorkflowReturn = (
       Object.prototype.hasOwnProperty.call(result, 'workflow_return')
       || Object.prototype.hasOwnProperty.call(result, 'workflowReturn')
@@ -1580,11 +1667,7 @@ async function run() {
       const workflowReturnOk = Object.prototype.hasOwnProperty.call(result, 'workflow_return_ok')
         ? result.workflow_return_ok === true
         : workflowReturn !== false;
-      const boundaryTaskIndex = runtimeTasks.findIndex((candidate, candidateIndex) => (
-        candidateIndex > taskIndex
-        && candidate.runner === 'workflow-boundary'
-        && String(candidate.embedded_workflow_frame_key || '').trim() === embeddedWorkflowFrameKey
-      ));
+      const boundaryTaskIndex = embeddedBoundaryIndexForTask(runtimeTasks, task, taskIndex);
 
       if (boundaryTaskIndex >= 0) {
         embeddedWorkflowResults.set(embeddedWorkflowFrameKey, {
@@ -1620,14 +1703,57 @@ async function run() {
         : null;
 
       if (failureRoute) {
-        const targetCardKey = String(failureRoute.card_key || failureRoute.card || '').trim();
+        const targetCardKey = routeTargetCardKey(failureRoute);
         const targetTaskIndex = targetCardKey === ''
           ? -1
           : runtimeTasks.findIndex((candidate) => String(candidate.key || '') === targetCardKey);
+        const targetTask = targetTaskIndex >= 0 ? runtimeTasks[targetTaskIndex] : null;
+        const currentEmbeddedFrameKey = embeddedFrameKeyForTask(task);
+        const targetIsInSameEmbeddedFrame = currentEmbeddedFrameKey !== ''
+          && embeddedFrameKeyForTask(targetTask) === currentEmbeddedFrameKey;
+        const failureRouteType = routeType(failureRoute);
+        const boundaryIndex = failureRouteType === 'end'
+          ? embeddedBoundaryIndexForTask(runtimeTasks, task, taskIndex)
+          : -1;
 
-        // Rueckspruenge bleiben beim PHP-Orchestrator. Dort wird max_attempts
-        // pro Workflow-Lauf gezaehlt und auch ueber mehrere Node-Laeufe eingehalten.
-        if (targetTaskIndex > taskIndex) {
+        if (boundaryIndex >= 0) {
+          routeTransitions += 1;
+
+          if (routeTransitions > Math.max(100, runtimeTasks.length * 20)) {
+            throw new Error('Zu viele Task-Routenwechsel. Moegliche Schleife in der Fehlerroute.');
+          }
+
+          pushEvent('embedded-workflow-error-route-ended', 'Fehlerroute beendet den eingebetteten Workflow.', {
+            taskKey: task.key,
+            boundaryTaskKey: runtimeTasks[boundaryIndex]?.key || null,
+            status,
+          });
+          taskIndex = boundaryIndex;
+          continue;
+        }
+
+        const canFollowFailureRouteInNode = targetTaskIndex > taskIndex || targetIsInSameEmbeddedFrame;
+
+        if (canFollowFailureRouteInNode) {
+          const maxAttempts = routeMaxAttempts(failureRoute);
+          const isBackRoute = targetTaskIndex <= taskIndex;
+
+          if (isBackRoute && targetIsInSameEmbeddedFrame && maxAttempts > 0) {
+            const attemptKey = routeAttemptKey(task, failureRoute, targetCardKey);
+            const attempts = routeAttemptCounts.get(attemptKey) || 0;
+
+            if (attempts >= maxAttempts) {
+              requestedFailureRouteTask = {
+                ...task,
+                key: task.route_source_task_key || task.parent_task_key || task.key,
+              };
+              requestedRouteMessage = 'Fehlerroute im eingebetteten Workflow wurde zu oft wiederholt.';
+              break;
+            }
+
+            routeAttemptCounts.set(attemptKey, attempts + 1);
+          }
+
           routeTransitions += 1;
 
           if (routeTransitions > Math.max(100, runtimeTasks.length * 20)) {
@@ -1641,6 +1767,22 @@ async function run() {
           });
           taskIndex = targetTaskIndex;
           continue;
+        }
+
+        if (
+          currentEmbeddedFrameKey !== ''
+          && task.runner !== 'workflow-boundary'
+          && failureRouteType !== 'fail'
+          && routeHasExplicitTarget(failureRoute)
+        ) {
+          requestedFailureRouteTask = {
+            ...task,
+            key: task.route_source_task_key || task.parent_task_key || task.key,
+          };
+          requestedRouteMessage = targetCardKey !== ''
+            ? `Interne Fehlerroute im eingebetteten Workflow konnte nicht aufgeloest werden: ${targetCardKey}.`
+            : 'Interne Fehlerroute im eingebetteten Workflow konnte nicht aufgeloest werden.';
+          break;
         }
       }
 
@@ -1683,7 +1825,7 @@ async function run() {
     const successRoute = task.next && typeof task.next === 'object' ? task.next : null;
 
     if (successRoute) {
-      const successRouteType = String(successRoute.type || successRoute.action_key || successRoute.step || '').trim().toLowerCase();
+      const successRouteType = routeType(successRoute);
 
       if (successRouteType === 'fail') {
         requestedFailureRouteTask = {
@@ -1693,7 +1835,7 @@ async function run() {
         break;
       }
 
-      const targetCardKey = String(successRoute.card_key || successRoute.card || '').trim();
+      const targetCardKey = routeTargetCardKey(successRoute);
       const targetTaskIndex = targetCardKey === ''
         ? -1
         : runtimeTasks.findIndex((candidate) => String(candidate.key || '') === targetCardKey);
@@ -1707,6 +1849,41 @@ async function run() {
 
         taskIndex = targetTaskIndex;
         continue;
+      }
+
+      const currentEmbeddedFrameKey = embeddedFrameKeyForTask(task);
+      const isEmbeddedInternalRoute = currentEmbeddedFrameKey !== ''
+        && (task.runner !== 'workflow-boundary' || enclosingEmbeddedBoundaryKeyForTask(task) !== '');
+
+      if (isEmbeddedInternalRoute) {
+        const boundaryIndex = successRouteType === 'end'
+          ? embeddedBoundaryIndexForTask(runtimeTasks, task, taskIndex)
+          : -1;
+
+        if (boundaryIndex >= 0) {
+          routeTransitions += 1;
+
+          if (routeTransitions > Math.max(100, runtimeTasks.length * 20)) {
+            throw new Error('Zu viele Task-Routenwechsel. Moegliche Schleife in der Erfolgsroute.');
+          }
+
+          taskIndex = boundaryIndex;
+          continue;
+        }
+
+        if (!routeHasExplicitTarget(successRoute)) {
+          taskIndex += 1;
+          continue;
+        }
+
+        requestedFailureRouteTask = {
+          ...task,
+          key: task.route_source_task_key || task.parent_task_key || task.key,
+        };
+        requestedRouteMessage = targetCardKey !== ''
+          ? `Interne Erfolgsroute im eingebetteten Workflow konnte nicht aufgeloest werden: ${targetCardKey}.`
+          : 'Interne Erfolgsroute im eingebetteten Workflow konnte nicht aufgeloest werden.';
+        break;
       }
 
       requestedSuccessRouteTask = {
@@ -1728,7 +1905,7 @@ async function run() {
   const result = {
     ok: true,
     status: 'success',
-    statusMessage: 'Workflow-Tasks wurden ausgefuehrt.',
+    statusMessage: requestedRouteMessage || 'Workflow-Tasks wurden ausgefuehrt.',
     account: publicAccount(context.account, true),
     new_password: context.new_password || context.account?.password || null,
     generated_password: context.generated_password || context.new_password || context.account?.password || null,
