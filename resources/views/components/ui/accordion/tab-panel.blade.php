@@ -22,7 +22,8 @@
     role="tabpanel"
     :aria-hidden="(localOpenTab !== @js($panelFor)).toString()"
     @unless($isInitiallyActive) style="display: none;" @endunless
-    class="{{ $panelClass }}"
 >
-    {{ $slot }}
+    <div class="{{ $panelClass }}">
+        {{ $slot }}
+    </div>
 </div>
