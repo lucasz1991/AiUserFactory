@@ -74,9 +74,64 @@
         $selectBrowserWindowOptions = collect(['main']);
     }
 
+    $extraFieldTabForField = function (array $field) use ($catalogKey): string {
+        $name = trim((string) ($field['name'] ?? ''));
+
+        if (str_starts_with($catalogKey, 'mail.')) {
+            if (in_array($name, ['subject_selector', 'subject_filter'], true)) {
+                return 'Betreff';
+            }
+
+            if (in_array($name, ['title_selector', 'title_filter'], true)) {
+                return 'Titel';
+            }
+
+            if (in_array($name, ['date_selector', 'date_attribute', 'max_age_minutes', 'wait_for_new_mail_seconds'], true)) {
+                return 'Datum & Warten';
+            }
+
+            if (in_array($name, ['input_array_name', 'search_fields'], true)) {
+                return 'Quelle & Suche';
+            }
+
+            if (in_array($name, ['max_open_count', 'open_wait_ms', 'stop_on_first_match'], true)) {
+                return 'Oeffnen';
+            }
+
+            if (in_array($name, ['regex'], true)) {
+                return 'Wert ermitteln';
+            }
+
+            if (str_starts_with($name, 'output_') || in_array($name, ['max_items'], true)) {
+                return 'Ergebnis';
+            }
+        }
+
+        return trim((string) ($field['group'] ?? $field['tab'] ?? 'Einstellungen')) ?: 'Einstellungen';
+    };
+
     $extraFieldGroups = collect(is_array($form['extra_fields'] ?? null) ? $form['extra_fields'] : [])
         ->filter(fn ($field) => is_array($field) && trim((string) ($field['name'] ?? '')) !== '')
-        ->groupBy(fn ($field) => trim((string) ($field['tab'] ?? 'Einstellungen')) ?: 'Einstellungen');
+        ->groupBy(fn ($field) => $extraFieldTabForField($field));
+
+    if (str_starts_with($catalogKey, 'mail.')) {
+        $preferredMailTabs = [
+            'Quelle & Suche',
+            'Betreff',
+            'Titel',
+            'Datum & Warten',
+            'Oeffnen',
+            'Wert ermitteln',
+            'Ergebnis',
+        ];
+
+        $extraFieldGroups = $extraFieldGroups->sortBy(
+            fn ($fields, $tabLabel) => array_search((string) $tabLabel, $preferredMailTabs, true) === false
+                ? 99
+                : array_search((string) $tabLabel, $preferredMailTabs, true)
+        );
+    }
+
     $extraFieldTabIds = [];
     $extraFieldTabOptions = [];
 
@@ -91,228 +146,257 @@
             $suffix++;
         }
 
+        $tabId = 'extra-'.$tabId;
         $extraFieldTabIds[$tabLabel] = $tabId;
         $extraFieldTabOptions[$tabId] = $tabLabel;
     }
 
-    $defaultExtraTab = (string) (array_key_first($extraFieldTabOptions) ?? '');
-    $extraFieldTabGroup = 'workflow-task-'.$prefix.'-'.(\Illuminate\Support\Str::slug((string) $catalogKey) ?: 'task').'-extra-fields';
+    $taskSettingsTabOptions = ['general' => 'Allgemein'];
+
+    foreach ($extraFieldTabOptions as $tabId => $tabLabel) {
+        $taskSettingsTabOptions[$tabId] = $tabLabel;
+    }
+
+    if ($form['success_payload'] || $form['failure_payload']) {
+        $taskSettingsTabOptions['payload'] = 'Daten';
+    }
+
+    $taskSettingsTabOptions['routing'] = 'Routing';
+    $defaultExtraTab = 'general';
+    $extraFieldTabGroup = 'workflow-task-'.$prefix.'-'.(\Illuminate\Support\Str::slug((string) $catalogKey) ?: 'task').'-settings';
     $browserWindowDatalistId = 'workflow-'.$prefix.'-browser-windows';
 @endphp
 
 <div class="space-y-4" x-data="{ failedTarget: @entangle($prefix.'FailedTarget').live }">
-    <div class="grid gap-4 md:grid-cols-2">
-        @if(! $isEdit)
-            <div>
-                <label for="workflow-new-task-list" class="block text-sm font-medium text-gray-700">Liste</label>
-                <select id="workflow-new-task-list" wire:model.defer="newTaskListId" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
-                    <option value="">Bitte waehlen</option>
-                    @foreach($steps as $step)
-                        <option value="{{ $step->id }}">{{ $step->name }}</option>
-                    @endforeach
-                </select>
-                @error('newTaskListId') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
-            </div>
-        @endif
-
-        <div class="{{ $isEdit ? 'md:col-span-2' : '' }}">
-            <label class="block text-sm font-medium text-gray-700">Funktion / Node-Skript</label>
-            <select wire:model.live="{{ $prefix }}CatalogKey" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
-                @foreach($taskDefinitions as $taskDefinition)
-                    <option value="{{ $taskDefinition['key'] }}">{{ $taskDefinition['label'] }} ({{ $taskDefinition['runner'] }})</option>
-                @endforeach
-            </select>
-            @error($prefix.'CatalogKey') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
-            @if(($selectedDefinition['description'] ?? '') !== '')
-                <p class="mt-2 text-xs leading-5 text-slate-500">{{ $selectedDefinition['description'] }}</p>
-            @endif
-        </div>
-
-        <div>
-            <label class="block text-sm font-medium text-gray-700">Kartentitel</label>
-            <input type="text" wire:model.defer="{{ $prefix }}Title" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
-            @error($prefix.'Title') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
-        </div>
-
-        @if($isEdit || $form['timeout'])
-            <div>
-                <label class="block text-sm font-medium text-gray-700">{{ $form['timeout'] ? $form['timeout_label'] : 'Timeout in Sekunden' }}</label>
-                <input type="number" min="{{ $form['timeout'] ? $form['timeout_min'] : 0 }}" max="{{ $form['timeout_max'] }}" wire:model.defer="{{ $prefix }}TimeoutSeconds" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
-                @if($form['timeout'] && $form['timeout_help'] !== '')
-                    <p class="mt-1 text-xs text-slate-500">{{ $form['timeout_help'] }}</p>
+    <x-ui.accordion.tabs
+        :tabs="$taskSettingsTabOptions"
+        :default="$defaultExtraTab"
+        :group="$extraFieldTabGroup"
+        :persist="false"
+        collapse-at="md"
+    >
+        <x-ui.accordion.tab-panel
+            for="general"
+            :active="$defaultExtraTab"
+            :group="$extraFieldTabGroup"
+            panel-class="space-y-4 rounded-b-lg border border-slate-200 bg-white p-4"
+        >
+            <div class="grid gap-4 md:grid-cols-2">
+                @if(! $isEdit)
+                    <div>
+                        <label for="workflow-new-task-list" class="block text-sm font-medium text-gray-700">Liste</label>
+                        <select id="workflow-new-task-list" wire:model.defer="newTaskListId" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                            <option value="">Bitte waehlen</option>
+                            @foreach($steps as $step)
+                                <option value="{{ $step->id }}">{{ $step->name }}</option>
+                            @endforeach
+                        </select>
+                        @error('newTaskListId') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                    </div>
                 @endif
-                @error($prefix.'TimeoutSeconds') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
-            </div>
-        @endif
 
-        @if($form['browser_window'])
-            <div class="{{ $isEdit ? '' : 'md:col-span-2' }}">
-                <label class="block text-sm font-medium text-gray-700">{{ $form['browser_window_label'] }}</label>
-                @if($catalogKey === 'browser.open' || ($form['browser_window_create'] ?? false))
-                    <input
-                        type="text"
-                        list="{{ $browserWindowDatalistId }}"
-                        wire:model.defer="{{ $prefix }}BrowserWindow"
-                        placeholder="{{ $form['browser_window_placeholder'] }}"
-                        class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                    >
-                    <datalist id="{{ $browserWindowDatalistId }}">
-                        @foreach($selectBrowserWindowOptions as $browserWindowOption)
-                            <option value="{{ $browserWindowOption }}"></option>
-                        @endforeach
-                    </datalist>
-                @else
-                    <select wire:model.defer="{{ $prefix }}BrowserWindow" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
-                        @foreach($selectBrowserWindowOptions as $browserWindowOption)
-                            <option value="{{ $browserWindowOption }}">{{ $browserWindowOption }}</option>
+                <div class="{{ $isEdit ? 'md:col-span-2' : '' }}">
+                    <label class="block text-sm font-medium text-gray-700">Funktion / Node-Skript</label>
+                    <select wire:model.live="{{ $prefix }}CatalogKey" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                        @foreach($taskDefinitions as $taskDefinition)
+                            <option value="{{ $taskDefinition['key'] }}">{{ $taskDefinition['label'] }} ({{ $taskDefinition['runner'] }})</option>
                         @endforeach
                     </select>
-                @endif
-                @error($prefix.'BrowserWindow') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
-            </div>
-        @endif
-    </div>
-
-    <div>
-        <label class="block text-sm font-medium text-gray-700">Beschreibung</label>
-        <textarea rows="3" wire:model.defer="{{ $prefix }}Description" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"></textarea>
-        @error($prefix.'Description') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
-    </div>
-
-    @if($form['selector'] || $form['value'] || $form['url'])
-        <div class="grid gap-4 {{ ($form['selector'] && ($form['value'] || $form['url'])) ? 'md:grid-cols-2' : '' }}">
-            @if($form['selector'])
-                <div>
-                    <label class="block text-sm font-medium text-gray-700">{{ $form['selector_label'] }}</label>
-                    <input type="text" wire:model.defer="{{ $prefix }}ElementSelector" placeholder="{{ $form['selector_placeholder'] }}" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
-                    @error($prefix.'ElementSelector') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
-                </div>
-            @endif
-
-            @if($form['url'] || $form['value'])
-                <div>
-                    <label class="block text-sm font-medium text-gray-700">{{ $form['url'] ? $form['url_label'] : $form['value_label'] }}</label>
-                    <input type="text" wire:model.defer="{{ $prefix }}InputValue" placeholder="{{ $form['url'] ? $form['url_placeholder'] : $form['value_placeholder'] }}" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
-                    @error($prefix.'InputValue') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
-                </div>
-            @endif
-        </div>
-    @endif
-
-    @if($extraFieldGroups->isNotEmpty())
-        <x-ui.accordion.tabs
-            :tabs="$extraFieldTabOptions"
-            :default="$defaultExtraTab"
-            :group="$extraFieldTabGroup"
-            :persist="false"
-            collapse-at="md"
-        >
-            @foreach($extraFieldGroups as $tabLabel => $fields)
-                <x-ui.accordion.tab-panel
-                    :for="$extraFieldTabIds[(string) $tabLabel] ?? ''"
-                    :active="$defaultExtraTab"
-                    :group="$extraFieldTabGroup"
-                    panel-class="grid gap-4 rounded-b-lg border border-slate-200 bg-white p-4 md:grid-cols-2"
-                >
-                    @foreach($fields as $field)
-                        @php
-                            $fieldName = (string) ($field['name'] ?? '');
-                            $fieldType = (string) ($field['type'] ?? 'text');
-                            $fieldLabel = (string) ($field['label'] ?? $fieldName);
-                            $fieldPlaceholder = (string) ($field['placeholder'] ?? '');
-                            $fieldHelp = (string) ($field['help'] ?? '');
-                            $fieldRows = max(2, (int) ($field['rows'] ?? 2));
-                            $fieldClass = ($field['span'] ?? '') === 'full' ? 'md:col-span-2' : '';
-                        @endphp
-                        @if($fieldName !== '')
-                            <div class="{{ $fieldClass }}">
-                                <label class="block text-sm font-medium text-gray-700">{{ $fieldLabel }}</label>
-                                @if($fieldType === 'textarea')
-                                    <textarea rows="{{ $fieldRows }}" wire:model.live.debounce.500ms="{{ $prefix }}Extra.{{ $fieldName }}" placeholder="{{ $fieldPlaceholder }}" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"></textarea>
-                                @else
-                                    <input
-                                        type="{{ $fieldType === 'number' ? 'number' : 'text' }}"
-                                        @if(isset($field['min'])) min="{{ $field['min'] }}" @endif
-                                        @if(isset($field['max'])) max="{{ $field['max'] }}" @endif
-                                        @if(isset($field['step'])) step="{{ $field['step'] }}" @endif
-                                        wire:model.live.debounce.500ms="{{ $prefix }}Extra.{{ $fieldName }}"
-                                        placeholder="{{ $fieldPlaceholder }}"
-                                        class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                                    >
-                                @endif
-                                @if($fieldHelp !== '')
-                                    <p class="mt-1 text-xs text-slate-500">{{ $fieldHelp }}</p>
-                                @endif
-                                @error($prefix.'Extra.'.$fieldName) <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
-                            </div>
-                        @endif
-                    @endforeach
-                </x-ui.accordion.tab-panel>
-            @endforeach
-        </x-ui.accordion.tabs>
-    @endif
-
-    @if($form['mailbox_source'])
-        <div>
-            <label class="block text-sm font-medium text-gray-700">{{ $form['mailbox_source_label'] }}</label>
-            <select data-workflow-task-mailbox-source="{{ $prefix }}" wire:model.change="{{ $prefix }}MailboxSource" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
-                @foreach($form['mailbox_source_options'] as $mailboxSourceValue => $mailboxSourceLabel)
-                    <option value="{{ $mailboxSourceValue }}">{{ $mailboxSourceLabel }}</option>
-                @endforeach
-            </select>
-            @error($prefix.'MailboxSource') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
-        </div>
-    @endif
-
-    @if($form['success_payload'] || $form['failure_payload'])
-        <div class="grid gap-4 {{ ($form['success_payload'] && $form['failure_payload']) ? 'md:grid-cols-2' : '' }}">
-            @if($form['success_payload'])
-                <div>
-                    <label class="block text-sm font-medium text-gray-700">{{ $form['success_payload_label'] }}</label>
-                    <textarea rows="3" wire:model.defer="{{ $prefix }}SuccessPayload" placeholder='{{ $form['success_payload_placeholder'] }}' class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"></textarea>
-                    @error($prefix.'SuccessPayload') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
-                </div>
-            @endif
-            @if($form['failure_payload'])
-                <div>
-                    <label class="block text-sm font-medium text-gray-700">{{ $form['failure_payload_label'] }}</label>
-                    <textarea rows="3" wire:model.defer="{{ $prefix }}FailurePayload" placeholder='{{ $form['failure_payload_placeholder'] }}' class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"></textarea>
-                    @error($prefix.'FailurePayload') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
-                </div>
-            @endif
-        </div>
-    @endif
-
-    <div class="grid gap-4 md:grid-cols-2">
-        @foreach([
-            $prefix.'SuccessTarget' => 'Bei Erfolg',
-            $prefix.'FailedTarget' => 'Bei Fehler',
-        ] as $model => $label)
-            <div>
-                <label class="block text-sm font-medium text-gray-700">{{ $label }}</label>
-                <select @if($model === $prefix.'FailedTarget') x-model="failedTarget" @else wire:model.defer="{{ $model }}" @endif class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
-                    <option value="">{{ $label === 'Bei Erfolg' ? 'Naechste Karte' : 'Keine Route' }}</option>
-                    @if($label === 'Bei Fehler')
-                        <option value="next">Naechste Karte</option>
+                    @error($prefix.'CatalogKey') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                    @if(($selectedDefinition['description'] ?? '') !== '')
+                        <p class="mt-2 text-xs leading-5 text-slate-500">{{ $selectedDefinition['description'] }}</p>
                     @endif
-                    <option value="end">Workflow beenden</option>
-                    <option value="fail">Fehlerroute</option>
-                    @foreach($steps as $targetStep)
-                        <option value="step:{{ $targetStep->action_key }}">{{ $targetStep->name }}</option>
-                        @foreach($targetStep->task_cards as $targetTask)
-                            <option value="card:{{ $targetStep->id }}:{{ $targetTask['key'] ?? '' }}">Karte: {{ $targetStep->name }} / {{ $targetTask['title'] ?? 'Task' }}</option>
-                        @endforeach
-                    @endforeach
-                </select>
-                @error($model) <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
-            </div>
-        @endforeach
-    </div>
+                </div>
 
-    <div x-cloak x-show="String(failedTarget || '').startsWith('card:')" class="rounded-md border border-amber-200 bg-amber-50 p-3">
-        <label class="block text-sm font-medium text-amber-900">Maximale Fehlerrueckspruenge</label>
-        <input type="number" min="0" max="20" wire:model.defer="{{ $prefix }}FailedRetryLimit" class="mt-1 block w-full rounded-md border border-amber-300 bg-white p-2 text-sm shadow-sm focus:border-amber-500 focus:ring-amber-500">
-        <p class="mt-1 text-xs text-amber-800">Wird nur angewendet, wenn der Fehlerweg zu dieser oder einer vorherigen Task-Karte zurueckfuehrt. 0 bedeutet unbegrenzt.</p>
-        @error($prefix.'FailedRetryLimit') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
-    </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">Kartentitel</label>
+                    <input type="text" wire:model.defer="{{ $prefix }}Title" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                    @error($prefix.'Title') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                </div>
+
+                @if($isEdit || $form['timeout'])
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">{{ $form['timeout'] ? $form['timeout_label'] : 'Timeout in Sekunden' }}</label>
+                        <input type="number" min="{{ $form['timeout'] ? $form['timeout_min'] : 0 }}" max="{{ $form['timeout_max'] }}" wire:model.defer="{{ $prefix }}TimeoutSeconds" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                        @if($form['timeout'] && $form['timeout_help'] !== '')
+                            <p class="mt-1 text-xs text-slate-500">{{ $form['timeout_help'] }}</p>
+                        @endif
+                        @error($prefix.'TimeoutSeconds') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                    </div>
+                @endif
+
+                @if($form['browser_window'])
+                    <div class="{{ $isEdit ? '' : 'md:col-span-2' }}">
+                        <label class="block text-sm font-medium text-gray-700">{{ $form['browser_window_label'] }}</label>
+                        @if($catalogKey === 'browser.open' || ($form['browser_window_create'] ?? false))
+                            <input
+                                type="text"
+                                list="{{ $browserWindowDatalistId }}"
+                                wire:model.defer="{{ $prefix }}BrowserWindow"
+                                placeholder="{{ $form['browser_window_placeholder'] }}"
+                                class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                            >
+                            <datalist id="{{ $browserWindowDatalistId }}">
+                                @foreach($selectBrowserWindowOptions as $browserWindowOption)
+                                    <option value="{{ $browserWindowOption }}"></option>
+                                @endforeach
+                            </datalist>
+                        @else
+                            <select wire:model.defer="{{ $prefix }}BrowserWindow" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                                @foreach($selectBrowserWindowOptions as $browserWindowOption)
+                                    <option value="{{ $browserWindowOption }}">{{ $browserWindowOption }}</option>
+                                @endforeach
+                            </select>
+                        @endif
+                        @error($prefix.'BrowserWindow') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                    </div>
+                @endif
+            </div>
+
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Beschreibung</label>
+                <textarea rows="3" wire:model.defer="{{ $prefix }}Description" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"></textarea>
+                @error($prefix.'Description') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+            </div>
+
+            @if($form['selector'] || $form['value'] || $form['url'])
+                <div class="grid gap-4 {{ ($form['selector'] && ($form['value'] || $form['url'])) ? 'md:grid-cols-2' : '' }}">
+                    @if($form['selector'])
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">{{ $form['selector_label'] }}</label>
+                            <input type="text" wire:model.defer="{{ $prefix }}ElementSelector" placeholder="{{ $form['selector_placeholder'] }}" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                            @error($prefix.'ElementSelector') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                        </div>
+                    @endif
+
+                    @if($form['url'] || $form['value'])
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">{{ $form['url'] ? $form['url_label'] : $form['value_label'] }}</label>
+                            <input type="text" wire:model.defer="{{ $prefix }}InputValue" placeholder="{{ $form['url'] ? $form['url_placeholder'] : $form['value_placeholder'] }}" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                            @error($prefix.'InputValue') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                        </div>
+                    @endif
+                </div>
+            @endif
+
+            @if($form['mailbox_source'])
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">{{ $form['mailbox_source_label'] }}</label>
+                    <select data-workflow-task-mailbox-source="{{ $prefix }}" wire:model.change="{{ $prefix }}MailboxSource" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                        @foreach($form['mailbox_source_options'] as $mailboxSourceValue => $mailboxSourceLabel)
+                            <option value="{{ $mailboxSourceValue }}">{{ $mailboxSourceLabel }}</option>
+                        @endforeach
+                    </select>
+                    @error($prefix.'MailboxSource') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                </div>
+            @endif
+        </x-ui.accordion.tab-panel>
+
+        @foreach($extraFieldGroups as $tabLabel => $fields)
+            <x-ui.accordion.tab-panel
+                :for="$extraFieldTabIds[(string) $tabLabel] ?? ''"
+                :active="$defaultExtraTab"
+                :group="$extraFieldTabGroup"
+                panel-class="grid gap-4 rounded-b-lg border border-slate-200 bg-white p-4 md:grid-cols-2"
+            >
+                @foreach($fields as $field)
+                    @php
+                        $fieldName = (string) ($field['name'] ?? '');
+                        $fieldType = (string) ($field['type'] ?? 'text');
+                        $fieldLabel = (string) ($field['label'] ?? $fieldName);
+                        $fieldPlaceholder = (string) ($field['placeholder'] ?? '');
+                        $fieldHelp = (string) ($field['help'] ?? '');
+                        $fieldRows = max(2, (int) ($field['rows'] ?? 2));
+                        $fieldClass = ($field['span'] ?? '') === 'full' ? 'md:col-span-2' : '';
+                    @endphp
+                    @if($fieldName !== '')
+                        <div class="{{ $fieldClass }}">
+                            <label class="block text-sm font-medium text-gray-700">{{ $fieldLabel }}</label>
+                            @if($fieldType === 'textarea')
+                                <textarea rows="{{ $fieldRows }}" wire:model.live.debounce.500ms="{{ $prefix }}Extra.{{ $fieldName }}" placeholder="{{ $fieldPlaceholder }}" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"></textarea>
+                            @else
+                                <input
+                                    type="{{ $fieldType === 'number' ? 'number' : 'text' }}"
+                                    @if(isset($field['min'])) min="{{ $field['min'] }}" @endif
+                                    @if(isset($field['max'])) max="{{ $field['max'] }}" @endif
+                                    @if(isset($field['step'])) step="{{ $field['step'] }}" @endif
+                                    wire:model.live.debounce.500ms="{{ $prefix }}Extra.{{ $fieldName }}"
+                                    placeholder="{{ $fieldPlaceholder }}"
+                                    class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                                >
+                            @endif
+                            @if($fieldHelp !== '')
+                                <p class="mt-1 text-xs text-slate-500">{{ $fieldHelp }}</p>
+                            @endif
+                            @error($prefix.'Extra.'.$fieldName) <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                        </div>
+                    @endif
+                @endforeach
+            </x-ui.accordion.tab-panel>
+        @endforeach
+
+        @if($form['success_payload'] || $form['failure_payload'])
+            <x-ui.accordion.tab-panel
+                for="payload"
+                :active="$defaultExtraTab"
+                :group="$extraFieldTabGroup"
+                panel-class="grid gap-4 rounded-b-lg border border-slate-200 bg-white p-4 md:grid-cols-2"
+            >
+                @if($form['success_payload'])
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">{{ $form['success_payload_label'] }}</label>
+                        <textarea rows="3" wire:model.defer="{{ $prefix }}SuccessPayload" placeholder='{{ $form['success_payload_placeholder'] }}' class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"></textarea>
+                        @error($prefix.'SuccessPayload') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                    </div>
+                @endif
+                @if($form['failure_payload'])
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">{{ $form['failure_payload_label'] }}</label>
+                        <textarea rows="3" wire:model.defer="{{ $prefix }}FailurePayload" placeholder='{{ $form['failure_payload_placeholder'] }}' class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"></textarea>
+                        @error($prefix.'FailurePayload') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                    </div>
+                @endif
+            </x-ui.accordion.tab-panel>
+        @endif
+
+        <x-ui.accordion.tab-panel
+            for="routing"
+            :active="$defaultExtraTab"
+            :group="$extraFieldTabGroup"
+            panel-class="space-y-4 rounded-b-lg border border-slate-200 bg-white p-4"
+        >
+            <div class="grid gap-4 md:grid-cols-2">
+                @foreach([
+                    $prefix.'SuccessTarget' => 'Bei Erfolg',
+                    $prefix.'FailedTarget' => 'Bei Fehler',
+                ] as $model => $label)
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">{{ $label }}</label>
+                        <select @if($model === $prefix.'FailedTarget') x-model="failedTarget" @else wire:model.defer="{{ $model }}" @endif class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                            <option value="">{{ $label === 'Bei Erfolg' ? 'Naechste Karte' : 'Keine Route' }}</option>
+                            @if($label === 'Bei Fehler')
+                                <option value="next">Naechste Karte</option>
+                            @endif
+                            <option value="end">Workflow beenden</option>
+                            <option value="fail">Fehlerroute</option>
+                            @foreach($steps as $targetStep)
+                                <option value="step:{{ $targetStep->action_key }}">{{ $targetStep->name }}</option>
+                                @foreach($targetStep->task_cards as $targetTask)
+                                    <option value="card:{{ $targetStep->id }}:{{ $targetTask['key'] ?? '' }}">Karte: {{ $targetStep->name }} / {{ $targetTask['title'] ?? 'Task' }}</option>
+                                @endforeach
+                            @endforeach
+                        </select>
+                        @error($model) <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                    </div>
+                @endforeach
+            </div>
+
+            <div x-cloak x-show="String(failedTarget || '').startsWith('card:')" class="rounded-md border border-amber-200 bg-amber-50 p-3">
+                <label class="block text-sm font-medium text-amber-900">Maximale Fehlerrueckspruenge</label>
+                <input type="number" min="0" max="20" wire:model.defer="{{ $prefix }}FailedRetryLimit" class="mt-1 block w-full rounded-md border border-amber-300 bg-white p-2 text-sm shadow-sm focus:border-amber-500 focus:ring-amber-500">
+                <p class="mt-1 text-xs text-amber-800">Wird nur angewendet, wenn der Fehlerweg zu dieser oder einer vorherigen Task-Karte zurueckfuehrt. 0 bedeutet unbegrenzt.</p>
+                @error($prefix.'FailedRetryLimit') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+            </div>
+        </x-ui.accordion.tab-panel>
+    </x-ui.accordion.tabs>
 </div>
