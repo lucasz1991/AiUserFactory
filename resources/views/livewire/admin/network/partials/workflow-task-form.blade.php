@@ -96,6 +96,7 @@
     }
 
     $defaultExtraTab = (string) (array_key_first($extraFieldTabOptions) ?? '');
+    $extraFieldTabGroup = 'workflow-task-'.$prefix.'-'.(\Illuminate\Support\Str::slug((string) $catalogKey) ?: 'task').'-extra-fields';
     $browserWindowDatalistId = 'workflow-'.$prefix.'-browser-windows';
 @endphp
 
@@ -202,12 +203,15 @@
         <x-ui.accordion.tabs
             :tabs="$extraFieldTabOptions"
             :default="$defaultExtraTab"
+            :group="$extraFieldTabGroup"
             :persist="false"
             collapse-at="md"
         >
             @foreach($extraFieldGroups as $tabLabel => $fields)
                 <x-ui.accordion.tab-panel
                     :for="$extraFieldTabIds[(string) $tabLabel] ?? ''"
+                    :active="$defaultExtraTab"
+                    :group="$extraFieldTabGroup"
                     panel-class="grid gap-4 rounded-b-lg border border-slate-200 bg-white p-4 md:grid-cols-2"
                 >
                     @foreach($fields as $field)

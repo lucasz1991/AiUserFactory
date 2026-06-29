@@ -4,6 +4,7 @@
     'default' => null,
     'persistKey' => null,
     'persist' => true,
+    'group' => null,
     // optional: 'sm' | 'md' | 'lg' | 'xl' | '2xl'
     'collapseAt' => null,
 ])
@@ -19,6 +20,7 @@
     $autoKey    = 'tabs:' . $routeName . $tabsSig;
 
     $key = $persistKey ?: $autoKey;
+    $groupKey = $group ?: $key;
 @endphp
 
 <div
@@ -36,7 +38,7 @@
                     $count     = $isArray && array_key_exists('count', $tab) ? $tab['count'] : null;
                     $countLabel = $count !== null ? number_format((int) $count, 0, ',', '.') : null;
                 @endphp
-                out.push({ id: '{{ $k }}', label: @js($label), icon: @js($iconClass), countLabel: @js($countLabel) });
+                out.push({ id: @js((string) $k), label: @js($label), icon: @js($iconClass), countLabel: @js($countLabel) });
             @endforeach
             return out;
         })(),
@@ -44,7 +46,7 @@
         get others() { return this.items.filter(t => t.id !== this.openTab); },
         selectTab(id) {
             this.openTab = id;
-            this.$dispatch('ui-tab-selected', { tab: id });
+            this.$dispatch('ui-tab-selected', { group: @js($groupKey), tab: id });
         },
         mq: null,
         setupMQ(bp) {
