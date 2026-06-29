@@ -74,10 +74,15 @@
         $selectBrowserWindowOptions = collect(['main']);
     }
 
+    $extraFieldGroups = collect(is_array($form['extra_fields'] ?? null) ? $form['extra_fields'] : [])
+        ->filter(fn ($field) => is_array($field) && trim((string) ($field['name'] ?? '')) !== '')
+        ->groupBy(fn ($field) => trim((string) ($field['tab'] ?? 'Einstellungen')) ?: 'Einstellungen');
+    $extraFieldTabs = $extraFieldGroups->keys()->values();
+    $defaultExtraTab = (string) ($extraFieldTabs->first() ?? '');
     $browserWindowDatalistId = 'workflow-'.$prefix.'-browser-windows';
 @endphp
 
-<div class="space-y-4" x-data="{ failedTarget: @entangle($prefix.'FailedTarget').live }">
+<div class="space-y-4" x-data="{ failedTarget: @entangle($prefix.'FailedTarget').live, extraTab: @js($defaultExtraTab) }">
     <div class="grid gap-4 md:grid-cols-2">
         @if(! $isEdit)
             <div>
@@ -176,40 +181,62 @@
         </div>
     @endif
 
-    @if(! empty($form['extra_fields']))
-        <div class="grid gap-4 md:grid-cols-2">
-            @foreach($form['extra_fields'] as $field)
-                @php
-                    $fieldName = (string) ($field['name'] ?? '');
-                    $fieldType = (string) ($field['type'] ?? 'text');
-                    $fieldLabel = (string) ($field['label'] ?? $fieldName);
-                    $fieldPlaceholder = (string) ($field['placeholder'] ?? '');
-                    $fieldHelp = (string) ($field['help'] ?? '');
-                    $fieldRows = max(2, (int) ($field['rows'] ?? 2));
-                    $fieldClass = ($field['span'] ?? '') === 'full' ? 'md:col-span-2' : '';
-                @endphp
-                @if($fieldName !== '')
-                    <div class="{{ $fieldClass }}">
-                        <label class="block text-sm font-medium text-gray-700">{{ $fieldLabel }}</label>
-                        @if($fieldType === 'textarea')
-                            <textarea rows="{{ $fieldRows }}" wire:model.defer="{{ $prefix }}Extra.{{ $fieldName }}" placeholder="{{ $fieldPlaceholder }}" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"></textarea>
-                        @else
-                            <input
-                                type="{{ $fieldType === 'number' ? 'number' : 'text' }}"
-                                @if(isset($field['min'])) min="{{ $field['min'] }}" @endif
-                                @if(isset($field['max'])) max="{{ $field['max'] }}" @endif
-                                @if(isset($field['step'])) step="{{ $field['step'] }}" @endif
-                                wire:model.defer="{{ $prefix }}Extra.{{ $fieldName }}"
-                                placeholder="{{ $fieldPlaceholder }}"
-                                class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                            >
+    @if($extraFieldGroups->isNotEmpty())
+        <div class="space-y-4">
+            @if($extraFieldTabs->count() > 1)
+                <div class="flex flex-wrap gap-2 rounded-lg bg-slate-100 p-1">
+                    @foreach($extraFieldTabs as $tabLabel)
+                        <button
+                            type="button"
+                            x-on:click="extraTab = @js($tabLabel)"
+                            class="rounded-md px-3 py-1.5 text-sm font-semibold transition"
+                            x-bind:class="extraTab === @js($tabLabel) ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:bg-white/70 hover:text-slate-900'"
+                        >
+                            {{ $tabLabel }}
+                        </button>
+                    @endforeach
+                </div>
+            @endif
+
+            @foreach($extraFieldGroups as $tabLabel => $fields)
+                <div
+                    class="grid gap-4 md:grid-cols-2"
+                    @if($extraFieldTabs->count() > 1) x-show="extraTab === @js($tabLabel)" x-cloak @endif
+                >
+                    @foreach($fields as $field)
+                        @php
+                            $fieldName = (string) ($field['name'] ?? '');
+                            $fieldType = (string) ($field['type'] ?? 'text');
+                            $fieldLabel = (string) ($field['label'] ?? $fieldName);
+                            $fieldPlaceholder = (string) ($field['placeholder'] ?? '');
+                            $fieldHelp = (string) ($field['help'] ?? '');
+                            $fieldRows = max(2, (int) ($field['rows'] ?? 2));
+                            $fieldClass = ($field['span'] ?? '') === 'full' ? 'md:col-span-2' : '';
+                        @endphp
+                        @if($fieldName !== '')
+                            <div class="{{ $fieldClass }}">
+                                <label class="block text-sm font-medium text-gray-700">{{ $fieldLabel }}</label>
+                                @if($fieldType === 'textarea')
+                                    <textarea rows="{{ $fieldRows }}" wire:model.live.debounce.500ms="{{ $prefix }}Extra.{{ $fieldName }}" placeholder="{{ $fieldPlaceholder }}" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"></textarea>
+                                @else
+                                    <input
+                                        type="{{ $fieldType === 'number' ? 'number' : 'text' }}"
+                                        @if(isset($field['min'])) min="{{ $field['min'] }}" @endif
+                                        @if(isset($field['max'])) max="{{ $field['max'] }}" @endif
+                                        @if(isset($field['step'])) step="{{ $field['step'] }}" @endif
+                                        wire:model.live.debounce.500ms="{{ $prefix }}Extra.{{ $fieldName }}"
+                                        placeholder="{{ $fieldPlaceholder }}"
+                                        class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                                    >
+                                @endif
+                                @if($fieldHelp !== '')
+                                    <p class="mt-1 text-xs text-slate-500">{{ $fieldHelp }}</p>
+                                @endif
+                                @error($prefix.'Extra.'.$fieldName) <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                            </div>
                         @endif
-                        @if($fieldHelp !== '')
-                            <p class="mt-1 text-xs text-slate-500">{{ $fieldHelp }}</p>
-                        @endif
-                        @error($prefix.'Extra.'.$fieldName) <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
-                    </div>
-                @endif
+                    @endforeach
+                </div>
             @endforeach
         </div>
     @endif

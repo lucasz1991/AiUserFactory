@@ -25,14 +25,26 @@ function candidateKey(candidate = {}) {
   ].join('|').toLowerCase();
 }
 
-function subjectMatches(candidate = {}, filters = []) {
-  if (filters.length === 0) {
+function textMatches(value, filters = []) {
+  const text = normalizeText(value).toLowerCase();
+
+  return filters.some((filter) => text.includes(normalizeText(filter).toLowerCase()));
+}
+
+function filterMatches(candidate = {}, subjectFilters = [], titleFilters = []) {
+  if (subjectFilters.length === 0 && titleFilters.length === 0) {
     return true;
   }
 
-  const subject = normalizeText(candidate.subject || candidate.text).toLowerCase();
+  if (subjectFilters.length > 0 && textMatches(candidate.subject || candidate.text, subjectFilters)) {
+    return true;
+  }
 
-  return filters.some((filter) => subject.includes(normalizeText(filter).toLowerCase()));
+  if (titleFilters.length > 0 && textMatches(candidate.title || candidate.text, titleFilters)) {
+    return true;
+  }
+
+  return false;
 }
 
 async function run(context = {}) {
@@ -48,6 +60,7 @@ async function run(context = {}) {
   const maxItems = Math.max(1, Math.min(200, optionNumber(options, input, ['max_items', 'maxItems', 'limit'], 50)));
   const waitForNewMailSeconds = Math.max(0, Math.min(3600, optionNumber(options, input, ['wait_for_new_mail_seconds', 'waitForNewMailSeconds', 'wait_seconds', 'waitSeconds'], 0)));
   const subjectFilters = stringListFrom(optionString(options, input, ['subject_filter', 'subjectFilter', 'subject_must_contain', 'subjectMustContain'], ''), []);
+  const titleFilters = stringListFrom(optionString(options, input, ['title_filter', 'titleFilter', 'title_must_contain', 'titleMustContain'], ''), []);
 
   if (!page || (typeof page.frames !== 'function' && typeof page.evaluate !== 'function')) {
     return { ok: false, status: 'failed', statusMessage: 'Kein Page-Handle fuer den Mail-Inbox-Scan vorhanden.' };
@@ -63,14 +76,14 @@ async function run(context = {}) {
 
     return candidates.filter((candidate) => {
       if (!maximumAgeSeconds) {
-        return subjectMatches(candidate, subjectFilters);
+        return filterMatches(candidate, subjectFilters, titleFilters);
       }
 
       if (candidate.ageSeconds === null || candidate.ageSeconds === undefined) {
-        return includeUnknownAge && subjectMatches(candidate, subjectFilters);
+        return includeUnknownAge && filterMatches(candidate, subjectFilters, titleFilters);
       }
 
-      return Number(candidate.ageSeconds) <= maximumAgeSeconds && subjectMatches(candidate, subjectFilters);
+      return Number(candidate.ageSeconds) <= maximumAgeSeconds && filterMatches(candidate, subjectFilters, titleFilters);
     });
   };
 
@@ -121,6 +134,8 @@ async function run(context = {}) {
     list_item_selector: listItemSelector,
     subjectFilters,
     subject_filters: subjectFilters,
+    titleFilters,
+    title_filters: titleFilters,
     waitForNewMailSeconds,
     wait_for_new_mail_seconds: waitForNewMailSeconds,
     pollCount,

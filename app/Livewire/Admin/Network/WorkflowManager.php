@@ -656,7 +656,7 @@ class WorkflowManager extends Component
             $task['failure_payload'] = $failurePayload;
         }
 
-        $task = $this->applyTaskExtraFields($task, $formConfig, $this->newTaskExtra);
+        $task = $this->applyTaskExtraFields($task, $formConfig, $validated['newTaskExtra'] ?? []);
 
         $successRoute = $this->taskRouteTargetFromValue(
             (string) ($validated['newTaskSuccessTarget'] ?? ''),
@@ -880,7 +880,7 @@ class WorkflowManager extends Component
 
                 unset($task['on_partial']);
 
-                return $this->applyTaskExtraFields($task, $formConfig, $this->editingTaskExtra);
+                return $this->applyTaskExtraFields($task, $formConfig, $validated['editingTaskExtra'] ?? []);
             })
             ->values()
             ->toArray();

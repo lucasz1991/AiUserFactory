@@ -38,6 +38,14 @@ const DEFAULT_SUBJECT_SELECTORS = [
   '[aria-label*="subject" i]',
 ];
 
+const DEFAULT_TITLE_SELECTORS = [
+  '[title]',
+  '[data-testid*="title" i]',
+  '[data-test*="title" i]',
+  '[class*="title" i]',
+  '[aria-label*="title" i]',
+];
+
 const DEFAULT_SENDER_SELECTORS = [
   '[data-testid*="sender" i]',
   '[data-test*="sender" i]',
@@ -413,6 +421,7 @@ async function scanMailList(page, options = {}) {
   const listSelectors = selectorsFrom(options.listSelector || options.list_selector, DEFAULT_LIST_SELECTORS);
   const itemSelectors = selectorsFrom(options.listItemSelector || options.list_item_selector, DEFAULT_ITEM_SELECTORS);
   const subjectSelectors = selectorsFrom(options.subjectSelector || options.subject_selector, DEFAULT_SUBJECT_SELECTORS);
+  const titleSelectors = selectorsFrom(options.titleSelector || options.title_selector, DEFAULT_TITLE_SELECTORS);
   const senderSelectors = selectorsFrom(options.senderSelector || options.sender_selector, DEFAULT_SENDER_SELECTORS);
   const dateSelectors = selectorsFrom(options.dateSelector || options.date_selector, DEFAULT_DATE_SELECTORS);
   const dateAttributes = stringListFrom(options.dateAttribute || options.date_attribute || options.dateAttributes || options.date_attributes, [
@@ -443,6 +452,10 @@ async function scanMailList(page, options = {}) {
           }
 
           try {
+            if (node !== document && typeof node.matches === 'function' && node.matches(selector)) {
+              matches.push(node);
+            }
+
             matches.push(...Array.from(node.querySelectorAll(selector)));
           } catch {
             return;
@@ -549,10 +562,12 @@ async function scanMailList(page, options = {}) {
 
             const rect = element.getBoundingClientRect();
             const subjectMatch = textFor(element, payload.subjectSelectors);
+            const titleMatch = textFor(element, payload.titleSelectors, ['title', 'aria-label', 'text']);
             const senderMatch = textFor(element, payload.senderSelectors);
             const dateMatch = textFor(element, payload.dateSelectors, payload.dateAttributes);
             const previewMatch = textFor(element, payload.previewSelectors);
             const subject = subjectMatch.text;
+            const title = titleMatch.text;
             const sender = senderMatch.text;
             const dateText = dateMatch.text;
             const preview = previewMatch.text;
@@ -577,8 +592,11 @@ async function scanMailList(page, options = {}) {
               selector,
               selectorIndex,
               subject,
+              title,
               sender,
               dateText,
+              titleAttribute: titleMatch.attribute,
+              title_attribute: titleMatch.attribute,
               dateAttribute: dateMatch.attribute,
               date_attribute: dateMatch.attribute,
               preview,
@@ -600,6 +618,7 @@ async function scanMailList(page, options = {}) {
       listSelectors,
       itemSelectors,
       subjectSelectors,
+      titleSelectors,
       senderSelectors,
       dateSelectors,
       dateAttributes,
@@ -1015,6 +1034,7 @@ function mailMatches(mail = {}, searchText = '', fields = ['subject', 'sender', 
 module.exports = {
   DEFAULT_BODY_SELECTORS,
   DEFAULT_ITEM_SELECTORS,
+  DEFAULT_TITLE_SELECTORS,
   ageSecondsFromText,
   clickMailCandidate,
   extractValueFromText,

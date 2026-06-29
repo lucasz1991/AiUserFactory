@@ -23,7 +23,39 @@ const {
 } = require('../lib/mail_list.cjs');
 
 function fieldsFrom(value) {
-  return stringListFrom(value, ['subject', 'sender', 'preview', 'text', 'body']);
+  return stringListFrom(value, ['subject', 'title', 'sender', 'preview', 'text', 'body']);
+}
+
+function textMatches(value, filters = []) {
+  const text = normalizeText(value).toLowerCase();
+
+  return filters.some((filter) => text.includes(normalizeText(filter).toLowerCase()));
+}
+
+function subjectOrTitleMatches(mail = {}, subjectFilters = [], titleFilters = []) {
+  if (subjectFilters.length === 0 && titleFilters.length === 0) {
+    return true;
+  }
+
+  if (subjectFilters.length > 0 && textMatches(mail.subject || mail.text || '', subjectFilters)) {
+    return true;
+  }
+
+  if (titleFilters.length > 0 && textMatches(mail.title || mail.text || '', titleFilters)) {
+    return true;
+  }
+
+  return false;
+}
+
+async function firstTextFromPage(page, selectors = []) {
+  if (selectors.length === 0) {
+    return '';
+  }
+
+  const chunks = await readTextFromFrames(page, selectors);
+
+  return normalizeText(chunks.map((chunk) => chunk.text).filter(Boolean).join(' '));
 }
 
 function arrayFromContext(context = {}, name = '') {
@@ -64,8 +96,12 @@ async function run(context = {}) {
   const scalarValue = scalarInputValue(input);
   const inputArrayName = variableName(optionString(options, input, ['input_array_name', 'inputArrayName', 'array_name', 'arrayName'], 'inbox_mails'), 'inbox_mails');
   const searchText = optionString(options, input, ['search_text', 'searchText', 'query', 'contains'], scalarValue);
-  const searchFields = fieldsFrom(optionString(options, input, ['search_fields', 'searchFields'], 'subject,sender,preview,text,body'));
+  const searchFields = fieldsFrom(optionString(options, input, ['search_fields', 'searchFields'], 'subject,title,sender,preview,text,body'));
   const bodySelectors = selectorsFrom(optionString(options, input, ['body_selector', 'bodySelector', 'mail_body_selector', 'mailBodySelector'], input.selector || input.elementSelector || input.element_selector || ''));
+  const subjectSelectors = selectorsFrom(optionString(options, input, ['subject_selector', 'subjectSelector'], ''));
+  const titleSelectors = selectorsFrom(optionString(options, input, ['title_selector', 'titleSelector'], ''));
+  const subjectFilters = stringListFrom(optionString(options, input, ['subject_filter', 'subjectFilter', 'subject_must_contain', 'subjectMustContain'], ''), []);
+  const titleFilters = stringListFrom(optionString(options, input, ['title_filter', 'titleFilter', 'title_must_contain', 'titleMustContain'], ''), []);
   const outputMailName = variableName(optionString(options, input, ['output_mail_name', 'outputMailName'], 'matched_mail'), 'matched_mail');
   const outputValueName = normalizeText(optionString(options, input, ['output_value_name', 'outputValueName'], ''));
   const outputValueSource = optionString(options, input, ['output_value_source', 'outputValueSource'], 'body');
@@ -78,6 +114,8 @@ async function run(context = {}) {
   const sourceMails = arrayFromContext(context, inputArrayName);
   const openedMails = [];
   const matches = [];
+  const hasSubjectOrTitleFilter = subjectFilters.length > 0 || titleFilters.length > 0;
+  const canReadSubjectOrTitleAfterOpen = subjectSelectors.length > 0 || titleSelectors.length > 0;
 
   if (!page || (typeof page.frames !== 'function' && typeof page.evaluate !== 'function')) {
     return { ok: false, status: 'failed', statusMessage: 'Kein Page-Handle fuer die Mail-Suchschleife vorhanden.' };
@@ -105,6 +143,10 @@ async function run(context = {}) {
     }
 
     if (maximumAgeSeconds && (candidate.ageSeconds === null || candidate.ageSeconds === undefined) && !includeUnknownAge) {
+      continue;
+    }
+
+    if (hasSubjectOrTitleFilter && !canReadSubjectOrTitleAfterOpen && !subjectOrTitleMatches(candidate, subjectFilters, titleFilters)) {
       continue;
     }
 
@@ -144,6 +186,18 @@ async function run(context = {}) {
       openedAt: new Date().toISOString(),
     };
 
+    if (subjectSelectors.length > 0) {
+      mail.subject = await firstTextFromPage(page, subjectSelectors) || mail.subject || '';
+    }
+
+    if (titleSelectors.length > 0) {
+      mail.title = await firstTextFromPage(page, titleSelectors) || mail.title || '';
+    }
+
+    if (hasSubjectOrTitleFilter && !subjectOrTitleMatches(mail, subjectFilters, titleFilters)) {
+      continue;
+    }
+
     if (searchText && !mailMatches(mail, searchText, searchFields)) {
       continue;
     }
@@ -177,6 +231,10 @@ async function run(context = {}) {
       input_array_name: inputArrayName,
       searchText,
       search_text: searchText,
+      subjectFilters,
+      subject_filters: subjectFilters,
+      titleFilters,
+      title_filters: titleFilters,
       sourceCount: sourceMails.length,
       source_count: sourceMails.length,
       openedMails,
@@ -209,6 +267,10 @@ async function run(context = {}) {
     output_mail_name: outputMailName,
     outputValueName: outputValueName || null,
     output_value_name: outputValueName || null,
+    subjectFilters,
+    subject_filters: subjectFilters,
+    titleFilters,
+    title_filters: titleFilters,
     extractedValue: firstMatch.extractedValue || null,
     extracted_value: firstMatch.extractedValue || null,
     matchedMail,
