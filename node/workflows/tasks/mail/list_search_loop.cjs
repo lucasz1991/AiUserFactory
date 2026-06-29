@@ -14,6 +14,7 @@ const {
   scalarInputValue,
   selectorsFrom,
   setWorkflowVariable,
+  stringListFrom,
   taskOptions,
   valueFromPath,
   variableName,
@@ -22,17 +23,7 @@ const {
 } = require('../lib/mail_list.cjs');
 
 function fieldsFrom(value) {
-  if (Array.isArray(value)) {
-    return value.map(normalizeText).filter(Boolean);
-  }
-
-  const text = normalizeText(value);
-
-  if (!text) {
-    return ['subject', 'sender', 'preview', 'text', 'body'];
-  }
-
-  return text.split(/[,;\s]+/).map(normalizeText).filter(Boolean);
+  return stringListFrom(value, ['subject', 'sender', 'preview', 'text', 'body']);
 }
 
 function arrayFromContext(context = {}, name = '') {

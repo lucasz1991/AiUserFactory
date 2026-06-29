@@ -1449,10 +1449,12 @@ class WorkflowManager extends Component
 
     protected function taskExtraFieldsFromTask(array $formConfig, array $task): array
     {
+        $legacyPayload = $this->arrayPayloadFromTaskValue($task['success_payload'] ?? null);
+
         return collect($this->taskExtraFields($formConfig))
-            ->mapWithKeys(function (array $field) use ($task): array {
+            ->mapWithKeys(function (array $field) use ($task, $legacyPayload): array {
                 $name = $field['name'];
-                $value = data_get($task, $name, $field['default'] ?? '');
+                $value = data_get($task, $name, data_get($legacyPayload, $name, $field['default'] ?? ''));
 
                 if (is_array($value) || is_object($value)) {
                     $value = json_encode($value, JSON_UNESCAPED_SLASHES);
@@ -1461,6 +1463,21 @@ class WorkflowManager extends Component
                 return [$name => (string) $value];
             })
             ->all();
+    }
+
+    protected function arrayPayloadFromTaskValue(mixed $value): array
+    {
+        if (is_array($value)) {
+            return $value;
+        }
+
+        if (! is_string($value) || trim($value) === '') {
+            return [];
+        }
+
+        $decoded = json_decode($value, true);
+
+        return is_array($decoded) ? $decoded : [];
     }
 
     protected function applyTaskExtraFields(array $task, array $formConfig, array $values): array
