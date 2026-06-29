@@ -1,6 +1,7 @@
 @props([
     'workflow',
     'editMethod' => null,
+    'duplicateMethod' => null,
     'deleteMethod' => null,
 ])
 
@@ -21,6 +22,12 @@
         @if($editMethod)
             <button type="button" wire:click="{{ $editMethod }}({{ $workflow->id }})" class="block w-full px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50">
                 Bearbeiten
+            </button>
+        @endif
+
+        @if($duplicateMethod)
+            <button type="button" wire:click="{{ $duplicateMethod }}({{ $workflow->id }})" class="block w-full px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                Duplizieren
             </button>
         @endif
 

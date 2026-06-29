@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Livewire\Admin\Network\WorkflowManager;
+use App\Livewire\Admin\Network\WorkflowsIndex;
 use App\Models\Workflow;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowStep;
@@ -175,6 +176,56 @@ class WorkflowCompositionTest extends TestCase
         $this->assertSame($importedStart->action_key, data_get($copiedCheckTask, 'on_error.action_key'));
         $this->assertSame('start', data_get($copiedCheckTask, 'on_error.card_key'));
         $this->assertSame(2, data_get($copiedCheckTask, 'on_error.max_attempts'));
+    }
+
+    public function test_workflow_list_duplicates_workflow_definitions_and_shows_run_stats(): void
+    {
+        $workflow = $this->workflow('duplicate-source');
+        $this->step($workflow, 'Duplicate list', [$this->waitTask('duplicate-task')]);
+        WorkflowRun::query()->create([
+            'run_uuid' => (string) str()->uuid(),
+            'workflow_id' => $workflow->id,
+            'status' => 'completed',
+            'context_json' => [],
+            'result_json' => [],
+        ]);
+        WorkflowRun::query()->create([
+            'run_uuid' => (string) str()->uuid(),
+            'workflow_id' => $workflow->id,
+            'status' => 'failed',
+            'context_json' => [],
+            'result_json' => [],
+        ]);
+        WorkflowRun::query()->create([
+            'run_uuid' => (string) str()->uuid(),
+            'workflow_id' => $workflow->id,
+            'status' => 'cancelled',
+            'context_json' => [],
+            'result_json' => [],
+        ]);
+
+        Livewire::test(WorkflowsIndex::class)
+            ->assertSee('B 3')
+            ->assertSee('OK 1')
+            ->assertSee('F 1')
+            ->call('duplicateWorkflow', $workflow->id)
+            ->call('duplicateWorkflow', $workflow->id)
+            ->assertHasNoErrors();
+
+        $firstCopy = Workflow::query()->where('name', 'Duplicate source 01')->first();
+        $secondCopy = Workflow::query()->where('name', 'Duplicate source 02')->first();
+
+        $this->assertNotNull($firstCopy);
+        $this->assertNotNull($secondCopy);
+        $this->assertSame('duplicate-source-01', $firstCopy->slug);
+        $this->assertFalse($firstCopy->is_locked);
+        $this->assertSame(0, $firstCopy->runs()->count());
+
+        $copiedStep = $firstCopy->steps()->first();
+
+        $this->assertNotNull($copiedStep);
+        $this->assertSame('Duplicate list', $copiedStep->name);
+        $this->assertSame('duplicate-task', data_get($copiedStep->task_cards, '0.key'));
     }
 
     public function test_task_error_routes_resume_at_the_target_card_and_detect_back_routes(): void

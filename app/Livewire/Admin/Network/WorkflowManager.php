@@ -194,6 +194,10 @@ class WorkflowManager extends Component
             $this->activeTaskGroup = (string) ($taskGroups->first() ?? 'browser');
         }
 
+        $runStats = $selectedWorkflow
+            ? $this->workflowRunStats($selectedWorkflow)
+            : ['runs' => 0, 'successful_runs' => 0, 'failed_runs' => 0];
+
         return view('livewire.admin.network.workflow-manager', [
             'selectedWorkflow' => $selectedWorkflow,
             'steps' => $steps,
@@ -214,7 +218,7 @@ class WorkflowManager extends Component
                 'actions' => $steps->filter(fn (WorkflowStep $step): bool => $step->type !== WorkflowStep::TYPE_WAIT)->count(),
                 'lists' => $steps->count(),
                 'task_cards' => $steps->sum(fn (WorkflowStep $step): int => count($step->task_cards)),
-                'runs' => $selectedWorkflow?->runs()->count() ?? 0,
+                ...$runStats,
             ],
         ])->layout('layouts.master');
     }
@@ -1124,6 +1128,15 @@ class WorkflowManager extends Component
             ->latest('created_at')
             ->latest('id')
             ->first();
+    }
+
+    protected function workflowRunStats(Workflow $workflow): array
+    {
+        return [
+            'runs' => $workflow->runs()->count(),
+            'successful_runs' => $workflow->runs()->where('status', 'completed')->count(),
+            'failed_runs' => $workflow->runs()->where('status', 'failed')->count(),
+        ];
     }
 
     protected function loadWorkflowForm(): void

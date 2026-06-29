@@ -3,6 +3,8 @@
 namespace App\Livewire\Admin\Network;
 
 use App\Models\Workflow;
+use App\Models\WorkflowStep;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Livewire\Component;
 
@@ -46,7 +48,12 @@ class WorkflowsIndex extends Component
     {
         $workflows = Workflow::query()
             ->with(['steps', 'includedByWorkflows'])
-            ->withCount(['steps', 'runs'])
+            ->withCount([
+                'steps',
+                'runs',
+                'runs as successful_runs_count' => fn ($query) => $query->where('status', 'completed'),
+                'runs as failed_runs_count' => fn ($query) => $query->where('status', 'failed'),
+            ])
             ->orderBy('category')
             ->orderBy('subcategory')
             ->orderBy('name')
@@ -230,6 +237,62 @@ class WorkflowsIndex extends Component
         session()->flash('success', 'Workflow wurde geloescht. Du kannst ihn jetzt per Seeder neu erzeugen.');
     }
 
+    public function duplicateWorkflow(int $workflowId): void
+    {
+        $source = Workflow::query()
+            ->with(['steps' => fn ($query) => $query->ordered()])
+            ->find($workflowId);
+
+        if (! $source) {
+            return;
+        }
+
+        $duplicate = DB::transaction(function () use ($source): Workflow {
+            $name = $this->uniqueDuplicateName($source->name);
+            $settings = is_array($source->settings_json) ? $source->settings_json : [];
+
+            $duplicate = Workflow::query()->create([
+                'name' => $name,
+                'slug' => $this->uniqueSlug($name),
+                'description' => (string) $source->description,
+                'category' => trim((string) $source->category) ?: 'custom',
+                'subcategory' => trim((string) $source->subcategory) ?: null,
+                'is_active' => (bool) $source->is_active,
+                'is_locked' => false,
+                'trigger_type' => trim((string) $source->trigger_type) ?: 'manual',
+                'settings_json' => array_replace($settings, [
+                    'seeded' => false,
+                    'duplicated_from_workflow_id' => $source->id,
+                    'duplicated_from_workflow_slug' => $source->slug,
+                ]),
+            ]);
+
+            foreach ($source->steps as $step) {
+                if (! $step instanceof WorkflowStep) {
+                    continue;
+                }
+
+                $duplicate->steps()->create([
+                    'name' => $step->name,
+                    'type' => $step->type,
+                    'action_key' => $step->action_key,
+                    'position' => (int) $step->position,
+                    'is_enabled' => (bool) $step->is_enabled,
+                    'config_json' => is_array($step->config_json) ? $step->config_json : [],
+                    'retry_attempts' => max(0, (int) $step->retry_attempts),
+                    'wait_after_seconds' => max(0, (int) $step->wait_after_seconds),
+                ]);
+            }
+
+            return $duplicate;
+        });
+
+        $this->activeGroup = trim((string) $duplicate->category) ?: 'custom';
+        $this->activeSubcategory = trim((string) $duplicate->subcategory) ?: 'all';
+
+        session()->flash('success', 'Workflow wurde als "'.$duplicate->name.'" dupliziert.');
+    }
+
     protected function uniqueSlug(string $name): string
     {
         $base = Str::slug($name) ?: 'workflow';
@@ -241,6 +304,31 @@ class WorkflowsIndex extends Component
         }
 
         return $slug;
+    }
+
+    protected function uniqueDuplicateName(string $name): string
+    {
+        $name = trim($name) ?: 'Workflow';
+        $base = $name;
+        $start = 1;
+
+        if (preg_match('/^(.*\S)\s+(\d{2,})$/', $name, $matches)) {
+            $base = trim($matches[1]);
+            $start = max(1, (int) $matches[2] + 1);
+        }
+
+        $base = trim($base) ?: 'Workflow';
+
+        for ($index = $start; $index < 1000; $index++) {
+            $suffix = sprintf('%02d', $index);
+            $candidate = Str::limit($base, 160 - strlen($suffix) - 1, '').' '.$suffix;
+
+            if (! Workflow::query()->where('name', $candidate)->exists()) {
+                return $candidate;
+            }
+        }
+
+        return Str::limit($base, 150, '').' '.Str::lower(Str::random(8));
     }
 
     protected function taskCardCount(Workflow $workflow): int

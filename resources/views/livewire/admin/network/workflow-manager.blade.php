@@ -68,11 +68,13 @@
                 <span class="font-semibold">Nur-Lese-Modus.</span> {{ $selectedWorkflow->lock_reason }} Im Manager koennen fuer diesen Workflow nur Tests gestartet und geoeffnet werden.
             </div>
         @endif
-        <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
             <x-admin.stat label="Aufgaben" :value="$summary['actions']" tone="slate" />
             <x-admin.stat label="Listen" :value="$summary['lists']" tone="blue" />
             <x-admin.stat label="Tasks" :value="$summary['task_cards']" tone="amber" />
-            <x-admin.stat label="Laeufe" :value="$summary['runs']" tone="emerald" />
+            <x-admin.stat label="Benutzt" :value="$summary['runs']" tone="slate" />
+            <x-admin.stat label="Erfolgreich" :value="$summary['successful_runs']" tone="emerald" />
+            <x-admin.stat label="Fehlerhaft" :value="$summary['failed_runs']" tone="red" />
         </div>
 
         <x-admin.panel title="Board">

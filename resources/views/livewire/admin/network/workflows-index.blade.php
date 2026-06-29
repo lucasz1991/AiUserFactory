@@ -73,9 +73,9 @@
             <table class="w-full table-fixed divide-y divide-slate-200">
                 <thead class="bg-slate-50">
                     <tr>
-                        <th class="w-[42%] px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Workflow</th>
+                        <th class="w-[36%] px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Workflow</th>
                         <th class="w-[18%] px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Gruppe</th>
-                        <th class="w-[24%] px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Daten</th>
+                        <th class="w-[30%] px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Daten</th>
                         <th class="w-[10%] px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Status</th>
                         <th class="w-[6%] px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-500"></th>
                     </tr>
@@ -115,7 +115,9 @@
                                 <div class="flex flex-wrap gap-1.5">
                                     <span title="Listen" class="inline-flex items-center rounded-full bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-700 ring-1 ring-blue-200">L {{ $workflow->steps_count }}</span>
                                     <span title="Tasks" class="inline-flex items-center rounded-full bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-700 ring-1 ring-amber-200">T {{ $taskCardCount }}</span>
-                                    <span title="Laeufe" class="inline-flex items-center rounded-full bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-200">R {{ $workflow->runs_count }}</span>
+                                    <span title="Benutzt" class="inline-flex items-center rounded-full bg-slate-50 px-2 py-1 text-xs font-semibold text-slate-700 ring-1 ring-slate-200">B {{ $workflow->runs_count }}</span>
+                                    <span title="Erfolgreich" class="inline-flex items-center rounded-full bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-200">OK {{ $workflow->successful_runs_count }}</span>
+                                    <span title="Fehlerhaft" class="inline-flex items-center rounded-full bg-red-50 px-2 py-1 text-xs font-semibold text-red-700 ring-1 ring-red-200">F {{ $workflow->failed_runs_count }}</span>
                                 </div>
                             </td>
                             <td class="px-3 py-3">
@@ -124,7 +126,7 @@
                                 </span>
                             </td>
                             <td class="px-3 py-3 text-right">
-                                <x-workflows.actions-dropdown :workflow="$workflow" edit-method="openEditWorkflow" delete-method="deleteWorkflow" />
+                                <x-workflows.actions-dropdown :workflow="$workflow" edit-method="openEditWorkflow" duplicate-method="duplicateWorkflow" delete-method="deleteWorkflow" />
                             </td>
                         </tr>
                     @empty
