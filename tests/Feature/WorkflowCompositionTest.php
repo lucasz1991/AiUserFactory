@@ -419,6 +419,47 @@ class WorkflowCompositionTest extends TestCase
         $this->assertSame('child-session', $boundary['embedded_workflow_browser_window']);
     }
 
+    public function test_embedded_workflow_internal_routes_are_remapped_to_runtime_tasks(): void
+    {
+        $parent = $this->workflow('parent-internal-routes');
+        $child = $this->workflow('child-internal-routes');
+        $first = $this->waitTask('child-first');
+        $first['next'] = [
+            'type' => 'card',
+            'card_key' => 'child-second',
+            'card' => 'child-second',
+        ];
+        $second = $this->waitTask('child-second');
+        $second['next'] = [
+            'type' => 'end',
+            'step' => 'end',
+        ];
+        $this->step($child, 'Child internal list', [$first, $second]);
+
+        $workflowTask = $this->workflowTask($child, 'child-workflow');
+        $workflowTask['next'] = [
+            'type' => 'card',
+            'card_key' => 'parent-after-child',
+            'card' => 'parent-after-child',
+        ];
+        $parentStep = $this->step($parent, 'Parent list', [
+            $workflowTask,
+            $this->waitTask('parent-after-child'),
+        ]);
+
+        $tasks = $this->runtimeTasks($parentStep);
+        $runtimeFirst = collect($tasks)->first(fn (array $task): bool => str_ends_with((string) $task['key'], 'child-first'));
+        $runtimeSecond = collect($tasks)->first(fn (array $task): bool => str_ends_with((string) $task['key'], 'child-second'));
+        $boundary = collect($tasks)->firstWhere('runner', 'workflow-boundary');
+
+        $this->assertNotNull($runtimeFirst);
+        $this->assertNotNull($runtimeSecond);
+        $this->assertNotNull($boundary);
+        $this->assertSame($runtimeSecond['key'], data_get($runtimeFirst, 'next.card_key'));
+        $this->assertSame($boundary['key'], data_get($runtimeSecond, 'next.card_key'));
+        $this->assertSame('parent-after-child', data_get($boundary, 'next.card_key'));
+    }
+
     protected function workflow(string $slug): Workflow
     {
         return Workflow::query()->create([

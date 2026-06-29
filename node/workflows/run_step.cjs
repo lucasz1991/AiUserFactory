@@ -1683,6 +1683,16 @@ async function run() {
     const successRoute = task.next && typeof task.next === 'object' ? task.next : null;
 
     if (successRoute) {
+      const successRouteType = String(successRoute.type || successRoute.action_key || successRoute.step || '').trim().toLowerCase();
+
+      if (successRouteType === 'fail') {
+        requestedFailureRouteTask = {
+          ...task,
+          key: task.route_source_task_key || task.parent_task_key || task.key,
+        };
+        break;
+      }
+
       const targetCardKey = String(successRoute.card_key || successRoute.card || '').trim();
       const targetTaskIndex = targetCardKey === ''
         ? -1

@@ -332,6 +332,9 @@ class WorkflowTaskRunner
         ?string $inheritedMailboxSource = null,
         ?string $embeddedWorkflowFrameKey = null,
         ?string $embeddedBrowserWindowName = null,
+        array $embeddedRouteMap = [],
+        ?string $embeddedBoundaryTaskKey = null,
+        ?string $sourceStepActionKey = null,
     ): array {
         $expanded = [];
         $embeddedBrowserWindowName = $this->normalizeBrowserWindowName($embeddedBrowserWindowName);
@@ -361,6 +364,13 @@ class WorkflowTaskRunner
                     $originalKey = trim((string) ($runtimeTask['key'] ?? 'task')) ?: 'task';
                     $runtimeTask['key'] = Str::slug($keyPrefix.'-'.$originalKey);
                 }
+
+                $runtimeTask = $this->remapEmbeddedTaskRoutes(
+                    $runtimeTask,
+                    $embeddedRouteMap,
+                    $embeddedBoundaryTaskKey,
+                    $sourceStepActionKey,
+                );
 
                 if ($parentTaskKey !== null) {
                     $runtimeTask['parent_task_key'] = $parentTaskKey;
@@ -415,8 +425,15 @@ class WorkflowTaskRunner
             }
 
             $workflowFrameKey = Str::slug(trim($keyPrefix.'-workflow-'.$workflow->id.'-'.$taskKey, '-'));
+            $boundaryTaskKey = $workflowFrameKey.'-boundary';
+            $nestedGroups = [];
+            $workflowRouteMap = [
+                'cards' => [],
+                'first_tasks' => [],
+                'next_steps' => [],
+            ];
 
-            foreach ($steps as $nestedStep) {
+            foreach ($steps as $stepIndex => $nestedStep) {
                 $nestedTasks = $nestedStep->task_cards;
 
                 if ($nestedTasks === [] && $nestedStep->type === WorkflowStep::TYPE_WAIT) {
@@ -433,15 +450,60 @@ class WorkflowTaskRunner
                     );
                 }
 
+                if ($nestedStep->type !== WorkflowStep::TYPE_WAIT && $nestedStep->wait_after_seconds > 0) {
+                    $nestedTasks[] = app(WorkflowTaskCatalog::class)->cardFromDefinition('wait.seconds', [
+                        'key' => 'wartezeit-nach-liste',
+                        'title' => 'Wartezeit nach '.$nestedStep->name,
+                        'value' => $nestedStep->wait_after_seconds,
+                    ]);
+                }
+
+                $nestedTasks = $this->applyEmbeddedStepRoutesToTasks($nestedStep, $nestedTasks);
                 $nestedPrefix = trim($keyPrefix.'-workflow-'.$workflow->id.'-'.$taskKey.'-step-'.$nestedStep->id, '-');
+                $nestedActionKey = trim((string) $nestedStep->action_key);
+                $nextStep = $steps->get($stepIndex + 1);
+
+                if ($nestedActionKey !== '' && $nextStep instanceof WorkflowStep) {
+                    $workflowRouteMap['next_steps'][$nestedActionKey] = trim((string) $nextStep->action_key);
+                }
+
+                foreach ($nestedTasks as $nestedTaskIndex => $nestedTask) {
+                    if (! is_array($nestedTask)) {
+                        continue;
+                    }
+
+                    $originalKey = trim((string) ($nestedTask['key'] ?? 'task')) ?: 'task';
+                    $runtimeKey = Str::slug($nestedPrefix.'-'.$originalKey);
+
+                    if ($nestedTaskIndex === 0 && $nestedActionKey !== '') {
+                        $workflowRouteMap['first_tasks'][$nestedActionKey] = $runtimeKey;
+                    }
+
+                    if ($nestedActionKey !== '') {
+                        $workflowRouteMap['cards'][$nestedActionKey][$originalKey] = $runtimeKey;
+                    }
+                }
+
+                $nestedGroups[] = [
+                    'step' => $nestedStep,
+                    'tasks' => $nestedTasks,
+                    'prefix' => $nestedPrefix,
+                    'action_key' => $nestedActionKey,
+                ];
+            }
+
+            foreach ($nestedGroups as $nestedGroup) {
                 $nestedExpanded = $this->expandRuntimeTasks(
-                    $nestedTasks,
+                    $nestedGroup['tasks'],
                     [...$workflowStack, $workflowId],
                     $rootTaskKey,
-                    $nestedPrefix,
+                    $nestedGroup['prefix'],
                     $workflowMailboxSource,
                     $workflowFrameKey,
                     $workflowBrowserWindow,
+                    $workflowRouteMap,
+                    $boundaryTaskKey,
+                    $nestedGroup['action_key'],
                 );
 
                 foreach ($nestedExpanded as $nestedTask) {
@@ -449,33 +511,10 @@ class WorkflowTaskRunner
                     $nestedTask['embedded_workflow_name'] ??= $workflow->name;
                     $expanded[] = $nestedTask;
                 }
-
-                if ($nestedStep->type !== WorkflowStep::TYPE_WAIT && $nestedStep->wait_after_seconds > 0) {
-                    $waitTask = app(WorkflowTaskCatalog::class)->cardFromDefinition('wait.seconds', [
-                        'key' => 'wartezeit-nach-liste',
-                        'title' => 'Wartezeit nach '.$nestedStep->name,
-                        'value' => $nestedStep->wait_after_seconds,
-                    ]);
-                    $waitTask['key'] = Str::slug($nestedPrefix.'-wartezeit-nach-liste');
-                    $waitTask['parent_task_key'] = $rootTaskKey;
-                    $waitTask['embedded_workflow_id'] = $workflow->id;
-                    $waitTask['embedded_workflow_name'] = $workflow->name;
-                    $waitTask['embedded_workflow_frame_key'] = $workflowFrameKey;
-                    if ($workflowBrowserWindow !== null) {
-                        $waitTask['browser_window'] = $workflowBrowserWindow;
-                        $waitTask['browser_window_name'] = $workflowBrowserWindow;
-                        $waitTask['embedded_workflow_browser_window'] = $workflowBrowserWindow;
-                    }
-                    if ($workflowMailboxSource !== null) {
-                        $waitTask['mailbox_source'] = $workflowMailboxSource;
-                        $waitTask['script_person_source'] = $workflowMailboxSource;
-                    }
-                    $expanded[] = $waitTask;
-                }
             }
 
             $boundaryTask = [
-                'key' => $workflowFrameKey.'-boundary',
+                'key' => $boundaryTaskKey,
                 'task_key' => 'workflow.boundary',
                 'title' => $task['title'] ?? $workflow->name,
                 'description' => 'Wartet auf den Abschluss des eingebetteten Workflows und wertet dessen Rueckgabewert aus.',
@@ -491,7 +530,13 @@ class WorkflowTaskRunner
 
             foreach (['next', 'on_error'] as $routeKey) {
                 if (is_array($task[$routeKey] ?? null)) {
-                    $boundaryTask[$routeKey] = $task[$routeKey];
+                    $boundaryTask[$routeKey] = $this->remapEmbeddedRoute(
+                        $task[$routeKey],
+                        $embeddedRouteMap,
+                        $embeddedBoundaryTaskKey,
+                        $sourceStepActionKey,
+                        $routeKey,
+                    );
                 }
             }
 
@@ -499,6 +544,121 @@ class WorkflowTaskRunner
         }
 
         return $expanded;
+    }
+
+    protected function applyEmbeddedStepRoutesToTasks(WorkflowStep $step, array $tasks): array
+    {
+        $tasks = collect($tasks)
+            ->filter(fn (mixed $task): bool => is_array($task))
+            ->values()
+            ->toArray();
+
+        if ($tasks === []) {
+            return [];
+        }
+
+        $routes = is_array($step->config_json) && is_array($step->config_json['routes'] ?? null)
+            ? $step->config_json['routes']
+            : [];
+        $lastIndex = array_key_last($tasks);
+
+        if (is_array($routes['success'] ?? null) && ! is_array($tasks[$lastIndex]['next'] ?? null)) {
+            $tasks[$lastIndex]['next'] = $routes['success'];
+        }
+
+        if (is_array($routes['failed'] ?? null)) {
+            foreach ($tasks as &$task) {
+                if (! is_array($task['on_error'] ?? null)) {
+                    $task['on_error'] = $routes['failed'];
+                }
+            }
+            unset($task);
+        }
+
+        return $tasks;
+    }
+
+    protected function remapEmbeddedTaskRoutes(
+        array $task,
+        array $routeMap,
+        ?string $boundaryTaskKey,
+        ?string $sourceStepActionKey,
+    ): array {
+        foreach (['next', 'on_error', 'on_partial'] as $routeKey) {
+            if (is_array($task[$routeKey] ?? null)) {
+                $task[$routeKey] = $this->remapEmbeddedRoute(
+                    $task[$routeKey],
+                    $routeMap,
+                    $boundaryTaskKey,
+                    $sourceStepActionKey,
+                    $routeKey,
+                );
+            }
+        }
+
+        if (is_array($task['status_routes'] ?? null)) {
+            foreach ($task['status_routes'] as $outcome => $route) {
+                if (is_array($route)) {
+                    $task['status_routes'][$outcome] = $this->remapEmbeddedRoute(
+                        $route,
+                        $routeMap,
+                        $boundaryTaskKey,
+                        $sourceStepActionKey,
+                        (string) $outcome,
+                    );
+                }
+            }
+        }
+
+        return $task;
+    }
+
+    protected function remapEmbeddedRoute(
+        array $route,
+        array $routeMap,
+        ?string $boundaryTaskKey,
+        ?string $sourceStepActionKey,
+        string $routeKey,
+    ): array {
+        if ($routeMap === []) {
+            return $route;
+        }
+
+        $type = trim((string) ($route['type'] ?? ''));
+        $step = trim((string) ($route['action_key'] ?? $route['step'] ?? ''));
+        $card = trim((string) ($route['card_key'] ?? $route['card'] ?? ''));
+        $targetTaskKey = null;
+
+        if ($type === 'end' || $step === 'end') {
+            $targetTaskKey = $boundaryTaskKey;
+        } elseif ($step === 'next') {
+            $nextStep = trim((string) data_get($routeMap, 'next_steps.'.$sourceStepActionKey, ''));
+            $targetTaskKey = $nextStep !== ''
+                ? data_get($routeMap, 'first_tasks.'.$nextStep)
+                : $boundaryTaskKey;
+        } elseif ($card !== '') {
+            $targetStep = (! in_array($step, ['', 'next', 'end', 'fail'], true))
+                ? $step
+                : (string) $sourceStepActionKey;
+            $targetTaskKey = data_get($routeMap, 'cards.'.$targetStep.'.'.$card);
+        } elseif (! in_array($step, ['', 'end', 'fail'], true)) {
+            $targetTaskKey = data_get($routeMap, 'first_tasks.'.$step);
+        }
+
+        if ($targetTaskKey === null || trim((string) $targetTaskKey) === '') {
+            if ($routeKey === 'next' && $boundaryTaskKey !== null && ! in_array($step, ['fail'], true) && $type !== 'fail') {
+                $targetTaskKey = $boundaryTaskKey;
+            } else {
+                return $route;
+            }
+        }
+
+        $route['type'] = 'card';
+        $route['card_key'] = (string) $targetTaskKey;
+        $route['card'] = (string) $targetTaskKey;
+        unset($route['action_key'], $route['step']);
+
+        return $route;
     }
 
     protected function mappedEmbeddedBrowserWindowName(?string $embeddedBrowserWindowName, array $task): ?string
