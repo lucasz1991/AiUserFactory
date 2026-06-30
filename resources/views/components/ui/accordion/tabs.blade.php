@@ -48,9 +48,9 @@
     }"
     x-init="initTabs()"
 >
-    <div class="w-full max-w-[1200px] overflow-visible">
-        <nav aria-label="Tabs" role="tablist" aria-orientation="horizontal">
-            <ul class="flex w-full justify-start overflow-visible pt-2">
+    <div class="w-full max-w-full overflow-hidden">
+        <nav class="w-full max-w-full overflow-hidden" aria-label="Tabs" role="tablist" aria-orientation="horizontal">
+            <ul class="flex w-full max-w-full justify-start overflow-hidden pt-2">
                 @foreach($tabs as $tabKey => $tab)
                     @php
                         $tabId = (string) $tabKey;
@@ -71,7 +71,7 @@
                             @click.prevent="selectTab(@js($tabId))"
                             @mouseenter="hoverTab = @js($tabId)"
                             @mouseleave="hoverTab = null"
-                            class="group relative block overflow-visible p-0 text-sm font-semibold border border-gray-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-200"
+                            class="group relative block overflow-visible p-0 text-sm font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-200"
                             role="tab"
                             :aria-selected="(openTab === @js($tabId)).toString()"
                             :tabindex="openTab === @js($tabId) ? 0 : -1"
@@ -85,7 +85,7 @@
                                     aria-hidden="true"
                                     focusable="false"
                                 >
-                                    <path d="{{ $shapePath }}"></path>
+                                    <path d="{{ $shapePath }}" class="stroke-gray-400 stroke-[1.5]"></path>
                                 </svg>
                             @endunless
                             @unless($loop->first)
@@ -97,11 +97,11 @@
                                     aria-hidden="true"
                                     focusable="false"
                                 >
-                                    <path d="{{ $shapePath }}"></path>
+                                    <path d="{{ $shapePath }}" class="stroke-gray-400 stroke-[1.5]"></path>
                                 </svg>
                             @endunless
                             <span
-                                class="block overflow-hidden px-4 py-[0.7em] text-ellipsis whitespace-nowrap transition-all duration-150 ease-out"
+                                class="block overflow-hidden border border-gray-400 px-4 py-[0.7em] text-ellipsis whitespace-nowrap transition-all duration-150 ease-out"
                                 :class="[
                                     openTab === @js($tabId) ? 'bg-blue-50 text-blue-950' : 'bg-slate-300 text-slate-700 group-hover:bg-blue-100 group-hover:text-blue-900',
                                     isExpanded(@js($tabId)) ? 'w-40 sm:w-56' : 'w-16 sm:w-32',
@@ -110,14 +110,7 @@
                                 ]"
                             >
                                 <span class="inline-flex min-w-0 items-center gap-2">
-                                    @if($iconClass === 'instagram-grid')
-                                        <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                                            <rect x="4" y="4" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
-                                            <rect x="14" y="4" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
-                                            <rect x="4" y="14" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
-                                            <rect x="14" y="14" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
-                                        </svg>
-                                    @elseif($iconClass)
+                                    @if($iconClass)
                                         <i class="{{ $iconClass }} fa-lg" aria-hidden="true"></i>
                                     @endif
                                     <span class="truncate">
