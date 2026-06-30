@@ -45,13 +45,15 @@ class WorkflowCompositionTest extends TestCase
 
         $manager = app(WorkflowManager::class);
         $manager->mount($child);
-        $manager->addStep();
-        $this->assertSame(1, $child->steps()->count());
+        $manager->workflowDescription = 'Von einem Admin bearbeitet.';
+        $manager->saveWorkflow();
+        $this->assertSame('Von einem Admin bearbeitet.', $child->fresh()->description);
 
         Livewire::test(WorkflowManager::class, ['workflow' => $child])
-            ->assertSee('Nur-Lese-Modus')
+            ->assertSee('Achtung: Dieser Workflow ist gesperrt.')
+            ->assertSee('Als Admin kannst du ihn trotzdem bearbeiten.')
             ->assertSee('Testen')
-            ->assertDontSee('Task-Bibliothek');
+            ->assertSee('Task-Bibliothek');
 
         $tasks = $this->runtimeTasks($parentStep);
 
@@ -63,6 +65,9 @@ class WorkflowCompositionTest extends TestCase
         $this->assertSame('workflow-boundary', $tasks[1]['runner']);
         $this->assertSame('child-workflow', $tasks[1]['route_source_task_key']);
         $this->assertSame($tasks[0]['embedded_workflow_frame_key'], $tasks[1]['embedded_workflow_frame_key']);
+
+        $manager->toggleStep($childStep->id);
+        $this->assertFalse($childStep->fresh()->is_enabled);
 
         $parentStep->forceFill(['config_json' => ['tasks' => []]])->save();
         $child->refresh();

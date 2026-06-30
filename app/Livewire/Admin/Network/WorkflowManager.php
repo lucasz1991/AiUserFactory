@@ -260,9 +260,15 @@ class WorkflowManager extends Component
 
     public function deleteWorkflow(): void
     {
-        $workflow = $this->editableWorkflow();
+        $workflow = $this->selectedWorkflow();
 
         if (! $workflow) {
+            return;
+        }
+
+        if ($workflow->is_edit_locked) {
+            session()->flash('error', 'Ein gesperrter Workflow kann nicht geloescht werden. '.$workflow->lock_reason);
+
             return;
         }
 
@@ -1102,19 +1108,7 @@ class WorkflowManager extends Component
 
     protected function editableWorkflow(): ?Workflow
     {
-        $workflow = $this->selectedWorkflow();
-
-        if (! $workflow) {
-            return null;
-        }
-
-        if ($workflow->is_edit_locked) {
-            session()->flash('error', 'Dieser Workflow ist gesperrt und kann nur getestet werden. '.$workflow->lock_reason);
-
-            return null;
-        }
-
-        return $workflow;
+        return $this->selectedWorkflow();
     }
 
     protected function previewWorkflowRun(): ?WorkflowRun
@@ -2168,7 +2162,7 @@ class WorkflowManager extends Component
     {
         $workflow = $this->selectedWorkflow();
 
-        if (! $workflow || $workflow->is_edit_locked) {
+        if (! $workflow) {
             return null;
         }
 
