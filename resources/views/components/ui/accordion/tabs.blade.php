@@ -28,8 +28,10 @@
     {{ $attributes->merge(['class' => 'w-full']) }}
     x-data="{
         openTab: @if($persist) $persist(@js($initial)).as(@js($key)) @else @js($initial) @endif,
-        collapsed: false,
+        overlapped: false,
+        overlapOffset: 0,
         forceCollapsed: false,
+        hoverTab: null,
         items: (function() {
             const out = [];
             @foreach($tabs as $k => $tab)
@@ -45,7 +47,6 @@
             return out;
         })(),
         get active() { return this.items.find(t => t.id === this.openTab) ?? this.items[0]; },
-        get others() { return this.items.filter(t => t.id !== this.openTab); },
         selectTab(id) {
             this.openTab = id;
             this.$dispatch('ui-tab-selected', { group: @js($groupKey), tab: id });
@@ -62,74 +63,52 @@
             update();
         },
         onResize() {
-            if (this.forceCollapsed) { this.collapsed = true; return; }
             this.$nextTick(() => {
                 const row = this.$refs.row;
                 const nav = this.$refs.nav;
                 if (!row) return;
+                if (!nav) return;
 
-                if (!nav) {
-                    this.collapsed = false;
-                    this.$nextTick(() => this.onResize());
-                    return;
-                }
-
-                this.collapsed = nav.scrollWidth > row.clientWidth + 1;
+                const totalWidth = Array.from(nav.children).reduce((width, child) => width + child.offsetWidth, 0);
+                this.overlapped = this.forceCollapsed || totalWidth > row.clientWidth + 1;
+                this.overlapOffset = this.overlapped && this.items.length > 1
+                    ? Math.min(Math.max(Math.ceil((totalWidth - row.clientWidth) / (this.items.length - 1)) + 8, 16), 40)
+                    : 0;
             });
         }
     }"
     x-init="if (!items.some(t => t.id === openTab)) openTab = items[0]?.id ?? openTab; setupMQ(@js($collapseAt)); onResize(); $watch('openTab', () => onResize())"
 >
     <div class="border-b border-slate-200" x-ref="row" x-resize.debounce.150ms="onResize()" x-on:ui-tab-selected.window="$nextTick(() => onResize())">
-        <template x-if="!collapsed">
-            <nav
-                class="tabs tabs-lifted flex w-max min-w-full justify-start gap-0 overflow-visible px-1"
-                x-ref="nav"
-                aria-label="Tabs"
-                role="tablist"
-                aria-orientation="horizontal"
-            >
-                <template x-for="t in items" :key="t.id">
-                    <button
-                        type="button"
-                        @click.prevent="selectTab(t.id)"
-                        :id="@js($htmlIdPrefix) + '-item-' + t.id"
-                        :aria-controls="@js($htmlIdPrefix) + '-panel-' + t.id"
-                        :class="openTab === t.id
-                            ? 'active tab-active border-slate-300 border-b-white bg-white text-slate-950 shadow-sm'
-                            : 'border-transparent border-b-slate-200 bg-slate-50/70 text-slate-500 hover:bg-white hover:text-slate-900'"
-                        class="tab active-tab:tab-active -mb-px inline-flex min-h-[2.75rem] shrink-0 items-center gap-2 rounded-t-md border px-4 py-2 text-xs font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-300"
-                        role="tab"
-                        :aria-selected="openTab === t.id"
-                        :tabindex="openTab === t.id ? 0 : -1"
-                    >
-                        <template x-if="t.icon === 'instagram-grid'">
-                            <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                                <rect x="4" y="4" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
-                                <rect x="14" y="4" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
-                                <rect x="4" y="14" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
-                                <rect x="14" y="14" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
-                            </svg>
-                        </template>
-                        <template x-if="t.icon && t.icon !== 'instagram-grid'">
-                            <i :class="t.icon + ' fa-lg'" aria-hidden="true"></i>
-                        </template>
-                        <span class="whitespace-nowrap">
-                            <span x-text="t.label"></span><template x-if="t.countLabel"><span>&nbsp;<span x-text="t.countLabel"></span></span></template>
-                        </span>
-                    </button>
-                </template>
-            </nav>
-        </template>
-
-        <template x-if="collapsed">
-            <div class="flex w-full justify-center">
+        <nav
+            class="tabs tabs-lifted flex min-w-full justify-start overflow-visible transition-[padding] duration-300 ease-out"
+            :class="overlapped ? 'px-3 sm:px-4' : 'px-1'"
+            x-ref="nav"
+            aria-label="Tabs"
+            role="tablist"
+            aria-orientation="horizontal"
+        >
+            <template x-for="(t, index) in items" :key="t.id">
                 <button
                     type="button"
-                    class="tab active-tab:tab-active active tab-active -mb-px inline-flex min-h-[2.75rem] shrink-0 items-center gap-2 rounded-t-md border border-slate-300 border-b-white bg-white px-4 py-2 text-xs font-semibold text-slate-950 shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-300"
-                    role="tab" aria-selected="true" tabindex="0"
+                    @click.prevent="selectTab(t.id)"
+                    @mouseenter="hoverTab = t.id"
+                    @mouseleave="hoverTab = null"
+                    :id="@js($htmlIdPrefix) + '-item-' + t.id"
+                    :aria-controls="@js($htmlIdPrefix) + '-panel-' + t.id"
+                    :style="{
+                        marginLeft: overlapped && index > 0 ? `-${overlapOffset}px` : '0',
+                        zIndex: openTab === t.id ? 50 : (hoverTab === t.id ? 60 : 10 + index),
+                    }"
+                    :class="openTab === t.id
+                        ? 'active tab-active border-slate-300 border-b-white bg-white text-slate-950 shadow-md'
+                        : 'border-transparent border-b-slate-200 bg-slate-50/80 text-slate-500 hover:border-slate-300 hover:border-b-white hover:bg-white hover:text-slate-900 hover:shadow-md'"
+                    class="tab active-tab:tab-active relative -mb-px inline-flex min-h-[2.75rem] shrink-0 origin-bottom items-center gap-2 rounded-t-md border px-4 py-2 text-xs font-semibold transition-[margin,transform,box-shadow,background-color,border-color,color] duration-300 ease-out hover:-translate-y-0.5 focus:-translate-y-0.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-300"
+                    role="tab"
+                    :aria-selected="openTab === t.id"
+                    :tabindex="openTab === t.id ? 0 : -1"
                 >
-                    <template x-if="active?.icon === 'instagram-grid'">
+                    <template x-if="t.icon === 'instagram-grid'">
                         <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                             <rect x="4" y="4" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
                             <rect x="14" y="4" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
@@ -137,64 +116,15 @@
                             <rect x="14" y="14" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
                         </svg>
                     </template>
-                    <template x-if="active?.icon && active.icon !== 'instagram-grid'">
-                        <i :class="active.icon + ' fa-lg'" aria-hidden="true"></i>
+                    <template x-if="t.icon && t.icon !== 'instagram-grid'">
+                        <i :class="t.icon + ' fa-lg'" aria-hidden="true"></i>
                     </template>
                     <span class="whitespace-nowrap">
-                        <span x-text="active?.label ?? ''"></span><template x-if="active?.countLabel"><span>&nbsp;<span x-text="active.countLabel"></span></span></template>
+                        <span x-text="t.label"></span><template x-if="t.countLabel"><span>&nbsp;<span x-text="t.countLabel"></span></span></template>
                     </span>
                 </button>
-
-                <div class="relative" x-data="{ open:false }">
-                    <button
-                        type="button"
-                        @click="open=!open"
-                        @keydown.escape.window="open=false"
-                        class="tab inline-flex min-h-[2.75rem] shrink-0 items-center gap-2 rounded-t-md border border-transparent border-b-slate-200 bg-slate-50/70 px-4 py-2 text-xs font-semibold text-slate-500 transition-colors hover:bg-white hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-300"
-                        :aria-expanded="open" aria-haspopup="menu" title="Weitere Tabs"
-                    >
-                        <i class="fad fa-bars fa-lg" aria-hidden="true"></i>
-                        <span class="whitespace-nowrap">Mehr</span>
-                    </button>
-
-                    <div
-                        x-cloak
-                        x-show="open"
-                        @click.outside="open=false"
-                        class="absolute right-0 z-20 mt-1 w-56 rounded-xl border border-slate-200 bg-white shadow"
-                        role="menu"
-                    >
-                        <ul class="py-1 max-h-[60vh] overflow-auto">
-                            <template x-for="t in others" :key="t.id">
-                                <li>
-                                    <button
-                                        type="button"
-                                        class="inline-flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50"
-                                        role="menuitem"
-                                        @click="open=false; selectTab(t.id)"
-                                    >
-                                        <template x-if="t.icon === 'instagram-grid'">
-                                            <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                                                <rect x="4" y="4" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
-                                                <rect x="14" y="4" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
-                                                <rect x="4" y="14" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
-                                                <rect x="14" y="14" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
-                                            </svg>
-                                        </template>
-                                        <template x-if="t.icon && t.icon !== 'instagram-grid'">
-                                            <i :class="t.icon + ' fa-lg'" aria-hidden="true"></i>
-                                        </template>
-                                        <span>
-                                            <span x-text="t.label"></span><template x-if="t.countLabel"><span>&nbsp;<span x-text="t.countLabel"></span></span></template>
-                                        </span>
-                                    </button>
-                                </li>
-                            </template>
-                        </ul>
-                    </div>
-                </div>
-            </div>
-        </template>
+            </template>
+        </nav>
     </div>
 
     <div>
