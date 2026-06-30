@@ -21,6 +21,7 @@
 
     $key = $persistKey ?: $autoKey;
     $groupKey = $group ?: $key;
+    $htmlIdPrefix = 'tabs-'.substr(md5($groupKey), 0, 10);
 @endphp
 
 <div
@@ -62,57 +63,70 @@
         },
         onResize() {
             if (this.forceCollapsed) { this.collapsed = true; return; }
-            // Falls du zusätzlich overflow-basiert kollabieren willst, ent-kommentieren:
-            // const row = this.$refs.row; this.collapsed = row ? (row.scrollWidth > row.clientWidth) : false;
-            this.collapsed = false;
+            this.$nextTick(() => {
+                const row = this.$refs.row;
+                const nav = this.$refs.nav;
+                if (!row) return;
+
+                if (!nav) {
+                    this.collapsed = false;
+                    this.$nextTick(() => this.onResize());
+                    return;
+                }
+
+                this.collapsed = nav.scrollWidth > row.clientWidth + 1;
+            });
         }
     }"
     x-init="if (!items.some(t => t.id === openTab)) openTab = items[0]?.id ?? openTab; setupMQ(@js($collapseAt)); onResize(); $watch('openTab', () => onResize())"
-    role="tablist"
 >
-    <div class="border-b border-slate-200" x-ref="row" x-resize.debounce.150ms="onResize()">
-        <!-- Normalmodus: alle Tabs (Layout unverändert) -->
+    <div class="border-b border-slate-200" x-ref="row" x-resize.debounce.150ms="onResize()" x-on:ui-tab-selected.window="$nextTick(() => onResize())">
         <template x-if="!collapsed">
-            <div class="overflow-x-auto scroll-px-2">
-                <div class="flex w-max min-w-full justify-start px-1 sm:justify-center">
-                    <template x-for="t in items" :key="t.id">
-                        <button
-                            type="button"
-                            @click.prevent="selectTab(t.id)"
-                            :class="openTab === t.id
-                                ? '-mb-px border-t-slate-950 text-slate-950'
-                                : 'border-t-transparent text-slate-500 hover:text-slate-900'"
-                            class="inline-flex shrink-0 items-center gap-2 border-t px-4 py-3 text-[11px] font-bold uppercase tracking-[0.18em] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-300 sm:px-5"
-                            role="tab"
-                            :aria-selected="openTab === t.id"
-                            :tabindex="openTab === t.id ? 0 : -1"
-                        >
-                            <template x-if="t.icon === 'instagram-grid'">
-                                <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                                    <rect x="4" y="4" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
-                                    <rect x="14" y="4" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
-                                    <rect x="4" y="14" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
-                                    <rect x="14" y="14" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
-                                </svg>
-                            </template>
-                            <template x-if="t.icon && t.icon !== 'instagram-grid'">
-                                <i :class="t.icon + ' fa-lg'" aria-hidden="true"></i>
-                            </template>
-                            <span class="whitespace-nowrap">
-                                <span x-text="t.label"></span><template x-if="t.countLabel"><span>&nbsp;<span x-text="t.countLabel"></span></span></template>
-                            </span>
-                        </button>
-                    </template>
-                </div>
-            </div>
+            <nav
+                class="tabs tabs-lifted flex w-max min-w-full justify-start gap-0 overflow-visible px-1"
+                x-ref="nav"
+                aria-label="Tabs"
+                role="tablist"
+                aria-orientation="horizontal"
+            >
+                <template x-for="t in items" :key="t.id">
+                    <button
+                        type="button"
+                        @click.prevent="selectTab(t.id)"
+                        :id="@js($htmlIdPrefix) + '-item-' + t.id"
+                        :aria-controls="@js($htmlIdPrefix) + '-panel-' + t.id"
+                        :class="openTab === t.id
+                            ? 'active tab-active border-slate-300 border-b-white bg-white text-slate-950 shadow-sm'
+                            : 'border-transparent border-b-slate-200 bg-slate-50/70 text-slate-500 hover:bg-white hover:text-slate-900'"
+                        class="tab active-tab:tab-active -mb-px inline-flex min-h-[2.75rem] shrink-0 items-center gap-2 rounded-t-md border px-4 py-2 text-xs font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-300"
+                        role="tab"
+                        :aria-selected="openTab === t.id"
+                        :tabindex="openTab === t.id ? 0 : -1"
+                    >
+                        <template x-if="t.icon === 'instagram-grid'">
+                            <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                <rect x="4" y="4" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
+                                <rect x="14" y="4" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
+                                <rect x="4" y="14" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
+                                <rect x="14" y="14" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
+                            </svg>
+                        </template>
+                        <template x-if="t.icon && t.icon !== 'instagram-grid'">
+                            <i :class="t.icon + ' fa-lg'" aria-hidden="true"></i>
+                        </template>
+                        <span class="whitespace-nowrap">
+                            <span x-text="t.label"></span><template x-if="t.countLabel"><span>&nbsp;<span x-text="t.countLabel"></span></span></template>
+                        </span>
+                    </button>
+                </template>
+            </nav>
         </template>
 
-        <!-- Collapsed: aktiver Tab + Menü (Buttons behalten deine Klassen) -->
         <template x-if="collapsed">
             <div class="flex w-full justify-center">
                 <button
                     type="button"
-                    class="-mb-px inline-flex shrink-0 items-center gap-2 border-t border-t-slate-950 px-5 py-3 text-[11px] font-bold uppercase tracking-[0.18em] text-slate-950 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-300"
+                    class="tab active-tab:tab-active active tab-active -mb-px inline-flex min-h-[2.75rem] shrink-0 items-center gap-2 rounded-t-md border border-slate-300 border-b-white bg-white px-4 py-2 text-xs font-semibold text-slate-950 shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-300"
                     role="tab" aria-selected="true" tabindex="0"
                 >
                     <template x-if="active?.icon === 'instagram-grid'">
@@ -136,7 +150,7 @@
                         type="button"
                         @click="open=!open"
                         @keydown.escape.window="open=false"
-                        class="inline-flex shrink-0 items-center gap-2 border-t border-t-transparent px-5 py-3 text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500 transition-colors hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-300"
+                        class="tab inline-flex min-h-[2.75rem] shrink-0 items-center gap-2 rounded-t-md border border-transparent border-b-slate-200 bg-slate-50/70 px-4 py-2 text-xs font-semibold text-slate-500 transition-colors hover:bg-white hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-300"
                         :aria-expanded="open" aria-haspopup="menu" title="Weitere Tabs"
                     >
                         <i class="fad fa-bars fa-lg" aria-hidden="true"></i>
