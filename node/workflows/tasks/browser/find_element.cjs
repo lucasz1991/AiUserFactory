@@ -2,22 +2,10 @@
 
 const { captureTaskPreview } = require('../lib/preview.cjs');
 const {
+  elementCandidatesFromInput,
   elementSnapshot,
-  findVisibleElement,
-  findVisibleElementByText,
+  findFirstVisibleElement,
 } = require('../lib/find_visible_element.cjs');
-
-function firstNonEmpty(...values) {
-  for (const value of values) {
-    const normalized = String(value ?? '').trim();
-
-    if (normalized !== '') {
-      return normalized;
-    }
-  }
-
-  return '';
-}
 
 async function snapshotAndDispose(handle, selector) {
   try {
@@ -31,57 +19,41 @@ async function run(context = {}) {
   const page = context.page;
   const input = context.input || {};
   const timeout = Number(input.timeoutMs || context.timeoutMs || 45000);
-  const selector = firstNonEmpty(
-    input.elementSelector,
-    input.element_selector,
-    input.selector,
-    input.inputSelector,
-    input.input_selector,
-  );
-  const text = firstNonEmpty(input.text, input.label, input.name, input.value);
+  const candidates = elementCandidatesFromInput(input, {
+    textKeys: ['text', 'texts', 'label', 'labels', 'name', 'value'],
+  });
 
   if (!page || (typeof page.frames !== 'function' && typeof page.mainFrame !== 'function')) {
     return { ok: false, status: 'failed', statusMessage: 'Kein Page-Handle fuer Element-Suche vorhanden.' };
   }
 
-  if (selector !== '') {
-    const handle = await findVisibleElement(page, selector, timeout);
-
-    if (handle) {
-      const match = await snapshotAndDispose(handle, selector);
-
-      return captureTaskPreview(context, {
-        ok: true,
-        status: 'success',
-        statusMessage: 'Element wurde gefunden.',
-        selector,
-        element: match,
-      });
-    }
+  if (candidates.length === 0) {
+    return { ok: false, status: 'failed', statusMessage: 'Kein Selector oder Suchtext fuer die Element-Suche angegeben.' };
   }
 
-  if (text !== '') {
-    const handle = await findVisibleElementByText(page, text, Math.min(timeout, 15000));
+  const found = await findFirstVisibleElement(page, candidates, timeout);
 
-    if (handle) {
-      const match = await snapshotAndDispose(handle, `text=${text}`);
+  if (found) {
+    const element = await snapshotAndDispose(found.handle, found.selector);
 
-      return captureTaskPreview(context, {
-        ok: true,
-        status: 'success',
-        statusMessage: 'Element wurde ueber Text gefunden.',
-        text,
-        element: match,
-      });
-    }
+    return captureTaskPreview(context, {
+      ok: true,
+      status: 'success',
+      statusMessage: found.matchedBy === 'text'
+        ? 'Element wurde ueber Text gefunden.'
+        : 'Element wurde gefunden.',
+      selector: found.selector,
+      matchedBy: found.matchedBy,
+      matchedCandidate: found.candidate.value,
+      element,
+    });
   }
 
   return captureTaskPreview(context, {
     ok: false,
     status: 'partial',
     statusMessage: 'Kein Element gefunden. Weiterleitung kann ueber Teilstatus oder Fehler erfolgen.',
-    selector,
-    text,
+    attemptedCandidates: candidates.map((candidate) => candidate.value),
   });
 }
 

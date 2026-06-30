@@ -2,20 +2,18 @@
 
 const { captureTaskPreview } = require('../lib/preview.cjs');
 const {
+  elementCandidatesFromInput,
   elementSnapshot,
-  findVisibleElement,
+  findFirstVisibleElement,
   framesForPage,
 } = require('../lib/find_visible_element.cjs');
 
 async function run(context = {}) {
   const page = context.page;
   const input = context.input || {};
-  const selector = String(
-    input.elementSelector
-    || input.element_selector
-    || input.selector
-    || '',
-  ).trim();
+  const candidates = elementCandidatesFromInput(input, {
+    textKeys: ['text', 'texts', 'label', 'labels'],
+  });
   const timeout = Math.max(0, Number(
     input.timeoutMs
     || (Number(input.timeout_seconds || 0) * 1000)
@@ -28,31 +26,31 @@ async function run(context = {}) {
     return { ok: false, status: 'failed', statusMessage: 'Kein Page-Handle fuer die IF-Element-Pruefung vorhanden.' };
   }
 
-  if (!selector) {
-    return { ok: false, status: 'failed', statusMessage: 'Kein Selector fuer die IF-Element-Pruefung angegeben.' };
+  if (candidates.length === 0) {
+    return { ok: false, status: 'failed', statusMessage: 'Kein Selector oder Suchtext fuer die IF-Element-Pruefung angegeben.' };
   }
 
   let searchedFrames = framesForPage(page).length;
-  let handle = await findVisibleElement(page, selector, timeout);
+  let found = await findFirstVisibleElement(page, candidates, timeout);
 
   searchedFrames = Math.max(searchedFrames, framesForPage(page).length);
 
-  if (!handle && typeof context.refreshActivePage === 'function') {
+  if (!found && typeof context.refreshActivePage === 'function') {
     const refreshedPage = await context.refreshActivePage().catch(() => null);
     const remainingTimeout = Math.max(0, deadline - Date.now());
 
     if (refreshedPage && refreshedPage !== page && remainingTimeout > 0) {
-      handle = await findVisibleElement(refreshedPage, selector, remainingTimeout);
+      found = await findFirstVisibleElement(refreshedPage, candidates, remainingTimeout);
       searchedFrames = Math.max(searchedFrames, framesForPage(refreshedPage).length);
     }
   }
 
-  if (!handle) {
+  if (!found) {
     return {
       ok: true,
       status: 'not_found',
-      statusMessage: `IF-Bedingung nicht erfuellt: Element nicht gefunden (${selector}).`,
-      selector,
+      statusMessage: `IF-Bedingung nicht erfuellt: Kein Element gefunden (${candidates.map((candidate) => candidate.value).join(', ')}).`,
+      attemptedCandidates: candidates.map((candidate) => candidate.value),
       elementExists: false,
       searchedFrames,
       searchedOpenShadowDom: true,
@@ -61,20 +59,22 @@ async function run(context = {}) {
   }
 
   try {
-    const element = await elementSnapshot(handle, selector);
+    const element = await elementSnapshot(found.handle, found.selector);
 
     return captureTaskPreview(context, {
       ok: true,
       status: 'success',
       statusMessage: 'IF-Bedingung erfuellt: Element wurde gefunden.',
-      selector,
+      selector: found.selector,
+      matchedBy: found.matchedBy,
+      matchedCandidate: found.candidate.value,
       elementExists: true,
       searchedFrames,
       searchedOpenShadowDom: true,
       element,
     });
   } finally {
-    await handle.dispose?.().catch(() => {});
+    await found.handle.dispose?.().catch(() => {});
   }
 }
 

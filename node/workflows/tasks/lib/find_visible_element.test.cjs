@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const {
+  findFirstVisibleElement,
   clickVisibleElement,
   findVisibleElement,
   framesForPage,
@@ -91,6 +92,67 @@ test('button:has-text also finds a link explicitly styled as a button', async ()
     'button',
     'button,a[data-component="button"],[role="button"],input[type="button"],input[type="submit"]',
   ]);
+});
+
+test('multiple selectors use the first candidate that currently has a match', async () => {
+  const attempted = [];
+  const linkHandle = elementHandle(async () => {});
+  const frame = {
+    detached: false,
+    async evaluateHandle(_callback, css, _descendantCss, text) {
+      attempted.push({ css, text });
+      const handle = css === 'a' && text === 'Login' ? linkHandle : null;
+
+      return {
+        asElement: () => handle,
+        async dispose() {},
+      };
+    },
+  };
+  const found = await findFirstVisibleElement(
+    { frames: () => [frame] },
+    'button:has-text("Missing"), a:has-text("Login"), Zurück zum Login',
+    100,
+  );
+
+  assert.equal(found.handle, linkHandle);
+  assert.equal(found.matchedBy, 'selector');
+  assert.equal(found.candidate.value, 'a:has-text("Login")');
+  assert.deepEqual(attempted, [
+    { css: 'button', text: 'Missing' },
+    {
+      css: 'button,a[data-component="button"],[role="button"],input[type="button"],input[type="submit"]',
+      text: 'Missing',
+    },
+    { css: 'a', text: 'Login' },
+  ]);
+});
+
+test('plain comma-separated values are searched as text alternatives', async () => {
+  const attemptedTexts = [];
+  const backHandle = elementHandle(async () => {});
+  const frame = {
+    detached: false,
+    async evaluateHandle(_callback, _selector, text) {
+      attemptedTexts.push(text);
+      const handle = text === 'zurück zum login' ? backHandle : null;
+
+      return {
+        asElement: () => handle,
+        async dispose() {},
+      };
+    },
+  };
+  const found = await findFirstVisibleElement(
+    { frames: () => [frame] },
+    'login, Zurück zum Login',
+    100,
+  );
+
+  assert.equal(found.handle, backHandle);
+  assert.equal(found.matchedBy, 'text');
+  assert.equal(found.candidate.value, 'Zurück zum Login');
+  assert.deepEqual(attemptedTexts, ['login', 'zurück zum login']);
 });
 
 test('detached frames are ignored before searching', () => {

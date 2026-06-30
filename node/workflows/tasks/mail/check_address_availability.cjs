@@ -2,6 +2,7 @@
 
 const { captureTaskPreview } = require('../lib/preview.cjs');
 const { fillFirstMatchingInput } = require('../lib/fill_input.cjs');
+const { clickFirstVisibleElement } = require('../lib/find_visible_element.cjs');
 
 const DEFAULT_UNAVAILABLE_PATTERNS = [
   'already taken',
@@ -333,30 +334,24 @@ async function observeAvailability(page, account, options = {}) {
 }
 
 async function clickFirstMatchingSubmit(page, selectors, timeout) {
-  const frames = typeof page.frames === 'function' ? page.frames() : [page.mainFrame ? page.mainFrame() : null];
-  const attemptedSelectors = [];
+  const attemptedSelectors = []
+    .concat(selectors || [])
+    .flat()
+    .filter(Boolean);
 
-  for (const frame of frames.filter(Boolean)) {
-    for (const selector of selectors) {
-      attemptedSelectors.push(selector);
+  try {
+    const clicked = await clickFirstVisibleElement(page, attemptedSelectors, timeout, { defaultKind: 'selector' });
 
-      try {
-        const element = await frame.waitForSelector(selector, { visible: true, timeout: Math.min(timeout, 2500) });
-
-        if (element && typeof element.click === 'function') {
-          await element.click({ delay: 20 }).catch(() => element.click());
-
-          return {
-            ok: true,
-            selector,
-            frameUrl: typeof frame.url === 'function' ? frame.url() : '',
-            attemptedSelectors,
-          };
-        }
-      } catch {
-        // Try the next frame/selector pair.
-      }
+    if (clicked) {
+      return {
+        ok: true,
+        selector: clicked.selector,
+        frameUrl: typeof clicked.frame?.url === 'function' ? clicked.frame.url() : '',
+        attemptedSelectors,
+      };
     }
+  } catch {
+    // The caller reports the failed submit attempt with the complete candidate list.
   }
 
   return { ok: false, attemptedSelectors };

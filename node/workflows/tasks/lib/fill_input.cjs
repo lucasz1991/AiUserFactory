@@ -1,36 +1,14 @@
 'use strict';
 
+const { normalizeElementCandidates } = require('../../lib/selector.cjs');
+const { findFirstVisibleElement } = require('./find_visible_element.cjs');
+
 async function sleep(ms) {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function selectorList(selectors = []) {
-  const seen = new Set();
-
-  return []
-    .concat(selectors || [])
-    .flat()
-    .map((selector) => String(selector || '').trim())
-    .filter((selector) => {
-      if (selector === '' || seen.has(selector)) {
-        return false;
-      }
-
-      seen.add(selector);
-      return true;
-    });
-}
-
-function framesForPage(page) {
-  if (page && typeof page.frames === 'function') {
-    const frames = page.frames().filter(Boolean);
-
-    if (frames.length > 0) {
-      return frames;
-    }
-  }
-
-  return page ? [page] : [];
+  return normalizeElementCandidates(selectors, { defaultKind: 'auto' });
 }
 
 function frameUrl(frame) {
@@ -85,54 +63,6 @@ async function elementState(handle) {
     usable: false,
     error: error.message,
   }));
-}
-
-async function queryDeepHandles(frame, selector) {
-  const directHandles = await frame.$$(selector).catch(() => []);
-
-  if (directHandles.length > 0) {
-    return directHandles;
-  }
-
-  const arrayHandle = await frame.evaluateHandle((targetSelector) => {
-    const matches = [];
-    const visited = new Set();
-
-    const collect = (root) => {
-      if (!root || visited.has(root)) {
-        return;
-      }
-
-      visited.add(root);
-
-      try {
-        matches.push(...root.querySelectorAll(targetSelector));
-      } catch {
-        return;
-      }
-
-      root.querySelectorAll('*').forEach((element) => {
-        if (element.shadowRoot) {
-          collect(element.shadowRoot);
-        }
-      });
-    };
-
-    collect(document);
-
-    return matches;
-  }, selector).catch(() => null);
-
-  if (!arrayHandle) {
-    return [];
-  }
-
-  const properties = await arrayHandle.getProperties().catch(() => new Map());
-  await arrayHandle.dispose().catch(() => {});
-
-  return Array.from(properties.values())
-    .map((property) => (typeof property.asElement === 'function' ? property.asElement() : null))
-    .filter(Boolean);
 }
 
 async function fillHandleValue(handle, value, delay = 35) {
@@ -229,71 +159,78 @@ async function fillFirstMatchingInput(page, selectors, value, timeoutMs = 12000,
   const stopAt = Date.now() + Math.max(500, Number(timeoutMs) || 12000);
   const delay = Math.max(0, Number(options.delay ?? 35));
   const attempts = [];
+  const failureCounts = new Map();
+  let activeCandidates = [...candidates];
   let matchedElementCount = 0;
   let lastError = '';
 
-  while (Date.now() < stopAt) {
-    for (const frame of framesForPage(page)) {
-      const currentFrameUrl = frameUrl(frame);
+  while (Date.now() < stopAt && activeCandidates.length > 0) {
+    const found = await findFirstVisibleElement(
+      page,
+      activeCandidates,
+      Math.max(1, stopAt - Date.now()),
+      {
+        editableOnly: true,
+        textSelector: 'input,textarea,[contenteditable="true"]',
+      },
+    );
 
-      for (const selector of candidates) {
-        let handles = [];
+    if (!found) {
+      break;
+    }
 
-        try {
-          handles = await queryDeepHandles(frame, selector);
-        } catch (error) {
-          lastError = error.message;
-          continue;
+    const handle = found.handle;
+    const selector = found.selector;
+    const currentFrameUrl = frameUrl(found.frame);
+    const candidateKey = `${found.candidate.kind}:${found.candidate.value}:${found.candidate.exact === true}`;
+    matchedElementCount += 1;
+
+    try {
+      const state = await elementState(handle);
+
+      if (!state.usable) {
+        lastError = 'Gefundenes Element ist nicht editierbar.';
+        if (attempts.length < 30) attempts.push({ selector, frameUrl: currentFrameUrl, state, error: lastError });
+      } else {
+        const enteredValue = await fillHandleValue(handle, value, delay);
+
+        if (String(enteredValue || '') === String(value ?? '')) {
+          return {
+            ok: true,
+            selector,
+            matchedBy: found.matchedBy,
+            matchedCandidate: found.candidate.value,
+            frameUrl: currentFrameUrl,
+            attemptedSelectors: candidates.map((candidate) => candidate.value),
+            matchedElementCount,
+          };
         }
 
-        matchedElementCount += handles.length;
-
-        for (const handle of handles) {
-          try {
-            const state = await elementState(handle);
-
-            if (!state.usable) {
-              if (attempts.length < 30) {
-                attempts.push({ selector, frameUrl: currentFrameUrl, state });
-              }
-
-              continue;
-            }
-
-            const enteredValue = await fillHandleValue(handle, value, delay);
-
-            if (String(enteredValue || '') === String(value ?? '')) {
-              return {
-                ok: true,
-                selector,
-                frameUrl: currentFrameUrl,
-                attemptedSelectors: candidates,
-                matchedElementCount,
-              };
-            }
-
-            lastError = 'Wert wurde gesetzt, aber nicht im Feld bestaetigt.';
-
-            if (attempts.length < 30) {
-              attempts.push({
-                selector,
-                frameUrl: currentFrameUrl,
-                state,
-                error: lastError,
-                enteredLength: String(enteredValue || '').length,
-              });
-            }
-          } catch (error) {
-            lastError = error.message;
-
-            if (attempts.length < 30) {
-              attempts.push({ selector, frameUrl: currentFrameUrl, error: error.message });
-            }
-          } finally {
-            await handle.dispose().catch(() => {});
-          }
+        lastError = 'Wert wurde gesetzt, aber nicht im Feld bestaetigt.';
+        if (attempts.length < 30) {
+          attempts.push({
+            selector,
+            frameUrl: currentFrameUrl,
+            state,
+            error: lastError,
+            enteredLength: String(enteredValue || '').length,
+          });
         }
       }
+    } catch (error) {
+      lastError = error.message;
+      if (attempts.length < 30) attempts.push({ selector, frameUrl: currentFrameUrl, error: error.message });
+    } finally {
+      await handle.dispose?.().catch(() => {});
+    }
+
+    const failures = (failureCounts.get(candidateKey) || 0) + 1;
+    failureCounts.set(candidateKey, failures);
+
+    if (failures >= 2) {
+      activeCandidates = activeCandidates.filter((candidate) => (
+        `${candidate.kind}:${candidate.value}:${candidate.exact === true}` !== candidateKey
+      ));
     }
 
     await sleep(250);
@@ -301,7 +238,7 @@ async function fillFirstMatchingInput(page, selectors, value, timeoutMs = 12000,
 
   return {
     ok: false,
-    attemptedSelectors: candidates,
+    attemptedSelectors: candidates.map((candidate) => candidate.value),
     attempts,
     matchedElementCount,
     lastError,

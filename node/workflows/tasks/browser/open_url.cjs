@@ -1,7 +1,7 @@
 'use strict';
 
 const { captureTaskPreview } = require('../lib/preview.cjs');
-const { findVisibleElement } = require('../lib/find_visible_element.cjs');
+const { findFirstVisibleElement } = require('../lib/find_visible_element.cjs');
 
 async function run(context = {}) {
   const page = context.page;
@@ -22,9 +22,9 @@ async function run(context = {}) {
 
   if (input.waitForSelector) {
     const selectorTimeout = Number(input.selectorTimeoutMs || 30000);
-    const handle = await findVisibleElement(page, input.waitForSelector, selectorTimeout);
+    const found = await findFirstVisibleElement(page, input.waitForSelector, selectorTimeout);
 
-    if (!handle) {
+    if (!found) {
       return captureTaskPreview(context, {
         ok: false,
         status: 'timeout',
@@ -34,7 +34,7 @@ async function run(context = {}) {
       });
     }
 
-    await handle.dispose?.().catch(() => {});
+    await found.handle.dispose?.().catch(() => {});
   }
 
   return captureTaskPreview(context, {
