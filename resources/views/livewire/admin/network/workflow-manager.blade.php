@@ -384,7 +384,7 @@
                 }"
                 x-init="refreshRouteLines()"
                 x-on:keydown.escape.window="setFullscreen(false)"
-                x-bind:class="isFullscreen ? 'fixed inset-0 z-[60] flex flex-col rounded-none border-0' : 'rounded-xl border border-slate-200'"
+                x-bind:class="isFullscreen ? 'fixed inset-0 z-[60] flex flex-col rounded-none border-0' : 'rounded-xl border border-slate-400'"
                 class="overflow-hidden bg-white shadow-sm"
             >
                 <div class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-5 py-4">
