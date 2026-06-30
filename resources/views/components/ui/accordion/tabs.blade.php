@@ -22,7 +22,6 @@
     $key = $persistKey ?: $autoKey;
     $groupKey = $group ?: $key;
     $htmlIdPrefix = 'tabs-'.substr(md5($groupKey), 0, 10);
-    $tabCount = count($tabs);
     $defaultIcons = [
         'quelle-suche' => 'fad fa-database',
         'filter' => 'fad fa-filter',
@@ -34,6 +33,24 @@
         'eingabe' => 'fad fa-keyboard',
         'daten' => 'fad fa-code',
     ];
+    $normalizedTabs = [];
+
+    foreach ($tabs as $tabKey => $tab) {
+        $tabId = (string) $tabKey;
+        $isArray = is_array($tab);
+        $iconClass = $isArray ? ($tab['icon'] ?? null) : null;
+        $iconClass = $iconClass === 'instagram-grid' ? 'fad fa-table-cells' : $iconClass;
+        $count = $isArray && array_key_exists('count', $tab) ? $tab['count'] : null;
+
+        $normalizedTabs[] = [
+            'id' => $tabId,
+            'label' => $isArray ? ($tab['label'] ?? Str::title($tabId)) : $tab,
+            'icon' => $iconClass ?: ($defaultIcons[$tabId] ?? 'fad fa-sliders'),
+            'count_label' => $count !== null ? number_format((int) $count, 0, ',', '.') : null,
+        ];
+    }
+
+    $tabCount = count($normalizedTabs);
 @endphp
 
 <section
@@ -46,8 +63,7 @@
         compact: false,
         compactFrame: null,
         compactObserver: null,
-        get expandedTab() { return this.hoverTab || this.openTab; },
-        isExpanded(id) { return !this.compact || this.expandedTab === id; },
+        isExpanded(id) { return !this.compact || this.openTab === id || this.hoverTab === id; },
         iconClass(id, fallback) {
             return `${this.tabIcons[id] || fallback} fa-fw shrink-0 text-center leading-none`;
         },
@@ -75,10 +91,21 @@
             if ('ResizeObserver' in window) {
                 this.compactObserver = new ResizeObserver(() => this.scheduleCompactUpdate());
 
+                if (this.$refs.tabWrap) {
+                    this.compactObserver.observe(this.$refs.tabWrap);
+                }
+
                 if (this.$refs.tabRow) {
                     this.compactObserver.observe(this.$refs.tabRow);
-                    this.compactObserver.observe(this.$refs.tabRow.parentElement);
                 }
+
+                if (this.$refs.measureRow) {
+                    this.compactObserver.observe(this.$refs.measureRow);
+                }
+            }
+
+            if (document.fonts && document.fonts.ready) {
+                document.fonts.ready.then(() => this.scheduleCompactUpdate());
             }
         },
         destroy() {
@@ -101,36 +128,34 @@
         },
         updateCompact() {
             this.$nextTick(() => {
+                const wrap = this.$refs.tabWrap;
                 const row = this.$refs.tabRow;
+                const measure = this.$refs.measureRow;
 
-                if (!row || row.clientWidth <= 0) return;
+                if (!wrap || !row || !measure) return;
 
-                this.compact = false;
+                const availableWidth = Math.floor(wrap.clientWidth || row.clientWidth || 0);
 
-                this.$nextTick(() => {
-                    requestAnimationFrame(() => {
-                        this.compact = row.scrollWidth > row.clientWidth + 1;
-                    });
-                });
+                if (availableWidth <= 0) return;
+
+                const requiredWidth = Math.ceil(measure.scrollWidth || measure.getBoundingClientRect().width || 0);
+
+                this.compact = requiredWidth > availableWidth + 1;
             });
         }
     }"
     x-init="initTabs()"
     x-on:ui-tab-icon="registerTabIcon($event)"
 >
-    <div class="w-full max-w-full overflow-hidden">
+    <div x-ref="tabWrap" class="relative w-full max-w-full overflow-hidden">
         <nav class="w-full max-w-full overflow-hidden" aria-label="Tabs" role="tablist" aria-orientation="horizontal">
             <ul x-ref="tabRow" class="flex w-full max-w-full justify-start overflow-hidden pt-2">
-                @foreach($tabs as $tabKey => $tab)
+                @foreach($normalizedTabs as $tab)
                     @php
-                        $tabId = (string) $tabKey;
-                        $isArray = is_array($tab);
-                        $label = $isArray ? ($tab['label'] ?? Str::title($tabId)) : $tab;
-                        $iconClass = $isArray ? ($tab['icon'] ?? null) : null;
-                        $iconClass = $iconClass === 'instagram-grid' ? 'fad fa-table-cells' : $iconClass;
-                        $iconClass = $iconClass ?: ($defaultIcons[$tabId] ?? 'fad fa-sliders');
-                        $count = $isArray && array_key_exists('count', $tab) ? $tab['count'] : null;
-                        $countLabel = $count !== null ? number_format((int) $count, 0, ',', '.') : null;
+                        $tabId = $tab['id'];
+                        $label = $tab['label'];
+                        $iconClass = $tab['icon'];
+                        $countLabel = $tab['count_label'];
                     @endphp
                     <li
                         class="relative flex-none"
@@ -173,6 +198,23 @@
                 @endforeach
             </ul>
         </nav>
+
+        <ul x-ref="measureRow" class="pointer-events-none invisible absolute left-0 top-0 flex w-max max-w-none justify-start overflow-visible pt-2" aria-hidden="true">
+            @foreach($normalizedTabs as $tab)
+                <li class="relative flex-none">
+                    <span class="relative block h-full overflow-hidden rounded-t-md border border-b-0 border-gray-400 text-sm font-semibold">
+                        <span class="flex h-full items-center justify-center overflow-hidden py-[0.7em] text-slate-700">
+                            <span class="inline-flex h-5 min-w-0 items-center justify-center gap-2 overflow-hidden px-4 align-middle leading-none">
+                                <i class="{{ $tab['icon'] }} fa-fw shrink-0 text-center leading-none" aria-hidden="true"></i>
+                                <span class="flex h-5 min-w-0 items-center whitespace-nowrap text-center leading-none">
+                                    {{ $tab['label'] }}@if($tab['count_label'])&nbsp;{{ $tab['count_label'] }}@endif
+                                </span>
+                            </span>
+                        </span>
+                    </span>
+                </li>
+            @endforeach
+        </ul>
     </div>
 
     <div class="content-wrap bg-white">
