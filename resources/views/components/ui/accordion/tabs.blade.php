@@ -24,6 +24,7 @@
     $htmlIdPrefix = 'tabs-'.substr(md5($groupKey), 0, 10);
     $tabCount = count($tabs);
     $shapePath = 'M80,60C34,53.5,64.5,0,0,0v60H80z';
+    $shapeStrokePath = 'M80,60C34,53.5,64.5,0,0,0';
 @endphp
 
 <section
@@ -85,7 +86,8 @@
                                     aria-hidden="true"
                                     focusable="false"
                                 >
-                                    <path d="{{ $shapePath }}" class="stroke-gray-400 stroke-[1.5]"></path>
+                                    <path d="{{ $shapePath }}"></path>
+                                    <path d="{{ $shapeStrokePath }}" class="fill-none stroke-gray-400 stroke-[1.5]"></path>
                                 </svg>
                             @endunless
                             @unless($loop->first)
@@ -97,16 +99,17 @@
                                     aria-hidden="true"
                                     focusable="false"
                                 >
-                                    <path d="{{ $shapePath }}" class="stroke-gray-400 stroke-[1.5]"></path>
+                                    <path d="{{ $shapePath }}"></path>
+                                    <path d="{{ $shapeStrokePath }}" class="fill-none stroke-gray-400 stroke-[1.5]"></path>
                                 </svg>
                             @endunless
                             <span
-                                class="block overflow-hidden border border-gray-400 px-4 py-[0.7em] text-ellipsis whitespace-nowrap transition-all duration-150 ease-out"
+                                class="block overflow-hidden border-t border-gray-400 px-4 py-[0.7em] text-ellipsis whitespace-nowrap transition-all duration-150 ease-out"
                                 :class="[
                                     openTab === @js($tabId) ? 'bg-blue-50 text-blue-950' : 'bg-slate-300 text-slate-700 group-hover:bg-blue-100 group-hover:text-blue-900',
                                     isExpanded(@js($tabId)) ? 'w-40 sm:w-56' : 'w-16 sm:w-32',
-                                    @js($loop->first) ? 'rounded-tl-[30px] pl-8' : '',
-                                    @js($loop->last) ? 'rounded-tr-[30px] pr-8' : ''
+                                    @js($loop->first) ? 'rounded-tl-[30px] border-l pl-8' : '',
+                                    @js($loop->last) ? 'rounded-tr-[30px] border-r pr-8' : ''
                                 ]"
                             >
                                 <span class="inline-flex min-w-0 items-center gap-2">
