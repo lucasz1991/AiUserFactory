@@ -50,7 +50,7 @@
     data-step-route-failed="{{ $stepFailedTarget }}"
     {{ $attributes->merge(['class' => 'relative flex min-h-[300px] w-[296px] min-w-[296px] max-w-[296px] shrink-0 flex-col rounded-xl border '.$enabledClass]) }}
 >
-    <div class="relative z-30 rounded-xl border border-slate-200 bg-sky-100 px-4 py-3">
+    <div class="relative z-30 rounded-xl border border-sky-200 bg-sky-100 px-4 py-3">
         <div class="flex items-start justify-between gap-3">
             <div class="min-w-0">
                 <div class="flex flex-wrap items-center gap-2">
@@ -63,11 +63,11 @@
             </div>
             <div class="flex items-center gap-1">
                 @if(! $locked)
-                    <div x-sort:handle class="flex h-8 w-8 cursor-grab items-center justify-center rounded-md text-xs font-bold text-slate-400 hover:bg-slate-200 hover:text-slate-700 active:cursor-grabbing">::</div>
+                    <div x-sort:handle class="flex h-8 w-8 cursor-grab items-center justify-center rounded-md text-xs font-bold text-slate-700 hover:bg-slate-200 hover:text-slate-700 active:cursor-grabbing">::</div>
                 @endif
                 @isset($actions)
                     <div class="relative" x-data="{ open: false }">
-                        <button type="button" x-on:click.stop="open = ! open" class="flex h-8 w-8 items-center justify-center rounded-md text-slate-500 hover:bg-slate-200 hover:text-slate-900">
+                        <button type="button" x-on:click.stop="open = ! open" class="flex h-8 w-8 items-center justify-center rounded-md text-slate-700 hover:bg-slate-200 hover:text-slate-900">
                             ...
                         </button>
                         <div x-cloak x-show="open" x-transition x-on:click.stop x-on:click.outside="open = false" class="absolute right-0 z-30 mt-1 w-40 rounded-md border border-slate-200 bg-white p-1 shadow-lg">
