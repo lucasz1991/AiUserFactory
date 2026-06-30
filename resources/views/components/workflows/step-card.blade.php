@@ -5,7 +5,7 @@
 
 @php
     $enabledClass = $step->is_enabled
-        ? 'border-slate-200 bg-white shadow-sm'
+        ? 'border-slate-200 border-dashed'
         : 'border-slate-200 bg-slate-50 opacity-70 shadow-sm';
     $routeNodeForStep = static function (?array $route): string {
         if (! is_array($route)) {
