@@ -4,12 +4,17 @@ namespace App\Livewire\Admin\Network;
 
 use App\Models\Workflow;
 use App\Models\WorkflowStep;
+use App\Services\Workflows\WorkflowTransferService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Livewire\Component;
+use Livewire\WithFileUploads;
+use Throwable;
 
 class WorkflowsIndex extends Component
 {
+    use WithFileUploads;
+
     public string $activeGroup = 'all';
 
     public string $activeSubcategory = 'all';
@@ -43,6 +48,12 @@ class WorkflowsIndex extends Component
     public bool $editingWorkflowIncluded = false;
 
     public bool $editingWorkflowEffectiveLocked = false;
+
+    public array $selectedWorkflowIds = [];
+
+    public mixed $workflowImportFile = null;
+
+    public bool $showImportWorkflowModal = false;
 
     public function render()
     {
@@ -103,6 +114,91 @@ class WorkflowsIndex extends Component
     {
         $this->activeGroup = trim($group) !== '' ? trim($group) : 'all';
         $this->activeSubcategory = 'all';
+    }
+
+    public function toggleSelectAllVisibleWorkflows(): void
+    {
+        $visibleIds = $this->visibleWorkflowQuery()->pluck('id')->map(fn ($id): string => (string) $id);
+        $selectedIds = collect($this->selectedWorkflowIds)->map(fn ($id): string => (string) $id);
+        $allVisibleSelected = $visibleIds->isNotEmpty() && $visibleIds->every(fn (string $id): bool => $selectedIds->contains($id));
+
+        $this->selectedWorkflowIds = $allVisibleSelected
+            ? $selectedIds->reject(fn (string $id): bool => $visibleIds->contains($id))->values()->all()
+            : $selectedIds->merge($visibleIds)->unique()->values()->all();
+    }
+
+    public function clearWorkflowSelection(): void
+    {
+        $this->selectedWorkflowIds = [];
+    }
+
+    public function selectAllWorkflows(): void
+    {
+        $this->selectedWorkflowIds = Workflow::query()
+            ->orderBy('id')
+            ->pluck('id')
+            ->map(fn ($id): string => (string) $id)
+            ->all();
+    }
+
+    public function exportSelectedWorkflows(WorkflowTransferService $transferService): mixed
+    {
+        $ids = collect($this->selectedWorkflowIds)
+            ->map(fn ($id): int => (int) $id)
+            ->filter(fn (int $id): bool => $id > 0)
+            ->unique()
+            ->values();
+
+        if ($ids->isEmpty()) {
+            session()->flash('error', 'Bitte mindestens einen Workflow fuer den Export auswaehlen.');
+
+            return null;
+        }
+
+        $workflows = Workflow::query()
+            ->with(['steps' => fn ($query) => $query->ordered()])
+            ->whereKey($ids->all())
+            ->orderBy('name')
+            ->get();
+
+        if ($workflows->isEmpty()) {
+            session()->flash('error', 'Die ausgewaehlten Workflows wurden nicht gefunden.');
+
+            return null;
+        }
+
+        $export = $transferService->zip(
+            $workflows,
+            'workflows-'.$workflows->count().'-'.now()->format('Y-m-d-His'),
+        );
+
+        return response()->download($export['path'], $export['filename'])->deleteFileAfterSend(true);
+    }
+
+    public function importWorkflows(WorkflowTransferService $transferService): void
+    {
+        $this->validate([
+            'workflowImportFile' => ['required', 'file', 'max:10240'],
+        ]);
+
+        try {
+            $result = $transferService->importFile(
+                $this->workflowImportFile->getRealPath(),
+                $this->workflowImportFile->getClientOriginalName(),
+            );
+        } catch (Throwable $exception) {
+            $this->addError('workflowImportFile', $exception->getMessage());
+
+            return;
+        }
+
+        $this->reset('workflowImportFile', 'selectedWorkflowIds');
+        $this->showImportWorkflowModal = false;
+
+        session()->flash(
+            'success',
+            $result['total'].' Workflows importiert: '.$result['created'].' neu, '.$result['updated'].' aktualisiert.',
+        );
     }
 
     public function createWorkflow(): void
@@ -361,5 +457,15 @@ class WorkflowsIndex extends Component
                 default => Str::of($group)->replace(['_', '-'], ' ')->title()->toString(),
             }])
             ->all();
+    }
+
+    protected function visibleWorkflowQuery()
+    {
+        return Workflow::query()
+            ->when($this->activeGroup !== 'all', fn ($query) => $query->where('category', $this->activeGroup))
+            ->when(
+                $this->activeSubcategory !== 'all',
+                fn ($query) => $query->where('subcategory', $this->activeSubcategory),
+            );
     }
 }

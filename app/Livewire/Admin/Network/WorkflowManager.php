@@ -10,6 +10,7 @@ use App\Services\Workflows\PersonaActionWorkflowCatalog;
 use App\Services\Workflows\WorkflowExecutionService;
 use App\Services\Workflows\WorkflowTaskCatalog;
 use App\Services\Workflows\WorkflowTaskOrderingService;
+use App\Services\Workflows\WorkflowTransferService;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -256,6 +257,25 @@ class WorkflowManager extends Component
         $this->showWorkflowModal = false;
 
         session()->flash('success', 'Workflow wurde gespeichert.');
+    }
+
+    public function exportWorkflow(WorkflowTransferService $transferService): mixed
+    {
+        $workflow = $this->selectedWorkflow();
+
+        if (! $workflow) {
+            session()->flash('error', 'Workflow wurde nicht gefunden.');
+
+            return null;
+        }
+
+        $workflow->load(['steps' => fn ($query) => $query->ordered()]);
+        $export = $transferService->zip(
+            [$workflow],
+            'workflow-'.$workflow->slug.'-'.now()->format('Y-m-d-His'),
+        );
+
+        return response()->download($export['path'], $export['filename'])->deleteFileAfterSend(true);
     }
 
     public function deleteWorkflow(): void

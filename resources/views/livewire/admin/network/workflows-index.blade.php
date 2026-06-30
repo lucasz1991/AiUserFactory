@@ -10,6 +10,9 @@
             <button type="button" wire:click="$set('showCreateWorkflowModal', true)" class="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">
                 Neuer Workflow
             </button>
+            <button type="button" wire:click="$set('showImportWorkflowModal', true)" class="rounded-md border border-blue-300 bg-white px-4 py-2 text-sm font-semibold text-blue-700 shadow-sm hover:bg-blue-50">
+                Importieren
+            </button>
             <a href="{{ route('network.actions') }}" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">
                 Aktionen
             </a>
@@ -69,11 +72,53 @@
             </div>
         @endif
 
+        @php
+            $selectedIdStrings = collect($selectedWorkflowIds)->map(fn ($id) => (string) $id);
+            $visibleIdStrings = $visibleWorkflows->pluck('id')->map(fn ($id) => (string) $id);
+            $allVisibleSelected = $visibleIdStrings->isNotEmpty()
+                && $visibleIdStrings->every(fn ($id) => $selectedIdStrings->contains($id));
+        @endphp
+
+        <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 py-3">
+            <div class="text-xs font-medium text-slate-500">
+                {{ count($selectedWorkflowIds) }} ausgewählt
+            </div>
+            <div class="flex flex-wrap justify-end gap-2">
+                <button type="button" wire:click="toggleSelectAllVisibleWorkflows" class="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">
+                    {{ $allVisibleSelected ? 'Sichtbare abwählen' : 'Alle sichtbaren auswählen' }}
+                </button>
+                @if(count($selectedWorkflowIds) < $workflows->count())
+                    <button type="button" wire:click="selectAllWorkflows" class="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">
+                        Alle {{ $workflows->count() }} auswählen
+                    </button>
+                @endif
+                @if(count($selectedWorkflowIds) > 0)
+                    <button type="button" wire:click="clearWorkflowSelection" class="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">
+                        Auswahl aufheben
+                    </button>
+                @endif
+                <button
+                    type="button"
+                    wire:click="exportSelectedWorkflows"
+                    wire:loading.attr="disabled"
+                    @disabled(count($selectedWorkflowIds) === 0)
+                    class="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                    Auswahl als ZIP exportieren
+                </button>
+            </div>
+        </div>
+
         <div class="overflow-visible">
             <table class="w-full table-fixed divide-y divide-slate-200">
                 <thead class="bg-slate-50">
                     <tr>
-                        <th class="w-[36%] px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Workflow</th>
+                        <th class="w-[4%] px-3 py-3 text-left">
+                            <button type="button" wire:click="toggleSelectAllVisibleWorkflows" class="flex h-5 w-5 items-center justify-center rounded border {{ $allVisibleSelected ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-300 bg-white text-transparent' }}" aria-label="Alle sichtbaren Workflows auswählen">
+                                <svg class="h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.704 5.29a1 1 0 0 1 .006 1.414l-8 8a1 1 0 0 1-1.414 0l-4-4A1 1 0 0 1 4.71 9.29L8 12.586l7.296-7.296a1 1 0 0 1 1.408 0Z" clip-rule="evenodd" /></svg>
+                            </button>
+                        </th>
+                        <th class="w-[32%] px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Workflow</th>
                         <th class="w-[18%] px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Gruppe</th>
                         <th class="w-[30%] px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Daten</th>
                         <th class="w-[10%] px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Status</th>
@@ -86,6 +131,9 @@
                             $taskCardCount = $workflow->steps->sum(fn ($step) => count($step->task_cards));
                         @endphp
                         <tr wire:key="workflow-row-{{ $workflow->id }}" class="hover:bg-slate-50">
+                            <td class="px-3 py-3 align-middle">
+                                <input type="checkbox" wire:model.live="selectedWorkflowIds" value="{{ $workflow->id }}" class="rounded border-slate-300 text-blue-600 shadow-sm focus:ring-blue-500" aria-label="{{ $workflow->name }} auswählen">
+                            </td>
                             <td class="min-w-0 px-3 py-3">
                                 <div class="min-w-0">
                                     <div class="flex min-w-0 items-center gap-2">
@@ -131,7 +179,7 @@
                         </tr>
                     @empty
                         <tr>
-                            <td colspan="5" class="px-4 py-8 text-center text-sm text-slate-500">
+                            <td colspan="6" class="px-4 py-8 text-center text-sm text-slate-500">
                                 Keine Workflows in dieser Gruppe.
                             </td>
                         </tr>
@@ -169,7 +217,7 @@
                 lock-model="editingWorkflowLocked"
                 :disabled="$editingWorkflowEffectiveLocked"
                 :lock-disabled="$editingWorkflowIncluded"
-                :lock-help="$editingWorkflowIncluded ? 'Automatisch gesperrt, weil dieser Workflow in einem anderen Workflow enthalten ist.' : ($editingWorkflowEffectiveLocked ? 'Haken entfernen und speichern, um den Workflow zu entsperren.' : 'Gesperrte Workflows koennen im Manager nur getestet werden.')"
+                :lock-help="$editingWorkflowIncluded ? 'Automatisch gesperrt, weil dieser Workflow in einem anderen Workflow enthalten ist.' : ($editingWorkflowEffectiveLocked ? 'Haken entfernen und speichern, um den Workflow zu entsperren.' : 'Gesperrte Workflows bleiben fuer Admins im Manager bearbeitbar und werden dort mit einer Warnung markiert.')"
             />
         </x-slot>
         <x-slot name="footer">
@@ -177,6 +225,29 @@
             @if(! $editingWorkflowIncluded)
                 <button type="button" wire:click="saveEditWorkflow" class="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">{{ $editingWorkflowEffectiveLocked ? 'Entsperren' : 'Speichern' }}</button>
             @endif
+        </x-slot>
+    </x-dialog-modal>
+
+    <x-dialog-modal wire:model="showImportWorkflowModal" maxWidth="2xl">
+        <x-slot name="title">Workflows importieren</x-slot>
+        <x-slot name="content">
+            <div class="space-y-4">
+                <div class="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                    Vorhandene Workflows mit demselben Slug werden aktualisiert. Ihre Listen und Tasks werden durch den Stand aus der Importdatei ersetzt. Laufhistorien bleiben erhalten.
+                </div>
+                <div>
+                    <label for="workflow-import-file" class="block text-sm font-medium text-slate-700">CSV- oder ZIP-Datei</label>
+                    <input id="workflow-import-file" type="file" wire:model="workflowImportFile" accept=".csv,.zip,text/csv,application/zip" class="mt-1 block w-full rounded-md border border-slate-300 bg-white p-2 text-sm shadow-sm file:mr-3 file:rounded file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-sm file:font-semibold file:text-slate-700 hover:file:bg-slate-200">
+                    <p class="mt-1 text-xs text-slate-500">Maximal 10 MB. ZIP-Dateien müssen eine Workflow-CSV enthalten.</p>
+                    @error('workflowImportFile') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                </div>
+            </div>
+        </x-slot>
+        <x-slot name="footer">
+            <button type="button" x-on:click="$dispatch('close')" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">Abbrechen</button>
+            <button type="button" wire:click="importWorkflows" wire:loading.attr="disabled" wire:target="workflowImportFile,importWorkflows" class="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:opacity-50">
+                Importieren
+            </button>
         </x-slot>
     </x-dialog-modal>
 </div>
