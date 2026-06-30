@@ -22,9 +22,11 @@
     $key = $persistKey ?: $autoKey;
     $groupKey = $group ?: $key;
     $htmlIdPrefix = 'tabs-'.substr(md5($groupKey), 0, 10);
+    $shapeId = $htmlIdPrefix.'-shape';
 @endphp
 
-<div
+<section
+    id="{{ $htmlIdPrefix }}"
     {{ $attributes->merge(['class' => 'w-full']) }}
     x-data="{
         openTab: @if($persist) $persist(@js($initial)).as(@js($key)) @else @js($initial) @endif,
@@ -50,51 +52,129 @@
     }"
     x-init="if (!items.some(t => t.id === openTab)) openTab = items[0]?.id ?? openTab"
 >
-    <div class="overflow-x-auto border-b border-slate-200 px-2">
-        <nav
-            class="tabs tabs-lifted flex w-max min-w-full justify-start overflow-visible px-1"
-            aria-label="Tabs"
-            role="tablist"
-            aria-orientation="horizontal"
-        >
-            <template x-for="(t, index) in items" :key="t.id">
-                <button
-                    type="button"
-                    @click.prevent="selectTab(t.id)"
-                    :id="@js($htmlIdPrefix) + '-item-' + t.id"
-                    :aria-controls="@js($htmlIdPrefix) + '-panel-' + t.id"
-                    :style="{
-                        marginLeft: index > 0 ? '-0.625rem' : '0',
-                        zIndex: items.length - index,
-                    }"
-                    :class="openTab === t.id
-                        ? 'active tab-active border-slate-300 border-b-white bg-white text-slate-950 shadow-md'
-                        : 'border-transparent border-b-slate-200 bg-slate-50/80 text-slate-500 hover:border-slate-300 hover:border-b-white hover:bg-white hover:text-slate-900 hover:shadow-md'"
-                    class="tab active-tab:tab-active relative -mb-px inline-flex min-h-[2.75rem] shrink-0 items-center gap-2 rounded-t-md border px-4 py-2 text-xs font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-300"
-                    role="tab"
-                    :aria-selected="openTab === t.id"
-                    :tabindex="openTab === t.id ? 0 : -1"
-                >
-                    <template x-if="t.icon === 'instagram-grid'">
-                        <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                            <rect x="4" y="4" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
-                            <rect x="14" y="4" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
-                            <rect x="4" y="14" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
-                            <rect x="14" y="14" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
-                        </svg>
-                    </template>
-                    <template x-if="t.icon && t.icon !== 'instagram-grid'">
-                        <i :class="t.icon + ' fa-lg'" aria-hidden="true"></i>
-                    </template>
-                    <span class="whitespace-nowrap">
-                        <span x-text="t.label"></span><template x-if="t.countLabel"><span>&nbsp;<span x-text="t.countLabel"></span></span></template>
-                    </span>
-                </button>
-            </template>
+    <style>
+        #{{ $htmlIdPrefix }} .shape-tab-svg {
+            pointer-events: none;
+        }
+
+        #{{ $htmlIdPrefix }} .shape-tab-svg use {
+            pointer-events: auto;
+        }
+
+        @media screen and (max-width: 58em) {
+            #{{ $htmlIdPrefix }} .shape-tabs-list {
+                display: block;
+                padding-top: 1.5em;
+            }
+
+            #{{ $htmlIdPrefix }} .shape-tabs-item {
+                display: block;
+                margin: -1.25em 0 0 !important;
+                flex: none;
+            }
+
+            #{{ $htmlIdPrefix }} .shape-tabs-trigger {
+                margin: 0 !important;
+                width: 100%;
+            }
+
+            #{{ $htmlIdPrefix }} .shape-tab-svg {
+                display: none;
+            }
+
+            #{{ $htmlIdPrefix }} .shape-tab-label {
+                padding: 1.25em 1rem 2em !important;
+                border-radius: 30px 30px 0 0 !important;
+                box-shadow: 0 -1px 2px rgba(0, 0, 0, 0.1);
+                line-height: 1;
+            }
+
+            #{{ $htmlIdPrefix }} .shape-tabs-item:last-child .shape-tab-label {
+                padding-bottom: 1.25em !important;
+            }
+        }
+    </style>
+
+    <svg class="hidden" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+            <path id="{{ $shapeId }}" d="M80,60C34,53.5,64.5,0,0,0v60H80z"></path>
+        </defs>
+    </svg>
+
+    <div class="tabs tabs-style-shape w-full max-w-[1200px] overflow-x-auto">
+        <nav aria-label="Tabs" role="tablist" aria-orientation="horizontal">
+            <ul class="shape-tabs-list flex min-w-max justify-start overflow-visible">
+                <template x-for="(t, index) in items" :key="t.id">
+                    <li
+                        class="shape-tabs-item relative mx-12 flex-none first:ml-0"
+                        :class="{ 'tab-current': openTab === t.id }"
+                        :style="{ zIndex: items.length - index }"
+                    >
+                        <button
+                            type="button"
+                            @click.prevent="selectTab(t.id)"
+                            :id="@js($htmlIdPrefix) + '-item-' + t.id"
+                            :aria-controls="@js($htmlIdPrefix) + '-panel-' + t.id"
+                            class="shape-tabs-trigger group relative -mr-12 block overflow-visible p-0 text-sm font-medium text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#2CC185]"
+                            role="tab"
+                            :aria-selected="openTab === t.id"
+                            :tabindex="openTab === t.id ? 0 : -1"
+                        >
+                            <svg
+                                x-show="index < items.length - 1"
+                                viewBox="0 0 80 60"
+                                preserveAspectRatio="none"
+                                class="shape-tab-svg absolute left-full top-0 m-0 h-full w-12 group-hover:fill-[#2CC185]"
+                                :class="openTab === t.id ? 'fill-white' : 'fill-[#bdc2c9]'"
+                                aria-hidden="true"
+                                focusable="false"
+                            >
+                                <use href="#{{ $shapeId }}" xlink:href="#{{ $shapeId }}"></use>
+                            </svg>
+                            <svg
+                                x-show="index > 0"
+                                viewBox="0 0 80 60"
+                                preserveAspectRatio="none"
+                                class="shape-tab-svg absolute right-full top-0 m-0 h-full w-12 -scale-x-100 group-hover:fill-[#2CC185]"
+                                :class="openTab === t.id ? 'fill-white' : 'fill-[#bdc2c9]'"
+                                aria-hidden="true"
+                                focusable="false"
+                            >
+                                <use href="#{{ $shapeId }}" xlink:href="#{{ $shapeId }}"></use>
+                            </svg>
+                            <span
+                                class="shape-tab-label block overflow-hidden px-4 py-[0.65em] text-ellipsis whitespace-nowrap"
+                                :class="[
+                                    openTab === t.id ? 'bg-white text-slate-950' : 'bg-[#bdc2c9] text-white group-hover:bg-[#2CC185]',
+                                    index === 0 ? 'rounded-tl-[30px] pl-8' : '',
+                                    index === items.length - 1 ? 'rounded-tr-[30px] pr-8' : ''
+                                ]"
+                            >
+                                <span class="inline-flex items-center gap-2">
+                                    <template x-if="t.icon === 'instagram-grid'">
+                                        <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                            <rect x="4" y="4" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
+                                            <rect x="14" y="4" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
+                                            <rect x="4" y="14" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
+                                            <rect x="14" y="14" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
+                                        </svg>
+                                    </template>
+                                    <template x-if="t.icon && t.icon !== 'instagram-grid'">
+                                        <i :class="t.icon + ' fa-lg'" aria-hidden="true"></i>
+                                    </template>
+                                    <span>
+                                        <span x-text="t.label"></span><template x-if="t.countLabel"><span>&nbsp;<span x-text="t.countLabel"></span></span></template>
+                                    </span>
+                                </span>
+                            </span>
+                        </button>
+                    </li>
+                </template>
+            </ul>
         </nav>
     </div>
 
-    <div>
+    <div class="content-wrap bg-white">
         {{ $slot }}
     </div>
-</div>
+</section>
