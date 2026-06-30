@@ -6,19 +6,44 @@
                 Workflows gruppiert nach Prozessbereich, als kompakte Liste mit Kennzahlen.
             </p>
         </div>
-        <div class="flex flex-wrap gap-3">
-            <button type="button" wire:click="$set('showCreateWorkflowModal', true)" class="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">
-                Neuer Workflow
-            </button>
-            <button type="button" wire:click="$set('showImportWorkflowModal', true)" class="rounded-md border border-blue-300 bg-white px-4 py-2 text-sm font-semibold text-blue-700 shadow-sm hover:bg-blue-50">
-                Importieren
-            </button>
-            <a href="{{ route('network.actions') }}" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">
-                Aktionen
-            </a>
-            <a href="{{ route('processes.index') }}" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">
-                Prozesse
-            </a>
+        <div class="ml-auto flex max-w-full flex-col items-end gap-2">
+            <div class="flex flex-wrap justify-end gap-2">
+                <div class="relative" x-data="{ open: false }" x-on:keydown.escape.window="open = false">
+                    <button type="button" x-on:click="open = ! open" x-bind:aria-expanded="open" class="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">
+                        Verwalten
+                        <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" /></svg>
+                    </button>
+                    <div x-cloak x-show="open" x-transition x-on:click.outside="open = false" class="absolute right-0 z-50 mt-2 w-56 rounded-lg border border-slate-200 bg-white p-1.5 shadow-xl">
+                        <button type="button" wire:click="$set('showCreateWorkflowModal', true)" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-100">Neuer Workflow</button>
+                        <button type="button" wire:click="$set('showImportWorkflowModal', true)" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-blue-700 hover:bg-blue-50">Workflows importieren</button>
+                    </div>
+                </div>
+
+                <div class="relative" x-data="{ open: false }" x-on:keydown.escape.window="open = false">
+                    <button type="button" x-on:click="open = ! open" x-bind:aria-expanded="open" class="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
+                        Weitere
+                        <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" /></svg>
+                    </button>
+                    <div x-cloak x-show="open" x-transition x-on:click.outside="open = false" class="absolute right-0 z-50 mt-2 w-52 rounded-lg border border-slate-200 bg-white p-1.5 shadow-xl">
+                        <a href="{{ route('network.actions') }}" class="block rounded-md px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">Aktionsplanung öffnen</a>
+                        <a href="{{ route('processes.index') }}" class="block rounded-md px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">Prozesse öffnen</a>
+                    </div>
+                </div>
+            </div>
+
+            <div class="flex flex-wrap justify-end gap-1.5" aria-label="Workflow-Statistik">
+                @foreach([
+                    ['Workflows', $summary['workflows'], 'bg-slate-100 text-slate-700'],
+                    ['Aktiv', $summary['active_workflows'], 'bg-emerald-50 text-emerald-700'],
+                    ['Listen', $summary['lists'], 'bg-blue-50 text-blue-700'],
+                    ['Tasks', $summary['task_cards'], 'bg-amber-50 text-amber-700'],
+                ] as [$label, $value, $classes])
+                    <span class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] leading-none {{ $classes }}">
+                        <span class="font-medium opacity-75">{{ $label }}</span>
+                        <span class="font-bold tabular-nums">{{ $value }}</span>
+                    </span>
+                @endforeach
+            </div>
         </div>
     </div>
 
@@ -33,13 +58,6 @@
             {{ session('error') }}
         </div>
     @endif
-
-    <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <x-admin.stat label="Workflows" :value="$summary['workflows']" tone="slate" />
-        <x-admin.stat label="Aktiv" :value="$summary['active_workflows']" tone="emerald" />
-        <x-admin.stat label="Listen" :value="$summary['lists']" tone="blue" />
-        <x-admin.stat label="Step-Karten" :value="$summary['task_cards']" tone="amber" />
-    </div>
 
     <x-admin.panel title="Workflow-Gruppen">
         <div class="border-b border-slate-200">
