@@ -44,6 +44,8 @@
         hoverTab: null,
         tabIcons: {},
         compact: false,
+        compactFrame: null,
+        compactObserver: null,
         get expandedTab() { return this.hoverTab || this.openTab; },
         isExpanded(id) { return !this.compact || this.expandedTab === id; },
         iconClass(id, fallback) {
@@ -55,6 +57,7 @@
             }
 
             this.tabIcons[event.detail.tab] = event.detail.icon;
+            this.scheduleCompactUpdate();
         },
         selectTab(id) {
             this.openTab = id;
@@ -65,23 +68,49 @@
                 this.openTab = @js((string) $initial);
             }
 
-            this.updateCompact();
-            this._updateTabCompact = () => this.updateCompact();
+            this.scheduleCompactUpdate();
+            this._updateTabCompact = () => this.scheduleCompactUpdate();
             window.addEventListener('resize', this._updateTabCompact);
+
+            if ('ResizeObserver' in window) {
+                this.compactObserver = new ResizeObserver(() => this.scheduleCompactUpdate());
+
+                if (this.$refs.tabRow) {
+                    this.compactObserver.observe(this.$refs.tabRow);
+                    this.compactObserver.observe(this.$refs.tabRow.parentElement);
+                }
+            }
         },
         destroy() {
             window.removeEventListener('resize', this._updateTabCompact);
+            this.compactObserver?.disconnect();
+
+            if (this.compactFrame) {
+                cancelAnimationFrame(this.compactFrame);
+            }
+        },
+        scheduleCompactUpdate() {
+            if (this.compactFrame) {
+                cancelAnimationFrame(this.compactFrame);
+            }
+
+            this.compactFrame = requestAnimationFrame(() => {
+                this.compactFrame = null;
+                this.updateCompact();
+            });
         },
         updateCompact() {
             this.$nextTick(() => {
                 const row = this.$refs.tabRow;
 
-                if (!row) return;
+                if (!row || row.clientWidth <= 0) return;
 
                 this.compact = false;
 
                 this.$nextTick(() => {
-                    this.compact = row.scrollWidth > row.clientWidth + 1;
+                    requestAnimationFrame(() => {
+                        this.compact = row.scrollWidth > row.clientWidth + 1;
+                    });
                 });
             });
         }
