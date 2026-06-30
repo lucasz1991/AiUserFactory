@@ -23,6 +23,17 @@
     $groupKey = $group ?: $key;
     $htmlIdPrefix = 'tabs-'.substr(md5($groupKey), 0, 10);
     $tabCount = count($tabs);
+    $defaultIcons = [
+        'quelle-suche' => 'fad fa-database',
+        'filter' => 'fad fa-filter',
+        'datum-warten' => 'fad fa-clock',
+        'oeffnen' => 'fad fa-envelope-open-text',
+        'wert-ermitteln' => 'fad fa-search',
+        'ergebnis' => 'fad fa-check-square',
+        'ausfuehrung' => 'fad fa-play',
+        'eingabe' => 'fad fa-keyboard',
+        'daten' => 'fad fa-code',
+    ];
 @endphp
 
 <section
@@ -31,9 +42,9 @@
     x-data="{
         openTab: @if($persist) $persist(@js($initial)).as(@js($key)) @else @js($initial) @endif,
         hoverTab: null,
-        overlapFor(id) {
-            return (this.openTab === id || this.hoverTab === id) ? 40 : 92;
-        },
+        compact: false,
+        get expandedTab() { return this.hoverTab || this.openTab; },
+        isExpanded(id) { return !this.compact || this.expandedTab === id; },
         selectTab(id) {
             this.openTab = id;
             this.$dispatch('ui-tab-selected', { group: @js($groupKey), tab: id });
@@ -42,26 +53,46 @@
             if (!@js(array_map('strval', array_keys($tabs))).includes(this.openTab)) {
                 this.openTab = @js((string) $initial);
             }
+
+            this.updateCompact();
+            this._updateTabCompact = () => this.updateCompact();
+            window.addEventListener('resize', this._updateTabCompact);
+        },
+        destroy() {
+            window.removeEventListener('resize', this._updateTabCompact);
+        },
+        updateCompact() {
+            this.$nextTick(() => {
+                const row = this.$refs.tabRow;
+
+                if (!row) return;
+
+                this.compact = false;
+
+                this.$nextTick(() => {
+                    this.compact = row.scrollWidth > row.clientWidth + 1;
+                });
+            });
         }
     }"
     x-init="initTabs()"
 >
     <div class="w-full max-w-full overflow-hidden">
         <nav class="w-full max-w-full overflow-hidden" aria-label="Tabs" role="tablist" aria-orientation="horizontal">
-            <ul class="flex w-full max-w-full justify-start overflow-hidden pt-2">
+            <ul x-ref="tabRow" class="flex w-full max-w-full justify-start overflow-hidden pt-2">
                 @foreach($tabs as $tabKey => $tab)
                     @php
                         $tabId = (string) $tabKey;
                         $isArray = is_array($tab);
                         $label = $isArray ? ($tab['label'] ?? Str::title($tabId)) : $tab;
                         $iconClass = $isArray ? ($tab['icon'] ?? null) : null;
+                        $iconClass = $iconClass ?: ($defaultIcons[$tabId] ?? 'fad fa-sliders-h');
                         $count = $isArray && array_key_exists('count', $tab) ? $tab['count'] : null;
                         $countLabel = $count !== null ? number_format((int) $count, 0, ',', '.') : null;
                     @endphp
                     <li
-                        class="relative flex-none transition-[margin] duration-200 ease-out"
+                        class="relative flex-none"
                         :style="{
-                            marginLeft: @js($loop->first) ? '0' : `-${overlapFor(@js($tabId))}px`,
                             zIndex: @js($tabCount - $loop->index),
                         }"
                     >
@@ -78,18 +109,17 @@
                             :tabindex="openTab === @js($tabId) ? 0 : -1"
                         >
                             <span
-                                class="block w-40 overflow-hidden px-4 py-[0.7em] text-ellipsis whitespace-nowrap sm:w-56"
+                                class="block overflow-hidden px-4 py-[0.7em] text-ellipsis whitespace-nowrap transition-[width,background-color,color] duration-200 ease-out"
                                 :class="[
                                     openTab === @js($tabId) ? 'bg-blue-50 text-blue-950' : 'bg-slate-300 text-slate-700 group-hover/tab:bg-blue-100 group-hover/tab:text-blue-900',
+                                    isExpanded(@js($tabId)) ? 'w-40 sm:w-56' : 'w-12',
                                     @js($loop->first) ? 'pl-5' : '',
                                     @js($loop->last) ? 'pr-5' : ''
                                 ]"
                             >
                                 <span class="inline-flex min-w-0 items-center gap-2">
-                                    @if($iconClass)
-                                        <i class="{{ $iconClass }} fa-lg" aria-hidden="true"></i>
-                                    @endif
-                                    <span class="truncate">
+                                    <i class="{{ $iconClass }} shrink-0 fa-lg" aria-hidden="true"></i>
+                                    <span class="truncate" x-show="isExpanded(@js($tabId))" x-transition.opacity.duration.150ms>
                                         {{ $label }}@if($countLabel)&nbsp;{{ $countLabel }}@endif
                                     </span>
                                 </span>
