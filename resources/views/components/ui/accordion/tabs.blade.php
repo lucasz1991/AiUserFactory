@@ -116,13 +116,13 @@
                             @click.prevent="selectTab(@js($tabId))"
                             @mouseenter="hoverTab = @js($tabId)"
                             @mouseleave="hoverTab = null"
-                            class="group/tab relative block overflow-hidden rounded-t-md border border-b-0 border-gray-400 text-sm font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-200"
+                            class="group/tab relative block overflow-hidden h-full rounded-t-md border border-b-0 border-gray-400 text-sm font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-200"
                             role="tab"
                             :aria-selected="(openTab === @js($tabId)).toString()"
                             :tabindex="openTab === @js($tabId) ? 0 : -1"
                         >
                             <span
-                                class="block overflow-hidden px-4 py-[0.7em] text-ellipsis whitespace-nowrap transition-[width,background-color,color] duration-200 ease-out"
+                                class="block overflow-hidden px-4 py-[0.7em] h-full text-ellipsis whitespace-nowrap transition-[width,background-color,color] duration-200 ease-out"
                                 :class="[
                                     openTab === @js($tabId) ? 'bg-blue-50 text-blue-950' : 'bg-slate-300 text-slate-700 group-hover/tab:bg-blue-100 group-hover/tab:text-blue-900',
                                     isExpanded(@js($tabId)) ? 'w-40 sm:w-56' : 'w-12',
