@@ -107,7 +107,7 @@
                 <span class="font-semibold">Achtung: Dieser Workflow ist gesperrt.</span> {{ $selectedWorkflow->lock_reason }} Als Admin kannst du ihn trotzdem bearbeiten. Aenderungen koennen laufende oder eingebundene Workflows beeinflussen.
             </div>
         @endif
-        <x-admin.panel title="Board">
+        <div>
             <div
                 x-data="{
                     focusedTask: '',
@@ -473,7 +473,7 @@
                     </div>
                 </div>
             </div>
-        </x-admin.panel>
+</div>
 
         @if(! $showTaskPanel)
             <button
