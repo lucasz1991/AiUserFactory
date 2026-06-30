@@ -122,16 +122,15 @@
                             :tabindex="openTab === @js($tabId) ? 0 : -1"
                         >
                             <span
-                                class="flex h-full items-center justify-center overflow-hidden px-4 py-[0.7em] text-ellipsis whitespace-nowrap transition-[width,background-color,color] duration-200 ease-out"
+                                class="flex h-full items-center justify-center overflow-hidden py-[0.7em] text-ellipsis whitespace-nowrap transition-[background-color,color] duration-200 ease-out"
                                 :class="[
-                                    openTab === @js($tabId) ? 'bg-blue-50 text-blue-950' : 'bg-slate-300 text-slate-700 group-hover/tab:bg-blue-100 group-hover/tab:text-blue-900',
-                                    @js($loop->first) ? 'pl-5' : '',
-                                    @js($loop->last) ? 'pr-5' : ''
+                                    openTab === @js($tabId) ? 'bg-blue-50 text-blue-950' : 'bg-slate-300 text-slate-700 group-hover/tab:bg-blue-100 group-hover/tab:text-blue-900'
                                 ]"
                             >
-                                <span class="inline-flex h-5 min-w-0 items-center justify-center gap-2 align-middle leading-none"
+                                <span
+                                    class="inline-flex h-5 min-w-0 items-center justify-center overflow-hidden align-middle leading-none transition-[gap,padding] duration-200 ease-out"
                                     :class="[
-                                        isExpanded(@js($tabId)) ? 'px-3' : 'px-0',
+                                        isExpanded(@js($tabId)) ? 'gap-2 px-4' : 'gap-0 px-3',
                                     ]"
                                 >
                                     <i :class="iconClass(@js($tabId), @js($iconClass))" aria-hidden="true"></i>
