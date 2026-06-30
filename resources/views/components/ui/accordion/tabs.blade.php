@@ -71,7 +71,7 @@
                             @click.prevent="selectTab(@js($tabId))"
                             @mouseenter="hoverTab = @js($tabId)"
                             @mouseleave="hoverTab = null"
-                            class="group relative block overflow-visible p-0 text-sm font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-200"
+                            class="group relative block overflow-visible p-0 text-sm font-semibold border border-gray-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-200"
                             role="tab"
                             :aria-selected="(openTab === @js($tabId)).toString()"
                             :tabindex="openTab === @js($tabId) ? 0 : -1"
