@@ -69,7 +69,7 @@
                 if (!row) return;
                 if (!nav) return;
 
-                const totalWidth = Array.from(nav.children).reduce((width, child) => width + child.offsetWidth, 0);
+                const totalWidth = Array.from(nav.children).reduce((width, child) => width + child.scrollWidth, 0);
                 this.overlapped = this.forceCollapsed || totalWidth > row.clientWidth + 1;
                 this.overlapOffset = this.overlapped && this.items.length > 1
                     ? Math.min(Math.max(Math.ceil((totalWidth - row.clientWidth) / (this.items.length - 1)) + 8, 16), 40)
@@ -98,12 +98,13 @@
                     :aria-controls="@js($htmlIdPrefix) + '-panel-' + t.id"
                     :style="{
                         marginLeft: overlapped && index > 0 ? `-${overlapOffset}px` : '0',
-                        zIndex: openTab === t.id ? 50 : (hoverTab === t.id ? 60 : 10 + index),
+                        zIndex: items.length - index,
+                        maxWidth: overlapped && openTab !== t.id && hoverTab !== t.id ? '8.75rem' : '20rem',
                     }"
                     :class="openTab === t.id
                         ? 'active tab-active border-slate-300 border-b-white bg-white text-slate-950 shadow-md'
                         : 'border-transparent border-b-slate-200 bg-slate-50/80 text-slate-500 hover:border-slate-300 hover:border-b-white hover:bg-white hover:text-slate-900 hover:shadow-md'"
-                    class="tab active-tab:tab-active relative -mb-px inline-flex min-h-[2.75rem] shrink-0 origin-bottom items-center gap-2 rounded-t-md border px-4 py-2 text-xs font-semibold transition-[margin,transform,box-shadow,background-color,border-color,color] duration-300 ease-out hover:-translate-y-0.5 focus:-translate-y-0.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-300"
+                    class="tab active-tab:tab-active relative -mb-px inline-flex min-h-[2.75rem] shrink-0 origin-bottom items-center gap-2 overflow-hidden rounded-t-md border px-4 py-2 text-xs font-semibold transition-[margin,max-width,box-shadow,background-color,border-color,color] duration-300 ease-out focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-300"
                     role="tab"
                     :aria-selected="openTab === t.id"
                     :tabindex="openTab === t.id ? 0 : -1"
