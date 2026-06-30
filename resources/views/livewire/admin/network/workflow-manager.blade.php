@@ -425,7 +425,7 @@
                 <div
                     x-ref="routeSurface"
                     x-on:scroll.debounce.100ms="refreshRouteLines()"
-                    x-bind:class="isFullscreen ? 'min-h-0 flex-1 max-h-none' : ' min-h-[570px]'"
+                    x-bind:class="isFullscreen ? 'min-h-0 flex-1 max-h-none' : ' min-h-70vh max-h-[calc(100vh-300px)]'"
                     class="relative isolate overflow-auto bg-slate-100/80 scrollbar-thin scrollbar-thumb-slate-300 scrollbar-track-slate-100"
                 >
                     <svg
