@@ -125,12 +125,15 @@
                                 class="flex h-full items-center justify-center overflow-hidden px-4 py-[0.7em] text-ellipsis whitespace-nowrap transition-[width,background-color,color] duration-200 ease-out"
                                 :class="[
                                     openTab === @js($tabId) ? 'bg-blue-50 text-blue-950' : 'bg-slate-300 text-slate-700 group-hover/tab:bg-blue-100 group-hover/tab:text-blue-900',
-                                    isExpanded(@js($tabId)) ? 'w-40 sm:w-56' : 'w-12',
                                     @js($loop->first) ? 'pl-5' : '',
                                     @js($loop->last) ? 'pr-5' : ''
                                 ]"
                             >
-                                <span class="inline-flex h-5 min-w-0 items-center justify-center gap-2 align-middle leading-none">
+                                <span class="inline-flex h-5 min-w-0 items-center justify-center gap-2 align-middle leading-none"
+                                    :class="[
+                                        isExpanded(@js($tabId)) ? 'px-3' : 'px-0',
+                                    ]"
+                                >
                                     <i :class="iconClass(@js($tabId), @js($iconClass))" aria-hidden="true"></i>
                                     <span class="flex h-5 min-w-0 items-center truncate text-center leading-none" x-show="isExpanded(@js($tabId))" x-transition.opacity.duration.150ms>
                                         {{ $label }}@if($countLabel)&nbsp;{{ $countLabel }}@endif
