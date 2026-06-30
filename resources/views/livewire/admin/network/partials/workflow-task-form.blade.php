@@ -350,14 +350,21 @@
                                     <div class="{{ $fieldClass }}">
                                         <label class="block text-sm font-medium text-gray-700">{{ $fieldLabel }}</label>
                                         @if($fieldType === 'textarea')
-                                            <textarea rows="{{ $fieldRows }}" wire:model.defer="{{ $prefix }}Extra.{{ $fieldName }}" placeholder="{{ $fieldPlaceholder }}" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"></textarea>
+                                            <textarea
+                                                rows="{{ $fieldRows }}"
+                                                wire:key="{{ $prefix }}-extra-{{ $catalogKey }}-{{ $fieldName }}"
+                                                wire:model="{{ $prefix }}Extra.{{ $fieldName }}"
+                                                placeholder="{{ $fieldPlaceholder }}"
+                                                class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                                            ></textarea>
                                         @else
                                             <input
                                                 type="{{ $fieldType === 'number' ? 'number' : 'text' }}"
+                                                wire:key="{{ $prefix }}-extra-{{ $catalogKey }}-{{ $fieldName }}"
                                                 @if(isset($field['min'])) min="{{ $field['min'] }}" @endif
                                                 @if(isset($field['max'])) max="{{ $field['max'] }}" @endif
                                                 @if(isset($field['step'])) step="{{ $field['step'] }}" @endif
-                                                wire:model.defer="{{ $prefix }}Extra.{{ $fieldName }}"
+                                                wire:model="{{ $prefix }}Extra.{{ $fieldName }}"
                                                 placeholder="{{ $fieldPlaceholder }}"
                                                 class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"
                                             >

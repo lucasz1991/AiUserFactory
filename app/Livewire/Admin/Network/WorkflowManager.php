@@ -717,7 +717,9 @@ class WorkflowManager extends Component
             return;
         }
 
-        $task = collect($step->task_cards)
+        $rawTasks = is_array(data_get($step->config_json, 'tasks')) ? data_get($step->config_json, 'tasks') : [];
+        $task = collect($rawTasks)
+            ->filter(fn (mixed $task): bool => is_array($task))
             ->first(fn (array $task): bool => (string) ($task['key'] ?? '') === $taskKey);
 
         if (! $task) {
