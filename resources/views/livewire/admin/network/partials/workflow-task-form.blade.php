@@ -131,6 +131,17 @@
     $inputTabLabel = str_starts_with($catalogKey, 'mail.') ? 'Quelle & Suche' : 'Eingabe';
     $runtimeTabLabel = 'Ausfuehrung';
     $payloadTabLabel = 'Daten';
+    $taskSettingsTabIcons = [
+        'Quelle & Suche' => 'fad fa-database',
+        'Filter' => 'fad fa-filter',
+        'Datum & Warten' => 'fad fa-clock',
+        'Oeffnen' => 'fad fa-envelope-open',
+        'Wert ermitteln' => 'fad fa-magnifying-glass',
+        'Ergebnis' => 'fad fa-square-check',
+        'Ausfuehrung' => 'fad fa-play',
+        'Eingabe' => 'fad fa-keyboard',
+        'Daten' => 'fad fa-code',
+    ];
 
     if ($form['selector'] || $form['value'] || $form['url']) {
         $taskSpecificTabLabels->push($inputTabLabel);
@@ -259,6 +270,7 @@
                     :active="$defaultExtraTab"
                     :group="$extraFieldTabGroup"
                     panel-class="space-y-4 rounded-b-lg border border-slate-200 bg-white p-4"
+                    icon="{{ $taskSettingsTabIcons[(string) $tabLabel] ?? 'fad fa-sliders' }}"
                 >
                     @if($tabLabel === $inputTabLabel && ($form['selector'] || $form['value'] || $form['url']))
                         <div class="grid gap-4 {{ ($form['selector'] && ($form['value'] || $form['url'])) ? 'md:grid-cols-2' : '' }}">

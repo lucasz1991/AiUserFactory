@@ -42,9 +42,20 @@
     x-data="{
         openTab: @if($persist) $persist(@js($initial)).as(@js($key)) @else @js($initial) @endif,
         hoverTab: null,
+        tabIcons: {},
         compact: false,
         get expandedTab() { return this.hoverTab || this.openTab; },
         isExpanded(id) { return !this.compact || this.expandedTab === id; },
+        iconClass(id, fallback) {
+            return `${this.tabIcons[id] || fallback} shrink-0 fa-lg`;
+        },
+        registerTabIcon(event) {
+            if (event.detail.group !== @js($groupKey) || !event.detail.tab || !event.detail.icon) {
+                return;
+            }
+
+            this.tabIcons[event.detail.tab] = event.detail.icon;
+        },
         selectTab(id) {
             this.openTab = id;
             this.$dispatch('ui-tab-selected', { group: @js($groupKey), tab: id });
@@ -76,6 +87,7 @@
         }
     }"
     x-init="initTabs()"
+    x-on:ui-tab-icon="registerTabIcon($event)"
 >
     <div class="w-full max-w-full overflow-hidden">
         <nav class="w-full max-w-full overflow-hidden" aria-label="Tabs" role="tablist" aria-orientation="horizontal">
@@ -119,7 +131,7 @@
                                 ]"
                             >
                                 <span class="inline-flex min-w-0 items-center gap-2">
-                                    <i class="{{ $iconClass }} shrink-0 fa-lg" aria-hidden="true"></i>
+                                    <i :class="iconClass(@js($tabId), @js($iconClass))" aria-hidden="true"></i>
                                     <span class="truncate" x-show="isExpanded(@js($tabId))" x-transition.opacity.duration.150ms>
                                         {{ $label }}@if($countLabel)&nbsp;{{ $countLabel }}@endif
                                     </span>
