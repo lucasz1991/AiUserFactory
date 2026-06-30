@@ -23,8 +23,6 @@
     $groupKey = $group ?: $key;
     $htmlIdPrefix = 'tabs-'.substr(md5($groupKey), 0, 10);
     $tabCount = count($tabs);
-    $shapePath = 'M80,60C34,53.5,64.5,0,0,0v60H80z';
-    $shapeStrokePath = 'M80,60C34,53.5,64.5,0,0,0';
 @endphp
 
 <section
@@ -32,6 +30,10 @@
     {{ $attributes->merge(['class' => 'w-full']) }}
     x-data="{
         openTab: @if($persist) $persist(@js($initial)).as(@js($key)) @else @js($initial) @endif,
+        hoverTab: null,
+        overlapFor(id) {
+            return (this.openTab === id || this.hoverTab === id) ? 40 : 92;
+        },
         selectTab(id) {
             this.openTab = id;
             this.$dispatch('ui-tab-selected', { group: @js($groupKey), tab: id });
@@ -57,51 +59,30 @@
                         $countLabel = $count !== null ? number_format((int) $count, 0, ',', '.') : null;
                     @endphp
                     <li
-                        class="relative flex-none {{ $loop->first ? '' : '-ml-9 sm:-ml-10' }}"
-                        style="z-index: {{ $tabCount - $loop->index }}"
+                        class="relative flex-none transition-[margin] duration-200 ease-out"
+                        :style="{
+                            marginLeft: @js($loop->first) ? '0' : `-${overlapFor(@js($tabId))}px`,
+                            zIndex: @js($tabCount - $loop->index),
+                        }"
                     >
                         <button
                             type="button"
                             id="{{ $htmlIdPrefix }}-item-{{ $tabId }}"
                             aria-controls="{{ $htmlIdPrefix }}-panel-{{ $tabId }}"
                             @click.prevent="selectTab(@js($tabId))"
-                            class="group/tab relative block overflow-visible p-0 text-sm font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-200"
+                            @mouseenter="hoverTab = @js($tabId)"
+                            @mouseleave="hoverTab = null"
+                            class="group/tab relative block overflow-hidden rounded-t-md border border-b-0 border-gray-400 text-sm font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-200"
                             role="tab"
                             :aria-selected="(openTab === @js($tabId)).toString()"
                             :tabindex="openTab === @js($tabId) ? 0 : -1"
                         >
-                            @unless($loop->last)
-                                <svg
-                                    viewBox="0 0 80 60"
-                                    preserveAspectRatio="none"
-                                    class="pointer-events-none absolute left-full top-0 m-0 h-full w-12"
-                                    :class="openTab === @js($tabId) ? 'fill-blue-50' : 'fill-slate-300 group-hover/tab:fill-blue-100'"
-                                    aria-hidden="true"
-                                    focusable="false"
-                                >
-                                    <path d="{{ $shapePath }}"></path>
-                                    <path d="{{ $shapeStrokePath }}" class="fill-none stroke-gray-400 stroke-[1.5]"></path>
-                                </svg>
-                            @endunless
-                            @unless($loop->first)
-                                <svg
-                                    viewBox="0 0 80 60"
-                                    preserveAspectRatio="none"
-                                    class="pointer-events-none absolute right-full top-0 m-0 h-full w-12 -scale-x-100"
-                                    :class="openTab === @js($tabId) ? 'fill-blue-50' : 'fill-slate-300 group-hover/tab:fill-blue-100'"
-                                    aria-hidden="true"
-                                    focusable="false"
-                                >
-                                    <path d="{{ $shapePath }}"></path>
-                                    <path d="{{ $shapeStrokePath }}" class="fill-none stroke-gray-400 stroke-[1.5]"></path>
-                                </svg>
-                            @endunless
                             <span
-                                class="block w-40 overflow-hidden border-t border-gray-400 px-4 py-[0.7em] text-ellipsis whitespace-nowrap sm:w-56"
+                                class="block w-40 overflow-hidden px-4 py-[0.7em] text-ellipsis whitespace-nowrap sm:w-56"
                                 :class="[
                                     openTab === @js($tabId) ? 'bg-blue-50 text-blue-950' : 'bg-slate-300 text-slate-700 group-hover/tab:bg-blue-100 group-hover/tab:text-blue-900',
-                                    @js($loop->first) ? 'rounded-tl-[30px] border-l pl-8' : '',
-                                    @js($loop->last) ? 'rounded-tr-[30px] border-r pr-8' : ''
+                                    @js($loop->first) ? 'pl-5' : '',
+                                    @js($loop->last) ? 'pr-5' : ''
                                 ]"
                             >
                                 <span class="inline-flex min-w-0 items-center gap-2">
