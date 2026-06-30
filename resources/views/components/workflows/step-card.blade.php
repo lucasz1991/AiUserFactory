@@ -50,7 +50,7 @@
     data-step-route-failed="{{ $stepFailedTarget }}"
     {{ $attributes->merge(['class' => 'relative flex min-h-[300px] w-[296px] min-w-[296px] max-w-[296px] shrink-0 flex-col rounded-xl border '.$enabledClass]) }}
 >
-    <div class="relative z-30 rounded-t-xl border-b border-slate-200 bg-slate-50/95 px-4 py-3">
+    <div class="relative z-30 rounded-xl border border-slate-200 bg-sky-100 px-4 py-3">
         <div class="flex items-start justify-between gap-3">
             <div class="min-w-0">
                 <div class="flex flex-wrap items-center gap-2">
