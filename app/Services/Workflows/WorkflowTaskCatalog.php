@@ -133,13 +133,13 @@ class WorkflowTaskCatalog
                             'name' => 'subject_selector',
                             'label' => 'Betreff-Selector',
                             'placeholder' => '[class*=subject]',
-                            'tab' => 'Selectoren',
+                            'tab' => 'Filter',
                         ],
                         [
                             'name' => 'title_selector',
                             'label' => 'Titel-Selector',
                             'placeholder' => '[title], [class*=title]',
-                            'tab' => 'Selectoren',
+                            'tab' => 'Filter',
                         ],
                         [
                             'name' => 'subject_filter',

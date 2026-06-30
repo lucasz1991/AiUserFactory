@@ -78,12 +78,8 @@
         $name = trim((string) ($field['name'] ?? ''));
 
         if (str_starts_with($catalogKey, 'mail.')) {
-            if (in_array($name, ['subject_selector', 'subject_filter'], true)) {
-                return 'Betreff';
-            }
-
-            if (in_array($name, ['title_selector', 'title_filter'], true)) {
-                return 'Titel';
+            if (in_array($name, ['subject_selector', 'subject_filter', 'title_selector', 'title_filter'], true)) {
+                return 'Filter';
             }
 
             if (in_array($name, ['date_selector', 'date_attribute', 'max_age_minutes', 'wait_for_new_mail_seconds'], true)) {
@@ -117,8 +113,7 @@
     if (str_starts_with($catalogKey, 'mail.')) {
         $preferredMailTabs = [
             'Quelle & Suche',
-            'Betreff',
-            'Titel',
+            'Filter',
             'Datum & Warten',
             'Oeffnen',
             'Wert ermitteln',
@@ -355,14 +350,14 @@
                                     <div class="{{ $fieldClass }}">
                                         <label class="block text-sm font-medium text-gray-700">{{ $fieldLabel }}</label>
                                         @if($fieldType === 'textarea')
-                                            <textarea rows="{{ $fieldRows }}" wire:model.live.debounce.500ms="{{ $prefix }}Extra.{{ $fieldName }}" placeholder="{{ $fieldPlaceholder }}" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"></textarea>
+                                            <textarea rows="{{ $fieldRows }}" wire:model.defer="{{ $prefix }}Extra.{{ $fieldName }}" placeholder="{{ $fieldPlaceholder }}" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"></textarea>
                                         @else
                                             <input
                                                 type="{{ $fieldType === 'number' ? 'number' : 'text' }}"
                                                 @if(isset($field['min'])) min="{{ $field['min'] }}" @endif
                                                 @if(isset($field['max'])) max="{{ $field['max'] }}" @endif
                                                 @if(isset($field['step'])) step="{{ $field['step'] }}" @endif
-                                                wire:model.live.debounce.500ms="{{ $prefix }}Extra.{{ $fieldName }}"
+                                                wire:model.defer="{{ $prefix }}Extra.{{ $fieldName }}"
                                                 placeholder="{{ $fieldPlaceholder }}"
                                                 class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"
                                             >
