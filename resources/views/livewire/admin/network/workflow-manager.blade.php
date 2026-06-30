@@ -384,7 +384,7 @@
                 }"
                 x-init="refreshRouteLines()"
                 x-on:keydown.escape.window="setFullscreen(false)"
-                x-bind:class="isFullscreen ? 'fixed inset-0 z-[60] flex flex-col rounded-none border-0' : 'rounded-xl border border-slate-400'"
+                x-bind:class="isFullscreen ? 'fixed inset-0 z-[60] flex flex-col rounded-none border-0' : 'rounded-xl border border-slate-200'"
                 class="overflow-hidden "
             >
                 <div class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-5 py-4">
@@ -425,8 +425,8 @@
                 <div
                     x-ref="routeSurface"
                     x-on:scroll.debounce.100ms="refreshRouteLines()"
-                    x-bind:class="isFullscreen ? 'min-h-0 flex-1 max-h-none' : ' min-h-70vh max-h-[calc(100vh-300px)]'"
-                    class="relative isolate overflow-auto bg-slate-100/80 scroll-container"
+                    x-bind:class="isFullscreen ? 'min-h-0 flex-1 max-h-none' : ' min-h-70vh'"
+                    class="relative isolate overflow-x-auto overflow-y-hidden bg-slate-100/80 scroll-container"
                 >
                     <svg
                         x-cloak
