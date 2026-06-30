@@ -24,7 +24,8 @@
             </div>
 
             @if($selectedWorkflow)
-                <div class="flex flex-wrap justify-end gap-2">
+                <div class="ml-auto flex max-w-full flex-col items-end gap-2">
+                    <div class="flex flex-wrap justify-end gap-2">
                     <button
                         type="button"
                         wire:click="openLatestRunPreview"
@@ -43,6 +44,23 @@
                     @if(! $workflowLocked)
                         <button type="button" wire:click="deleteWorkflow" wire:confirm="Workflow samt Aufgaben, Tasks und Ausfuehrungen wirklich loeschen?" class="rounded-md border border-red-300 bg-white px-3 py-2 text-sm font-semibold text-red-700 shadow-sm hover:bg-red-50">Loeschen</button>
                     @endif
+                    </div>
+
+                    <div class="flex flex-wrap justify-end gap-1.5" aria-label="Workflow-Statistik">
+                        @foreach([
+                            ['Aufgaben', $summary['actions'], 'bg-slate-100 text-slate-700'],
+                            ['Listen', $summary['lists'], 'bg-blue-50 text-blue-700'],
+                            ['Tasks', $summary['task_cards'], 'bg-amber-50 text-amber-700'],
+                            ['Benutzt', $summary['runs'], 'bg-slate-100 text-slate-700'],
+                            ['Erfolgreich', $summary['successful_runs'], 'bg-emerald-50 text-emerald-700'],
+                            ['Fehlerhaft', $summary['failed_runs'], 'bg-red-50 text-red-700'],
+                        ] as [$label, $value, $classes])
+                            <span class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] leading-none {{ $classes }}">
+                                <span class="font-medium opacity-75">{{ $label }}</span>
+                                <span class="font-bold tabular-nums">{{ $value }}</span>
+                            </span>
+                        @endforeach
+                    </div>
                 </div>
             @endif
         </div>
@@ -68,15 +86,6 @@
                 <span class="font-semibold">Achtung: Dieser Workflow ist gesperrt.</span> {{ $selectedWorkflow->lock_reason }} Als Admin kannst du ihn trotzdem bearbeiten. Aenderungen koennen laufende oder eingebundene Workflows beeinflussen.
             </div>
         @endif
-        <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
-            <x-admin.stat label="Aufgaben" :value="$summary['actions']" tone="slate" />
-            <x-admin.stat label="Listen" :value="$summary['lists']" tone="blue" />
-            <x-admin.stat label="Tasks" :value="$summary['task_cards']" tone="amber" />
-            <x-admin.stat label="Benutzt" :value="$summary['runs']" tone="slate" />
-            <x-admin.stat label="Erfolgreich" :value="$summary['successful_runs']" tone="emerald" />
-            <x-admin.stat label="Fehlerhaft" :value="$summary['failed_runs']" tone="red" />
-        </div>
-
         <x-admin.panel title="Board">
             <div
                 x-data="{
