@@ -137,7 +137,7 @@
         'Datum & Warten' => 'fad fa-clock',
         'Oeffnen' => 'fad fa-envelope-open',
         'Wert ermitteln' => 'fad fa-magnifying-glass',
-        'Ergebnis' => 'fad fa-square-check',
+        'Ergebnis' => 'fad fa-check',
         'Ausfuehrung' => 'fad fa-play',
         'Eingabe' => 'fad fa-keyboard',
         'Daten' => 'fad fa-code',
