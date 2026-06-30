@@ -3,7 +3,7 @@
     'active' => null,
     'group' => null,
     'icon' => null,
-    'panelClass' => 'space-y-4 bg-white p-4 rounded-b-lg rounded-se-lg border border-blue-300 z-10',
+    'panelClass' => ' rounded-b-lg rounded-se-lg border border-blue-300 z-10',
 ])
 
 @php
