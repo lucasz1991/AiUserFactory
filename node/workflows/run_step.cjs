@@ -140,6 +140,13 @@ function redactPublicSecrets(value) {
         'session_payload',
         'webmailSessionFilePath',
         'webmail_session_file_path',
+        'browserSessionFilePath',
+        'browser_session_file_path',
+        'browserSessionPayload',
+        'browser_session_payload',
+        'encryptedBrowserSessionPayload',
+        'payload_encrypted',
+        'browser_sessions',
       ].includes(key)) {
         delete item[key];
         continue;
@@ -181,6 +188,14 @@ function publicWorkflow(workflow = null) {
     delete copy.person.emailAccount.passwordEncrypted;
     delete copy.person.emailAccount.webmailSession;
     delete copy.person.emailAccount.webmail_session;
+  }
+
+  if (copy.person?.metadata && typeof copy.person.metadata === 'object') {
+    delete copy.person.metadata.browser_sessions;
+
+    if (copy.person.metadata.email_account && typeof copy.person.metadata.email_account === 'object') {
+      delete copy.person.metadata.email_account.webmail_session;
+    }
   }
 
   if (copy.person && typeof copy.person === 'object') {
@@ -1471,7 +1486,7 @@ async function run() {
 
         if (task.task_key === 'browser.close') {
           selectExistingPage(context, targetBrowserWindow);
-        } else if (task.kind !== 'data' || ['data.persist_webmail_session'].includes(String(task.task_key || ''))) {
+        } else if (task.kind !== 'data' || ['data.persist_webmail_session', 'data.persist_browser_session', 'data.delete_browser_session'].includes(String(task.task_key || ''))) {
           await ensurePage(context, targetBrowserWindow, targetBrowserWindow === 'main' ? 'Main' : taskLabel);
           startPreviewLoop(context);
         }

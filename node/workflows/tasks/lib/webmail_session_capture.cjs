@@ -12,6 +12,61 @@ function originFromUrl(value) {
   }
 }
 
+function normalizeDomain(value) {
+  const rawValue = String(value || '').trim().toLowerCase();
+
+  if (rawValue === '') {
+    return '';
+  }
+
+  try {
+    return new URL(rawValue).hostname.replace(/^\.+/, '').replace(/\.+$/, '');
+  } catch {
+    return rawValue
+      .replace(/^https?:\/\//i, '')
+      .replace(/^\/+/, '')
+      .split('/')[0]
+      .split(':')[0]
+      .replace(/^\.+/, '')
+      .replace(/\.+$/, '');
+  }
+}
+
+function domainFromUrl(value) {
+  try {
+    return normalizeDomain(new URL(String(value || '')).hostname);
+  } catch {
+    return '';
+  }
+}
+
+function uniqueValues(values = []) {
+  return Array.from(new Set(values.map((value) => String(value || '').trim()).filter(Boolean)));
+}
+
+function cookieDomain(cookie = {}) {
+  return normalizeDomain(cookie.domain || cookie.url || '');
+}
+
+function domainMatches(candidate, target) {
+  const candidateDomain = normalizeDomain(candidate);
+  const targetDomain = normalizeDomain(target);
+
+  if (candidateDomain === '' || targetDomain === '') {
+    return false;
+  }
+
+  return candidateDomain === targetDomain
+    || candidateDomain.endsWith(`.${targetDomain}`)
+    || targetDomain.endsWith(`.${candidateDomain}`);
+}
+
+function cookieMatchesDomains(cookie = {}, domains = []) {
+  const currentDomain = cookieDomain(cookie);
+
+  return domains.some((domain) => domainMatches(currentDomain, domain));
+}
+
 async function allCookies(page) {
   if (!page || typeof page.target !== 'function') {
     return [];
@@ -105,20 +160,34 @@ function safeCookie(cookie) {
   return nextCookie;
 }
 
-async function captureWebmailSession(page, account = {}) {
+async function captureBrowserSession(page, options = {}) {
+  const account = options.account || {};
   const finalUrl = typeof page.url === 'function' ? page.url() : '';
   const origins = await captureStorage(page);
   const currentOrigin = originFromUrl(finalUrl);
   const currentStorage = origins.find((entry) => entry.origin === currentOrigin) || {};
-  const cookies = (await allCookies(page)).map(safeCookie);
+  const primaryDomain = normalizeDomain(options.domain || options.targetDomain || domainFromUrl(finalUrl));
+  const storageDomains = uniqueValues(origins.map((entry) => domainFromUrl(entry.url || entry.origin)));
+  const relatedDomains = uniqueValues([primaryDomain, ...storageDomains]);
+  const includeAllCookies = options.includeAllCookies === true;
+  const cookies = (await allCookies(page))
+    .filter((cookie) => includeAllCookies || relatedDomains.length === 0 || cookieMatchesDomains(cookie, relatedDomains))
+    .map(safeCookie);
+  const cookieDomains = uniqueValues(cookies.map(cookieDomain));
+  const domains = uniqueValues([primaryDomain, ...storageDomains, ...cookieDomains]);
 
   return {
     capturedAt: new Date().toISOString(),
+    type: options.type || 'browser-session',
+    label: options.label || '',
     provider: account.provider || '',
     email: account.email || '',
     username: account.username || account.email || '',
     finalUrl,
     origin: currentOrigin,
+    domain: primaryDomain,
+    domains,
+    cookieDomains,
     cookies,
     storage: {
       localStorage: currentStorage.localStorage || {},
@@ -126,6 +195,13 @@ async function captureWebmailSession(page, account = {}) {
     },
     origins,
   };
+}
+
+async function captureWebmailSession(page, account = {}) {
+  return captureBrowserSession(page, {
+    account,
+    type: 'webmail-session',
+  });
 }
 
 function writeSessionPayload(session, directory, prefix = 'webmail-session') {
@@ -140,6 +216,11 @@ function writeSessionPayload(session, directory, prefix = 'webmail-session') {
 }
 
 module.exports = {
+  captureBrowserSession,
   captureWebmailSession,
+  cookieMatchesDomains,
+  domainFromUrl,
+  domainMatches,
+  normalizeDomain,
   writeSessionPayload,
 };

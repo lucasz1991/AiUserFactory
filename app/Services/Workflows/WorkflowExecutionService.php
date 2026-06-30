@@ -12,6 +12,7 @@ use App\Models\WorkflowStepRun;
 use App\Services\Mail\MailAccountRegistrationRunner;
 use App\Services\Mail\WebmailSessionRunner;
 use App\Services\Workflows\Tasks\PersistMailAccountTask;
+use App\Services\Workflows\Tasks\PersistBrowserSessionTask;
 use App\Services\Workflows\Tasks\PersistWebmailSessionTask;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Crypt;
@@ -1029,6 +1030,16 @@ class WorkflowExecutionService
             return $this->finalizeWorkflowWebmailSessionResult($result);
         }
 
+        if (
+            $stepRun->external_run_type === 'workflow-task'
+            && (
+                trim((string) data_get($result, 'browserSessionFilePath', '')) !== ''
+                || trim((string) data_get($result, 'encryptedBrowserSessionPayload', '')) !== ''
+            )
+        ) {
+            return $this->finalizeWorkflowBrowserSessionResult($result);
+        }
+
         return $result;
     }
 
@@ -1069,6 +1080,27 @@ class WorkflowExecutionService
         ) {
             $result = $this->finalizeWorkflowWebmailSessionResult($result);
             $this->applyWebmailSessionResult($stepRun->workflowRun, $result);
+        }
+
+        if (
+            $stepRun->external_run_type === 'workflow-task'
+            && (
+                trim((string) data_get($result, 'browserSessionFilePath', '')) !== ''
+                || trim((string) data_get($result, 'encryptedBrowserSessionPayload', '')) !== ''
+            )
+        ) {
+            $result = $this->finalizeWorkflowBrowserSessionResult($result);
+            $this->applyBrowserSessionResult($stepRun->workflowRun, $result);
+        }
+
+        if (
+            $stepRun->external_run_type === 'workflow-task'
+            && (
+                (bool) data_get($result, 'browserSessionDeleted', false)
+                || (bool) data_get($result, 'deletedBrowserSession', false)
+            )
+        ) {
+            $this->applyBrowserSessionDeletionResult($stepRun->workflowRun, $result);
         }
 
         return $result;
@@ -1165,6 +1197,29 @@ class WorkflowExecutionService
         app(PersistWebmailSessionTask::class)->handleVerificationMailbox($result);
     }
 
+    protected function applyBrowserSessionResult(WorkflowRun $run, array $result): void
+    {
+        $person = $this->personForRun($run);
+        $encryptedPayload = trim((string) ($result['encryptedBrowserSessionPayload'] ?? ''));
+
+        if (! $person || $encryptedPayload === '') {
+            return;
+        }
+
+        app(PersistBrowserSessionTask::class)->handle($person, $result);
+    }
+
+    protected function applyBrowserSessionDeletionResult(WorkflowRun $run, array $result): void
+    {
+        $person = $this->personForRun($run);
+
+        if (! $person) {
+            return;
+        }
+
+        app(PersistBrowserSessionTask::class)->delete($person, $result);
+    }
+
     protected function finalizeWorkflowWebmailSessionResult(array $result): array
     {
         if (trim((string) ($result['encryptedSessionPayload'] ?? '')) !== '') {
@@ -1201,9 +1256,60 @@ class WorkflowExecutionService
             'capturedAt' => is_array($decodedSession) ? ($decodedSession['capturedAt'] ?? now()->toIso8601String()) : now()->toIso8601String(),
             'finalUrl' => is_array($decodedSession) ? ($decodedSession['finalUrl'] ?? null) : null,
             'origin' => is_array($decodedSession) ? ($decodedSession['origin'] ?? null) : null,
+            'domain' => is_array($decodedSession) ? ($decodedSession['domain'] ?? null) : null,
+            'domains' => is_array($decodedSession) && is_array($decodedSession['domains'] ?? null) ? $decodedSession['domains'] : [],
+            'cookieDomains' => is_array($decodedSession) && is_array($decodedSession['cookieDomains'] ?? null) ? $decodedSession['cookieDomains'] : [],
             'cookieCount' => is_array($decodedSession) && is_array($decodedSession['cookies'] ?? null) ? count($decodedSession['cookies']) : 0,
         ], $summary);
         $result['sessionFinalized'] = true;
+
+        File::delete($sessionFilePath);
+
+        return $result;
+    }
+
+    protected function finalizeWorkflowBrowserSessionResult(array $result): array
+    {
+        if (trim((string) ($result['encryptedBrowserSessionPayload'] ?? '')) !== '') {
+            return $result;
+        }
+
+        $sessionFilePath = trim((string) ($result['browserSessionFilePath'] ?? $result['browser_session_file_path'] ?? ''));
+
+        if ($sessionFilePath === '' || ! File::exists($sessionFilePath)) {
+            $result['ok'] = false;
+            $result['status'] = 'failed';
+            $result['statusMessage'] = 'Browser-Session-Datei wurde nicht gefunden.';
+
+            return $result;
+        }
+
+        $sessionPayload = trim((string) File::get($sessionFilePath));
+
+        if ($sessionPayload === '') {
+            File::delete($sessionFilePath);
+            $result['ok'] = false;
+            $result['status'] = 'failed';
+            $result['statusMessage'] = 'Browser-Session-Datei ist leer.';
+
+            return $result;
+        }
+
+        $decodedSession = json_decode($sessionPayload, true);
+        $summary = is_array($result['browserSessionSummary'] ?? null) ? $result['browserSessionSummary'] : [];
+
+        $result['encryptedBrowserSessionPayload'] = Crypt::encryptString($sessionPayload);
+        $result['browserSessionPayloadHash'] = (string) ($result['browserSessionPayloadHash'] ?? hash('sha256', $sessionPayload));
+        $result['browserSessionSummary'] = array_replace([
+            'capturedAt' => is_array($decodedSession) ? ($decodedSession['capturedAt'] ?? now()->toIso8601String()) : now()->toIso8601String(),
+            'finalUrl' => is_array($decodedSession) ? ($decodedSession['finalUrl'] ?? null) : null,
+            'origin' => is_array($decodedSession) ? ($decodedSession['origin'] ?? null) : null,
+            'domain' => is_array($decodedSession) ? ($decodedSession['domain'] ?? null) : null,
+            'domains' => is_array($decodedSession) && is_array($decodedSession['domains'] ?? null) ? $decodedSession['domains'] : [],
+            'cookieDomains' => is_array($decodedSession) && is_array($decodedSession['cookieDomains'] ?? null) ? $decodedSession['cookieDomains'] : [],
+            'cookieCount' => is_array($decodedSession) && is_array($decodedSession['cookies'] ?? null) ? count($decodedSession['cookies']) : 0,
+        ], $summary);
+        $result['browserSessionFinalized'] = true;
 
         File::delete($sessionFilePath);
 
@@ -1563,10 +1669,16 @@ class WorkflowExecutionService
             $payload['browser_ws_endpoint'],
             $payload['webmailSessionFilePath'],
             $payload['webmail_session_file_path'],
+            $payload['browserSessionFilePath'],
+            $payload['browser_session_file_path'],
             $payload['webmailSessionPayload'],
             $payload['webmail_session_payload'],
+            $payload['browserSessionPayload'],
+            $payload['browser_session_payload'],
             $payload['sessionPayload'],
             $payload['session_payload'],
+            $payload['encryptedBrowserSessionPayload'],
+            $payload['payload_encrypted'],
         );
 
         foreach (['account', 'email_account', 'verificationMailbox', 'verification_mailbox', 'veri_account', 'veri-account'] as $key) {
@@ -1587,6 +1699,14 @@ class WorkflowExecutionService
                     $payload['person']['emailAccount']['webmail_session'],
                 );
             }
+
+            if (isset($payload['person']['metadata']) && is_array($payload['person']['metadata'])) {
+                unset($payload['person']['metadata']['browser_sessions']);
+
+                if (isset($payload['person']['metadata']['email_account']) && is_array($payload['person']['metadata']['email_account'])) {
+                    unset($payload['person']['metadata']['email_account']['webmail_session']);
+                }
+            }
         }
 
         if (isset($payload['tasks']) && is_array($payload['tasks'])) {
@@ -1598,11 +1718,17 @@ class WorkflowExecutionService
                 unset(
                     $taskPayload['webmailSessionFilePath'],
                     $taskPayload['webmail_session_file_path'],
+                    $taskPayload['browserSessionFilePath'],
+                    $taskPayload['browser_session_file_path'],
                     $taskPayload['webmailSessionPayload'],
                     $taskPayload['webmail_session_payload'],
+                    $taskPayload['browserSessionPayload'],
+                    $taskPayload['browser_session_payload'],
                     $taskPayload['sessionPayload'],
                     $taskPayload['session_payload'],
-                    $taskPayload['encryptedSessionPayload']
+                    $taskPayload['encryptedSessionPayload'],
+                    $taskPayload['encryptedBrowserSessionPayload'],
+                    $taskPayload['payload_encrypted']
                 );
 
                 foreach (['account', 'email_account', 'verificationMailbox', 'verification_mailbox', 'veri_account', 'veri-account'] as $key) {
@@ -1622,6 +1748,14 @@ class WorkflowExecutionService
                             $taskPayload['person']['emailAccount']['webmailSession'],
                             $taskPayload['person']['emailAccount']['webmail_session'],
                         );
+                    }
+
+                    if (isset($taskPayload['person']['metadata']) && is_array($taskPayload['person']['metadata'])) {
+                        unset($taskPayload['person']['metadata']['browser_sessions']);
+
+                        if (isset($taskPayload['person']['metadata']['email_account']) && is_array($taskPayload['person']['metadata']['email_account'])) {
+                            unset($taskPayload['person']['metadata']['email_account']['webmail_session']);
+                        }
                     }
                 }
             }
@@ -1658,6 +1792,14 @@ class WorkflowExecutionService
                     $payload['workflow']['person']['passwordEncrypted'],
                     $payload['workflow']['person']['password_encrypted'],
                 );
+
+                if (isset($payload['workflow']['person']['metadata']) && is_array($payload['workflow']['person']['metadata'])) {
+                    unset($payload['workflow']['person']['metadata']['browser_sessions']);
+
+                    if (isset($payload['workflow']['person']['metadata']['email_account']) && is_array($payload['workflow']['person']['metadata']['email_account'])) {
+                        unset($payload['workflow']['person']['metadata']['email_account']['webmail_session']);
+                    }
+                }
             }
         }
 

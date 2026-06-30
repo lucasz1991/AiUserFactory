@@ -141,6 +141,8 @@
         'Ausfuehrung' => 'fad fa-play',
         'Eingabe' => 'fad fa-keyboard',
         'Daten' => 'fad fa-code',
+        'Session' => 'fad fa-cookie',
+        'Loeschen' => 'fad fa-trash-can',
     ];
 
     if ($form['selector'] || $form['value'] || $form['url']) {

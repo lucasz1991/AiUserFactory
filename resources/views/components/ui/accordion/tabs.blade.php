@@ -33,6 +33,8 @@
         'ausfuehrung' => 'fad fa-play',
         'eingabe' => 'fad fa-keyboard',
         'daten' => 'fad fa-code',
+        'session' => 'fad fa-cookie',
+        'loeschen' => 'fad fa-trash-can',
     ];
 @endphp
 

@@ -745,6 +745,8 @@ class WorkflowTaskRunner
             'data.read_login_data' => 'node/workflows/tasks/data/read_login_data.cjs',
             'data.persist_mail_account' => 'node/workflows/tasks/data/persist_mail_account.cjs',
             'data.persist_webmail_session' => 'node/workflows/tasks/data/persist_webmail_session.cjs',
+            'data.persist_browser_session' => 'node/workflows/tasks/data/persist_browser_session.cjs',
+            'data.delete_browser_session' => 'node/workflows/tasks/data/delete_browser_session.cjs',
             'data.workflow_return' => 'node/workflows/tasks/data/workflow_return.cjs',
             default => null,
         };
@@ -786,6 +788,14 @@ class WorkflowTaskRunner
 
         if (isset($public['person']) && is_array($public['person'])) {
             unset($public['person']['password'], $public['person']['passwordEncrypted'], $public['person']['password_encrypted']);
+
+            if (isset($public['person']['metadata']) && is_array($public['person']['metadata'])) {
+                unset($public['person']['metadata']['browser_sessions']);
+
+                if (isset($public['person']['metadata']['email_account']) && is_array($public['person']['metadata']['email_account'])) {
+                    unset($public['person']['metadata']['email_account']['webmail_session']);
+                }
+            }
         }
 
         return $public;

@@ -16,12 +16,17 @@ async function run(context = {}) {
   const session = await captureWebmailSession(page, account);
   const cookieCount = Array.isArray(session.cookies) ? session.cookies.length : 0;
   const finalUrl = session.finalUrl || '';
+  const storage = session.storage || {};
 
   if (!/^https?:\/\//i.test(finalUrl)) {
     return { ok: false, status: 'failed', statusMessage: 'Die aktuelle Seite ist kein gueltiges Webmailportal.' };
   }
 
-  if (cookieCount === 0 && (!session.storage || Object.keys(session.storage.localStorage || {}).length === 0)) {
+  if (
+    cookieCount === 0
+    && Object.keys(storage.localStorage || {}).length === 0
+    && Object.keys(storage.sessionStorage || {}).length === 0
+  ) {
     return {
       ok: false,
       status: 'failed',
@@ -45,9 +50,15 @@ async function run(context = {}) {
       capturedAt: session.capturedAt,
       finalUrl: session.finalUrl,
       origin: session.origin,
+      domain: session.domain,
+      domains: session.domains,
+      cookieDomains: session.cookieDomains,
       cookieCount,
       storageOriginCount: Array.isArray(session.origins) ? session.origins.length : 0,
     },
+    domain: session.domain,
+    domains: session.domains,
+    cookieDomains: session.cookieDomains,
     cookieCount,
     finalUrl,
     scriptName: 'persist_webmail_session.cjs',
