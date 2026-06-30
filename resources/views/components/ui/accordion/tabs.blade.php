@@ -73,35 +73,37 @@
     <div class="border-b border-slate-200" x-ref="row" x-resize.debounce.150ms="onResize()">
         <!-- Normalmodus: alle Tabs (Layout unverändert) -->
         <template x-if="!collapsed">
-            <div class="flex justify-center overflow-x-auto">
-                <template x-for="t in items" :key="t.id">
-                    <button
-                        type="button"
-                        @click.prevent="selectTab(t.id)"
-                        :class="openTab === t.id
-                            ? '-mb-px border-t-slate-950 text-slate-950'
-                            : 'border-t-transparent text-slate-500 hover:text-slate-900'"
-                        class="inline-flex shrink-0 items-center gap-2 border-t px-5 py-3 text-[11px] font-bold uppercase tracking-[0.18em] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-300 sm:px-6"
-                        role="tab"
-                        :aria-selected="openTab === t.id"
-                        :tabindex="openTab === t.id ? 0 : -1"
-                    >
-                        <template x-if="t.icon === 'instagram-grid'">
-                            <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                                <rect x="4" y="4" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
-                                <rect x="14" y="4" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
-                                <rect x="4" y="14" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
-                                <rect x="14" y="14" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
-                            </svg>
-                        </template>
-                        <template x-if="t.icon && t.icon !== 'instagram-grid'">
-                            <i :class="t.icon + ' fa-lg'" aria-hidden="true"></i>
-                        </template>
-                        <span class="whitespace-nowrap">
-                            <span x-text="t.label"></span><template x-if="t.countLabel"><span>&nbsp;<span x-text="t.countLabel"></span></span></template>
-                        </span>
-                    </button>
-                </template>
+            <div class="overflow-x-auto scroll-px-2">
+                <div class="flex w-max min-w-full justify-start px-1 sm:justify-center">
+                    <template x-for="t in items" :key="t.id">
+                        <button
+                            type="button"
+                            @click.prevent="selectTab(t.id)"
+                            :class="openTab === t.id
+                                ? '-mb-px border-t-slate-950 text-slate-950'
+                                : 'border-t-transparent text-slate-500 hover:text-slate-900'"
+                            class="inline-flex shrink-0 items-center gap-2 border-t px-4 py-3 text-[11px] font-bold uppercase tracking-[0.18em] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-300 sm:px-5"
+                            role="tab"
+                            :aria-selected="openTab === t.id"
+                            :tabindex="openTab === t.id ? 0 : -1"
+                        >
+                            <template x-if="t.icon === 'instagram-grid'">
+                                <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                    <rect x="4" y="4" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
+                                    <rect x="14" y="4" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
+                                    <rect x="4" y="14" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
+                                    <rect x="14" y="14" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
+                                </svg>
+                            </template>
+                            <template x-if="t.icon && t.icon !== 'instagram-grid'">
+                                <i :class="t.icon + ' fa-lg'" aria-hidden="true"></i>
+                            </template>
+                            <span class="whitespace-nowrap">
+                                <span x-text="t.label"></span><template x-if="t.countLabel"><span>&nbsp;<span x-text="t.countLabel"></span></span></template>
+                            </span>
+                        </button>
+                    </template>
+                </div>
             </div>
         </template>
 
