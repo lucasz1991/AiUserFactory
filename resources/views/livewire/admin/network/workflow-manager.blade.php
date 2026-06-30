@@ -741,7 +741,7 @@
             </x-slot>
         </x-dialog-modal>
 
-        <x-dialog-modal wire:model="showEditTaskModal" maxWidth="3xl">
+        <x-dialog-modal wire:model="showEditTaskModal" maxWidth="5xl">
             <x-slot name="title">Step-Karte bearbeiten</x-slot>
             <x-slot name="content">
                 @include('livewire.admin.network.partials.workflow-task-form', [
