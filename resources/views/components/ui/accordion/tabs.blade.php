@@ -130,9 +130,9 @@
                                     @js($loop->last) ? 'pr-5' : ''
                                 ]"
                             >
-                                <span class="inline-flex min-w-0 items-center gap-2">
+                                <span class="inline-flex min-w-0 items-center gap-2 h-[1.2em]">
                                     <i :class="iconClass(@js($tabId), @js($iconClass))" aria-hidden="true"></i>
-                                    <span class="truncate" x-show="isExpanded(@js($tabId))" x-transition.opacity.duration.150ms>
+                                    <span class="truncate h-[1.2em]" x-show="isExpanded(@js($tabId))" x-transition.opacity.duration.150ms>
                                         {{ $label }}@if($countLabel)&nbsp;{{ $countLabel }}@endif
                                     </span>
                                 </span>
