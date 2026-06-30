@@ -81,34 +81,70 @@
 
     <div
         x-data="{
+            dragInside: false,
             dragEffect(event) {
                 return Array.from(event.dataTransfer.types || []).includes('application/x-workflow-task-catalog') ? 'copy' : 'move';
             },
-            dropTask(event, position) {
+            taskPositionFromEvent(event) {
+                const list = this.$refs.taskList;
+
+                if (!list) {
+                    return 0;
+                }
+
+                const items = Array.from(list.querySelectorAll('[data-workflow-task-sort-item]'));
+
+                if (items.length === 0) {
+                    return 0;
+                }
+
+                const pointerY = event.clientY;
+                let position = items.length;
+
+                for (let index = 0; index < items.length; index += 1) {
+                    const rect = items[index].getBoundingClientRect();
+
+                    if (pointerY < rect.top + (rect.height / 2)) {
+                        position = index;
+                        break;
+                    }
+                }
+
+                return position;
+            },
+            dropTask(event, position = null) {
                 if (@js($locked)) return;
                 const taskKey = event.dataTransfer.getData('application/x-workflow-task-key');
                 const sourceStepId = event.dataTransfer.getData('application/x-workflow-source-step-id');
                 const catalogKey = event.dataTransfer.getData('application/x-workflow-task-catalog') || event.dataTransfer.getData('text/plain');
+                const targetPosition = position === null ? this.taskPositionFromEvent(event) : position;
+
+                this.dragInside = false;
 
                 if (taskKey) {
                     $dispatch('moveWorkflowTaskCard', {
                         targetStepId: {{ $step->id }},
                         sourceStepId: sourceStepId,
                         taskKey: taskKey,
-                        position: position,
+                        position: targetPosition,
                     });
 
                     return;
                 }
 
                 if (catalogKey) {
-                    $wire.prepareTaskFromCatalog({{ $step->id }}, catalogKey, position);
+                    $wire.prepareTaskFromCatalog({{ $step->id }}, catalogKey, targetPosition);
                 }
             },
         }"
-        class="min-w-0 flex-1 space-y-0 px-3 pb-4 pt-2"
+        x-on:dragenter.prevent="dragInside = true"
+        x-on:dragover.prevent="$event.dataTransfer.dropEffect = dragEffect($event)"
+        x-on:dragleave.self="dragInside = false"
+        x-on:drop.prevent.stop="dropTask($event)"
+        x-bind:class="dragInside ? 'bg-slate-100/80 ring-2 ring-inset ring-slate-300' : ''"
+        class="min-w-0 flex-1 space-y-0 px-3 pb-4 pt-2 transition"
     >
-        <div @if(! $locked) x-sort="$dispatch('reorderWorkflowTaskCards', { targetStepId: {{ $step->id }}, item: $item, position: $position })" @endif class="min-w-0 space-y-0">
+        <div x-ref="taskList" class="min-w-0 space-y-0">
             @foreach($step->task_cards as $task)
                 @php
                     $taskKey = trim((string) ($task['key'] ?? ''));
@@ -122,7 +158,7 @@
                     $connectsFromPrevious = ! $loop->first && ($previousTarget === '' || $previousTarget === $sourceNode);
                 @endphp
                 <div
-                    @if(! $locked) x-sort:item="@js($step->id.'::'.($task['key'] ?? ''))" @endif
+                    data-workflow-task-sort-item
                     class="min-w-0 max-w-full"
                     wire:key="workflow-task-{{ $step->id }}-{{ $task['key'] ?? 'task' }}"
                 >
@@ -143,11 +179,14 @@
                         data-workflow-step-action="{{ $step->action_key }}"
                         data-route-success="{{ $successTarget }}"
                         data-route-failed="{{ $failedTarget }}"
+                        @if(! $locked) draggable="true" @endif
                         @if(! $locked) x-on:dragstart.stop="
                             $event.dataTransfer.setData('application/x-workflow-task-key', @js($task['key'] ?? ''));
                             $event.dataTransfer.setData('application/x-workflow-source-step-id', @js((string) $step->id));
+                            $event.dataTransfer.setData('text/plain', @js($task['key'] ?? ''));
                             $event.dataTransfer.effectAllowed = 'move';
                         " @endif
+                        @if(! $locked) x-on:dragend.window="dragInside = false" @endif
                         x-on:click.stop="focusedTask = @js($step->id.'::'.($task['key'] ?? ''))"
                         @if(! $locked) x-on:dblclick.stop="$wire.openEditTaskCard({{ $step->id }}, @js($task['key'] ?? ''))" @endif
                         x-bind:class="focusedTask === @js($step->id.'::'.($task['key'] ?? '')) ? 'ring-2 ring-slate-400 ring-offset-2 ring-offset-slate-100' : ''"
@@ -168,7 +207,7 @@
 
         @if($step->task_cards === [])
             <div
-                x-on:dragover.prevent="$event.dataTransfer.dropEffect = 'copy'"
+                x-on:dragover.prevent="$event.dataTransfer.dropEffect = dragEffect($event)"
                 x-on:drop.prevent.stop="dropTask($event, 0)"
                 class="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-2 transition hover:bg-white"
             >
