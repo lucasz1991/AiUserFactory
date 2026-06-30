@@ -27,7 +27,7 @@
         'quelle-suche' => 'fad fa-database',
         'filter' => 'fad fa-filter',
         'datum-warten' => 'fad fa-clock',
-        'oeffnen' => 'fad fa-envelope-open-text',
+        'oeffnen' => 'fad fa-envelope-open',
         'wert-ermitteln' => 'fad fa-search',
         'ergebnis' => 'fad fa-check-square',
         'ausfuehrung' => 'fad fa-play',
@@ -86,6 +86,7 @@
                         $isArray = is_array($tab);
                         $label = $isArray ? ($tab['label'] ?? Str::title($tabId)) : $tab;
                         $iconClass = $isArray ? ($tab['icon'] ?? null) : null;
+                        $iconClass = $iconClass === 'instagram-grid' ? 'fad fa-th' : $iconClass;
                         $iconClass = $iconClass ?: ($defaultIcons[$tabId] ?? 'fad fa-sliders-h');
                         $count = $isArray && array_key_exists('count', $tab) ? $tab['count'] : null;
                         $countLabel = $count !== null ? number_format((int) $count, 0, ',', '.') : null;
