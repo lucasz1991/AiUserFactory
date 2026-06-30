@@ -44,10 +44,13 @@
         hoverTab: null,
         tabIcons: {},
         compact: false,
-        get expandedTab() { return this.hoverTab || this.openTab; },
-        isExpanded(id) { return !this.compact || this.expandedTab === id; },
+        compactFrame: null,
+        isExpanded(id) { return !this.compact || this.openTab === id || this.hoverTab === id; },
         iconClass(id, fallback) {
             return `${this.tabIcons[id] || fallback} fa-fw shrink-0 text-center leading-none`;
+        },
+        hasOverflow(element) {
+            return element.scrollWidth > element.clientWidth + 1;
         },
         registerTabIcon(event) {
             if (event.detail.group !== @js($groupKey) || !event.detail.tab || !event.detail.icon) {
@@ -55,6 +58,7 @@
             }
 
             this.tabIcons[event.detail.tab] = event.detail.icon;
+            this.updateCompact();
         },
         selectTab(id) {
             this.openTab = id;
@@ -71,6 +75,10 @@
         },
         destroy() {
             window.removeEventListener('resize', this._updateTabCompact);
+
+            if (this.compactFrame) {
+                cancelAnimationFrame(this.compactFrame);
+            }
         },
         updateCompact() {
             this.$nextTick(() => {
@@ -78,10 +86,17 @@
 
                 if (!row) return;
 
+                if (this.compactFrame) {
+                    cancelAnimationFrame(this.compactFrame);
+                }
+
                 this.compact = false;
 
                 this.$nextTick(() => {
-                    this.compact = row.scrollWidth > row.clientWidth + 1;
+                    this.compactFrame = requestAnimationFrame(() => {
+                        this.compactFrame = null;
+                        this.compact = this.hasOverflow(row);
+                    });
                 });
             });
         }
