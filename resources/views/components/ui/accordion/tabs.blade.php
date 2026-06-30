@@ -32,7 +32,6 @@
     {{ $attributes->merge(['class' => 'w-full']) }}
     x-data="{
         openTab: @if($persist) $persist(@js($initial)).as(@js($key)) @else @js($initial) @endif,
-        overlapOffset: 40,
         selectTab(id) {
             this.openTab = id;
             this.$dispatch('ui-tab-selected', { group: @js($groupKey), tab: id });
@@ -41,43 +40,13 @@
             if (!@js(array_map('strval', array_keys($tabs))).includes(this.openTab)) {
                 this.openTab = @js((string) $initial);
             }
-
-            this.updateOverlap();
-            this._updateTabOverlap = () => this.updateOverlap();
-            window.addEventListener('resize', this._updateTabOverlap);
-        },
-        destroy() {
-            window.removeEventListener('resize', this._updateTabOverlap);
-        },
-        updateOverlap() {
-            this.$nextTick(() => {
-                const row = this.$refs.tabRow;
-                const count = @js($tabCount);
-
-                if (!row || count <= 1) {
-                    this.overlapOffset = 0;
-                    return;
-                }
-
-                const minOverlap = 40;
-                const maxOverlap = 128;
-                const fullWidth = Array.from(row.children).reduce((width, item) => {
-                    const tab = item.querySelector('[data-tab-body]');
-
-                    return width + (tab ? tab.offsetWidth : item.offsetWidth);
-                }, 0);
-                const availableWidth = row.clientWidth;
-                const neededOverlap = Math.ceil(Math.max(0, fullWidth - availableWidth) / (count - 1)) + minOverlap;
-
-                this.overlapOffset = Math.min(maxOverlap, Math.max(minOverlap, neededOverlap));
-            });
         }
     }"
     x-init="initTabs()"
 >
     <div class="w-full max-w-full overflow-hidden">
         <nav class="w-full max-w-full overflow-hidden" aria-label="Tabs" role="tablist" aria-orientation="horizontal">
-            <ul x-ref="tabRow" class="flex w-full max-w-full justify-start overflow-hidden pt-2">
+            <ul class="flex w-full max-w-full justify-start overflow-hidden pt-2">
                 @foreach($tabs as $tabKey => $tab)
                     @php
                         $tabId = (string) $tabKey;
@@ -88,11 +57,8 @@
                         $countLabel = $count !== null ? number_format((int) $count, 0, ',', '.') : null;
                     @endphp
                     <li
-                        class="relative flex-none transition-[margin] duration-200 ease-out"
-                        :style="{
-                            marginLeft: @js($loop->first) ? '0' : `-${overlapOffset}px`,
-                            zIndex: @js($tabCount - $loop->index),
-                        }"
+                        class="relative flex-none {{ $loop->first ? '' : '-ml-9 sm:-ml-10' }}"
+                        style="z-index: {{ $tabCount - $loop->index }}"
                     >
                         <button
                             type="button"
@@ -131,7 +97,6 @@
                                 </svg>
                             @endunless
                             <span
-                                data-tab-body
                                 class="block w-40 overflow-hidden border-t border-gray-400 px-4 py-[0.7em] text-ellipsis whitespace-nowrap sm:w-56"
                                 :class="[
                                     openTab === @js($tabId) ? 'bg-blue-50 text-blue-950' : 'bg-slate-300 text-slate-700 group-hover/tab:bg-blue-100 group-hover/tab:text-blue-900',
