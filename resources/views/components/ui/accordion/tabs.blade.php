@@ -43,20 +43,9 @@
         openTab: @if($persist) $persist(@js($initial)).as(@js($key)) @else @js($initial) @endif,
         hoverTab: null,
         tabIcons: {},
-        compact: false,
-        compactFrame: null,
-        compactObserver: null,
-        isExpanded(id) { return !this.compact || this.openTab === id || this.hoverTab === id; },
+        isExpanded(id) { return this.openTab === id || this.hoverTab === id; },
         iconClass(id, fallback) {
             return `${this.tabIcons[id] || fallback} fa-fw shrink-0 text-center leading-none`;
-        },
-        hasOverflow(element) {
-            const containerWidth = Math.floor(element.getBoundingClientRect().width || element.clientWidth || 0);
-            const childrenWidth = Math.ceil(Array.from(element.children).reduce((total, child) => {
-                return total + child.getBoundingClientRect().width;
-            }, 0));
-
-            return childrenWidth > containerWidth + 1 || element.scrollWidth > element.clientWidth + 1;
         },
         registerTabIcon(event) {
             if (event.detail.group !== @js($groupKey) || !event.detail.tab || !event.detail.icon) {
@@ -64,7 +53,6 @@
             }
 
             this.tabIcons[event.detail.tab] = event.detail.icon;
-            this.updateCompact();
         },
         selectTab(id) {
             this.openTab = id;
@@ -74,56 +62,6 @@
             if (!@js(array_map('strval', array_keys($tabs))).includes(this.openTab)) {
                 this.openTab = @js((string) $initial);
             }
-
-            this.updateCompact();
-            this._updateTabCompact = () => this.updateCompact();
-            window.addEventListener('resize', this._updateTabCompact);
-
-            if ('ResizeObserver' in window && this.$refs.tabRow && this.$refs.tabRow.parentElement) {
-                this.compactObserver = new ResizeObserver(() => this.updateCompact());
-                this.compactObserver.observe(this.$refs.tabRow.parentElement);
-            }
-
-            if (document.fonts && document.fonts.ready) {
-                document.fonts.ready.then(() => this.updateCompact());
-            }
-        },
-        destroy() {
-            window.removeEventListener('resize', this._updateTabCompact);
-
-            if (this.compactObserver) {
-                this.compactObserver.disconnect();
-            }
-
-            if (this.compactFrame) {
-                cancelAnimationFrame(this.compactFrame);
-            }
-        },
-        updateCompact() {
-            this.$nextTick(() => {
-                const row = this.$refs.tabRow;
-
-                if (!row) return;
-
-                if (this.compactFrame) {
-                    cancelAnimationFrame(this.compactFrame);
-                }
-
-                this.compact = false;
-
-                this.$nextTick(() => {
-                    this.compactFrame = requestAnimationFrame(() => {
-                        this.compactFrame = null;
-
-                        if (row.getBoundingClientRect().width <= 0) {
-                            window.setTimeout(() => this.updateCompact(), 50);
-                            return;
-                        }
-
-                        this.compact = this.hasOverflow(row);
-                    });
-                });
-            });
         }
     }"
     x-init="initTabs()"
@@ -153,6 +91,7 @@
                             type="button"
                             id="{{ $htmlIdPrefix }}-item-{{ $tabId }}"
                             aria-controls="{{ $htmlIdPrefix }}-panel-{{ $tabId }}"
+                            aria-label="{{ $label }}@if($countLabel) {{ $countLabel }}@endif"
                             @click.prevent="selectTab(@js($tabId))"
                             @mouseenter="hoverTab = @js($tabId)"
                             @mouseleave="hoverTab = null"
