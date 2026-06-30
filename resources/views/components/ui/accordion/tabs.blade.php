@@ -24,6 +24,7 @@
 @endphp
 
 <div
+    {{ $attributes->merge(['class' => 'w-full']) }}
     x-data="{
         openTab: @if($persist) $persist(@js($initial)).as(@js($key)) @else @js($initial) @endif,
         collapsed: false,
@@ -66,8 +67,7 @@
             this.collapsed = false;
         }
     }"
-    x-init="setupMQ(@js($collapseAt)); onResize(); $watch('openTab', () => onResize())"
-    class="w-full"
+    x-init="if (!items.some(t => t.id === openTab)) openTab = items[0]?.id ?? openTab; setupMQ(@js($collapseAt)); onResize(); $watch('openTab', () => onResize())"
     role="tablist"
 >
     <div class="border-b border-slate-200" x-ref="row" x-resize.debounce.150ms="onResize()">

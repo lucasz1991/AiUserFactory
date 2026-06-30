@@ -169,8 +169,9 @@
         $taskSettingsTabOptions[$tabId] = $tabLabel;
     }
 
-    $defaultExtraTab = (string) (array_key_first($taskSettingsTabOptions) ?? '');
+    $defaultExtraTab = (string) ($taskSpecificTabIds[$inputTabLabel] ?? array_key_first($taskSettingsTabOptions) ?? '');
     $extraFieldTabGroup = 'workflow-task-'.$prefix.'-'.(\Illuminate\Support\Str::slug((string) $catalogKey) ?: 'task').'-settings';
+    $taskSettingsTabsKey = 'workflow-task-settings-tabs-'.$prefix.'-'.(\Illuminate\Support\Str::slug((string) $catalogKey) ?: 'task').'-'.md5(json_encode(array_keys($taskSettingsTabOptions)));
     $browserWindowDatalistId = 'workflow-'.$prefix.'-browser-windows';
 @endphp
 
@@ -250,6 +251,7 @@
 
     @if($taskSettingsTabOptions !== [])
         <x-ui.accordion.tabs
+            wire:key="{{ $taskSettingsTabsKey }}"
             :tabs="$taskSettingsTabOptions"
             :default="$defaultExtraTab"
             :group="$extraFieldTabGroup"
