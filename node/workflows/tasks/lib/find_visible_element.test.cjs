@@ -210,6 +210,46 @@ test('a CSS selector searches child frames before a main-frame wait can consume 
   assert.equal(found, handle);
 });
 
+test('frame search returns as soon as any frame finds a match', async () => {
+  const handle = elementHandle(async () => {});
+  const emptyHandle = {
+    asElement: () => null,
+    async dispose() {},
+  };
+  const slowEmptyFrame = {
+    detached: false,
+    async evaluateHandle() {
+      return emptyHandle;
+    },
+    async waitForSelector(_selector, options = {}) {
+      await new Promise((resolve) => setTimeout(resolve, Number(options.timeout || 1)));
+
+      return null;
+    },
+  };
+  const matchingFrame = {
+    detached: false,
+    async evaluateHandle() {
+      return {
+        asElement: () => handle,
+        async dispose() {},
+      };
+    },
+  };
+  const page = {
+    frames: () => [slowEmptyFrame, matchingFrame],
+  };
+
+  const startedAt = Date.now();
+  const found = await findFirstVisibleElement(page, 'webmailer-mail-list#list', 1000, {
+    framePollTimeoutMs: 500,
+  });
+  const durationMs = Date.now() - startedAt;
+
+  assert.equal(found.handle, handle);
+  assert.ok(durationMs < 250, `search took ${durationMs}ms`);
+});
+
 test('a CSS selector is found inside a recursively discovered nested frame', async () => {
   const handle = elementHandle(async () => {});
   const emptyFrame = (children = []) => ({

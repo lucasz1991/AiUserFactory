@@ -575,34 +575,53 @@ async function firstMatchAcrossFrames(frames, findInFrame) {
     return null;
   }
 
-  const matches = await Promise.all(frames.map(async (frame) => {
+  const pending = new Set(frames.map(async (frame) => {
     if (frameIsDetached(frame)) {
-      return null;
+      return { match: null };
     }
 
     try {
       const handle = await findInFrame(frame);
 
-      return handle ? { handle, frame } : null;
+      return { match: handle ? { handle, frame } : null };
     } catch (error) {
       if (isTransientDomError(error)) {
-        return null;
+        return { match: null };
       }
 
-      return null;
+      return { match: null };
     }
   }));
-  const winner = matches.find(Boolean) || null;
 
-  await Promise.all(matches.map(async (match) => {
-    if (!match || match === winner) {
-      return;
+  const cleanupLateMatches = (winner) => {
+    Promise.all(Array.from(pending).map(async (promise) => {
+      const result = await promise.catch(() => ({ match: null }));
+      const match = result?.match || null;
+
+      if (!match || match === winner) {
+        return;
+      }
+
+      await match.handle.dispose?.().catch(() => {});
+    })).catch(() => {});
+  };
+
+  while (pending.size > 0) {
+    const settled = await Promise.race(Array.from(pending).map((promise) => (
+      promise.then((result) => ({ promise, result }))
+    )));
+    pending.delete(settled.promise);
+
+    const match = settled.result?.match || null;
+
+    if (match) {
+      cleanupLateMatches(match);
+
+      return match;
     }
+  }
 
-    await match.handle.dispose?.().catch(() => {});
-  }));
-
-  return winner;
+  return null;
 }
 
 async function findFirstVisibleElement(page, values, timeout = 15000, options = {}) {
@@ -619,13 +638,25 @@ async function findFirstVisibleElement(page, values, timeout = 15000, options = 
   await synchronizeLiveDom(page);
 
   while (remainingTimeout(deadline) > 0) {
-    const remaining = remainingTimeout(deadline);
     const frames = framesForPage(page);
-    const frameTimeout = candidates.length === 1
-      ? Math.max(1, remaining)
-      : Math.max(1, Math.min(100, remaining));
+    const configuredFramePollTimeout = Number(
+      options.framePollTimeoutMs
+      ?? options.frameTimeoutMs
+      ?? 100,
+    );
+    const framePollTimeout = Math.max(
+      1,
+      Number.isFinite(configuredFramePollTimeout) ? configuredFramePollTimeout : 100,
+    );
 
     for (const candidate of candidates) {
+      const remaining = remainingTimeout(deadline);
+
+      if (remaining <= 0) {
+        return null;
+      }
+
+      const frameTimeout = Math.max(1, Math.min(framePollTimeout, remaining));
       const match = await firstMatchAcrossFrames(
         frames,
         (frame) => candidate.kind === 'text'
