@@ -136,7 +136,7 @@ class WorkflowStep extends Model
             ->map(function (array $task, int $index): array {
                 $order = max(0, (int) ($task['order_id'] ?? $task['position'] ?? (($index + 1) * 10)));
 
-                return [
+                return array_replace($task, [
                     'key' => trim((string) ($task['key'] ?? 'task-'.$this->id.'-'.$index)),
                     'title' => trim((string) ($task['title'] ?? $task['label'] ?? 'Task')),
                     'description' => trim((string) ($task['description'] ?? '')),
@@ -167,7 +167,7 @@ class WorkflowStep extends Model
                     'on_partial' => is_array($task['on_partial'] ?? null) ? $task['on_partial'] : null,
                     'on_error' => is_array($task['on_error'] ?? null) ? $task['on_error'] : null,
                     'status_routes' => is_array($task['status_routes'] ?? null) ? $task['status_routes'] : [],
-                ];
+                ]);
             })
             ->values()
             ->toArray();

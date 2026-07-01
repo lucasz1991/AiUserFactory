@@ -342,8 +342,97 @@ function maxAgeSeconds(options = {}, input = {}, fallback = 0) {
   return minutes > 0 ? minutes * 60 : fallback;
 }
 
+function ageFromDate(date, now = new Date()) {
+  const age = Math.round((now.getTime() - date.getTime()) / 1000);
+
+  return age >= 0 ? age : null;
+}
+
+function ageFromDateParts(now, day, month, year, hour = 0, minute = 0) {
+  const normalizedYear = Number(year) < 100
+    ? (Number(year) >= 70 ? 1900 + Number(year) : 2000 + Number(year))
+    : Number(year);
+  const normalizedDay = Number(day);
+  const normalizedMonth = Number(month);
+  const normalizedHour = Number(hour || 0);
+  const normalizedMinute = Number(minute || 0);
+
+  if (
+    normalizedMonth < 1
+    || normalizedMonth > 12
+    || normalizedDay < 1
+    || normalizedDay > 31
+    || normalizedHour < 0
+    || normalizedHour > 23
+    || normalizedMinute < 0
+    || normalizedMinute > 59
+  ) {
+    return null;
+  }
+
+  const date = new Date(now);
+  date.setFullYear(normalizedYear, normalizedMonth - 1, normalizedDay);
+  date.setHours(normalizedHour, normalizedMinute, 0, 0);
+
+  if (
+    date.getFullYear() !== normalizedYear
+    || date.getMonth() !== normalizedMonth - 1
+    || date.getDate() !== normalizedDay
+  ) {
+    return null;
+  }
+
+  return ageFromDate(date, now);
+}
+
+function monthNumber(value) {
+  const normalized = lowerText(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+  const months = {
+    jan: 1,
+    januar: 1,
+    january: 1,
+    feb: 2,
+    februar: 2,
+    february: 2,
+    mar: 3,
+    marz: 3,
+    maerz: 3,
+    march: 3,
+    apr: 4,
+    april: 4,
+    mai: 5,
+    may: 5,
+    jun: 6,
+    juni: 6,
+    june: 6,
+    jul: 7,
+    juli: 7,
+    july: 7,
+    aug: 8,
+    august: 8,
+    sep: 9,
+    sept: 9,
+    september: 9,
+    okt: 10,
+    oktober: 10,
+    oct: 10,
+    october: 10,
+    nov: 11,
+    november: 11,
+    dez: 12,
+    dezember: 12,
+    dec: 12,
+    december: 12,
+  };
+
+  return months[normalized] || null;
+}
+
 function ageSecondsFromText(value, now = new Date()) {
-  const text = lowerText(value);
+  const rawText = normalizeText(value);
+  const text = rawText.toLowerCase();
 
   if (!text) {
     return null;
@@ -377,25 +466,54 @@ function ageSecondsFromText(value, now = new Date()) {
     return Number(match[1]) * 86400;
   }
 
-  match = text.match(/(?:heute|today)?\s*(\d{1,2})[:.](\d{2})/);
+  match = text.match(/(?:^|[^\d])(\d{1,2})\.(\d{1,2})\.(\d{2,4})(?:\s*(?:,|um|at)?\s*(\d{1,2})[:.](\d{2}))?/);
 
   if (match) {
+    const age = ageFromDateParts(now, match[1], match[2], match[3], match[4] || 0, match[5] || 0);
+
+    if (age !== null) {
+      return age;
+    }
+  }
+
+  match = text.match(/(?:^|[^\d])(\d{1,2})\.\s*([a-zäöü]+)\s+(\d{2,4})(?:\s*(?:,|um|at)?\s*(\d{1,2})[:.](\d{2}))?/i);
+
+  if (match) {
+    const month = monthNumber(match[2]);
+
+    if (month) {
+      const age = ageFromDateParts(now, match[1], month, match[3], match[4] || 0, match[5] || 0);
+
+      if (age !== null) {
+        return age;
+      }
+    }
+  }
+
+  const parsed = Date.parse(rawText);
+
+  if (Number.isFinite(parsed)) {
+    return ageFromDate(new Date(parsed), now);
+  }
+
+  match = text.match(/(?:^|[^\d.])(?:heute|today)?\s*,?\s*(\d{1,2})[:.](\d{2})(?![.\d])/);
+
+  if (match) {
+    const hour = Number(match[1]);
+    const minute = Number(match[2]);
+
+    if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+      return null;
+    }
+
     const date = new Date(now);
-    date.setHours(Number(match[1]), Number(match[2]), 0, 0);
+    date.setHours(hour, minute, 0, 0);
 
     let age = Math.round((now.getTime() - date.getTime()) / 1000);
 
     if (age < -3600) {
       age += 86400;
     }
-
-    return age >= 0 ? age : null;
-  }
-
-  const parsed = Date.parse(normalizeText(value));
-
-  if (Number.isFinite(parsed)) {
-    const age = Math.round((now.getTime() - parsed) / 1000);
 
     return age >= 0 ? age : null;
   }

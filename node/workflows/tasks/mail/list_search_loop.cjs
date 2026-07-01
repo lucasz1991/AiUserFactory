@@ -106,7 +106,7 @@ async function run(context = {}) {
   const outputValueName = normalizeText(optionString(options, input, ['output_value_name', 'outputValueName'], ''));
   const outputValueSource = optionString(options, input, ['output_value_source', 'outputValueSource'], 'body');
   const maximumAgeSeconds = maxAgeSeconds(options, input, 0);
-  const includeUnknownAge = optionBoolean(options, input, ['include_unknown_age', 'includeUnknownAge'], true);
+  const includeUnknownAge = optionBoolean(options, input, ['include_unknown_age', 'includeUnknownAge'], maximumAgeSeconds <= 0);
   const maxOpenCount = Math.max(1, Math.min(50, optionNumber(options, input, ['max_open_count', 'maxOpenCount', 'max_mail_clicks', 'maxMailClicks', 'limit'], 8)));
   const openWaitMs = Math.max(0, Math.min(10000, optionNumber(options, input, ['open_wait_ms', 'openWaitMs'], 900)));
   const stopOnFirstMatch = optionBoolean(options, input, ['stop_on_first_match', 'stopOnFirstMatch'], true);
