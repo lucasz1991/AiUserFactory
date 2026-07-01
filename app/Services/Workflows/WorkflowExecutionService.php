@@ -192,7 +192,7 @@ class WorkflowExecutionService
                 'cancelledAt' => $cancelledAt->toIso8601String(),
                 'durationMs' => $durationMs,
                 'duration_ms' => $durationMs,
-            ]),
+            ], $this->workflowReturnPayload($run)),
             'error_message' => $message,
         ])->save();
 
@@ -534,6 +534,7 @@ class WorkflowExecutionService
                 'finishedAt' => $finishedAt->toIso8601String(),
                 'durationMs' => $durationMs,
                 'duration_ms' => $durationMs,
+                ...$this->workflowReturnPayload($run),
             ],
             'error_message' => null,
         ])->save();
@@ -555,7 +556,7 @@ class WorkflowExecutionService
                 'failedAt' => $finishedAt->toIso8601String(),
                 'durationMs' => $durationMs,
                 'duration_ms' => $durationMs,
-            ]),
+            ], $this->workflowReturnPayload($run)),
             'error_message' => $message,
         ])->save();
 
@@ -569,6 +570,47 @@ class WorkflowExecutionService
             : ($run->queued_at instanceof Carbon ? $run->queued_at : $finishedAt);
 
         return max(0, $startedAt->diffInMilliseconds($finishedAt));
+    }
+
+    protected function workflowReturnPayload(WorkflowRun $run): array
+    {
+        $context = is_array($run->context_json) ? $run->context_json : [];
+        $payload = [];
+        $variables = array_filter([
+            ...(is_array($context['workflow_variables'] ?? null) ? $context['workflow_variables'] : []),
+            ...(is_array($context['workflowVariables'] ?? null) ? $context['workflowVariables'] : []),
+        ], fn (mixed $value): bool => $value !== null);
+
+        if (array_key_exists('workflow_return', $context) || array_key_exists('workflowReturn', $context)) {
+            $value = array_key_exists('workflow_return', $context)
+                ? $context['workflow_return']
+                : $context['workflowReturn'];
+
+            $payload['workflow_return'] = $value;
+            $payload['workflowReturn'] = $value;
+            $variables['workflow_return'] = $value;
+        }
+
+        if (array_key_exists('workflow_return_ok', $context)) {
+            $payload['workflow_return_ok'] = (bool) $context['workflow_return_ok'];
+            $variables['workflow_return_ok'] = (bool) $context['workflow_return_ok'];
+        }
+
+        if (array_key_exists('workflow_return_key', $context) || array_key_exists('workflowReturnKey', $context)) {
+            $key = trim((string) ($context['workflow_return_key'] ?? $context['workflowReturnKey'] ?? ''));
+
+            if ($key !== '') {
+                $payload['workflow_return_key'] = $key;
+                $payload['workflowReturnKey'] = $key;
+            }
+        }
+
+        if ($variables !== []) {
+            $payload['workflow_variables'] = $variables;
+            $payload['workflowVariables'] = $variables;
+        }
+
+        return $payload;
     }
 
     protected function closeWorkflowTaskProcesses(WorkflowRun $run, string $message): void
@@ -1173,7 +1215,9 @@ class WorkflowExecutionService
             $variables['workflow_return_ok'] = (bool) $result['workflow_return_ok'];
         }
 
-        if ($variables === []) {
+        $workflowReturnKey = trim((string) ($result['workflow_return_key'] ?? $result['workflowReturnKey'] ?? ''));
+
+        if ($variables === [] && $workflowReturnKey === '') {
             return;
         }
 
@@ -1194,6 +1238,11 @@ class WorkflowExecutionService
 
         if (array_key_exists('workflow_return_ok', $variables)) {
             $context['workflow_return_ok'] = (bool) $variables['workflow_return_ok'];
+        }
+
+        if ($workflowReturnKey !== '') {
+            $context['workflow_return_key'] = $workflowReturnKey;
+            $context['workflowReturnKey'] = $workflowReturnKey;
         }
 
         $run->forceFill(['context_json' => $context])->save();
@@ -1910,6 +1959,9 @@ class WorkflowExecutionService
                         ->values();
 
                     if ($includedTasks->isNotEmpty()) {
+                        $returnTask = $includedTasks
+                            ->reverse()
+                            ->first(fn (array $item): bool => array_key_exists('workflow_return', $item) || array_key_exists('workflowReturn', $item));
                         $resultTask = [
                             'key' => $taskKey,
                             'status' => $includedTasks->contains(fn (array $item): bool => in_array((string) ($item['status'] ?? ''), ['failed', 'timeout'], true))
@@ -1917,6 +1969,23 @@ class WorkflowExecutionService
                                 : ($includedTasks->every(fn (array $item): bool => in_array((string) ($item['status'] ?? ''), ['success', 'completed'], true)) ? 'completed' : $status),
                             'included_tasks' => $includedTasks->all(),
                         ];
+
+                        if (is_array($returnTask)) {
+                            $workflowReturn = array_key_exists('workflow_return', $returnTask)
+                                ? $returnTask['workflow_return']
+                                : $returnTask['workflowReturn'];
+                            $resultTask['workflow_return'] = $workflowReturn;
+                            $resultTask['workflowReturn'] = $workflowReturn;
+                            $resultTask['workflow_return_ok'] = array_key_exists('workflow_return_ok', $returnTask)
+                                ? (bool) $returnTask['workflow_return_ok']
+                                : $workflowReturn !== false;
+
+                            foreach (['workflow_return_key', 'workflowReturnKey', 'workflow_variables', 'workflowVariables'] as $returnKey) {
+                                if (array_key_exists($returnKey, $returnTask)) {
+                                    $resultTask[$returnKey] = $returnTask[$returnKey];
+                                }
+                            }
+                        }
                     }
                 }
 

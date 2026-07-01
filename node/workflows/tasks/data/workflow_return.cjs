@@ -60,6 +60,8 @@ async function run(context = {}) {
     statusMessage: ok
       ? 'Workflow-Rueckgabewert wurde gesetzt.'
       : 'Workflow-Rueckgabewert wurde als Fehler gesetzt.',
+    workflow_return_key: key,
+    workflowReturnKey: key,
     workflow_return: value,
     workflowReturn: value,
     workflow_return_ok: ok,

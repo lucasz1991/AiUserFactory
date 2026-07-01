@@ -36,7 +36,46 @@
             ($hours === 0 && $remainingSeconds > 0) || ($hours === 0 && $minutes === 0) ? $remainingSeconds.'s' : null,
         ])->filter()->implode(' ');
     };
+    $formatWorkflowValue = static function ($value): string {
+        if (is_bool($value)) {
+            return $value ? 'true' : 'false';
+        }
+
+        if ($value === null) {
+            return 'null';
+        }
+
+        if (is_array($value) || is_object($value)) {
+            return \Illuminate\Support\Str::limit(json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?: '[]', 120);
+        }
+
+        return \Illuminate\Support\Str::limit((string) $value, 120);
+    };
+    $workflowReturnLabel = static function ($run) use ($formatWorkflowValue): ?string {
+        if (! $run) {
+            return null;
+        }
+
+        foreach ([is_array($run->result_json) ? $run->result_json : [], is_array($run->context_json) ? $run->context_json : []] as $source) {
+            if (\Illuminate\Support\Arr::has($source, 'workflow_return')) {
+                $value = data_get($source, 'workflow_return');
+            } elseif (\Illuminate\Support\Arr::has($source, 'workflowReturn')) {
+                $value = data_get($source, 'workflowReturn');
+            } elseif (\Illuminate\Support\Arr::has($source, 'workflow_variables.workflow_return')) {
+                $value = data_get($source, 'workflow_variables.workflow_return');
+            } elseif (\Illuminate\Support\Arr::has($source, 'workflowVariables.workflow_return')) {
+                $value = data_get($source, 'workflowVariables.workflow_return');
+            } else {
+                continue;
+            }
+
+            return 'Rueckgabe: '.$formatWorkflowValue($value);
+        }
+
+        return null;
+    };
     $quickPreviewDurationLabel = $quickPreviewRun ? $formatRunDuration($quickPreviewRun) : null;
+    $quickPreviewReturnLabel = $quickPreviewRun ? $workflowReturnLabel($quickPreviewRun) : null;
 @endphp
 <div class="space-y-5" wire:loading.class="opacity-60 pointer-events-none">
     <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
@@ -76,6 +115,9 @@
                                     {{ $quickPreviewRun && in_array($quickPreviewRun->status, ['queued', 'running', 'waiting'], true) ? 'Laufenden Test öffnen' : 'Letzten Test öffnen' }}
                                     @if($quickPreviewDurationLabel)
                                         <span class="mt-0.5 block text-xs font-medium text-indigo-500">Dauer: {{ $quickPreviewDurationLabel }}</span>
+                                    @endif
+                                    @if($quickPreviewReturnLabel)
+                                        <span class="mt-0.5 block break-words text-xs font-medium text-indigo-500">{{ $quickPreviewReturnLabel }}</span>
                                     @endif
                                 </button>
                             </div>

@@ -50,12 +50,153 @@
 
         return max(0, $startedAt->diffInMilliseconds($finishedAt));
     };
+    $formatWorkflowValue = static function ($value): string {
+        if (is_bool($value)) {
+            return $value ? 'true' : 'false';
+        }
+
+        if ($value === null) {
+            return 'null';
+        }
+
+        if (is_array($value) || is_object($value)) {
+            return \Illuminate\Support\Str::limit(json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?: '[]', 180);
+        }
+
+        return \Illuminate\Support\Str::limit((string) $value, 180);
+    };
+    $workflowReturnSummary = static function (...$sources) use ($formatWorkflowValue): array {
+        $empty = [
+            'has' => false,
+            'key' => 'workflow_return',
+            'value' => null,
+            'valueLabel' => '-',
+            'ok' => null,
+            'okLabel' => '-',
+            'variables' => [],
+        ];
+        $variables = [];
+        $extract = function ($source) use (&$extract, &$variables, $formatWorkflowValue, $empty): ?array {
+            if (! is_array($source)) {
+                return null;
+            }
+
+            foreach (['workflow_variables', 'workflowVariables'] as $variablesKey) {
+                $candidateVariables = data_get($source, $variablesKey);
+
+                if (is_array($candidateVariables)) {
+                    $variables = array_replace($variables, $candidateVariables);
+                }
+            }
+
+            $hasValue = false;
+            $value = null;
+
+            if (\Illuminate\Support\Arr::has($source, 'workflow_return')) {
+                $hasValue = true;
+                $value = data_get($source, 'workflow_return');
+            } elseif (\Illuminate\Support\Arr::has($source, 'workflowReturn')) {
+                $hasValue = true;
+                $value = data_get($source, 'workflowReturn');
+            } elseif (\Illuminate\Support\Arr::has($source, 'workflow_variables.workflow_return')) {
+                $hasValue = true;
+                $value = data_get($source, 'workflow_variables.workflow_return');
+            } elseif (\Illuminate\Support\Arr::has($source, 'workflowVariables.workflow_return')) {
+                $hasValue = true;
+                $value = data_get($source, 'workflowVariables.workflow_return');
+            }
+
+            if ($hasValue) {
+                $ok = \Illuminate\Support\Arr::has($source, 'workflow_return_ok')
+                    ? (bool) data_get($source, 'workflow_return_ok')
+                    : (\Illuminate\Support\Arr::has($source, 'workflow_variables.workflow_return_ok')
+                        ? (bool) data_get($source, 'workflow_variables.workflow_return_ok')
+                        : (\Illuminate\Support\Arr::has($source, 'workflowVariables.workflow_return_ok')
+                            ? (bool) data_get($source, 'workflowVariables.workflow_return_ok')
+                            : $value !== false));
+                $key = trim((string) (
+                    data_get($source, 'workflow_return_key')
+                    ?: data_get($source, 'workflowReturnKey')
+                    ?: ''
+                ));
+
+                if ($key === '') {
+                    foreach ($variables as $variableKey => $variableValue) {
+                        if (! in_array($variableKey, ['workflow_return', 'workflow_return_ok'], true) && $variableValue === $value) {
+                            $key = (string) $variableKey;
+                            break;
+                        }
+                    }
+                }
+
+                $key = $key !== '' ? $key : 'workflow_return';
+
+                return [
+                    ...$empty,
+                    'has' => true,
+                    'key' => $key,
+                    'value' => $value,
+                    'valueLabel' => $formatWorkflowValue($value),
+                    'ok' => $ok,
+                    'okLabel' => $ok ? 'true' : 'false',
+                    'variables' => $variables,
+                ];
+            }
+
+            foreach (['result', 'resultTask'] as $nestedKey) {
+                $nested = data_get($source, $nestedKey);
+                $summary = is_array($nested) ? $extract($nested) : null;
+
+                if ($summary && $summary['has']) {
+                    return $summary;
+                }
+            }
+
+            foreach (['included_tasks', 'tasks'] as $listKey) {
+                $items = data_get($source, $listKey);
+
+                if (! is_array($items)) {
+                    continue;
+                }
+
+                foreach (array_reverse($items) as $item) {
+                    $summary = is_array($item) ? $extract($item) : null;
+
+                    if ($summary && $summary['has']) {
+                        return $summary;
+                    }
+                }
+            }
+
+            return null;
+        };
+
+        foreach ($sources as $source) {
+            $summary = $extract($source);
+
+            if ($summary && $summary['has']) {
+                return [
+                    ...$summary,
+                    'variables' => array_replace($variables, $summary['variables'] ?? []),
+                ];
+            }
+        }
+
+        return [
+            ...$empty,
+            'variables' => $variables,
+        ];
+    };
 @endphp
 
 <div {{ $attributes->merge(['class' => 'divide-y divide-slate-100']) }}>
     @forelse($runs as $run)
         @php
             $durationLabel = $formatDuration($runDurationMs($run));
+            $workflowReturn = $workflowReturnSummary(
+                is_array($run->result_json) ? $run->result_json : [],
+                is_array($run->context_json) ? $run->context_json : [],
+            );
         @endphp
         <div x-data="{ workflowPreviewOpen: false }" class="py-4">
             <div class="flex flex-wrap items-start justify-between gap-3">
@@ -76,6 +217,11 @@
                             <div>{{ $run->finished_at->format('d.m.Y H:i') }}</div>
                         @endif
                         <div class="font-semibold text-slate-600">Dauer: {{ $durationLabel }}</div>
+                        @if($workflowReturn['has'])
+                            <div class="max-w-xs break-words font-semibold text-indigo-700">
+                                Rueckgabe: {{ $workflowReturn['key'] }} = {{ $workflowReturn['valueLabel'] }}
+                            </div>
+                        @endif
                     </div>
                     <button type="button" x-on:click="workflowPreviewOpen = true" class="rounded border border-blue-200 bg-white px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-50">
                         Vorschau
@@ -91,7 +237,7 @@
                             $resultTasks = collect(is_array(data_get($stepRun->result_json, 'tasks')) ? data_get($stepRun->result_json, 'tasks') : [])
                                 ->filter(fn ($task) => is_array($task))
                                 ->keyBy(fn ($task) => (string) data_get($task, 'key'));
-                            $displayTasks = $stepTasks->map(function (array $task) use ($resultTasks, $stepRun) {
+                            $displayTasks = $stepTasks->map(function (array $task) use ($resultTasks, $stepRun, $workflowReturnSummary) {
                                 $taskKey = (string) ($task['key'] ?? '');
                                 $resultTask = $resultTasks->get($taskKey);
                                 $isPlannedOnly = ($stepRun->workflowStep?->type ?? null) === \App\Models\WorkflowStep::TYPE_PLANNED_ACTION
@@ -101,6 +247,7 @@
                                     : (is_array($resultTask)
                                     ? (string) data_get($resultTask, 'status', $stepRun->status)
                                     : (($stepRun->status === 'completed' && $resultTasks->isEmpty()) ? 'not_executed' : 'configured'));
+                                $return = $workflowReturnSummary(is_array($resultTask) ? $resultTask : [], $task);
 
                                 return [
                                     'title' => (string) ($task['title'] ?? 'Task'),
@@ -108,6 +255,7 @@
                                     'runner' => (string) ($task['runner'] ?? ''),
                                     'node_script' => (string) ($task['node_script'] ?? ''),
                                     'php_handler' => (string) ($task['php_handler'] ?? ''),
+                                    'return' => $return,
                                     'debug' => [
                                         'workflowRunId' => $run->id,
                                         'workflowStepRunId' => $stepRun->id,
@@ -117,10 +265,12 @@
                                         'status' => $status,
                                         'task' => $task,
                                         'resultTask' => $resultTask,
+                                        'workflowReturn' => $return['has'] ? $return : null,
                                         'logs' => is_array($stepRun->logs_json) ? $stepRun->logs_json : [],
                                     ],
                                 ];
                             })->values();
+                            $stepReturn = $workflowReturnSummary(is_array($stepRun->result_json) ? $stepRun->result_json : []);
                             $stepDebug = [
                                 'workflowRunId' => $run->id,
                                 'workflowRunUuid' => $run->run_uuid,
@@ -134,6 +284,7 @@
                                 'errorMessage' => $stepRun->error_message,
                                 'logs' => is_array($stepRun->logs_json) ? $stepRun->logs_json : [],
                                 'result' => is_array($stepRun->result_json) ? $stepRun->result_json : [],
+                                'workflowReturn' => $stepReturn['has'] ? $stepReturn : null,
                                 'config' => $stepRun->workflowStep?->config_json,
                             ];
                         @endphp
@@ -153,6 +304,11 @@
                             </div>
                             @if($stepRun->external_run_id)
                                 <p class="mt-1 truncate text-[11px] text-slate-500">{{ $stepRun->external_run_type }} · {{ $stepRun->external_run_id }}</p>
+                            @endif
+                            @if($stepReturn['has'])
+                                <p class="mt-1 break-words text-[11px] font-semibold text-indigo-700">
+                                    Rueckgabe: {{ $stepReturn['key'] }} = {{ $stepReturn['valueLabel'] }} · OK: {{ $stepReturn['okLabel'] }}
+                                </p>
                             @endif
                             @if($displayTasks->isNotEmpty())
                                 <div class="mt-2 space-y-1">
@@ -179,6 +335,12 @@
                                                     @elseif($task['php_handler'])
                                                         - {{ $task['php_handler'] }}
                                                     @endif
+                                                </div>
+                                            @endif
+                                            @if($task['return']['has'])
+                                                <div class="mt-1 break-words text-indigo-600">
+                                                    Rueckgabe: {{ $task['return']['key'] }} = {{ $task['return']['valueLabel'] }}
+                                                    · OK: {{ $task['return']['okLabel'] }}
                                                 </div>
                                             @endif
                                         </div>
