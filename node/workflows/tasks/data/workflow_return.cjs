@@ -47,6 +47,7 @@ function valueFromPath(source = {}, path = '') {
 
 function workflowVariableRoot(context = {}) {
   return {
+    ...(context && typeof context === 'object' ? context : {}),
     ...(context.workflow && typeof context.workflow === 'object' ? context.workflow : {}),
     ...(context.workflow_variables && typeof context.workflow_variables === 'object' ? context.workflow_variables : {}),
     ...(context.workflowVariables && typeof context.workflowVariables === 'object' ? context.workflowVariables : {}),

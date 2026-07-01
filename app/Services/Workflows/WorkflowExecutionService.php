@@ -1589,6 +1589,29 @@ class WorkflowExecutionService
         $context = is_array($run->context_json) ? $run->context_json : [];
         $browserWindows = is_array($context['browser_windows'] ?? null) ? $context['browser_windows'] : [];
         $browserRuntime = is_array($context['browser_runtime'] ?? null) ? $context['browser_runtime'] : [];
+        $workflowVariables = array_replace(
+            is_array($context['workflow_variables'] ?? null) ? $context['workflow_variables'] : [],
+            is_array($context['workflowVariables'] ?? null) ? $context['workflowVariables'] : [],
+        );
+        $contextValue = static function (array $source, string ...$keys): mixed {
+            foreach ($keys as $key) {
+                if (array_key_exists($key, $source)) {
+                    return $source[$key];
+                }
+            }
+
+            return null;
+        };
+        $verificationCode = $contextValue($context, 'verification_code', 'verificationCode')
+            ?? $contextValue($workflowVariables, 'verification_code', 'verificationCode');
+        $workflowReturn = $contextValue($context, 'workflow_return', 'workflowReturn')
+            ?? $contextValue($workflowVariables, 'workflow_return', 'workflowReturn');
+        $workflowReturnOk = $contextValue($context, 'workflow_return_ok')
+            ?? $contextValue($workflowVariables, 'workflow_return_ok');
+        $workflowReturnKey = $contextValue($context, 'workflow_return_key', 'workflowReturnKey')
+            ?? $contextValue($workflowVariables, 'workflow_return_key', 'workflowReturnKey');
+        $generatedPassword = $contextValue($context, 'new_password', 'generated_password', 'generated-password')
+            ?? $contextValue($workflowVariables, 'new_password', 'generated_password', 'generated-password');
 
         return [
             'workflowRunId' => $run->id,
@@ -1610,6 +1633,18 @@ class WorkflowExecutionService
             'browser_windows' => $browserWindows,
             'browser' => $browserRuntime,
             'browser_runtime' => $browserRuntime,
+            'workflowVariables' => $workflowVariables,
+            'workflow_variables' => $workflowVariables,
+            'verificationCode' => $verificationCode,
+            'verification_code' => $verificationCode,
+            'workflowReturn' => $workflowReturn,
+            'workflow_return' => $workflowReturn,
+            'workflow_return_ok' => $workflowReturnOk,
+            'workflowReturnKey' => $workflowReturnKey,
+            'workflow_return_key' => $workflowReturnKey,
+            'generated_password' => $generatedPassword,
+            'new_password' => $generatedPassword,
+            'generated-password' => $generatedPassword,
             'account' => $effectiveAccountEmail !== '' ? $effectiveAccount : null,
             'email_account' => $effectiveAccountEmail !== '' ? $effectiveAccount : null,
             'verificationMailbox' => $verificationMailbox,
