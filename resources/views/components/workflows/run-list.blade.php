@@ -9,10 +9,54 @@
     $downloadName = static function (string $name): string {
         return \Illuminate\Support\Str::slug($name) ?: 'workflow-debug';
     };
+    $formatDuration = static function (?int $milliseconds): string {
+        if ($milliseconds === null) {
+            return '-';
+        }
+
+        $milliseconds = max(0, $milliseconds);
+
+        if ($milliseconds > 0 && $milliseconds < 1000) {
+            return '< 1s';
+        }
+
+        $seconds = intdiv($milliseconds, 1000);
+        $hours = intdiv($seconds, 3600);
+        $minutes = intdiv($seconds % 3600, 60);
+        $remainingSeconds = $seconds % 60;
+
+        return collect([
+            $hours > 0 ? $hours.'h' : null,
+            $minutes > 0 ? $minutes.'m' : null,
+            ($hours === 0 && $remainingSeconds > 0) || ($hours === 0 && $minutes === 0) ? $remainingSeconds.'s' : null,
+        ])->filter()->implode(' ');
+    };
+    $runDurationMs = static function ($run): ?int {
+        $stored = $run->duration_ms
+            ?? data_get($run->result_json, 'durationMs')
+            ?? data_get($run->result_json, 'duration_ms');
+
+        if (is_numeric($stored) && (int) $stored >= 0) {
+            return (int) $stored;
+        }
+
+        $startedAt = $run->started_at ?? $run->queued_at;
+
+        if (! $startedAt) {
+            return null;
+        }
+
+        $finishedAt = $run->finished_at ?? now();
+
+        return max(0, $startedAt->diffInMilliseconds($finishedAt));
+    };
 @endphp
 
 <div {{ $attributes->merge(['class' => 'divide-y divide-slate-100']) }}>
     @forelse($runs as $run)
+        @php
+            $durationLabel = $formatDuration($runDurationMs($run));
+        @endphp
         <div x-data="{ workflowPreviewOpen: false }" class="py-4">
             <div class="flex flex-wrap items-start justify-between gap-3">
                 <div class="min-w-0">
@@ -31,6 +75,7 @@
                         @if($run->finished_at)
                             <div>{{ $run->finished_at->format('d.m.Y H:i') }}</div>
                         @endif
+                        <div class="font-semibold text-slate-600">Dauer: {{ $durationLabel }}</div>
                     </div>
                     <button type="button" x-on:click="workflowPreviewOpen = true" class="rounded border border-blue-200 bg-white px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-50">
                         Vorschau

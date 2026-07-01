@@ -2,13 +2,16 @@
 
 namespace App\Services\Workflows;
 
+use App\Models\ManagedProcess;
 use App\Models\Workflow;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowStep;
 use App\Models\WorkflowStepRun;
 use App\Services\Mail\MailAccountRegistrationRunner;
+use App\Services\Processes\ManagedProcessInventory;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Process;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
 class WorkflowTaskRunner
@@ -221,6 +224,54 @@ class WorkflowTaskRunner
         $this->writeJsonFile($statusPath, $status);
 
         return ['ok' => true, 'message' => $message, 'pid' => $pid ?: null];
+    }
+
+    public function closeRun(?string $runId, string $message = 'Workflow-Browser wurde nach Abschluss geschlossen.'): array
+    {
+        $runId = trim((string) $runId);
+
+        if ($runId === '') {
+            return ['ok' => false, 'message' => 'Run-ID fehlt.'];
+        }
+
+        $statusPath = $this->runDirectory($runId).DIRECTORY_SEPARATOR.'status.json';
+        $status = $this->readJsonFile($statusPath) ?: [];
+        $pid = (int) ($status['pid'] ?? 0);
+        $events = is_array($status['events'] ?? null) ? $status['events'] : [];
+        $events[] = [
+            'at' => now()->toIso8601String(),
+            'stage' => 'workflow-browser-close-requested',
+            'message' => $message,
+            'pid' => $pid ?: null,
+        ];
+
+        $state = trim((string) ($status['state'] ?? $status['status'] ?? 'completed')) ?: 'completed';
+
+        $status = array_replace($status, [
+            'runId' => $runId,
+            'state' => in_array($state, ['completed', 'failed', 'cancelled'], true) ? $state : 'completed',
+            'stage' => 'workflow-browser-close-requested',
+            'message' => $message,
+            'isRunning' => false,
+            'closedAt' => now()->toIso8601String(),
+            'at' => now()->toIso8601String(),
+            'events' => array_slice($events, -80),
+        ]);
+
+        $this->writeJsonFile($statusPath, $status);
+
+        $terminated = $this->terminateManagedProcessFamily($runId, true, $message);
+
+        if (! $terminated && $pid > 1) {
+            $this->stopProcess($pid, true);
+        }
+
+        return [
+            'ok' => true,
+            'message' => $message,
+            'pid' => $pid ?: null,
+            'terminated' => $terminated,
+        ];
     }
 
     protected function browserWindowsFromStatus(array $status): array
@@ -947,6 +998,44 @@ class WorkflowTaskRunner
         }
 
         Process::timeout(10)->run(['kill', '-'.($force ? 'KILL' : 'TERM'), (string) $pid]);
+    }
+
+    protected function terminateManagedProcessFamily(string $runId, bool $force, string $message): bool
+    {
+        if (! Schema::hasTable('managed_processes')) {
+            return false;
+        }
+
+        try {
+            app(ManagedProcessInventory::class)->sync();
+        } catch (\Throwable) {
+            // Best-effort cleanup: if syncing fails, fall back to the PID from status.json.
+        }
+
+        $process = ManagedProcess::query()
+            ->where('run_id', $runId)
+            ->where('run_type', 'workflow-task')
+            ->where('is_root', true)
+            ->whereIn('status', ['running', 'terminate_requested', 'kill_requested'])
+            ->latest('last_seen_at')
+            ->first();
+
+        if (! $process) {
+            return false;
+        }
+
+        $result = app(ManagedProcessInventory::class)->terminate($process, $force);
+
+        if (($result['ok'] ?? false) === true) {
+            return true;
+        }
+
+        $process->forceFill([
+            'last_action_at' => now(),
+            'action_message' => $message,
+        ])->save();
+
+        return false;
     }
 
     protected function powershellQuote(string $value): string

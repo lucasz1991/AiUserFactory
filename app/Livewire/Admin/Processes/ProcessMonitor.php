@@ -268,7 +268,7 @@ class ProcessMonitor extends Component
                 'is_idle_suspect' => false,
                 'cpu_percent' => null,
                 'memory_mb' => null,
-                'elapsed_seconds' => $run->started_at ? max(0, $run->started_at->diffInSeconds(now())) : 0,
+                'elapsed_seconds' => $this->workflowElapsedSeconds($run),
                 'started_at' => $run->started_at ?? $run->queued_at,
                 'detected_at' => $run->queued_at,
                 'last_seen_at' => $run->updated_at,
@@ -303,6 +303,21 @@ class ProcessMonitor extends Component
             ?: data_get($process->metadata, 'workflowStepRunId')
             ?: 0
         );
+    }
+
+    protected function workflowElapsedSeconds(WorkflowRun $run): int
+    {
+        if ($run->duration_ms !== null) {
+            return intdiv(max(0, (int) $run->duration_ms), 1000);
+        }
+
+        $startedAt = $run->started_at ?? $run->queued_at;
+
+        if (! $startedAt) {
+            return 0;
+        }
+
+        return max(0, $startedAt->diffInSeconds($run->finished_at ?? now()));
     }
 
     protected function buildProcessTree(Collection $processes): Collection

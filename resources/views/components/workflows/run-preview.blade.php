@@ -78,7 +78,54 @@
     $downloadName = static function (string $name): string {
         return \Illuminate\Support\Str::slug($name) ?: 'workflow-debug';
     };
+    $formatDuration = static function (?int $milliseconds): string {
+        if ($milliseconds === null) {
+            return '-';
+        }
+
+        $milliseconds = max(0, $milliseconds);
+
+        if ($milliseconds > 0 && $milliseconds < 1000) {
+            return '< 1s';
+        }
+
+        $seconds = intdiv($milliseconds, 1000);
+        $hours = intdiv($seconds, 3600);
+        $minutes = intdiv($seconds % 3600, 60);
+        $remainingSeconds = $seconds % 60;
+
+        return collect([
+            $hours > 0 ? $hours.'h' : null,
+            $minutes > 0 ? $minutes.'m' : null,
+            ($hours === 0 && $remainingSeconds > 0) || ($hours === 0 && $minutes === 0) ? $remainingSeconds.'s' : null,
+        ])->filter()->implode(' ');
+    };
+    $runDurationMs = static function ($run): ?int {
+        if (! $run) {
+            return null;
+        }
+
+        $stored = $run->duration_ms
+            ?? data_get($run->result_json, 'durationMs')
+            ?? data_get($run->result_json, 'duration_ms');
+
+        if (is_numeric($stored) && (int) $stored >= 0) {
+            return (int) $stored;
+        }
+
+        $startedAt = $run->started_at ?? $run->queued_at;
+
+        if (! $startedAt) {
+            return null;
+        }
+
+        $finishedAt = $run->finished_at ?? now();
+
+        return max(0, $startedAt->diffInMilliseconds($finishedAt));
+    };
     $stepRuns = $workflowRun?->stepRuns ?? collect();
+    $workflowDurationMs = $runDurationMs($workflowRun);
+    $workflowDurationLabel = $formatDuration($workflowDurationMs);
     $screenshotPanels = collect($stepRuns)
         ->flatMap(function ($stepRun) use ($publicUrl, $windowStatus, $liveStatusForStepRun, $mergeLiveStatus) {
             $storedResult = is_array($stepRun->result_json) ? $stepRun->result_json : [];
@@ -275,6 +322,7 @@
                 <div class="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
                     <span>Run #{{ $workflowRun?->id ?? '-' }}</span>
                     <span>{{ $workflowRun?->status ?? '-' }}</span>
+                    <span>Dauer: {{ $workflowDurationLabel }}</span>
                     @if($activeTaskKey)
                         <span class="max-w-[18rem] truncate">Aktiv: {{ $activeTaskKey }}</span>
                     @endif
@@ -337,6 +385,9 @@
                     Run: {{ $workflowRun?->run_uuid ?: '-' }}
                 </div>
                 <div class="mt-1 text-xs text-slate-500">
+                    Dauer: {{ $workflowDurationLabel }}
+                </div>
+                <div class="mt-1 text-xs text-slate-500">
                     Script: {{ data_get($latestStatusResult, 'scriptVersionLabel', data_get($latestStatusResult, 'scriptName', '-')) }}
                 </div>
                 @if(data_get($latestStatusResult, 'processHeartbeatStatus.statusText'))
@@ -370,6 +421,7 @@
                         'workflowRunId' => $workflowRun?->id,
                         'workflowRunUuid' => $workflowRun?->run_uuid,
                         'status' => $workflowRun?->status,
+                        'durationMs' => $workflowDurationMs,
                         'steps' => $stepDebugPanels->pluck('debug')->all(),
                     ]) }}"
                     download="workflow-run-{{ $workflowRun?->id ?? 'debug' }}.json"

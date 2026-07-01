@@ -1246,9 +1246,54 @@ async function keepWorkflowBrowserAlive(state = 'completed', stage = 'workflow-b
   });
 }
 
+async function closeWorkflowBrowser(state = 'cancelled') {
+  if (!browser || browserDisconnected) {
+    browserWindowsByName.clear();
+    page = null;
+
+    return;
+  }
+
+  if (connectedToExistingBrowser) {
+    if (typeof browser.disconnect === 'function') {
+      browser.disconnect();
+    }
+
+    browser = null;
+    browserWindowsByName.clear();
+    page = null;
+
+    return;
+  }
+
+  const stage = state === 'cancelled' ? 'cancelled-browser-closing' : 'workflow-browser-closing';
+  const message = state === 'cancelled'
+    ? 'Workflow wurde gestoppt; Browser wird geschlossen.'
+    : 'Workflow-Browser wird geschlossen.';
+
+  pushEvent(stage, message);
+  writeStatus(state, stage, message);
+
+  if (typeof browser.close === 'function') {
+    await browser.close().catch((error) => {
+      pushEvent('workflow-browser-close-failed', error.message);
+    });
+  }
+
+  browser = null;
+  browserWindowsByName.clear();
+  page = null;
+}
+
 async function finalizeBrowserLifecycle(state = 'completed') {
   const context = { __workflowPreviewTimer: null };
   stopPreviewLoop(context);
+
+  if (state === 'cancelled') {
+    await closeWorkflowBrowser(state);
+
+    return;
+  }
 
   await keepWorkflowBrowserAlive(
     state,

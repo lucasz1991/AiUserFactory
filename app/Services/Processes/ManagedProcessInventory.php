@@ -179,45 +179,112 @@ class ManagedProcessInventory
             'action_message' => $force ? 'Beenden erzwingen wurde angefordert.' : 'Beenden wurde angefordert.',
         ])->save();
 
-        $result = PHP_OS_FAMILY === 'Windows'
-            ? Process::timeout(10)->run(array_values(array_filter([
-                'taskkill',
-                '/PID',
-                (string) $process->pid,
-                '/T',
-                $force ? '/F' : null,
-            ])))
-            : Process::timeout(10)->run([
-                'kill',
-                '-'.($force ? 'KILL' : 'TERM'),
-                (string) $process->pid,
-            ]);
+        $targetProcesses = $this->managedProcessFamily($process);
+        $targetPids = $targetProcesses
+            ->pluck('pid')
+            ->map(fn (mixed $pid): int => (int) $pid)
+            ->filter(fn (int $pid): bool => $pid > 1)
+            ->unique()
+            ->values();
 
-        if (! $result->successful()) {
-            $message = trim($result->errorOutput() ?: $result->output()) ?: 'Unbekannter Fehler beim Beenden.';
+        if ($targetPids->isEmpty()) {
+            $targetPids = collect([(int) $process->pid]);
+        }
+
+        $failureMessage = $this->terminatePids($targetPids, (int) ($process->family_root_pid ?: $process->pid), $force);
+
+        if ($failureMessage !== null) {
             $process->forceFill([
                 'status' => 'running',
                 'last_action_at' => now(),
-                'action_message' => $message,
+                'action_message' => $failureMessage,
             ])->save();
 
             return [
                 'ok' => false,
-                'message' => $message,
+                'message' => $failureMessage,
             ];
         }
+
+        ManagedProcess::query()
+            ->whereIn('pid', $targetPids->all())
+            ->update([
+                'status' => $force ? 'killed' : 'terminated',
+                'exited_at' => now(),
+                'last_action_at' => now(),
+                'action_message' => $force ? 'Prozessfamilie wurde erzwungen beendet.' : 'Prozessfamilie wurde beendet.',
+            ]);
 
         $process->forceFill([
             'status' => $force ? 'killed' : 'terminated',
             'exited_at' => now(),
             'last_action_at' => now(),
-            'action_message' => trim($result->output()) ?: ($force ? 'Prozess wurde erzwungen beendet.' : 'Prozess wurde beendet.'),
+            'action_message' => $force ? 'Prozessfamilie wurde erzwungen beendet.' : 'Prozessfamilie wurde beendet.',
         ])->save();
+
+        $count = $targetPids->count();
 
         return [
             'ok' => true,
-            'message' => 'Prozess '.$process->pid.' wurde '.($force ? 'erzwungen beendet.' : 'beendet.'),
+            'message' => $count > 1
+                ? $count.' zugehoerige Prozesse wurden '.($force ? 'erzwungen beendet.' : 'beendet.')
+                : 'Prozess '.$process->pid.' wurde '.($force ? 'erzwungen beendet.' : 'beendet.'),
         ];
+    }
+
+    protected function managedProcessFamily(ManagedProcess $process): Collection
+    {
+        $rootPid = (int) ($process->family_root_pid ?: $process->pid);
+
+        if ($rootPid <= 1) {
+            return collect([$process]);
+        }
+
+        $family = ManagedProcess::query()
+            ->where(function ($query) use ($rootPid): void {
+                $query->where('family_root_pid', $rootPid)
+                    ->orWhere('pid', $rootPid);
+            })
+            ->whereIn('status', ['running', 'terminate_requested', 'kill_requested'])
+            ->orderByRaw('CASE WHEN pid = ? THEN 1 ELSE 0 END', [$rootPid])
+            ->get();
+
+        return $family->isNotEmpty() ? $family : collect([$process]);
+    }
+
+    protected function terminatePids(Collection $pids, int $rootPid, bool $force): ?string
+    {
+        if (PHP_OS_FAMILY === 'Windows') {
+            $result = Process::timeout(10)->run(array_values(array_filter([
+                'taskkill',
+                '/PID',
+                (string) $rootPid,
+                '/T',
+                $force ? '/F' : null,
+            ])));
+
+            return $result->successful()
+                ? null
+                : (trim($result->errorOutput() ?: $result->output()) ?: 'Unbekannter Fehler beim Beenden.');
+        }
+
+        foreach ($pids as $pid) {
+            $result = Process::timeout(10)->run([
+                'kill',
+                '-'.($force ? 'KILL' : 'TERM'),
+                (string) $pid,
+            ]);
+
+            if (! $result->successful()) {
+                $message = trim($result->errorOutput() ?: $result->output());
+
+                if (! str_contains(Str::lower($message), 'no such process')) {
+                    return $message ?: 'Unbekannter Fehler beim Beenden.';
+                }
+            }
+        }
+
+        return null;
     }
 
     public function loadProcessInventory(): Collection

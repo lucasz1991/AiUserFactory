@@ -20,6 +20,7 @@ class WorkflowRun extends Model
         'queued_at',
         'started_at',
         'finished_at',
+        'duration_ms',
         'context_json',
         'result_json',
         'error_message',
@@ -29,6 +30,7 @@ class WorkflowRun extends Model
         'queued_at' => 'datetime',
         'started_at' => 'datetime',
         'finished_at' => 'datetime',
+        'duration_ms' => 'integer',
         'context_json' => 'array',
         'result_json' => 'array',
     ];

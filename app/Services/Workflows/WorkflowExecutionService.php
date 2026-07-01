@@ -178,18 +178,25 @@ class WorkflowExecutionService
             ])->save();
         }
 
+        $durationMs = $this->workflowRunDurationMs($run, $cancelledAt);
+
         $run->forceFill([
             'status' => 'cancelled',
             'current_workflow_step_id' => null,
             'finished_at' => $cancelledAt,
+            'duration_ms' => $durationMs,
             'result_json' => array_replace(is_array($run->result_json) ? $run->result_json : [], [
                 'ok' => false,
                 'status' => 'cancelled',
                 'statusMessage' => $message,
                 'cancelledAt' => $cancelledAt->toIso8601String(),
+                'durationMs' => $durationMs,
+                'duration_ms' => $durationMs,
             ]),
             'error_message' => $message,
         ])->save();
+
+        $this->closeWorkflowTaskProcesses($run, $message);
 
         return ['ok' => true, 'message' => $message, 'cancelledStepRuns' => $stepRuns->count()];
     }
@@ -513,31 +520,74 @@ class WorkflowExecutionService
     protected function completeRun(WorkflowRun $run): void
     {
         $run = $this->loadRun($run->id);
+        $finishedAt = now();
+        $durationMs = $this->workflowRunDurationMs($run, $finishedAt);
 
         $run->forceFill([
             'status' => 'completed',
             'current_workflow_step_id' => null,
-            'finished_at' => now(),
+            'finished_at' => $finishedAt,
+            'duration_ms' => $durationMs,
             'result_json' => [
                 'ok' => true,
                 'completed_steps' => $run->stepRuns()->where('status', 'completed')->count(),
-                'finishedAt' => now()->toIso8601String(),
+                'finishedAt' => $finishedAt->toIso8601String(),
+                'durationMs' => $durationMs,
+                'duration_ms' => $durationMs,
             ],
             'error_message' => null,
         ])->save();
+
+        $this->closeWorkflowTaskProcesses($run, 'Workflow-Lauf wurde abgeschlossen; zugehoerige Browser-Prozesse wurden geschlossen.');
     }
 
     protected function failRun(WorkflowRun $run, string $message): void
     {
+        $finishedAt = now();
+        $durationMs = $this->workflowRunDurationMs($run, $finishedAt);
+
         $run->forceFill([
             'status' => 'failed',
-            'finished_at' => now(),
+            'finished_at' => $finishedAt,
+            'duration_ms' => $durationMs,
             'result_json' => array_replace(is_array($run->result_json) ? $run->result_json : [], [
                 'ok' => false,
-                'failedAt' => now()->toIso8601String(),
+                'failedAt' => $finishedAt->toIso8601String(),
+                'durationMs' => $durationMs,
+                'duration_ms' => $durationMs,
             ]),
             'error_message' => $message,
         ])->save();
+
+        $this->closeWorkflowTaskProcesses($run, 'Workflow-Lauf wurde beendet; zugehoerige Browser-Prozesse wurden geschlossen.');
+    }
+
+    protected function workflowRunDurationMs(WorkflowRun $run, Carbon $finishedAt): int
+    {
+        $startedAt = $run->started_at instanceof Carbon
+            ? $run->started_at
+            : ($run->queued_at instanceof Carbon ? $run->queued_at : $finishedAt);
+
+        return max(0, $startedAt->diffInMilliseconds($finishedAt));
+    }
+
+    protected function closeWorkflowTaskProcesses(WorkflowRun $run, string $message): void
+    {
+        $run->stepRuns()
+            ->where('external_run_type', 'workflow-task')
+            ->whereNotNull('external_run_id')
+            ->get()
+            ->each(function (WorkflowStepRun $stepRun) use ($message): void {
+                $externalRunId = trim((string) $stepRun->external_run_id);
+
+                if ($externalRunId !== '') {
+                    try {
+                        $this->workflowTasks->closeRun($externalRunId, $message);
+                    } catch (\Throwable) {
+                        // Cleanup ist best-effort; der Workflow-Status wurde bereits final gespeichert.
+                    }
+                }
+            });
     }
 
     protected function nextStepForRun(WorkflowRun $run): ?WorkflowStep
