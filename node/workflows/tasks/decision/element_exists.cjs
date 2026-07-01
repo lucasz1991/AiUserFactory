@@ -6,6 +6,7 @@ const {
   elementSnapshot,
   findFirstVisibleElement,
   framesForPage,
+  rememberFoundElement,
 } = require('../lib/find_visible_element.cjs');
 
 async function run(context = {}) {
@@ -58,24 +59,36 @@ async function run(context = {}) {
     };
   }
 
-  try {
-    const element = await elementSnapshot(found.handle, found.selector);
+  let element = null;
 
-    return captureTaskPreview(context, {
-      ok: true,
-      status: 'success',
-      statusMessage: 'IF-Bedingung erfuellt: Element wurde gefunden.',
-      selector: found.selector,
-      matchedBy: found.matchedBy,
-      matchedCandidate: found.candidate.value,
-      elementExists: true,
-      searchedFrames,
-      searchedOpenShadowDom: true,
-      element,
-    });
-  } finally {
+  try {
+    element = await elementSnapshot(found.handle, found.selector);
+  } catch (error) {
+    await found.handle.dispose?.().catch(() => {});
+
+    throw error;
+  }
+
+  const cached = await rememberFoundElement(context, found, {
+    sourceTaskType: 'decision.element_exists',
+  });
+
+  if (!cached) {
     await found.handle.dispose?.().catch(() => {});
   }
+
+  return captureTaskPreview(context, {
+    ok: true,
+    status: 'success',
+    statusMessage: 'IF-Bedingung erfuellt: Element wurde gefunden.',
+    selector: found.selector,
+    matchedBy: found.matchedBy,
+    matchedCandidate: found.candidate.value,
+    elementExists: true,
+    searchedFrames,
+    searchedOpenShadowDom: true,
+    element,
+  });
 }
 
 module.exports = { key: 'decision.element_exists', run };

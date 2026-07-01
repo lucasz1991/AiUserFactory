@@ -7,9 +7,19 @@ const {
 
 const buttonLikeSelector = 'button,a[data-component="button"],[role="button"],input[type="button"],input[type="submit"]';
 const clickableElementSelector = 'a,button,[role="button"],input[type="button"],input[type="submit"]';
+const elementCacheLimit = 20;
 
 function normalizeText(value) {
   return String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function normalizeSelectorCacheValue(value) {
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+    .replace(/\[\s*([^\]=\s]+)\s*=\s*["']?([^"'\]\s]+)["']?\s*\]/g, '[$1=$2]')
+    .replace(/:(has-text|text-is)\(\s*(["'])(.*?)\2\s*\)/g, ':$1("$3")');
 }
 
 function elementCandidatesFromInput(input = {}, options = {}) {
@@ -40,6 +50,131 @@ function candidateSelector(candidate) {
   return candidate?.kind === 'text'
     ? `text=${candidate.value}`
     : String(candidate?.value || '');
+}
+
+function activeBrowserWindowName(context = {}) {
+  return String(context.activeBrowserWindow || context.browserWindow || 'main').trim() || 'main';
+}
+
+function candidateCacheKey(candidate = {}) {
+  const kind = candidate?.kind === 'text' ? 'text' : 'selector';
+  const value = kind === 'text'
+    ? normalizeText(candidate?.value)
+    : normalizeSelectorCacheValue(candidate?.value);
+
+  if (value === '') {
+    return '';
+  }
+
+  return `${kind}:${value}:${candidate?.exact === true}`;
+}
+
+function selectorCacheKey(selector = '') {
+  const value = normalizeSelectorCacheValue(selector);
+
+  return value === '' ? '' : `selector:${value}`;
+}
+
+function elementCacheKeys(found = {}) {
+  return Array.from(new Set([
+    candidateCacheKey(found.candidate),
+    selectorCacheKey(found.selector),
+  ].filter(Boolean)));
+}
+
+async function disposeCachedElement(entry = {}) {
+  await entry.handle?.dispose?.().catch(() => {});
+}
+
+function elementCache(context = {}) {
+  if (!context || typeof context !== 'object') {
+    return [];
+  }
+
+  if (!Array.isArray(context.__workflowElementCache)) {
+    context.__workflowElementCache = [];
+  }
+
+  return context.__workflowElementCache;
+}
+
+async function removeCachedElement(context = {}, entryToRemove = null) {
+  const cache = elementCache(context);
+
+  if (!entryToRemove) {
+    return;
+  }
+
+  context.__workflowElementCache = cache.filter((entry) => entry !== entryToRemove);
+  await disposeCachedElement(entryToRemove);
+}
+
+async function rememberFoundElement(context = {}, found = null, metadata = {}) {
+  if (!context || typeof context !== 'object' || !found?.handle) {
+    return false;
+  }
+
+  const keys = elementCacheKeys(found);
+
+  if (keys.length === 0) {
+    return false;
+  }
+
+  const cache = elementCache(context);
+  const browserWindow = activeBrowserWindowName(context);
+  const page = context.page || null;
+  const existingEntries = cache.filter((entry) => (
+    entry.browserWindow === browserWindow
+    && entry.keys.some((key) => keys.includes(key))
+  ));
+
+  context.__workflowElementCache = cache.filter((entry) => !existingEntries.includes(entry));
+
+  await Promise.all(existingEntries.map(async (entry) => {
+    if (entry.handle !== found.handle) {
+      await disposeCachedElement(entry);
+    }
+  }));
+
+  context.__workflowElementCache.unshift({
+    browserWindow,
+    cachedAt: Date.now(),
+    candidate: found.candidate || null,
+    frame: found.frame || null,
+    handle: found.handle,
+    keys,
+    page,
+    selector: found.selector || candidateSelector(found.candidate),
+    sourceTaskKey: metadata.sourceTaskKey || metadata.taskKey || '',
+    sourceTaskType: metadata.sourceTaskType || metadata.taskType || '',
+  });
+
+  while (context.__workflowElementCache.length > elementCacheLimit) {
+    const staleEntry = context.__workflowElementCache.pop();
+    await disposeCachedElement(staleEntry);
+  }
+
+  return true;
+}
+
+function matchingCachedElement(context = {}, candidates = [], page = null) {
+  const cache = elementCache(context);
+  const browserWindow = activeBrowserWindowName(context);
+  const keys = new Set(
+    candidates
+      .flatMap((candidate) => [candidateCacheKey(candidate), selectorCacheKey(candidateSelector(candidate))])
+      .filter(Boolean),
+  );
+
+  if (keys.size === 0) {
+    return null;
+  }
+
+  return cache.find((entry) => (
+    entry.browserWindow === browserWindow
+    && (!page || !entry.page || entry.page === page)
+    && entry.keys.some((key) => keys.has(key))
+  )) || null;
 }
 
 function frameIsDetached(frame) {
@@ -708,6 +843,44 @@ async function clickFirstVisibleElement(page, values, timeout = 15000, options =
   const normalizedTimeout = Math.max(1, Number(timeout || 15000));
   const deadline = Date.now() + normalizedTimeout;
   let lastTransientError = null;
+  const cachedEntry = matchingCachedElement(options.context, candidates, page);
+
+  if (cachedEntry) {
+    let cachedClickableHandle = null;
+    const cachedCandidate = candidates.find((candidate) => {
+      const keys = [candidateCacheKey(candidate), selectorCacheKey(candidateSelector(candidate))].filter(Boolean);
+
+      return cachedEntry.keys.some((key) => keys.includes(key));
+    }) || cachedEntry.candidate || candidates[0];
+
+    try {
+      cachedClickableHandle = await clickableHandleFor(cachedEntry.handle);
+      const cachedSelector = cachedEntry.selector || candidateSelector(cachedCandidate);
+      const snapshot = await elementSnapshot(cachedClickableHandle, cachedSelector).catch(() => ({ selector: cachedSelector }));
+      await cachedClickableHandle.click({ timeout: Math.max(1, Math.min(1000, normalizedTimeout)) });
+
+      if (cachedClickableHandle !== cachedEntry.handle) {
+        await cachedClickableHandle.dispose?.().catch(() => {});
+      }
+
+      await removeCachedElement(options.context, cachedEntry);
+
+      return {
+        cachedElement: true,
+        candidate: cachedCandidate,
+        element: snapshot,
+        frame: cachedEntry.frame,
+        matchedBy: cachedCandidate?.kind || cachedEntry.candidate?.kind || 'selector',
+        selector: cachedSelector,
+      };
+    } catch {
+      if (cachedClickableHandle && cachedClickableHandle !== cachedEntry.handle) {
+        await cachedClickableHandle.dispose?.().catch(() => {});
+      }
+
+      await removeCachedElement(options.context, cachedEntry);
+    }
+  }
 
   while (remainingTimeout(deadline) > 0) {
     const match = await findFirstVisibleElement(
@@ -986,4 +1159,7 @@ module.exports = {
   findVisibleElement,
   findVisibleElementByText,
   framesForPage,
+  matchingCachedElement,
+  rememberFoundElement,
+  removeCachedElement,
 };

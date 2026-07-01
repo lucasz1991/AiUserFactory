@@ -30,7 +30,7 @@ async function run(context = {}) {
     ? selectors
     : ['input[type=email]', 'input[name*=email i]', 'input[name*=user i]', 'input[type=text]', 'textarea'];
 
-  const fillResult = await fillFirstMatchingInput(page, candidates, value, timeout);
+  const fillResult = await fillFirstMatchingInput(page, candidates, value, timeout, { context });
 
   if (fillResult.ok) {
     return captureTaskPreview(context, {
@@ -38,6 +38,7 @@ async function run(context = {}) {
       status: 'success',
       statusMessage: 'Input-Feld wurde gefuellt.',
       selector: fillResult.selector,
+      cachedElement: fillResult.cachedElement === true,
       frameUrl: fillResult.frameUrl,
     });
   }

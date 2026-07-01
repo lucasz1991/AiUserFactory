@@ -31,7 +31,7 @@ async function run(context = {}) {
   }
 
   try {
-    const clicked = await clickFirstVisibleElement(page, searchCandidates, timeout);
+    const clicked = await clickFirstVisibleElement(page, searchCandidates, timeout, { context });
 
     if (clicked) {
       return captureTaskPreview(context, {
@@ -42,6 +42,7 @@ async function run(context = {}) {
         matchedBy: clicked.matchedBy,
         matchedCandidate: clicked.candidate.value,
         element: clicked.element,
+        cachedElement: clicked.cachedElement === true,
       });
     }
   } catch (error) {

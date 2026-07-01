@@ -137,7 +137,7 @@ async function run(context = {}) {
     webmailUrl: provider.toLowerCase().includes('gmx') ? 'https://www.gmx.net' : 'https://mail.proton.me',
     generated: true,
   };
-  const fillResult = await fillFirstMatchingInput(page, selectorsFromInput(input), context.account.username, timeout);
+  const fillResult = await fillFirstMatchingInput(page, selectorsFromInput(input), context.account.username, timeout, { context });
 
   if (!fillResult.ok) {
     return {
@@ -157,6 +157,7 @@ async function run(context = {}) {
     status: 'success',
     statusMessage: `Username-Kandidat wurde eingetragen: ${context.account.username}`,
     selector: fillResult.selector,
+    cachedElement: fillResult.cachedElement === true,
     frameUrl: fillResult.frameUrl,
     account: {
       provider: context.account.provider,

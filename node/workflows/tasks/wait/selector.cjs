@@ -4,6 +4,7 @@ const { captureTaskPreview, startTaskPreview } = require('../lib/preview.cjs');
 const {
   elementCandidatesFromInput,
   findFirstVisibleElement,
+  rememberFoundElement,
 } = require('../lib/find_visible_element.cjs');
 
 async function run(context = {}) {
@@ -43,7 +44,13 @@ async function run(context = {}) {
       });
     }
 
-    await found.handle.dispose?.().catch(() => {});
+    const cached = await rememberFoundElement(context, found, {
+      sourceTaskType: 'wait.selector',
+    });
+
+    if (!cached) {
+      await found.handle.dispose?.().catch(() => {});
+    }
 
     return captureTaskPreview(context, {
       ok: true,

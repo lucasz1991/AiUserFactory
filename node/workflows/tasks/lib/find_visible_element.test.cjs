@@ -4,11 +4,14 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const {
+  clickFirstVisibleElement,
   findFirstVisibleElement,
   clickVisibleElement,
   findVisibleElement,
   framesForPage,
+  rememberFoundElement,
 } = require('./find_visible_element.cjs');
+const { fillFirstMatchingInput } = require('./fill_input.cjs');
 
 function elementHandle(click) {
   return {
@@ -38,6 +41,62 @@ function frameWithElement(handle, onEvaluate = null) {
     },
     async waitForSelector() {
       throw new Error('Extended selectors must not use the CSS wait fallback.');
+    },
+  };
+}
+
+function inputHandle() {
+  let currentValue = '';
+
+  return {
+    asElement() {
+      return this;
+    },
+    async click() {},
+    async dispose() {},
+    async evaluate(callback, value) {
+      const source = String(callback || '');
+
+      if (source.includes('getBoundingClientRect')) {
+        return {
+          usable: true,
+          visible: true,
+          editable: true,
+          disabled: false,
+          readOnly: false,
+          tagName: 'input',
+          type: 'email',
+          id: 'email',
+          name: 'email',
+          autocomplete: '',
+          placeholder: '',
+          ariaLabel: '',
+          width: 240,
+          height: 32,
+          display: 'block',
+          visibility: 'visible',
+          opacity: '1',
+        };
+      }
+
+      if (source.includes('element.value || element.textContent')) {
+        return currentValue;
+      }
+
+      if (arguments.length >= 2) {
+        currentValue = String(value ?? '');
+
+        return undefined;
+      }
+
+      if (source.includes('deleteContentBackward')) {
+        currentValue = '';
+      }
+
+      return undefined;
+    },
+    async type(value) {
+      currentValue = String(value ?? '');
     },
   };
 }
@@ -248,6 +307,63 @@ test('frame search returns as soon as any frame finds a match', async () => {
 
   assert.equal(found.handle, handle);
   assert.ok(durationMs < 250, `search took ${durationMs}ms`);
+});
+
+test('click uses a cached element from a prior search before scanning frames', async () => {
+  let successfulClicks = 0;
+  const handle = elementHandle(async () => {
+    successfulClicks += 1;
+  });
+  const frame = frameWithElement(handle);
+  const page = {
+    frames: () => [frame],
+  };
+  const context = {
+    activeBrowserWindow: 'main',
+    page,
+  };
+  const found = await findFirstVisibleElement(page, 'button:has-text("Login")', 100);
+  const cached = await rememberFoundElement(context, found, {
+    sourceTaskType: 'wait.selector',
+  });
+
+  page.frames = () => {
+    throw new Error('cached click should not search frames');
+  };
+
+  const clicked = await clickFirstVisibleElement(page, 'button:has-text("Login")', 100, { context });
+
+  assert.equal(cached, true);
+  assert.equal(clicked.cachedElement, true);
+  assert.equal(successfulClicks, 1);
+  assert.equal(context.__workflowElementCache.length, 0);
+});
+
+test('input fill uses a cached element from a prior search before scanning frames', async () => {
+  const handle = inputHandle();
+  const frame = frameWithElement(handle);
+  const page = {
+    frames: () => [frame],
+  };
+  const context = {
+    activeBrowserWindow: 'main',
+    page,
+  };
+  const found = await findFirstVisibleElement(page, 'input#email', 100);
+  const cached = await rememberFoundElement(context, found, {
+    sourceTaskType: 'wait.selector',
+  });
+
+  page.frames = () => {
+    throw new Error('cached fill should not search frames');
+  };
+
+  const result = await fillFirstMatchingInput(page, ['input#email'], 'test@example.com', 100, { context });
+
+  assert.equal(cached, true);
+  assert.equal(result.ok, true);
+  assert.equal(result.cachedElement, true);
+  assert.equal(context.__workflowElementCache.length, 0);
 });
 
 test('a CSS selector is found inside a recursively discovered nested frame', async () => {

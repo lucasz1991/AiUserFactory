@@ -333,19 +333,20 @@ async function observeAvailability(page, account, options = {}) {
   };
 }
 
-async function clickFirstMatchingSubmit(page, selectors, timeout) {
+async function clickFirstMatchingSubmit(page, selectors, timeout, context = {}) {
   const attemptedSelectors = []
     .concat(selectors || [])
     .flat()
     .filter(Boolean);
 
   try {
-    const clicked = await clickFirstVisibleElement(page, attemptedSelectors, timeout, { defaultKind: 'selector' });
+    const clicked = await clickFirstVisibleElement(page, attemptedSelectors, timeout, { context, defaultKind: 'selector' });
 
     if (clicked) {
       return {
         ok: true,
         selector: clicked.selector,
+        cachedElement: clicked.cachedElement === true,
         frameUrl: typeof clicked.frame?.url === 'function' ? clicked.frame.url() : '',
         attemptedSelectors,
       };
@@ -451,7 +452,7 @@ async function run(context = {}) {
     }
 
     const nextValue = useFullEmail ? next.email : next.username;
-    const fillResult = await fillFirstMatchingInput(page, selectors, nextValue, timeout);
+    const fillResult = await fillFirstMatchingInput(page, selectors, nextValue, timeout, { context });
 
     if (!fillResult.ok) {
       return {
@@ -467,7 +468,7 @@ async function run(context = {}) {
     }
 
     if (submitOnRetry) {
-      const submitResult = await clickFirstMatchingSubmit(page, submitSelectors, timeout);
+      const submitResult = await clickFirstMatchingSubmit(page, submitSelectors, timeout, context);
 
       if (!submitResult.ok) {
         return {

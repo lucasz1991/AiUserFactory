@@ -42,7 +42,7 @@ async function run(context = {}) {
     return { ok: false, status: 'failed', statusMessage: 'Keine generierte Mailadresse zum Eintragen vorhanden.' };
   }
 
-  const fillResult = await fillFirstMatchingInput(page, selectorsFromInput(input), value, timeout);
+  const fillResult = await fillFirstMatchingInput(page, selectorsFromInput(input), value, timeout, { context });
 
   if (!fillResult.ok) {
     return {
@@ -61,6 +61,7 @@ async function run(context = {}) {
     status: 'success',
     statusMessage: `Mailadresse wurde eingetragen: ${account.email || value}`,
     selector: fillResult.selector,
+    cachedElement: fillResult.cachedElement === true,
     frameUrl: fillResult.frameUrl,
     account: {
       provider: account.provider,

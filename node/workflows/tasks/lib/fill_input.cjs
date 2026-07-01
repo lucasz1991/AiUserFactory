@@ -1,7 +1,11 @@
 'use strict';
 
 const { normalizeElementCandidates } = require('../../lib/selector.cjs');
-const { findFirstVisibleElement } = require('./find_visible_element.cjs');
+const {
+  findFirstVisibleElement,
+  matchingCachedElement,
+  removeCachedElement,
+} = require('./find_visible_element.cjs');
 
 async function sleep(ms) {
   await new Promise((resolve) => setTimeout(resolve, ms));
@@ -163,6 +167,57 @@ async function fillFirstMatchingInput(page, selectors, value, timeoutMs = 12000,
   let activeCandidates = [...candidates];
   let matchedElementCount = 0;
   let lastError = '';
+  const cachedEntry = matchingCachedElement(options.context, candidates, page);
+
+  if (cachedEntry) {
+    const cachedCandidate = cachedEntry.candidate || candidates[0];
+    const selector = cachedEntry.selector || String(cachedCandidate?.value || '');
+    const currentFrameUrl = frameUrl(cachedEntry.frame);
+    matchedElementCount += 1;
+
+    try {
+      const state = await elementState(cachedEntry.handle);
+
+      if (!state.usable) {
+        lastError = 'Gespeichertes Element ist nicht editierbar.';
+        if (attempts.length < 30) attempts.push({ selector, frameUrl: currentFrameUrl, state, error: lastError, cachedElement: true });
+      } else {
+        const enteredValue = await fillHandleValue(cachedEntry.handle, value, delay);
+
+        if (String(enteredValue || '') === String(value ?? '')) {
+          await removeCachedElement(options.context, cachedEntry);
+
+          return {
+            ok: true,
+            cachedElement: true,
+            selector,
+            matchedBy: cachedCandidate?.kind || 'selector',
+            matchedCandidate: cachedCandidate?.value || selector,
+            frameUrl: currentFrameUrl,
+            attemptedSelectors: candidates.map((candidate) => candidate.value),
+            matchedElementCount,
+          };
+        }
+
+        lastError = 'Gespeichertes Element wurde gefuellt, aber nicht im Feld bestaetigt.';
+        if (attempts.length < 30) {
+          attempts.push({
+            selector,
+            frameUrl: currentFrameUrl,
+            state,
+            error: lastError,
+            enteredLength: String(enteredValue || '').length,
+            cachedElement: true,
+          });
+        }
+      }
+    } catch (error) {
+      lastError = error.message;
+      if (attempts.length < 30) attempts.push({ selector, frameUrl: currentFrameUrl, error: error.message, cachedElement: true });
+    }
+
+    await removeCachedElement(options.context, cachedEntry);
+  }
 
   while (Date.now() < stopAt && activeCandidates.length > 0) {
     const found = await findFirstVisibleElement(

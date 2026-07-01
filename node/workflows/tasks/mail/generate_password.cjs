@@ -61,7 +61,7 @@ async function run(context = {}) {
   }
 
   const password = generatePassword(input.length || input.passwordLength || input.password_length || 18);
-  const fillResult = await fillFirstMatchingInput(page, selectorsFromInput(input), password, timeout);
+  const fillResult = await fillFirstMatchingInput(page, selectorsFromInput(input), password, timeout, { context });
 
   if (!fillResult.ok) {
     return {
@@ -88,6 +88,7 @@ async function run(context = {}) {
     status: 'success',
     statusMessage: 'Wunschpasswort wurde eingetragen.',
     selector: fillResult.selector,
+    cachedElement: fillResult.cachedElement === true,
     frameUrl: fillResult.frameUrl,
     passwordFilled: true,
     new_password: password,

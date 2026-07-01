@@ -5,15 +5,8 @@ const {
   elementCandidatesFromInput,
   elementSnapshot,
   findFirstVisibleElement,
+  rememberFoundElement,
 } = require('../lib/find_visible_element.cjs');
-
-async function snapshotAndDispose(handle, selector) {
-  try {
-    return await elementSnapshot(handle, selector);
-  } finally {
-    await handle.dispose?.().catch(() => {});
-  }
-}
 
 async function run(context = {}) {
   const page = context.page;
@@ -34,7 +27,23 @@ async function run(context = {}) {
   const found = await findFirstVisibleElement(page, candidates, timeout);
 
   if (found) {
-    const element = await snapshotAndDispose(found.handle, found.selector);
+    let element = null;
+
+    try {
+      element = await elementSnapshot(found.handle, found.selector);
+    } catch (error) {
+      await found.handle.dispose?.().catch(() => {});
+
+      throw error;
+    }
+
+    const cached = await rememberFoundElement(context, found, {
+      sourceTaskType: 'browser.find_element',
+    });
+
+    if (!cached) {
+      await found.handle.dispose?.().catch(() => {});
+    }
 
     return captureTaskPreview(context, {
       ok: true,

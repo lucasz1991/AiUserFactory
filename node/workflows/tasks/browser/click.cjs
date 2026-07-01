@@ -23,7 +23,7 @@ async function run(context = {}) {
   }
 
   try {
-    const clicked = await clickFirstVisibleElement(page, candidates, timeout);
+    const clicked = await clickFirstVisibleElement(page, candidates, timeout, { context });
 
     if (clicked) {
       return captureTaskPreview(context, {
@@ -36,6 +36,7 @@ async function run(context = {}) {
         matchedBy: clicked.matchedBy,
         matchedCandidate: clicked.candidate.value,
         element: clicked.element,
+        cachedElement: clicked.cachedElement === true,
         url: typeof page.url === 'function' ? page.url() : null,
       });
     }
