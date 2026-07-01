@@ -1231,8 +1231,11 @@ class MailAccountRegistrationRunner
             ]);
         } else {
             $shellCommand = sprintf(
-                'cd %s && nohup %s > %s 2> %s < /dev/null & echo $!',
+                'cd %s && if command -v setsid >/dev/null 2>&1; then setsid nohup %s > %s 2> %s < /dev/null & echo $!; else nohup %s > %s 2> %s < /dev/null & echo $!; fi',
                 escapeshellarg($workingDirectory),
+                implode(' ', array_map('escapeshellarg', $command)),
+                escapeshellarg($stdoutPath),
+                escapeshellarg($stderrPath),
                 implode(' ', array_map('escapeshellarg', $command)),
                 escapeshellarg($stdoutPath),
                 escapeshellarg($stderrPath),
@@ -1268,7 +1271,13 @@ class MailAccountRegistrationRunner
             return;
         }
 
-        Process::timeout(10)->run(['kill', '-'.($force ? 'KILL' : 'TERM'), (string) $pid]);
+        $signal = $force ? 'KILL' : 'TERM';
+
+        Process::timeout(10)->run(['sh', '-lc', sprintf(
+            'pkill -%1$s -P %2$d 2>/dev/null || true; kill -%1$s -%2$d 2>/dev/null || true; kill -%1$s %2$d 2>/dev/null || true',
+            $signal,
+            $pid,
+        )]);
     }
 
     protected function powershellQuote(string $value): string

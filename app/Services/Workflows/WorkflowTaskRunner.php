@@ -268,8 +268,9 @@ class WorkflowTaskRunner
             $terminated = ! $this->workflowTaskRootIsRunning($runId, $pid);
         }
 
-        if (! $terminated && $forceAfterGrace) {
-            $terminated = $this->terminateManagedProcessFamily($runId, true, $message);
+        if ($forceAfterGrace) {
+            $familyTerminated = $this->terminateManagedProcessFamily($runId, true, $message);
+            $terminated = $terminated || $familyTerminated;
 
             if (! $terminated && $pid > 1) {
                 $this->stopProcess($pid, true);
@@ -972,8 +973,11 @@ class WorkflowTaskRunner
             $result = Process::timeout(15)->run(['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $script]);
         } else {
             $shellCommand = sprintf(
-                'cd %s && nohup %s > %s 2> %s < /dev/null & echo $!',
+                'cd %s && if command -v setsid >/dev/null 2>&1; then setsid nohup %s > %s 2> %s < /dev/null & echo $!; else nohup %s > %s 2> %s < /dev/null & echo $!; fi',
                 escapeshellarg($workingDirectory),
+                implode(' ', array_map('escapeshellarg', $command)),
+                escapeshellarg($stdoutPath),
+                escapeshellarg($stderrPath),
                 implode(' ', array_map('escapeshellarg', $command)),
                 escapeshellarg($stdoutPath),
                 escapeshellarg($stderrPath),
@@ -1008,7 +1012,13 @@ class WorkflowTaskRunner
             return;
         }
 
-        Process::timeout(10)->run(['kill', '-'.($force ? 'KILL' : 'TERM'), (string) $pid]);
+        $signal = $force ? 'KILL' : 'TERM';
+
+        Process::timeout(10)->run(['sh', '-lc', sprintf(
+            'pkill -%1$s -P %2$d 2>/dev/null || true; kill -%1$s -%2$d 2>/dev/null || true; kill -%1$s %2$d 2>/dev/null || true',
+            $signal,
+            $pid,
+        )]);
     }
 
     protected function terminateManagedProcessFamily(string $runId, bool $force, string $message): bool
@@ -1026,8 +1036,8 @@ class WorkflowTaskRunner
         $process = ManagedProcess::query()
             ->where('run_id', $runId)
             ->where('run_type', 'workflow-task')
-            ->where('is_root', true)
             ->whereIn('status', ['running', 'terminate_requested', 'kill_requested'])
+            ->orderByDesc('is_root')
             ->latest('last_seen_at')
             ->first();
 

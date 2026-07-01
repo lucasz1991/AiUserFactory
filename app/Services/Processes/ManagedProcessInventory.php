@@ -268,6 +268,8 @@ class ManagedProcessInventory
                 : (trim($result->errorOutput() ?: $result->output()) ?: 'Unbekannter Fehler beim Beenden.');
         }
 
+        $this->terminateUnixProcessTree($pids, $rootPid, $force);
+
         foreach ($pids as $pid) {
             $result = Process::timeout(10)->run([
                 'kill',
@@ -285,6 +287,43 @@ class ManagedProcessInventory
         }
 
         return null;
+    }
+
+    protected function terminateUnixProcessTree(Collection $pids, int $rootPid, bool $force): void
+    {
+        $signal = $force ? 'KILL' : 'TERM';
+        $pidList = $pids
+            ->map(fn (mixed $pid): int => (int) $pid)
+            ->filter(fn (int $pid): bool => $pid > 1)
+            ->unique()
+            ->implode(' ');
+
+        if ($pidList === '') {
+            return;
+        }
+
+        $script = <<<'SH'
+signal="$1"
+root="$2"
+shift 2
+kill_tree() {
+  current="$1"
+  if command -v pgrep >/dev/null 2>&1; then
+    for child in $(pgrep -P "$current" 2>/dev/null); do
+      kill_tree "$child"
+    done
+  fi
+  kill "-$signal" "$current" 2>/dev/null || true
+}
+for pid in "$@"; do
+  kill_tree "$pid"
+done
+if [ "$root" -gt 1 ] 2>/dev/null; then
+  kill "-$signal" "-$root" 2>/dev/null || true
+fi
+SH;
+
+        Process::timeout(10)->run(['sh', '-lc', $script, 'sh', $signal, (string) $rootPid, ...explode(' ', $pidList)]);
     }
 
     public function loadProcessInventory(): Collection

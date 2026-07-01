@@ -955,7 +955,7 @@ function extractVerificationCode(text, query = '') {
     /(?:^|[^\d])(\d[\d\s-]{2,10}\d)(?!\d)/g,
   ];
 
-  for (const pattern of patterns) {
+  patterns.forEach((pattern, patternIndex) => {
     let match;
 
     while ((match = pattern.exec(normalized)) !== null) {
@@ -968,17 +968,32 @@ function extractVerificationCode(text, query = '') {
       const start = Math.max(0, match.index - 140);
       const end = Math.min(normalized.length, match.index + 190);
       const snippet = normalized.slice(start, end).trim();
+      const lowerSnippet = lowerText(snippet);
       let score = /^\d{6}$/.test(code) ? 20 : 8;
+
+      if (patternIndex === 0) {
+        score += 35;
+      }
+
+      if (/(enter|use|verification|verify|verifizierung|bestaetigung|security|sicherheits)[^.\n]{0,80}(code|pin|token)/i.test(snippet)) {
+        score += 35;
+      } else if (/(code|passcode|pin|token|verification|verifizierung|sicherheitscode|bestaetigungscode)/i.test(snippet)) {
+        score += 15;
+      }
+
+      if (/(navsid|iac_token|csrf|gdpr|consent|adservice|prebid|bannerid|campaignid|cookie|oauthbridge|tracking)/i.test(snippet)) {
+        score -= 40;
+      }
 
       if (query && lowerText(snippet).includes(lowerText(query))) {
         score += 20;
       }
 
-      candidates.push({ value: code, snippet, score });
+      candidates.push({ value: code, snippet, score, index: match.index });
     }
-  }
+  });
 
-  candidates.sort((left, right) => right.score - left.score);
+  candidates.sort((left, right) => (right.score - left.score) || (left.index - right.index));
 
   return candidates[0] || null;
 }

@@ -26,6 +26,33 @@ function parseValue(value) {
   }
 }
 
+function valueFromPath(source = {}, path = '') {
+  const normalized = normalizeText(path);
+
+  if (!normalized || !source || typeof source !== 'object') {
+    return undefined;
+  }
+
+  return normalized
+    .split('.')
+    .filter(Boolean)
+    .reduce((value, key) => {
+      if (value === undefined || value === null) {
+        return undefined;
+      }
+
+      return value[key];
+    }, source);
+}
+
+function workflowVariableRoot(context = {}) {
+  return {
+    ...(context.workflow && typeof context.workflow === 'object' ? context.workflow : {}),
+    ...(context.workflow_variables && typeof context.workflow_variables === 'object' ? context.workflow_variables : {}),
+    ...(context.workflowVariables && typeof context.workflowVariables === 'object' ? context.workflowVariables : {}),
+  };
+}
+
 function variableName(input = {}) {
   return normalizeText(input.selector || input.elementSelector || input.element_selector || 'workflow_return')
     .replace(/\s+/g, '_')
@@ -33,10 +60,32 @@ function variableName(input = {}) {
     .slice(0, 120) || 'workflow_return';
 }
 
+function resolveReturnValue(context = {}, input = {}, key = 'workflow_return') {
+  const rawValue = input.value ?? input.inputValue ?? input.input_value ?? input.input ?? '';
+  const text = normalizeText(rawValue);
+
+  if (text !== '') {
+    return parseValue(rawValue);
+  }
+
+  if (key !== 'workflow_return') {
+    const root = workflowVariableRoot(context);
+    const existing = valueFromPath(root, key)
+      ?? valueFromPath(root, `workflow_variables.${key}`)
+      ?? valueFromPath(root, `workflowVariables.${key}`);
+
+    if (existing !== undefined && existing !== null && existing !== '') {
+      return existing;
+    }
+  }
+
+  return true;
+}
+
 async function run(context = {}) {
   const input = context.input || {};
   const key = variableName(input);
-  const value = parseValue(input.value ?? input.inputValue ?? input.input ?? true);
+  const value = resolveReturnValue(context, input, key);
   const ok = value !== false;
   const variables = {
     ...(context.workflow_variables || {}),

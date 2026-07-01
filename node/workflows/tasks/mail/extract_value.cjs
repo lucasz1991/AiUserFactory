@@ -16,6 +16,61 @@ const {
   workflowVariableRoot,
 } = require('../lib/mail_list.cjs');
 
+function bestMatchedMailText(context = {}) {
+  const root = workflowVariableRoot(context);
+  const mail = valueFromPath(root, 'matched_mail')
+    ?? valueFromPath(root, 'matchedMail')
+    ?? valueFromPath(root, 'workflow_variables.matched_mail')
+    ?? valueFromPath(root, 'workflowVariables.matched_mail');
+
+  if (!mail || typeof mail !== 'object') {
+    return '';
+  }
+
+  const chunks = Array.isArray(mail.bodyChunks)
+    ? mail.bodyChunks
+    : (Array.isArray(mail.body_chunks) ? mail.body_chunks : []);
+
+  if (chunks.length > 0) {
+    const scored = chunks
+      .map((chunk) => {
+        const text = normalizeText(chunk?.text || '');
+        const haystack = normalizeText([
+          chunk?.url,
+          chunk?.title,
+          text,
+        ].filter(Boolean).join(' ')).toLowerCase();
+        let score = 0;
+
+        if (haystack.includes('mailbody') || haystack.includes('/body/')) {
+          score += 40;
+        }
+
+        if (haystack.includes('verification') || haystack.includes('verify') || haystack.includes('code')) {
+          score += 30;
+        }
+
+        if (haystack.includes('proton')) {
+          score += 20;
+        }
+
+        if (/(adservice|prebid|tracking|gdpr|consent|navsid|iac_token|bannerid|campaignid)/i.test(haystack)) {
+          score -= 35;
+        }
+
+        return { text, score };
+      })
+      .filter((chunk) => chunk.text !== '')
+      .sort((left, right) => right.score - left.score);
+
+    if (scored.length > 0 && scored[0].score > 0) {
+      return scored[0].text;
+    }
+  }
+
+  return normalizeText(mail.body || mail.text || mail.preview || '');
+}
+
 async function sourceText(context = {}, page = null, input = {}, options = {}) {
   const configuredSource = optionString(options, input, ['source', 'source_path', 'sourcePath'], '');
 
@@ -36,6 +91,14 @@ async function sourceText(context = {}, page = null, input = {}, options = {}) {
   }
 
   const selector = optionString(options, input, ['body_selector', 'bodySelector', 'mail_body_selector', 'mailBodySelector'], input.selector || input.elementSelector || input.element_selector || '');
+
+  if (!selector) {
+    const matchedText = bestMatchedMailText(context);
+
+    if (matchedText) {
+      return matchedText;
+    }
+  }
 
   if (page && (typeof page.frames === 'function' || typeof page.evaluate === 'function')) {
     const chunks = await readTextFromFrames(page, selectorsFrom(selector));
