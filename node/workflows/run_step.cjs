@@ -54,6 +54,20 @@ function writeJson(filePath, payload) {
   fs.writeFileSync(filePath, JSON.stringify(payload, null, 2));
 }
 
+function readJson(filePath) {
+  try {
+    if (!filePath || !fs.existsSync(filePath)) {
+      return {};
+    }
+
+    const decoded = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+
+    return decoded && typeof decoded === 'object' ? decoded : {};
+  } catch {
+    return {};
+  }
+}
+
 function cleanForJson(value, depth = 0) {
   if (depth > 8) {
     return '[max-depth]';
@@ -1314,6 +1328,23 @@ async function handleShutdownSignal(signal) {
   }
 
   shutdownInProgress = true;
+  const currentStatus = readJson(runtime.statusPath);
+  const currentStage = String(currentStatus.stage || '').trim();
+  const currentState = String(currentStatus.state || currentStatus.status || '').trim();
+  const closeRequested = signal === 'SIGTERM' && currentStage === 'workflow-browser-close-requested';
+
+  if (closeRequested) {
+    const finalState = ['completed', 'failed', 'cancelled'].includes(currentState) ? currentState : 'completed';
+    const message = String(currentStatus.message || 'Workflow-Browser wird geschlossen.');
+
+    pushEvent('workflow-browser-close-requested', message, { signal });
+
+    try {
+      await closeWorkflowBrowser(finalState);
+    } finally {
+      process.exit(0);
+    }
+  }
 
   const result = {
     ok: false,

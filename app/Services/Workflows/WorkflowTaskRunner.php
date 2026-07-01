@@ -226,7 +226,7 @@ class WorkflowTaskRunner
         return ['ok' => true, 'message' => $message, 'pid' => $pid ?: null];
     }
 
-    public function closeRun(?string $runId, string $message = 'Workflow-Browser wurde nach Abschluss geschlossen.'): array
+    public function closeRun(?string $runId, string $message = 'Workflow-Browser wurde nach Abschluss geschlossen.', bool $forceAfterGrace = true): array
     {
         $runId = trim((string) $runId);
 
@@ -260,10 +260,21 @@ class WorkflowTaskRunner
 
         $this->writeJsonFile($statusPath, $status);
 
-        $terminated = $this->terminateManagedProcessFamily($runId, true, $message);
+        $terminated = false;
 
-        if (! $terminated && $pid > 1) {
-            $this->stopProcess($pid, true);
+        if ($pid > 1) {
+            $this->stopProcess($pid, false);
+            usleep(3000000);
+            $terminated = ! $this->workflowTaskRootIsRunning($runId, $pid);
+        }
+
+        if (! $terminated && $forceAfterGrace) {
+            $terminated = $this->terminateManagedProcessFamily($runId, true, $message);
+
+            if (! $terminated && $pid > 1) {
+                $this->stopProcess($pid, true);
+                $terminated = true;
+            }
         }
 
         return [
@@ -1036,6 +1047,40 @@ class WorkflowTaskRunner
         ])->save();
 
         return false;
+    }
+
+    protected function workflowTaskRootIsRunning(string $runId, int $pid): bool
+    {
+        if (Schema::hasTable('managed_processes')) {
+            try {
+                app(ManagedProcessInventory::class)->sync();
+
+                return ManagedProcess::query()
+                    ->where('run_id', $runId)
+                    ->where('run_type', 'workflow-task')
+                    ->where('is_root', true)
+                    ->whereIn('status', ['running', 'terminate_requested', 'kill_requested'])
+                    ->exists();
+            } catch (\Throwable) {
+                // Fall through to the lightweight PID check.
+            }
+        }
+
+        if ($pid <= 1) {
+            return false;
+        }
+
+        if (PHP_OS_FAMILY === 'Windows') {
+            $result = Process::timeout(5)->run([
+                'cmd.exe',
+                '/C',
+                'tasklist /FI "PID eq '.$pid.'" | findstr /R "\\<'.$pid.'\\>"',
+            ]);
+
+            return $result->successful();
+        }
+
+        return Process::timeout(5)->run(['kill', '-0', (string) $pid])->successful();
     }
 
     protected function powershellQuote(string $value): string
