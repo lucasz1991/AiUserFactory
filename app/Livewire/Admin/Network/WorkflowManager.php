@@ -8,6 +8,7 @@ use App\Models\WorkflowRun;
 use App\Models\WorkflowStep;
 use App\Services\Workflows\PersonaActionWorkflowCatalog;
 use App\Services\Workflows\WorkflowExecutionService;
+use App\Services\Workflows\WorkflowRunDebugPackageService;
 use App\Services\Workflows\WorkflowTaskCatalog;
 use App\Services\Workflows\WorkflowTaskOrderingService;
 use App\Services\Workflows\WorkflowTransferService;
@@ -1113,6 +1114,28 @@ class WorkflowManager extends Component
 
         $this->previewWorkflowRunId = $run->id;
         $this->showRunPreviewModal = true;
+    }
+
+    public function downloadLatestRunDebugPackage(WorkflowRunDebugPackageService $debugPackages): mixed
+    {
+        $workflow = $this->selectedWorkflow();
+        $run = $workflow ? $this->quickPreviewRun($workflow) : null;
+
+        if (! $run) {
+            session()->flash('error', 'Es gibt noch keinen Testlauf fuer diesen Workflow.');
+
+            return null;
+        }
+
+        try {
+            $export = $debugPackages->make($run);
+        } catch (\Throwable $exception) {
+            session()->flash('error', 'Debug-Paket konnte nicht erzeugt werden: '.$exception->getMessage());
+
+            return null;
+        }
+
+        return response()->download($export['path'], $export['filename'])->deleteFileAfterSend(true);
     }
 
     protected function selectedWorkflow(): ?Workflow
