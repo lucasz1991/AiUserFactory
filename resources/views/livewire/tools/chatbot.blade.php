@@ -1,11 +1,3 @@
-<style>
-    [x-cloak] { display: none !important; }
-    [data-workflow-copilot-root] .workflow-copilot-panel { display: none; }
-    [data-workflow-copilot-root][data-open="1"] .workflow-copilot-panel { display: flex; }
-    [data-workflow-copilot-root][data-open="1"] .workflow-copilot-button { display: none; }
-    [data-workflow-copilot-root][data-open="0"] .workflow-copilot-button { display: flex; }
-</style>
-
 <div
     data-workflow-copilot-root
     data-open="0"
@@ -33,6 +25,24 @@
         speakingIndex: null,
         lastAssistantMessageKey: null,
         refreshTimer: null,
+        livewireComponent() {
+            const root = this.$root.closest('[wire\\:id]');
+            const id = root ? root.getAttribute('wire:id') : null;
+
+            return id && window.Livewire && typeof window.Livewire.find === 'function'
+                ? window.Livewire.find(id)
+                : null;
+        },
+        async callLivewire(method, ...parameters) {
+            const component = this.livewireComponent();
+
+            if (!component || typeof component.call !== 'function') {
+                console.warn('Workflow Copilot Livewire-Komponente nicht bereit:', method);
+                return null;
+            }
+
+            return await component.call(method, ...parameters);
+        },
         init() {
             this.showChat = sessionStorage.getItem('workflow-copilot-open') === '1';
             this.autoRead = this.readBool('workflow-copilot-auto-read', this.autoRead);
@@ -49,7 +59,7 @@
                 if (!enabled) this.stopSpeaking();
             });
             this.$watch('speechRate', (rate) => localStorage.setItem('workflow-copilot-speech-rate', String(rate || 1)));
-            this.syncContext();
+            this.$nextTick(() => window.setTimeout(() => this.syncContext(), 0));
         },
         readBool(key, fallback) {
             const stored = localStorage.getItem(key);
@@ -85,7 +95,7 @@
             };
         },
         async syncContext() {
-            await $wire.updatePageContext(this.collectContext());
+            await this.callLivewire('updatePageContext', this.collectContext());
         },
         scrollMessages() {
             this.$nextTick(() => {
@@ -115,7 +125,7 @@
 
             try {
                 await this.syncContext();
-                await $wire.sendMessage(outgoing);
+                await this.callLivewire('sendMessage', outgoing);
             } finally {
                 this.submitting = false;
                 this.pendingLabel = '';
@@ -300,6 +310,14 @@
     x-bind:data-open="showChat ? '1' : '0'"
     class="fixed bottom-4 right-4 z-[80] sm:bottom-5 sm:right-5"
 >
+    <style>
+        [x-cloak] { display: none !important; }
+        [data-workflow-copilot-root] .workflow-copilot-panel { display: none; }
+        [data-workflow-copilot-root][data-open="1"] .workflow-copilot-panel { display: flex; }
+        [data-workflow-copilot-root][data-open="1"] .workflow-copilot-button { display: none; }
+        [data-workflow-copilot-root][data-open="0"] .workflow-copilot-button { display: flex; }
+    </style>
+
     <button
         type="button"
         x-show="!showChat"
@@ -373,7 +391,7 @@
                             <div class="mt-0.5 line-clamp-2 text-slate-600" x-text="event.message || ''"></div>
                             <div class="mt-1 text-[10px] text-slate-400" x-text="event.time || ''"></div>
                         </div>
-                        <button type="button" x-on:click="$wire.dismissToolEvent(event.id)" class="shrink-0 rounded px-1 text-slate-400 hover:bg-white hover:text-slate-800" aria-label="Toolmeldung entfernen">&times;</button>
+                        <button type="button" x-on:click="callLivewire('dismissToolEvent', event.id)" class="shrink-0 rounded px-1 text-slate-400 hover:bg-white hover:text-slate-800" aria-label="Toolmeldung entfernen">&times;</button>
                     </div>
                 </template>
             </div>
