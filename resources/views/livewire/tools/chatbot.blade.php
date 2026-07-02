@@ -340,7 +340,7 @@
         x-transition:leave-start="translate-y-0 opacity-100"
         x-transition:leave-end="translate-y-3 opacity-0"
         style="display: none;"
-        class="workflow-copilot-panel h-[min(760px,calc(100vh-2rem))] w-[min(470px,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl shadow-slate-900/25"
+        class="workflow-copilot-panel h-[min(780px,calc(100vh-2rem))] w-[min(500px,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl shadow-slate-900/25"
         aria-label="AI Workflow Copilot"
     >
         <header class="shrink-0 border-b border-slate-800 bg-slate-950 px-4 py-3 text-white">
@@ -383,7 +383,7 @@
                     aktiv
                 </span>
             </div>
-            <div x-show="latestToolEvents().length > 0" x-cloak class="flex max-h-24 gap-2 overflow-x-auto pb-1">
+            <div x-show="latestToolEvents().length > 0" x-cloak class="scroll-container flex max-h-24 gap-2 overflow-x-auto pb-1">
                 <template x-for="event in latestToolEvents()" :key="event.id">
                     <div class="flex min-w-[210px] items-start justify-between gap-2 rounded border bg-slate-50 px-2.5 py-2 text-xs shadow-sm" :class="event.status === 'success' ? 'border-emerald-200' : 'border-rose-200'">
                         <div class="min-w-0">
@@ -397,7 +397,7 @@
             </div>
         </div>
 
-        <div x-ref="messages" class="min-h-0 flex-1 space-y-3 overflow-y-auto bg-slate-50 px-4 py-4">
+        <div x-ref="messages" class="scroll-container min-h-0 flex-1 space-y-3 overflow-y-auto bg-[linear-gradient(to_bottom,#f8fafc,#f1f5f9)] px-4 py-4">
             @forelse($chatHistory as $index => $item)
                 @php
                     $role = $item['role'] ?? 'assistant';
@@ -411,7 +411,7 @@
                                 ? 'mr-auto border border-emerald-200 bg-emerald-50 text-emerald-950'
                                 : 'mr-auto border border-slate-200 bg-white text-slate-800'));
                 @endphp
-                <div class="max-w-[90%] rounded-lg px-3 py-2 text-sm shadow-sm {{ $bubbleClass }}">
+                <div class="max-w-[90%] rounded-2xl px-3.5 py-2.5 text-sm shadow-sm {{ $bubbleClass }}">
                     <div class="mb-1 flex items-center justify-between gap-3">
                         <span class="text-[10px] font-black uppercase tracking-[0.12em] {{ $isUser ? 'text-slate-300' : 'text-slate-400' }}">
                             {{ $isUser ? 'Du' : $assistantName }}
@@ -422,7 +422,7 @@
                                 x-show="speechSupported"
                                 x-cloak
                                 x-on:click="speak(@js($item['content'] ?? ''), {{ $index }})"
-                                class="rounded border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-600 hover:border-cyan-300 hover:text-cyan-700"
+                                class="rounded-md border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-600 hover:border-cyan-300 hover:text-cyan-700"
                             >
                                 Vorlesen
                             </button>
@@ -449,15 +449,16 @@
                     <div class="mt-1 text-[10px] {{ $isUser ? 'text-slate-300' : 'text-slate-400' }}">{{ $item['time'] ?? '' }}</div>
                 </div>
             @empty
-                <div class="rounded-lg border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-600">
-                    Frage nach einem Workflow, dem letzten Run, Task-Imports, Listen-Imports oder starte einen Testlauf.
+                <div class="rounded-2xl border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-600 shadow-sm">
+                    <p class="font-black text-slate-900">Womit soll ich starten?</p>
+                    <p class="mt-1 leading-5">Frage nach einem Workflow, dem letzten Run, Task-Imports, Listen-Imports oder starte einen Testlauf.</p>
                 </div>
             @endforelse
 
             <div
                 x-show="busy() && pendingLabel"
                 x-cloak
-                class="ml-auto max-w-[90%] rounded-lg bg-slate-950 px-3 py-2 text-sm text-white shadow-sm"
+                class="ml-auto max-w-[90%] rounded-2xl bg-slate-950 px-3.5 py-2.5 text-sm text-white shadow-sm"
             >
                 <div class="mb-1 text-[10px] font-black uppercase tracking-[0.12em] text-slate-300">Du</div>
                 <p class="whitespace-pre-line" x-text="pendingLabel"></p>
@@ -466,7 +467,7 @@
             <div
                 x-show="busy()"
                 x-cloak
-                class="mr-auto max-w-[94%] rounded-lg border border-cyan-200 bg-white px-3 py-3 text-sm text-slate-700 shadow-sm"
+                class="mr-auto max-w-[94%] rounded-2xl border border-cyan-200 bg-white px-3 py-3 text-sm text-slate-700 shadow-sm"
                 role="status"
                 aria-live="polite"
             >
@@ -491,50 +492,57 @@
         </div>
 
         <div class="shrink-0 border-t border-slate-200 bg-white p-3">
-            <div class="mb-2 rounded border border-slate-200 bg-slate-50 p-2">
+            <div class="mb-2 rounded-lg border border-slate-200 bg-slate-50 p-2 transition focus-within:border-cyan-300 focus-within:ring-2 focus-within:ring-cyan-100">
                 <div class="flex items-center gap-2">
-                    <input type="file" wire:model="workflowImportFile" accept=".csv,.zip" class="block min-w-0 flex-1 text-xs text-slate-600 file:mr-2 file:rounded file:border-0 file:bg-slate-950 file:px-2 file:py-1 file:text-xs file:font-semibold file:text-white">
-                    <button type="button" wire:click="importWorkflowUpdate" wire:loading.attr="disabled" wire:target="workflowImportFile,importWorkflowUpdate" class="rounded bg-slate-950 px-3 py-1.5 text-xs font-semibold text-white hover:bg-cyan-700 disabled:opacity-50">
+                    <input type="file" wire:model="workflowImportFile" accept=".csv,.zip" class="block min-w-0 flex-1 text-xs text-slate-600 file:mr-2 file:rounded-md file:border-0 file:bg-slate-950 file:px-2.5 file:py-1.5 file:text-xs file:font-semibold file:text-white hover:file:bg-cyan-700">
+                    <button type="button" wire:click="importWorkflowUpdate" wire:loading.attr="disabled" wire:target="workflowImportFile,importWorkflowUpdate" class="inline-flex h-8 shrink-0 items-center rounded-md bg-slate-950 px-3 text-xs font-semibold text-white shadow-sm hover:bg-cyan-700 disabled:cursor-not-allowed disabled:opacity-50">
                         Import
                     </button>
                 </div>
                 @error('workflowImportFile') <div class="mt-1 text-xs text-rose-600">{{ $message }}</div> @enderror
             </div>
 
-            <div class="mb-2 flex flex-wrap gap-1.5">
-                <button type="button" x-on:click="quick('Analysiere bitte den letzten Workflow-Lauf und nenne Fehlerursache, betroffene Liste/Task und naechste Reparatur.')" class="rounded border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:border-cyan-300 hover:bg-cyan-50">Letzten Run</button>
-                <button type="button" x-on:click="quick('Finde den Workflow DIBAG oeffnen, analysiere den letzten Lauf und schlage konkrete Korrekturen vor.')" class="rounded border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:border-cyan-300 hover:bg-cyan-50">DIBAG</button>
-                <button type="button" x-on:click="quick('Zeige mir verfuegbare Variablen und aktuelle Werte fuer diesen Workflow.')" class="rounded border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:border-cyan-300 hover:bg-cyan-50">Variablen</button>
-                <button type="button" x-on:click="quick('Hilf mir, einen neuen Workflow zu planen. Frage zuerst nach Ziel, Webseiten, benoetigten Listen, Tasks und eingebetteten Workflows.')" class="rounded border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:border-cyan-300 hover:bg-cyan-50">Neu</button>
+            <div class="scroll-container mb-2 flex gap-1.5 overflow-x-auto pb-1">
+                <button type="button" x-on:click="quick('Analysiere bitte den letzten Workflow-Lauf und nenne Fehlerursache, betroffene Liste/Task und naechste Reparatur.')" class="shrink-0 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:border-cyan-300 hover:bg-cyan-50">Letzten Run</button>
+                <button type="button" x-on:click="quick('Finde den Workflow DIBAG oeffnen, analysiere den letzten Lauf und schlage konkrete Korrekturen vor.')" class="shrink-0 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:border-cyan-300 hover:bg-cyan-50">DIBAG</button>
+                <button type="button" x-on:click="quick('Zeige mir verfuegbare Variablen und aktuelle Werte fuer diesen Workflow.')" class="shrink-0 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:border-cyan-300 hover:bg-cyan-50">Variablen</button>
+                <button type="button" x-on:click="quick('Hilf mir, einen neuen Workflow zu planen. Frage zuerst nach Ziel, Webseiten, benoetigten Listen, Tasks und eingebetteten Workflows.')" class="shrink-0 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:border-cyan-300 hover:bg-cyan-50">Neu</button>
+                <button type="button" x-on:click="quick('Welche Assistant-Tools stehen dir fuer Workflow-Analyse, Imports, Testlauf und Navigation zur Verfuegung?')" class="shrink-0 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:border-cyan-300 hover:bg-cyan-50">Tools</button>
             </div>
 
-            <form x-on:submit.prevent="send()" class="flex items-end gap-2">
-                <button
-                    type="button"
-                    x-on:click="toggleListening()"
-                    x-bind:disabled="!voiceSupported || busy()"
-                    class="flex h-10 w-10 shrink-0 items-center justify-center rounded border text-sm font-black transition disabled:cursor-not-allowed disabled:opacity-40"
-                    :class="listening ? 'border-rose-300 bg-rose-50 text-rose-700' : 'border-slate-300 bg-white text-slate-700 hover:border-cyan-300 hover:text-cyan-700'"
-                    aria-label="Spracheingabe"
-                >
-                    Mic
-                </button>
+            <form x-on:submit.prevent="send()" class="overflow-hidden rounded-lg border border-slate-300 bg-white shadow-sm transition focus-within:border-cyan-400 focus-within:ring-2 focus-within:ring-cyan-100">
                 <textarea
                     x-ref="composer"
                     x-model="draft"
-                    rows="2"
+                    rows="1"
                     placeholder="Workflow besprechen, Task einstellen, Import planen..."
-                    class="min-h-[44px] flex-1 resize-none rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-cyan-500 focus:ring-cyan-500"
+                    class="block min-h-[58px] max-h-32 w-full resize-none border-0 bg-transparent px-3.5 pb-2 pt-3 text-sm leading-6 text-slate-900 placeholder:text-slate-400 focus:ring-0"
                     x-on:input="resizeComposer()"
+                    x-on:keydown.enter.exact.prevent="send()"
                     x-on:keydown.enter.meta.prevent="send()"
                     x-on:keydown.enter.ctrl.prevent="send()"
                 ></textarea>
-                <button type="submit" x-bind:disabled="busy() || !(draft || '').trim()" class="h-10 rounded-md bg-slate-950 px-4 text-sm font-semibold text-white shadow-sm hover:bg-cyan-700 disabled:cursor-not-allowed disabled:opacity-50">
-                    Senden
-                </button>
+
+                <div class="flex items-center justify-between gap-2 border-t border-slate-100 bg-slate-50 px-2 py-2">
+                    <button
+                        type="button"
+                        x-on:click="toggleListening()"
+                        x-bind:disabled="!voiceSupported || busy()"
+                        class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border text-[11px] font-black transition disabled:cursor-not-allowed disabled:opacity-40"
+                        :class="listening ? 'border-rose-300 bg-rose-50 text-rose-700' : 'border-slate-300 bg-white text-slate-600 hover:border-cyan-300 hover:text-cyan-700'"
+                        aria-label="Spracheingabe"
+                        title="Spracheingabe"
+                    >
+                        Mic
+                    </button>
+                    <span class="min-w-0 flex-1 truncate text-[10px] font-semibold text-slate-400">Enter sendet, Shift+Enter erzeugt eine neue Zeile.</span>
+                    <button type="submit" x-bind:disabled="busy() || !(draft || '').trim()" class="inline-flex h-9 shrink-0 items-center rounded-md bg-slate-950 px-3.5 text-sm font-semibold text-white shadow-sm hover:bg-cyan-700 disabled:cursor-not-allowed disabled:opacity-50">
+                        Senden
+                    </button>
+                </div>
             </form>
 
-            <div x-show="listening" x-cloak class="mt-2 flex items-center gap-2 text-xs font-semibold text-rose-700">
+            <div x-show="listening" x-cloak class="mt-2 flex items-center gap-2 rounded-md border border-rose-100 bg-rose-50 px-2.5 py-1.5 text-xs font-semibold text-rose-700">
                 <span class="h-2 w-2 animate-pulse rounded-full bg-rose-500"></span>
                 Spracheingabe aktiv.
             </div>
