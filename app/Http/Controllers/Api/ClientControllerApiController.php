@@ -3,20 +3,21 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Jobs\MonitorWorkflowStepRunJob;
 use App\Models\Device;
 use App\Models\NetworkJob;
 use App\Models\NetworkNode;
 use App\Models\NodeHeartbeat;
 use App\Models\NodeRebindLog;
 use App\Models\NodeServerBinding;
-use App\Models\WorkflowStepRun;
-use App\Jobs\MonitorWorkflowStepRunJob;
 use App\Models\Setting;
+use App\Models\WorkflowStepRun;
+use App\Services\ClientController\ClientControllerReleaseService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 class ClientControllerApiController extends Controller
 {
@@ -25,7 +26,7 @@ class ClientControllerApiController extends Controller
         $bootstrapFromRequest = trim((string) $request->header('X-BOOTSTRAP-API-KEY', $request->input('bootstrap_api_key', $request->input('api_key', ''))));
         $expectedBootstrap = trim((string) data_get(Setting::getValue('client_controller', 'security'), 'bootstrap_api_key', 'followflow-default-node-key-change-me'));
 
-        if ($expectedBootstrap === '' || !hash_equals($expectedBootstrap, $bootstrapFromRequest)) {
+        if ($expectedBootstrap === '' || ! hash_equals($expectedBootstrap, $bootstrapFromRequest)) {
             return response()->json([
                 'success' => false,
                 'message' => 'Invalid bootstrap API key.',
@@ -69,6 +70,7 @@ class ClientControllerApiController extends Controller
         ]);
 
         $node->save();
+        $this->reconcileNodeUpdate($node);
 
         NodeServerBinding::query()->firstOrCreate(
             [
@@ -135,6 +137,7 @@ class ClientControllerApiController extends Controller
             'last_successful_server_domain' => $validated['last_successful_server_domain'] ?? $node->last_successful_server_domain,
             'capabilities_json' => $validated['capabilities'] ?? $node->capabilities_json,
         ])->save();
+        $this->reconcileNodeUpdate($node);
 
         NodeServerBinding::query()
             ->where('network_node_id', $node->id)
@@ -239,6 +242,13 @@ class ClientControllerApiController extends Controller
                     'status' => 'dispatched',
                     'dispatched_at' => now(),
                 ]);
+
+                if ($job->type === 'node_update') {
+                    $node->update([
+                        'update_status' => 'installing',
+                        'update_error' => null,
+                    ]);
+                }
             }
 
             return $jobs;
@@ -317,6 +327,21 @@ class ClientControllerApiController extends Controller
             'error_message' => $validated['error_message'] ?? null,
             'completed_at' => now(),
         ]);
+
+        if ($job->type === 'node_update') {
+            if ($validated['status'] === 'success') {
+                $node->update([
+                    'update_status' => 'awaiting_restart',
+                    'update_error' => null,
+                ]);
+                $this->reconcileNodeUpdate($node->fresh());
+            } else {
+                $node->update([
+                    'update_status' => 'failed',
+                    'update_error' => $validated['error_message'] ?? data_get($result, 'statusMessage', 'Update fehlgeschlagen.'),
+                ]);
+            }
+        }
 
         $stepRun = WorkflowStepRun::query()
             ->where('external_run_type', 'client-controller-workflow-task')
@@ -417,5 +442,36 @@ class ClientControllerApiController extends Controller
         return NetworkNode::query()
             ->where('api_key', $apiKey)
             ->first();
+    }
+
+    protected function reconcileNodeUpdate(NetworkNode $node): void
+    {
+        $target = app(ClientControllerReleaseService::class)->normalizeVersion((string) $node->update_target_version);
+        $installed = app(ClientControllerReleaseService::class)->normalizeVersion((string) $node->version);
+
+        if ($target === '' || $installed === '' || version_compare($installed, $target, '<')) {
+            return;
+        }
+
+        $node->update([
+            'update_status' => 'installed',
+            'update_installed_at' => now(),
+            'update_error' => null,
+        ]);
+
+        $node->jobs()
+            ->where('type', 'node_update')
+            ->whereIn('status', ['pending', 'dispatched'])
+            ->get()
+            ->filter(fn (NetworkJob $job): bool => app(ClientControllerReleaseService::class)->normalizeVersion((string) data_get($job->payload_json, 'target_version')) === $target)
+            ->each(fn (NetworkJob $job) => $job->update([
+                'status' => 'success',
+                'completed_at' => now(),
+                'result_json' => [
+                    'installed_version' => $installed,
+                    'confirmed_by' => 'node_heartbeat',
+                ],
+                'error_message' => null,
+            ]));
     }
 }

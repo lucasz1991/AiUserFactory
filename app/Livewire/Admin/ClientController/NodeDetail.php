@@ -3,10 +3,12 @@
 namespace App\Livewire\Admin\ClientController;
 
 use App\Models\NetworkNode;
+use App\Services\ClientController\ClientControllerReleaseService;
 use App\Services\ClientController\NetworkJobDispatcher;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Str;
 use Livewire\Component;
+use Throwable;
 
 class NodeDetail extends Component
 {
@@ -20,10 +22,20 @@ class NodeDetail extends Component
 
     public ?string $currentServerDomain = null;
 
-    public function mount(NetworkNode $node): void
+    public ?array $latestRelease = null;
+
+    public ?string $releaseError = null;
+
+    public function mount(NetworkNode $node, ClientControllerReleaseService $releases): void
     {
         $this->node = $node;
         $this->fillForm();
+
+        try {
+            $this->latestRelease = $releases->latestRelease();
+        } catch (Throwable $exception) {
+            $this->releaseError = $exception->getMessage();
+        }
     }
 
     public function save(): void
@@ -99,6 +111,16 @@ class NodeDetail extends Component
         session()->flash('success', 'Der API-Key wurde erneuert. Der Autopilot registriert den Node beim nächsten 401 automatisch neu.');
     }
 
+    public function queueUpdate(ClientControllerReleaseService $releases): void
+    {
+        try {
+            $job = $releases->queueUpdate($this->node, Auth::user()?->email);
+            session()->flash('success', 'Updateauftrag '.$job->job_uuid.' wurde eingeplant.');
+        } catch (Throwable $exception) {
+            $this->addError('update', $exception->getMessage());
+        }
+    }
+
     public function cancelJob(int $jobId): void
     {
         $job = $this->node->jobs()->whereKey($jobId)->firstOrFail();
@@ -111,7 +133,7 @@ class NodeDetail extends Component
         }
     }
 
-    public function render()
+    public function render(ClientControllerReleaseService $releases)
     {
         NetworkNode::expireStale();
         $this->node->refresh();
@@ -121,6 +143,7 @@ class NodeDetail extends Component
             'jobs' => $this->node->jobs()->latest('id')->limit(30)->get(),
             'heartbeats' => $this->node->heartbeats()->latest('received_at')->limit(20)->get(),
             'nodeIsOnline' => $this->node->isAvailable(),
+            'updateAvailable' => $this->latestRelease && $releases->updateAvailable($this->node->version, $this->latestRelease['version']),
         ])->layout('layouts.master');
     }
 

@@ -1,21 +1,21 @@
 <?php
 
-use Illuminate\Support\Facades\Route;
-
-use App\Livewire\AdminDashboard;
-use App\Livewire\AdminConfig;
+use App\Http\Controllers\Admin\ClientController\DeviceController as ClientControllerDeviceController;
+use App\Http\Controllers\Admin\ClientController\NetworkJobController as ClientControllerNetworkJobController;
+use App\Http\Controllers\Admin\ClientController\NetworkTargetController as ClientControllerNetworkTargetController;
+use App\Http\Controllers\Admin\ClientController\NodeController as ClientControllerNodeController;
+use App\Livewire\Admin\ClientController\Dashboard as ClientControllerDashboard;
+use App\Livewire\Admin\ClientController\NodeDetail as ClientControllerNodeDetail;
+use App\Livewire\Admin\ClientController\NodeIndex as ClientControllerNodeIndex;
 use App\Livewire\Admin\Config\PersonDetail;
 use App\Livewire\Admin\Config\SettingsPage;
 use App\Livewire\Admin\Network\ActionsPage;
 use App\Livewire\Admin\Network\WorkflowManager;
 use App\Livewire\Admin\Network\WorkflowsIndex;
 use App\Livewire\Admin\Processes\ProcessMonitor;
-use App\Livewire\Admin\ClientController\NodeDetail as ClientControllerNodeDetail;
-use App\Http\Controllers\Admin\ClientController\DashboardController as ClientControllerDashboardController;
-use App\Http\Controllers\Admin\ClientController\NodeController as ClientControllerNodeController;
-use App\Http\Controllers\Admin\ClientController\DeviceController as ClientControllerDeviceController;
-use App\Http\Controllers\Admin\ClientController\NetworkTargetController as ClientControllerNetworkTargetController;
-use App\Http\Controllers\Admin\ClientController\NetworkJobController as ClientControllerNetworkJobController;
+use App\Livewire\AdminConfig;
+use App\Livewire\AdminDashboard;
+use Illuminate\Support\Facades\Route;
 
 /*
 |--------------------------------------------------------------------------
@@ -41,10 +41,9 @@ Route::middleware(['auth:sanctum', config('jetstream.auth_session')])->group(fun
         Route::get('/einstellungen/{tab?}', SettingsPage::class)->name('admin.settings');
 
         Route::prefix('client-controller')->name('client-controller.')->group(function (): void {
-            Route::get('/', [ClientControllerDashboardController::class, 'index'])->name('dashboard');
-            Route::post('/settings', [ClientControllerDashboardController::class, 'saveSettings'])->name('settings.save');
+            Route::get('/', ClientControllerDashboard::class)->name('dashboard');
 
-            Route::get('/nodes', [ClientControllerNodeController::class, 'index'])->name('nodes.index');
+            Route::get('/nodes', ClientControllerNodeIndex::class)->name('nodes.index');
             Route::post('/nodes', [ClientControllerNodeController::class, 'store'])->name('nodes.store');
             Route::get('/nodes/{node}', ClientControllerNodeDetail::class)->name('nodes.show');
             Route::put('/nodes/{node}', [ClientControllerNodeController::class, 'update'])->name('nodes.update');

@@ -1,6 +1,7 @@
 <div class="main-content group-data-[sidebar-size=sm]:ml-[70px]" wire:poll.5s>
     <div class="page-content dark:bg-zinc-700">
         <div class="container-fluid px-[0.625rem] space-y-6">
+            @include('admin.client-controller._navigation')
             <div class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
                 <div>
                     <a href="{{ route('client-controller.nodes.index') }}" class="text-sm text-blue-700 hover:underline">&larr; Nodes verwalten</a>
@@ -21,6 +22,24 @@
             @error('command')
                 <div class="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-900">{{ $message }}</div>
             @enderror
+            @error('update')
+                <div class="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-900">{{ $message }}</div>
+            @enderror
+
+            <section class="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-cyan-200 bg-cyan-50 p-5">
+                <div>
+                    <div class="text-xs font-bold uppercase tracking-wider text-cyan-700">ClientController-Version</div>
+                    <div class="mt-1 flex items-center gap-3"><span class="font-mono text-xl font-bold text-slate-900">{{ $node->version ? 'v'.$node->version : 'unbekannt' }}</span>@if($latestRelease)<span class="text-sm text-slate-600">GitHub: v{{ $latestRelease['version'] }}</span>@endif</div>
+                    <div class="mt-1 text-xs text-slate-500">Update-Status: {{ $node->update_status ?: 'idle' }}@if($node->update_target_version) · Ziel v{{ $node->update_target_version }}@endif</div>
+                </div>
+                @if($updateAvailable)
+                    <button wire:click="queueUpdate" wire:confirm="Update auf v{{ $latestRelease['version'] }} beim nächsten Node-Kontakt installieren?" class="rounded-lg bg-cyan-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-cyan-700">Update v{{ $latestRelease['version'] }} freigeben</button>
+                @elseif($releaseError)
+                    <span class="text-sm text-amber-800">{{ $releaseError }}</span>
+                @else
+                    <span class="rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-slate-600">Kein Update nötig</span>
+                @endif
+            </section>
 
             <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
                 <div class="rounded-lg border border-gray-200 bg-white p-4"><div class="text-xs text-gray-500">Letzter Kontakt</div><div class="mt-1 text-sm font-semibold">{{ $node->last_seen_at?->timezone(config('app.timezone'))->format('d.m.Y H:i:s') ?? '-' }}</div></div>

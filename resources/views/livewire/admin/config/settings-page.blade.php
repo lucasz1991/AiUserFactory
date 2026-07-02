@@ -279,6 +279,8 @@
 
         @if($activeTab === 'client-controller')
             <div class="space-y-8 px-6 py-6">
+                <livewire:admin.client-controller.update-settings />
+
                 <div>
                     <h2 class="text-lg font-semibold text-gray-900">ClientController: Server & Sicherheit</h2>
                     <p class="mt-1 text-sm text-gray-500">
