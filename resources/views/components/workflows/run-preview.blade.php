@@ -187,7 +187,11 @@
                 'workflowReturnOk',
             ] as $directKey) {
                 if (\Illuminate\Support\Arr::has($source, $directKey)) {
-                    $variables[$directKey] = data_get($source, $directKey);
+                    $directValue = data_get($source, $directKey);
+
+                    if ($directValue !== null && $directValue !== '') {
+                        $variables[$directKey] = $directValue;
+                    }
                 }
             }
 
@@ -211,6 +215,11 @@
         foreach ($sources as $source) {
             $extract($source);
         }
+
+        $variables = array_filter(
+            $variables,
+            fn ($value): bool => $value !== null && $value !== '',
+        );
 
         ksort($variables);
 

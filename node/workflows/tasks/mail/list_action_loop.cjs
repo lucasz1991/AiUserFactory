@@ -19,7 +19,7 @@ const {
   elementCandidatesFromInput,
 } = require('../lib/find_visible_element.cjs');
 
-function arrayFromContext(context = {}, name = '') {
+function workflowArrayState(context = {}, name = '') {
   const root = workflowVariableRoot(context);
 
   for (const path of [
@@ -32,11 +32,11 @@ function arrayFromContext(context = {}, name = '') {
     const value = valueFromPath(root, path);
 
     if (Array.isArray(value)) {
-      return value;
+      return { found: true, value };
     }
   }
 
-  return [];
+  return { found: false, value: [] };
 }
 
 function parseActionSteps(value) {
@@ -123,7 +123,8 @@ async function run(context = {}) {
   const timeoutMs = Math.max(250, Math.min(120000, optionNumber(options, input, ['action_timeout_ms', 'actionTimeoutMs'], 10000)));
   const continueOnError = optionBoolean(options, input, ['continue_on_error', 'continueOnError'], true);
   const failOnItemError = optionBoolean(options, input, ['fail_on_item_error', 'failOnItemError'], true);
-  const sourceMails = arrayFromContext(context, inputArrayName).slice(0, maxItems);
+  const sourceState = workflowArrayState(context, inputArrayName);
+  const sourceMails = sourceState.value.slice(0, maxItems);
   const actionSteps = normalizedActionSteps(input, options);
   const results = [];
 
@@ -131,13 +132,36 @@ async function run(context = {}) {
     return { ok: false, status: 'failed', statusMessage: 'Kein Page-Handle fuer die Mail-Aktionsschleife vorhanden.' };
   }
 
-  if (sourceMails.length === 0) {
+  if (!sourceState.found) {
     return captureTaskPreview(context, {
       ok: false,
       status: 'failed',
       statusMessage: `Keine Mail-Liste unter "${inputArrayName}" gefunden.`,
       inputArrayName,
       input_array_name: inputArrayName,
+    }, true);
+  }
+
+  if (sourceMails.length === 0) {
+    setWorkflowVariable(context, outputArrayName, results);
+
+    return captureTaskPreview(context, {
+      ok: true,
+      status: 'success',
+      statusMessage: `Keine Mail-Listeneintraege in "${inputArrayName}" vorhanden; keine Aktion ausgefuehrt.`,
+      inputArrayName,
+      input_array_name: inputArrayName,
+      outputArrayName,
+      output_array_name: outputArrayName,
+      sourceCount: 0,
+      source_count: 0,
+      successfulCount: 0,
+      successful_count: 0,
+      failedCount: 0,
+      failed_count: 0,
+      results,
+      workflowVariables: context.workflowVariables,
+      workflow_variables: context.workflow_variables,
     }, true);
   }
 
