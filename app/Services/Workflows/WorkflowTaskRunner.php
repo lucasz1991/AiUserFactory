@@ -25,6 +25,8 @@ class WorkflowTaskRunner
         $settings = $this->mailSettings->settings();
         $timezone = $this->workflowTimezone($runtimeContext);
         $runId = (string) Str::uuid();
+        $livePreviewEnabled = (bool) ($settings['live_preview_enabled'] ?? true);
+        $livePreviewIntervalSeconds = max(1, min(60, (int) ($settings['live_preview_interval_seconds'] ?? 3)));
 
         return [
             'runId' => $runId,
@@ -42,10 +44,10 @@ class WorkflowTaskRunner
                 $step,
                 trim((string) ($runtimeContext['nextTaskKey'] ?? $runtimeContext['next_task_key'] ?? '')) ?: null,
             ),
-            'livePreviewEnabled' => true,
-            'livePreviewIntervalSeconds' => 3,
-            'livePreviewIntervalMs' => 3000,
-            'livePreviewPollIntervalSeconds' => 3,
+            'livePreviewEnabled' => $livePreviewEnabled,
+            'livePreviewIntervalSeconds' => $livePreviewIntervalSeconds,
+            'livePreviewIntervalMs' => $livePreviewIntervalSeconds * 1000,
+            'livePreviewPollIntervalSeconds' => $livePreviewIntervalSeconds,
             'browserEngine' => $settings['browser_engine'] ?? 'cloak-with-chrome-fallback',
             'cloakHumanizeEnabled' => (bool) ($settings['cloak_humanize_enabled'] ?? false),
             'cloakHumanPreset' => $settings['cloak_human_preset'] ?? '',
@@ -63,6 +65,8 @@ class WorkflowTaskRunner
         $settings = $this->mailSettings->settings();
         $timezone = $this->workflowTimezone($runtimeContext);
         $runId = (string) Str::uuid();
+        $livePreviewEnabled = (bool) ($settings['live_preview_enabled'] ?? true);
+        $livePreviewIntervalSeconds = max(1, min(60, (int) ($settings['live_preview_interval_seconds'] ?? 3)));
         $runDirectory = $this->runDirectory($runId);
         $publicRunDirectory = storage_path('app/public/'.$this->publicRunRelativeDirectory($runId));
         $statusPath = $runDirectory.DIRECTORY_SEPARATOR.'status.json';
@@ -95,10 +99,10 @@ class WorkflowTaskRunner
             'statusPath' => $statusPath,
             'resultPath' => $resultPath,
             'runDirectory' => $runDirectory,
-            'livePreviewEnabled' => true,
-            'livePreviewIntervalSeconds' => 3,
-            'livePreviewIntervalMs' => 3000,
-            'livePreviewPollIntervalSeconds' => 3,
+            'livePreviewEnabled' => $livePreviewEnabled,
+            'livePreviewIntervalSeconds' => $livePreviewIntervalSeconds,
+            'livePreviewIntervalMs' => $livePreviewIntervalSeconds * 1000,
+            'livePreviewPollIntervalSeconds' => $livePreviewIntervalSeconds,
             'livePreviewPath' => $publicRunDirectory.DIRECTORY_SEPARATOR.'live.png',
             'livePreviewRelativePath' => $this->publicScreenshotRelativePath($runId),
             'browserProfilePath' => $this->workflowBrowserProfilePath($run),
@@ -123,9 +127,9 @@ class WorkflowTaskRunner
             'stage' => 'queued',
             'message' => 'Workflow-Task-Lauf ist eingeplant.',
             'scriptName' => 'run_step.cjs',
-            'livePreviewEnabled' => true,
-            'livePreviewIntervalSeconds' => 3,
-            'livePreviewPollIntervalSeconds' => 3,
+            'livePreviewEnabled' => $livePreviewEnabled,
+            'livePreviewIntervalSeconds' => $livePreviewIntervalSeconds,
+            'livePreviewPollIntervalSeconds' => $livePreviewIntervalSeconds,
             'tasks' => $this->configuredTasks($tasks),
             'events' => [],
             'browserWindows' => $initialBrowserWindows,

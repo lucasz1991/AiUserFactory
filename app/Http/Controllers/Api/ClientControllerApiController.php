@@ -17,6 +17,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 class ClientControllerApiController extends Controller
@@ -306,7 +307,7 @@ class ClientControllerApiController extends Controller
             ]);
         }
 
-        $result = $validated['result'] ?? [];
+        $result = $this->attachStoredLivePreview($job, $validated['result'] ?? []);
 
         foreach ([
             'remoteWebmailSessionPayload' => 'encryptedSessionPayload',
@@ -351,6 +352,78 @@ class ClientControllerApiController extends Controller
         if ($stepRun) {
             MonitorWorkflowStepRunJob::dispatch($stepRun->id);
         }
+
+        return response()->json([
+            'success' => true,
+        ]);
+    }
+
+    public function reportJobProgress(Request $request): JsonResponse
+    {
+        $node = $this->resolveNodeFromApiKey($request);
+
+        if (! $node) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized node.',
+            ], 401);
+        }
+
+        $validated = $request->validate([
+            'job_uuid' => ['required', 'string', 'max:120'],
+            'progress' => ['required', 'string', 'max:5242880'],
+            'screenshot' => ['nullable', 'file', 'mimes:png', 'max:10240'],
+        ]);
+
+        $progress = json_decode($validated['progress'], true);
+
+        if (! is_array($progress)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Progress must be a JSON object.',
+            ], 422);
+        }
+
+        $job = NetworkJob::query()
+            ->where('job_uuid', $validated['job_uuid'])
+            ->where('network_node_id', $node->id)
+            ->first();
+
+        if (! $job) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Job not found for this node.',
+            ], 404);
+        }
+
+        if ($job->status !== 'dispatched') {
+            return response()->json([
+                'success' => true,
+                'ignored' => true,
+                'message' => 'Job is no longer running.',
+            ]);
+        }
+
+        if ($request->hasFile('screenshot')) {
+            $relativePath = $this->livePreviewRelativePath($job);
+            $request->file('screenshot')->storeAs(
+                dirname($relativePath),
+                basename($relativePath),
+                'public',
+            );
+        }
+
+        $progress = $this->attachStoredLivePreview($job, $progress);
+        $progress['clientControllerReportedAt'] = now()->toIso8601String();
+
+        $job->forceFill([
+            'result_json' => $progress,
+        ])->save();
+
+        $node->forceFill([
+            'is_online' => true,
+            'last_seen_at' => now(),
+        ])->save();
 
         return response()->json([
             'success' => true,
@@ -442,6 +515,33 @@ class ClientControllerApiController extends Controller
         return NetworkNode::query()
             ->where('api_key', $apiKey)
             ->first();
+    }
+
+    protected function attachStoredLivePreview(NetworkJob $job, array $payload): array
+    {
+        $relativePath = $this->livePreviewRelativePath($job);
+
+        if (! Storage::disk('public')->exists($relativePath)) {
+            return $payload;
+        }
+
+        $payload['livePreviewRelativePath'] = $relativePath;
+
+        if (isset($payload['browserWindows']) && is_array($payload['browserWindows'])) {
+            foreach ($payload['browserWindows'] as &$window) {
+                if (is_array($window)) {
+                    $window['livePreviewRelativePath'] = $relativePath;
+                }
+            }
+            unset($window);
+        }
+
+        return $payload;
+    }
+
+    protected function livePreviewRelativePath(NetworkJob $job): string
+    {
+        return 'workflow-task-runs/client-controller/'.$job->job_uuid.'/live.png';
     }
 
     protected function reconcileNodeUpdate(NetworkNode $node): void

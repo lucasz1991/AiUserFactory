@@ -1,9 +1,9 @@
 <?php
 
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Ai\AiConnectionController;
 use App\Http\Controllers\Api\ClientControllerApiController;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Route;
 
 /*
 |--------------------------------------------------------------------------
@@ -29,6 +29,7 @@ Route::prefix('client-controller')->group(function (): void {
     Route::post('/heartbeat', [ClientControllerApiController::class, 'heartbeat']);
     Route::post('/sync-devices', [ClientControllerApiController::class, 'syncDevices']);
     Route::post('/pull-jobs', [ClientControllerApiController::class, 'pullJobs']);
+    Route::post('/job-progress', [ClientControllerApiController::class, 'reportJobProgress']);
     Route::post('/job-result', [ClientControllerApiController::class, 'reportJobResult']);
     Route::post('/rebind', [ClientControllerApiController::class, 'rebind']);
 });

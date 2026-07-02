@@ -4,11 +4,14 @@ namespace Tests\Feature;
 
 use App\Livewire\Admin\ClientController\NodeDetail;
 use App\Livewire\Admin\ClientController\NodeIndex;
+use App\Models\NetworkJob;
 use App\Models\NetworkNode;
 use App\Models\Setting;
 use App\Services\ClientController\ClientControllerReleaseService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Storage;
 use Livewire\Livewire;
 use Tests\TestCase;
 
@@ -58,6 +61,68 @@ class ClientControllerNodeManagementTest extends TestCase
         $this->assertSame(1, NetworkNode::expireStale());
         $this->assertFalse($node->fresh()->is_online);
         $this->assertFalse($node->fresh()->isAvailable());
+    }
+
+    public function test_running_job_accepts_progress_and_preserves_its_uploaded_preview_in_the_final_result(): void
+    {
+        Storage::fake('public');
+
+        $node = NetworkNode::query()->create([
+            'name' => 'Progress node',
+            'node_uuid' => 'node-progress-1',
+            'api_key' => 'progress-node-key',
+            'status' => 'active',
+        ]);
+        $job = NetworkJob::query()->create([
+            'job_uuid' => '5b7dd349-cda1-4028-b97b-e5f0fdb99acf',
+            'network_node_id' => $node->id,
+            'type' => 'workflow_task',
+            'payload_json' => ['runtime' => []],
+            'status' => 'dispatched',
+            'queued_at' => now(),
+            'dispatched_at' => now(),
+        ]);
+        $progress = [
+            'state' => 'running',
+            'stage' => 'task-started',
+            'message' => 'Browser wird geoeffnet.',
+            'livePreviewIntervalSeconds' => 7,
+            'browserWindows' => [[
+                'key' => 'main',
+                'label' => 'Main',
+                'url' => 'https://example.test',
+            ]],
+        ];
+
+        $this->withHeader('X-NODE-API-KEY', $node->api_key)
+            ->post('/api/client-controller/job-progress', [
+                'job_uuid' => $job->job_uuid,
+                'progress' => json_encode($progress),
+                'screenshot' => UploadedFile::fake()->create('live.png', 32, 'image/png'),
+            ])
+            ->assertOk()
+            ->assertJsonPath('success', true);
+
+        $relativePath = 'workflow-task-runs/client-controller/'.$job->job_uuid.'/live.png';
+        Storage::disk('public')->assertExists($relativePath);
+        $this->assertSame('dispatched', $job->fresh()->status);
+        $this->assertSame('task-started', $job->fresh()->result_json['stage']);
+        $this->assertSame($relativePath, $job->fresh()->result_json['browserWindows'][0]['livePreviewRelativePath']);
+
+        $this->withHeader('X-NODE-API-KEY', $node->api_key)
+            ->postJson('/api/client-controller/job-result', [
+                'job_uuid' => $job->job_uuid,
+                'status' => 'success',
+                'result' => [
+                    'ok' => true,
+                    'statusMessage' => 'Fertig.',
+                    'browserWindows' => $progress['browserWindows'],
+                ],
+            ])
+            ->assertOk();
+
+        $this->assertSame('success', $job->fresh()->status);
+        $this->assertSame($relativePath, $job->fresh()->result_json['browserWindows'][0]['livePreviewRelativePath']);
     }
 
     public function test_detail_module_queues_only_one_active_remote_command(): void

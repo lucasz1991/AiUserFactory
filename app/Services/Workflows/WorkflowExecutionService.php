@@ -12,11 +12,11 @@ use App\Models\Workflow;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowStep;
 use App\Models\WorkflowStepRun;
+use App\Services\ClientController\NetworkJobDispatcher;
 use App\Services\Mail\MailAccountRegistrationRunner;
 use App\Services\Mail\WebmailSessionRunner;
-use App\Services\ClientController\NetworkJobDispatcher;
-use App\Services\Workflows\Tasks\PersistMailAccountTask;
 use App\Services\Workflows\Tasks\PersistBrowserSessionTask;
+use App\Services\Workflows\Tasks\PersistMailAccountTask;
 use App\Services\Workflows\Tasks\PersistWebmailSessionTask;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Crypt;
@@ -433,7 +433,10 @@ class WorkflowExecutionService
             ],
         ])->save();
 
-        $this->scheduleMonitor($stepRun, 3);
+        $this->scheduleMonitor(
+            $stepRun,
+            (int) ($runtime['livePreviewPollIntervalSeconds'] ?? $runtime['livePreviewIntervalSeconds'] ?? 3),
+        );
 
         return 'waiting';
     }
@@ -2146,11 +2149,24 @@ class WorkflowExecutionService
             default => (string) $job->status,
         };
 
+        $result = is_array($job->result_json) ? $job->result_json : [];
+
+        if ($job->status === 'dispatched' && $result !== []) {
+            return array_replace($result, [
+                'runId' => $job->job_uuid,
+                'state' => 'running',
+                'isRunning' => true,
+                'message' => trim((string) ($result['message'] ?? $result['statusMessage'] ?? ''))
+                    ?: 'ClientController-Job: dispatched',
+                'networkJobUuid' => $job->job_uuid,
+            ]);
+        }
+
         return [
             'runId' => $job->job_uuid,
             'state' => $state,
             'message' => $job->error_message ?: 'ClientController-Job: '.$job->status,
-            'result' => is_array($job->result_json) ? $job->result_json : [],
+            'result' => $result,
             'networkJobUuid' => $job->job_uuid,
         ];
     }
