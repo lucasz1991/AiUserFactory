@@ -1139,6 +1139,7 @@ class WorkflowExecutionService
     {
         if ($stepRun->external_run_type === 'workflow-task') {
             $this->applyWorkflowVariablesResult($stepRun->workflowRun, $result);
+            $this->applyWorkflowTaskMailAccountPersistence($stepRun->workflowRun, $result);
         }
 
         if ($stepRun->external_run_type === 'mail-registration') {
@@ -1274,6 +1275,94 @@ class WorkflowExecutionService
         }
 
         app(PersistMailAccountTask::class)->handle($person, $account);
+    }
+
+    protected function applyWorkflowTaskMailAccountPersistence(WorkflowRun $run, array $result): void
+    {
+        $person = $this->personForRun($run);
+
+        if (! $person) {
+            return;
+        }
+
+        foreach ($this->mailAccountsToPersistFromWorkflowTaskResult($result) as $account) {
+            app(PersistMailAccountTask::class)->handle($person, $account);
+        }
+    }
+
+    protected function mailAccountsToPersistFromWorkflowTaskResult(array $result): array
+    {
+        $accounts = [];
+
+        if ($this->shouldPersistMailAccountPayload($result)) {
+            $account = $this->mailAccountPayload($result);
+
+            if ($account !== null) {
+                $accounts[] = $account;
+            }
+        }
+
+        $tasks = is_array($result['tasks'] ?? null) ? array_reverse($result['tasks']) : [];
+
+        foreach ($tasks as $taskPayload) {
+            if (! is_array($taskPayload) || ! $this->shouldPersistMailAccountPayload($taskPayload)) {
+                continue;
+            }
+
+            $account = $this->mailAccountPayload($taskPayload);
+
+            if ($account !== null) {
+                $accounts[] = $account;
+            }
+        }
+
+        $seen = [];
+
+        return collect($accounts)
+            ->filter(fn (array $account): bool => trim((string) ($account['email'] ?? '')) !== '')
+            ->filter(function (array $account) use (&$seen): bool {
+                $key = strtolower(trim((string) ($account['email'] ?? ''))).'|'.strtolower(trim((string) ($account['provider'] ?? '')));
+
+                if (isset($seen[$key])) {
+                    return false;
+                }
+
+                $seen[$key] = true;
+
+                return true;
+            })
+            ->values()
+            ->all();
+    }
+
+    protected function shouldPersistMailAccountPayload(array $payload): bool
+    {
+        if (array_key_exists('persist_mail_account', $payload) || array_key_exists('persistMailAccount', $payload)) {
+            return filter_var(
+                $payload['persist_mail_account'] ?? $payload['persistMailAccount'],
+                FILTER_VALIDATE_BOOL,
+                FILTER_NULL_ON_FAILURE,
+            ) ?? false;
+        }
+
+        $taskKey = trim((string) ($payload['task_key'] ?? $payload['taskKey'] ?? ''));
+
+        return in_array($taskKey, ['data.persist_mail_account', 'data.save_workflow_data'], true);
+    }
+
+    protected function mailAccountPayload(array $payload): ?array
+    {
+        $account = is_array($payload['account'] ?? null)
+            ? $payload['account']
+            : (is_array($payload['email_account'] ?? null) ? $payload['email_account'] : null);
+
+        if ($account === null) {
+            return null;
+        }
+
+        $account['email'] = trim((string) ($account['email'] ?? ''));
+
+        return $account['email'] === '' ? null : $account;
     }
 
     protected function applyWebmailSessionResult(WorkflowRun $run, array $result): void
@@ -1937,7 +2026,68 @@ class WorkflowExecutionService
             }
         }
 
-        return $payload;
+        return $this->redactPublicSecretKeys($payload);
+    }
+
+    protected function redactPublicSecretKeys(mixed $value): mixed
+    {
+        if (! is_array($value)) {
+            return $value;
+        }
+
+        $secretKeys = [
+            'password',
+            'passwordEncrypted',
+            'password_encrypted',
+            'webmailSession',
+            'webmail_session',
+            'webmailSessionPayload',
+            'webmail_session_payload',
+            'browserSessionPayload',
+            'browser_session_payload',
+            'sessionPayload',
+            'session_payload',
+            'encryptedSessionPayload',
+            'encryptedBrowserSessionPayload',
+            'payload_encrypted',
+            'webmailSessionFilePath',
+            'webmail_session_file_path',
+            'browserSessionFilePath',
+            'browser_session_file_path',
+            'browser_sessions',
+            'browserWsEndpoint',
+            'browser_ws_endpoint',
+        ];
+
+        $redacted = [];
+
+        foreach ($value as $key => $item) {
+            if (is_string($key) && $this->isPublicSecretKey($key, $secretKeys)) {
+                continue;
+            }
+
+            $redacted[$key] = $this->redactPublicSecretKeys($item);
+        }
+
+        return $redacted;
+    }
+
+    protected function isPublicSecretKey(string $key, array $exactKeys): bool
+    {
+        if (in_array($key, $exactKeys, true)) {
+            return true;
+        }
+
+        $normalized = strtolower($key);
+
+        if (! str_contains($normalized, 'password') && ! str_contains($normalized, 'passwort')) {
+            return false;
+        }
+
+        return ! str_ends_with($normalized, '_source')
+            && ! str_ends_with($normalized, 'source')
+            && ! str_ends_with($normalized, '_variable')
+            && ! str_ends_with($normalized, 'variable');
     }
 
     protected function logsFromExternalStatus(array $status): array

@@ -849,6 +849,7 @@ class WorkflowTaskRunner
             'data.read_account_data' => 'node/workflows/tasks/data/read_account_data.cjs',
             'data.resolve_person' => 'node/workflows/tasks/data/resolve_person.cjs',
             'data.read_login_data' => 'node/workflows/tasks/data/read_login_data.cjs',
+            'data.save_workflow_data' => 'node/workflows/tasks/data/save_workflow_data.cjs',
             'data.persist_mail_account' => 'node/workflows/tasks/data/persist_mail_account.cjs',
             'data.persist_webmail_session' => 'node/workflows/tasks/data/persist_webmail_session.cjs',
             'data.persist_browser_session' => 'node/workflows/tasks/data/persist_browser_session.cjs',

@@ -131,6 +131,43 @@ function publicAccount(account = null, includePassword = false) {
 
 function redactPublicSecrets(value) {
   const copy = cleanForJson(value);
+  const secretKeys = [
+    'password',
+    'passwordEncrypted',
+    'password_encrypted',
+    'webmailSession',
+    'webmail_session',
+    'webmailSessionPayload',
+    'webmail_session_payload',
+    'sessionPayload',
+    'session_payload',
+    'webmailSessionFilePath',
+    'webmail_session_file_path',
+    'browserSessionFilePath',
+    'browser_session_file_path',
+    'browserSessionPayload',
+    'browser_session_payload',
+    'encryptedBrowserSessionPayload',
+    'payload_encrypted',
+    'browser_sessions',
+  ];
+
+  const isSecretKey = (key) => {
+    if (secretKeys.includes(key)) {
+      return true;
+    }
+
+    const normalized = String(key || '').toLowerCase();
+
+    if (!normalized.includes('password') && !normalized.includes('passwort')) {
+      return false;
+    }
+
+    return !normalized.endsWith('_source')
+      && !normalized.endsWith('source')
+      && !normalized.endsWith('_variable')
+      && !normalized.endsWith('variable');
+  };
 
   const scrub = (item) => {
     if (!item || typeof item !== 'object') {
@@ -142,26 +179,7 @@ function redactPublicSecrets(value) {
     }
 
     for (const key of Object.keys(item)) {
-      if ([
-        'password',
-        'passwordEncrypted',
-        'password_encrypted',
-        'webmailSession',
-        'webmail_session',
-        'webmailSessionPayload',
-        'webmail_session_payload',
-        'sessionPayload',
-        'session_payload',
-        'webmailSessionFilePath',
-        'webmail_session_file_path',
-        'browserSessionFilePath',
-        'browser_session_file_path',
-        'browserSessionPayload',
-        'browser_session_payload',
-        'encryptedBrowserSessionPayload',
-        'payload_encrypted',
-        'browser_sessions',
-      ].includes(key)) {
+      if (isSecretKey(key)) {
         delete item[key];
         continue;
       }
@@ -654,6 +672,7 @@ function pageTargetId(candidatePage) {
 }
 
 async function existingPageForWindow(currentBrowser, windowName = 'main') {
+  const normalizedName = normalizeBrowserWindowName(windowName);
   const state = workflowBrowserWindowState(windowName);
   const targetId = String(state?.targetId || state?.target_id || '').trim();
   const url = String(state?.url || '').trim();
@@ -686,6 +705,10 @@ async function existingPageForWindow(currentBrowser, windowName = 'main') {
     if (exactUrlPage) {
       return exactUrlPage;
     }
+  }
+
+  if (!state && normalizedName !== 'main') {
+    return null;
   }
 
   return openPages.find((candidatePage) => /^https?:\/\//i.test(String(candidatePage.url?.() || '')))
