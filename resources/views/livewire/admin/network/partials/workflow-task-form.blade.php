@@ -140,6 +140,7 @@
         'Ergebnis' => 'fad fa-check',
         'Ausfuehrung' => 'fad fa-play',
         'Eingabe' => 'fad fa-keyboard',
+        'Hover' => 'fad fa-computer-mouse',
         'Daten' => 'fad fa-code',
         'Session' => 'fad fa-cookie',
         'Loeschen' => 'fad fa-trash-can',

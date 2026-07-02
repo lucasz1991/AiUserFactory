@@ -19,7 +19,9 @@
             </button>
         </div>
 
-        <div class="flex w-full items-center justify-end ltr:pl-6 rtl:pr-6 ltr:pr-6 rtl:pl-6 border-b border-gray-300">
+        <div class="flex w-full items-center justify-end gap-3 ltr:pl-6 rtl:pr-6 ltr:pr-6 rtl:pl-6 border-b border-gray-300">
+            <livewire:system-clock />
+
             @auth
                 <div class="ms-3 relative">
                     <x-dropdown align="" width="48">

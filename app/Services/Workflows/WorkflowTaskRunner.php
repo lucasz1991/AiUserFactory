@@ -136,10 +136,7 @@ class WorkflowTaskRunner
                 $this->resolveNodeBinary(),
                 $this->resolveNodeScriptPath(),
                 $configPath,
-            ], base_path(), $stdoutPath, $stderrPath, [
-                'TZ' => $timezone,
-                'APP_TIMEZONE' => $timezone,
-            ]);
+            ], base_path(), $stdoutPath, $stderrPath, $this->nodeProcessEnvironment($timezone));
 
             $status = $this->readJsonFile($statusPath) ?: [];
             $status['pid'] = $pid;
@@ -905,35 +902,46 @@ class WorkflowTaskRunner
 
     protected function workflowTimezone(array $runtimeContext = []): string
     {
-        foreach ([
-            data_get($runtimeContext, 'timezone'),
-            data_get($runtimeContext, 'timeZone'),
-            data_get($runtimeContext, 'person.timezone'),
-            data_get($runtimeContext, 'person.person_timezone'),
-            config('app.timezone', 'Europe/Berlin'),
-            'Europe/Berlin',
-        ] as $candidate) {
-            $timezone = trim((string) $candidate);
+        return $this->validTimezone(
+            data_get($runtimeContext, 'timezone')
+            ?: data_get($runtimeContext, 'timeZone')
+            ?: data_get($runtimeContext, 'person.timezone')
+            ?: data_get($runtimeContext, 'person.person_timezone')
+            ?: (getenv('APP_TIMEZONE') ?: null)
+            ?: (getenv('TZ') ?: null)
+            ?: config('app.timezone', 'Europe/Berlin'),
+        );
+    }
 
-            if ($timezone === '') {
-                continue;
-            }
+    protected function validTimezone(mixed $timezone): string
+    {
+        $timezone = trim((string) $timezone);
 
+        if ($timezone !== '') {
             try {
                 new \DateTimeZone($timezone);
 
                 return $timezone;
             } catch (\Throwable) {
-                continue;
+                // Fall through to the stable default.
             }
         }
 
         return 'Europe/Berlin';
     }
 
+    protected function nodeProcessEnvironment(string $timezone): array
+    {
+        return [
+            'TZ' => $this->validTimezone($timezone),
+            'APP_TIMEZONE' => $this->validTimezone($timezone),
+        ];
+    }
+
     protected function normalizeRuntimeTask(array $task): array
     {
         $script = match ((string) ($task['task_key'] ?? '')) {
+            'browser.hover' => 'node/workflows/tasks/browser/hover.cjs',
             'data.read_account_data' => 'node/workflows/tasks/data/read_account_data.cjs',
             'data.resolve_person' => 'node/workflows/tasks/data/resolve_person.cjs',
             'data.read_login_data' => 'node/workflows/tasks/data/read_login_data.cjs',
@@ -1093,9 +1101,7 @@ class WorkflowTaskRunner
         File::ensureDirectoryExists(dirname($stderrPath));
 
         if (PHP_OS_FAMILY === 'Windows') {
-            $environmentScript = collect($environment)
-                ->map(fn (mixed $value, string $key): string => '$env:'.$key.' = '.$this->powershellQuote((string) $value).';')
-                ->implode(' ');
+            $environmentScript = $this->powershellEnvironmentScript($environment);
             $script = '$p = Start-Process'
                 .' -FilePath '.$this->powershellQuote($command[0])
                 .' -ArgumentList @('.implode(',', array_map(fn (string $argument): string => $this->powershellQuote($argument), array_slice($command, 1))).')'
@@ -1107,17 +1113,16 @@ class WorkflowTaskRunner
 
             $result = Process::timeout(15)->run(['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $environmentScript.$script]);
         } else {
-            $environmentPrefix = collect($environment)
-                ->filter(fn (mixed $value, string $key): bool => trim((string) $key) !== '' && trim((string) $value) !== '')
-                ->map(fn (mixed $value, string $key): string => $key.'='.escapeshellarg((string) $value))
-                ->implode(' ');
-            $commandLine = trim($environmentPrefix.' '.implode(' ', array_map('escapeshellarg', $command)));
+            $environmentPrefix = $this->shellEnvironmentPrefix($environment);
+            $commandLine = implode(' ', array_map('escapeshellarg', $command));
             $shellCommand = sprintf(
-                'cd %s && if command -v setsid >/dev/null 2>&1; then setsid nohup %s > %s 2> %s < /dev/null & echo $!; else nohup %s > %s 2> %s < /dev/null & echo $!; fi',
+                'cd %s && if command -v setsid >/dev/null 2>&1; then %s setsid nohup %s > %s 2> %s < /dev/null & echo $!; else %s nohup %s > %s 2> %s < /dev/null & echo $!; fi',
                 escapeshellarg($workingDirectory),
+                $environmentPrefix,
                 $commandLine,
                 escapeshellarg($stdoutPath),
                 escapeshellarg($stderrPath),
+                $environmentPrefix,
                 $commandLine,
                 escapeshellarg($stdoutPath),
                 escapeshellarg($stderrPath),
@@ -1132,6 +1137,22 @@ class WorkflowTaskRunner
         $pid = (int) trim($result->output());
 
         return $pid > 0 ? $pid : null;
+    }
+
+    protected function shellEnvironmentPrefix(array $environment): string
+    {
+        return collect($environment)
+            ->filter(fn (mixed $value, string $key): bool => trim((string) $key) !== '' && trim((string) $value) !== '')
+            ->map(fn (mixed $value, string $key): string => $key.'='.escapeshellarg((string) $value))
+            ->implode(' ');
+    }
+
+    protected function powershellEnvironmentScript(array $environment): string
+    {
+        return collect($environment)
+            ->filter(fn (mixed $value, string $key): bool => trim((string) $key) !== '' && trim((string) $value) !== '')
+            ->map(fn (mixed $value, string $key): string => '$env:'.$key.' = '.$this->powershellQuote((string) $value).';')
+            ->implode(' ');
     }
 
     protected function stopProcess(int $pid, bool $force = true): void

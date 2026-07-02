@@ -158,6 +158,7 @@ async function run(context = {}) {
     statusMessage: `Username-Kandidat wurde eingetragen: ${context.account.username}`,
     selector: fillResult.selector,
     cachedElement: fillResult.cachedElement === true,
+    hoverPreservedDuringFill: fillResult.hoverPreservedDuringFill === true,
     frameUrl: fillResult.frameUrl,
     account: {
       provider: context.account.provider,

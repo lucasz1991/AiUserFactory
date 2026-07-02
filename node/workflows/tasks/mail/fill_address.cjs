@@ -62,6 +62,7 @@ async function run(context = {}) {
     statusMessage: `Mailadresse wurde eingetragen: ${account.email || value}`,
     selector: fillResult.selector,
     cachedElement: fillResult.cachedElement === true,
+    hoverPreservedDuringFill: fillResult.hoverPreservedDuringFill === true,
     frameUrl: fillResult.frameUrl,
     account: {
       provider: account.provider,

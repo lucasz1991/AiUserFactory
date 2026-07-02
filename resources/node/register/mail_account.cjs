@@ -48,6 +48,22 @@ let heartbeatCounter = 0;
 let activeBrowserEngine = null;
 let requestedBrowserEngine = null;
 let browserFallbackReason = null;
+
+function runtimeTimezone(runtimeConfig = {}) {
+  return runtimeConfig.timeZone
+    || runtimeConfig.timezone
+    || runtimeConfig.subject?.timezone
+    || runtimeConfig.workflow?.person?.timezone
+    || runtimeConfig.workflow?.person?.person_timezone
+    || process.env.APP_TIMEZONE
+    || process.env.TZ
+    || 'Europe/Berlin';
+}
+
+function applyRuntimeTimezone(runtimeConfig = {}) {
+  process.env.TZ = runtimeTimezone(runtimeConfig);
+}
+
 const {
   livePreviewIntervalMs,
   captureLivePreviewScreenshot,
@@ -86,6 +102,8 @@ function publicStatusPayload(runtimeConfig, state, stage, message, data = {}) {
     browserProfilePath: runtimeConfig.browserProfilePath || null,
     previousBrowserProfilePath: runtimeConfig.previousBrowserProfilePath || null,
     browserProfileRetryCount: runtimeConfig.browserProfileRetryCount || 0,
+    timezone: runtimeTimezone(runtimeConfig),
+    timeZone: runtimeTimezone(runtimeConfig),
     scriptName: MAIL_ACCOUNT_SCRIPT_NAME,
     scriptVersion: MAIL_ACCOUNT_SCRIPT_VERSION,
     scriptVersionLabel: MAIL_ACCOUNT_SCRIPT_VERSION_LABEL,
@@ -4093,6 +4111,7 @@ async function main() {
     throw new Error(`Runtime-Konfiguration konnte nicht gelesen werden: ${runtimeConfigPath}`);
   }
 
+  applyRuntimeTimezone(runtimeConfig);
   const provider = validateProvider(runtimeConfig);
   runtimeConfig.provider = provider;
   requestedBrowserEngine = resolveBrowserEngine(runtimeConfig);

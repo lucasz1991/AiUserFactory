@@ -744,37 +744,6 @@ async function pageIsUsable(candidatePage) {
   return candidatePage.evaluate(() => document.readyState).then(() => true).catch(() => false);
 }
 
-async function applyBrowserTimezone(candidatePage, windowName = 'main') {
-  if (
-    !candidatePage
-    || browserDriver !== 'puppeteer'
-    || typeof candidatePage.emulateTimezone !== 'function'
-    || candidatePage.__workflowTimezoneApplied === workflowTimezone
-  ) {
-    return false;
-  }
-
-  try {
-    await candidatePage.emulateTimezone(workflowTimezone);
-    candidatePage.__workflowTimezoneApplied = workflowTimezone;
-
-    pushEvent('browser-timezone-applied', 'Browser-Zeitzone wurde gesetzt.', {
-      browserWindow: normalizeBrowserWindowName(windowName),
-      timezone: workflowTimezone,
-    });
-
-    return true;
-  } catch (error) {
-    pushEvent('browser-timezone-failed', 'Browser-Zeitzone konnte nicht gesetzt werden.', {
-      browserWindow: normalizeBrowserWindowName(windowName),
-      timezone: workflowTimezone,
-      error: String(error?.message || error).slice(0, 500),
-    });
-
-    return false;
-  }
-}
-
 async function restoreBrowserWindowState(context, nextPage, windowName = 'main') {
   const state = workflowBrowserWindowState(windowName);
   const url = String(state?.url || '').trim();
@@ -1207,7 +1176,6 @@ async function ensurePage(context, windowName = 'main', label = '') {
   const existingPage = await existingPageForWindow(currentBrowser, normalizedName);
 
   if (existingPage) {
-    await applyBrowserTimezone(existingPage, normalizedName);
     await restoreBrowserWindowState(context, existingPage, normalizedName);
 
     pushEvent('workflow-browser-window-active', 'Workflow-Browserfenster ist aktiv.', {
@@ -1220,7 +1188,6 @@ async function ensurePage(context, windowName = 'main', label = '') {
   }
 
   const nextPage = await currentBrowser.newPage();
-  await applyBrowserTimezone(nextPage, normalizedName);
   const registeredPage = registerBrowserWindow(context, nextPage, normalizedName, label);
   await restoreBrowserWindowState(context, registeredPage, normalizedName);
 
@@ -1700,7 +1667,6 @@ async function run() {
         }
 
         if (result && result.page) {
-          await applyBrowserTimezone(result.page, targetBrowserWindow);
           registerBrowserWindow(context, result.page, targetBrowserWindow, targetBrowserWindow === 'main' ? 'Main' : taskLabel);
         }
       }

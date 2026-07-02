@@ -70,7 +70,7 @@ return [
     |
     */
 
-    'timezone' => env('APP_TIMEZONE', 'Europe/Berlin'),
+    'timezone' => env('APP_TIMEZONE', env('TZ', 'Europe/Berlin')),
 
     /*
     |--------------------------------------------------------------------------
