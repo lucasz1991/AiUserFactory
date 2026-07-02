@@ -783,6 +783,8 @@
                                         @php
                                             $mailScanDebug = data_get($task, 'debug.resultTask.mailListScanDebug')
                                                 ?: data_get($task, 'debug.resultTask.mail_list_scan_debug');
+                                            $mailScanSearch = data_get($mailScanDebug, 'webmailSearch')
+                                                ?: data_get($mailScanDebug, 'webmail_search');
                                             $mailScanCandidates = is_array(data_get($mailScanDebug, 'candidates'))
                                                 ? array_slice(data_get($mailScanDebug, 'candidates'), 0, 8)
                                                 : [];
@@ -810,6 +812,16 @@
                                                 @if(is_array($mailScanDebug))
                                                     <div class="mt-2 rounded border border-amber-100 bg-amber-50 p-2 text-[11px] text-amber-900">
                                                         <div class="font-semibold uppercase tracking-wide text-amber-700">Mail-Scan Zeitfilter</div>
+                                                        @if(is_array($mailScanSearch) && (data_get($mailScanSearch, 'enabled') || data_get($mailScanSearch, 'searchInputSelector') || data_get($mailScanSearch, 'search_input_selector')))
+                                                            <div class="mt-1 grid gap-1 rounded border border-amber-200 bg-white/60 p-2 text-amber-900 sm:grid-cols-2">
+                                                                <span>Webmail-Suche: {{ data_get($mailScanSearch, 'enabled') ? 'aktiv' : 'inaktiv' }}</span>
+                                                                <span>Status: {{ data_get($mailScanSearch, 'statusMessage') ?: data_get($mailScanSearch, 'status_message') ?: data_get($mailScanSearch, 'status') ?: '-' }}</span>
+                                                                <span class="break-words">Suchwert: {{ data_get($mailScanSearch, 'searchValue') ?: data_get($mailScanSearch, 'search_value') ?: data_get($mailScanSearch, 'configuredSearchValue') ?: data_get($mailScanSearch, 'configured_search_value') ?: '-' }}</span>
+                                                                <span class="break-words">Suchfeld: {{ data_get($mailScanSearch, 'searchInputSelector') ?: data_get($mailScanSearch, 'search_input_selector') ?: '-' }}</span>
+                                                                <span>Absenden: {{ data_get($mailScanSearch, 'searchButtonSelector') || data_get($mailScanSearch, 'search_button_selector') ? 'Button' : 'Enter' }}</span>
+                                                                <span>Warten: {{ data_get($mailScanSearch, 'searchWaitMs', data_get($mailScanSearch, 'search_wait_ms', 0)) }}ms</span>
+                                                            </div>
+                                                        @endif
                                                         <div class="mt-1 flex flex-wrap gap-x-3 gap-y-1">
                                                             <span>Gesucht: {{ data_get($mailScanDebug, 'maxAgeSeconds') ? data_get($mailScanDebug, 'maxAgeSeconds').'s' : 'kein Zeitfilter' }}</span>
                                                             @if(data_get($mailScanDebug, 'acceptedSince'))
@@ -820,7 +832,17 @@
                                                             <span>Akzeptiert: {{ data_get($mailScanDebug, 'acceptedCandidates', 0) }}</span>
                                                             <span>Poll: {{ data_get($mailScanDebug, 'pollCount', 0) }}</span>
                                                             <span>GMT Offset: {{ data_get($mailScanDebug, 'mailTimeGmtOffsetHours', 0) }}</span>
+                                                            @if(data_get($mailScanDebug, 'subjectTitleFiltersIgnored') || data_get($mailScanDebug, 'subject_title_filters_ignored'))
+                                                                <span>Betreff/Titel: ignoriert durch Webmail-Suche</span>
+                                                            @endif
                                                         </div>
+                                                        @if(data_get($mailScanDebug, 'configuredSubjectFilters') || data_get($mailScanDebug, 'configuredTitleFilters'))
+                                                            <div class="mt-1 break-words text-amber-800">
+                                                                Konfigurierte Textfilter:
+                                                                Betreff {{ collect(data_get($mailScanDebug, 'configuredSubjectFilters', []))->implode(', ') ?: '-' }},
+                                                                Titel {{ collect(data_get($mailScanDebug, 'configuredTitleFilters', []))->implode(', ') ?: '-' }}
+                                                            </div>
+                                                        @endif
                                                         @if(data_get($mailScanDebug, 'foundDateTexts'))
                                                             <div class="mt-1 break-words text-amber-800">
                                                                 Zeittexte: {{ collect(data_get($mailScanDebug, 'foundDateTexts'))->take(10)->implode(' | ') }}

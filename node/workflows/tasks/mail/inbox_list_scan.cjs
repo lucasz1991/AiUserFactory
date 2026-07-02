@@ -1,6 +1,11 @@
 'use strict';
 
 const { captureTaskPreview, startTaskPreview } = require('../lib/preview.cjs');
+const { fillFirstMatchingInput } = require('../lib/fill_input.cjs');
+const {
+  clickFirstVisibleElement,
+  elementCandidatesFromInput,
+} = require('../lib/find_visible_element.cjs');
 const {
   maxAgeSeconds,
   normalizeText,
@@ -12,8 +17,10 @@ const {
   setWorkflowVariable,
   stringListFrom,
   taskOptions,
+  valueFromPath,
   variableName,
   wait,
+  workflowVariableRoot,
 } = require('../lib/mail_list.cjs');
 
 function candidateKey(candidate = {}) {
@@ -45,6 +52,185 @@ function filterMatches(candidate = {}, subjectFilters = [], titleFilters = []) {
   }
 
   return false;
+}
+
+function valueAsSearchText(value) {
+  if (value === undefined || value === null) {
+    return '';
+  }
+
+  if (typeof value === 'string') {
+    return normalizeText(value);
+  }
+
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+
+  try {
+    return normalizeText(JSON.stringify(value));
+  } catch {
+    return normalizeText(value);
+  }
+}
+
+function resolveSearchValue(context = {}, configuredValue = '') {
+  const configured = normalizeText(configuredValue);
+
+  if (!configured) {
+    return '';
+  }
+
+  const root = workflowVariableRoot(context);
+  const candidatePaths = Array.from(new Set([
+    configured,
+    configured.replace(/^workflowVariables\./, 'workflow_variables.'),
+    configured.replace(/^workflow_variables\./, 'workflowVariables.'),
+    `workflow_variables.${configured}`,
+    `workflowVariables.${configured}`,
+    `lastResult.${configured}`,
+  ]));
+
+  for (const path of candidatePaths) {
+    const resolved = valueFromPath(root, path);
+    const text = valueAsSearchText(resolved);
+
+    if (text !== '') {
+      return text;
+    }
+  }
+
+  return configured;
+}
+
+async function refreshActivePage(context = {}, fallbackPage = null) {
+  if (typeof context.refreshActivePage !== 'function') {
+    return fallbackPage;
+  }
+
+  const refreshedPage = await context.refreshActivePage().catch(() => null);
+
+  return refreshedPage || fallbackPage;
+}
+
+async function applyWebmailSearch(page, context = {}, config = {}) {
+  const searchInputSelector = normalizeText(config.searchInputSelector);
+  const configuredSearchValue = normalizeText(config.configuredSearchValue);
+  const searchValue = normalizeText(config.searchValue);
+  const searchButtonSelector = normalizeText(config.searchButtonSelector);
+  const searchWaitMs = Math.max(0, Math.min(30000, Number(config.searchWaitMs || 0)));
+  const timeoutMs = Math.max(500, Math.min(120000, Number(config.timeoutMs || 12000)));
+  const enabled = searchInputSelector !== '' && searchValue !== '';
+  const debug = {
+    enabled,
+    ok: !enabled,
+    status: enabled ? 'pending' : 'inactive',
+    statusMessage: enabled
+      ? ''
+      : (searchInputSelector || configuredSearchValue
+        ? 'Webmail-Suche nicht aktiv: Suchfeld-Selector und Suchwert muessen gesetzt sein.'
+        : 'Webmail-Suche nicht konfiguriert.'),
+    status_message: enabled
+      ? ''
+      : (searchInputSelector || configuredSearchValue
+        ? 'Webmail-Suche nicht aktiv: Suchfeld-Selector und Suchwert muessen gesetzt sein.'
+        : 'Webmail-Suche nicht konfiguriert.'),
+    searchInputSelector,
+    search_input_selector: searchInputSelector,
+    configuredSearchValue,
+    configured_search_value: configuredSearchValue,
+    searchValue: enabled ? searchValue : '',
+    search_value: enabled ? searchValue : '',
+    searchButtonSelector,
+    search_button_selector: searchButtonSelector,
+    searchWaitMs,
+    search_wait_ms: searchWaitMs,
+    submitMode: searchButtonSelector ? 'button' : 'enter',
+    submit_mode: searchButtonSelector ? 'button' : 'enter',
+  };
+
+  if (!enabled) {
+    return { enabled: false, ok: true, debug, page };
+  }
+
+  const fillResult = await fillFirstMatchingInput(
+    page,
+    [searchInputSelector],
+    searchValue,
+    timeoutMs,
+    { context },
+  );
+
+  debug.fillResult = fillResult;
+  debug.fill_result = fillResult;
+
+  if (!fillResult?.ok) {
+    debug.ok = false;
+    debug.status = 'failed';
+    debug.statusMessage = 'Webmail-Suchfeld wurde nicht gefunden oder konnte nicht gefuellt werden.';
+    debug.status_message = debug.statusMessage;
+
+    return { enabled: true, ok: false, debug, page };
+  }
+
+  if (searchButtonSelector !== '') {
+    const submitResult = await clickFirstVisibleElement(
+      page,
+      elementCandidatesFromInput({ selector: searchButtonSelector }, {
+        textKeys: ['text', 'value', 'label'],
+      }),
+      timeoutMs,
+      { context },
+    );
+
+    debug.submitResult = submitResult;
+    debug.submit_result = submitResult;
+
+    if (!submitResult) {
+      debug.ok = false;
+      debug.status = 'failed';
+      debug.statusMessage = 'Webmail-Suchen-Button wurde nicht gefunden oder konnte nicht geklickt werden.';
+      debug.status_message = debug.statusMessage;
+
+      return { enabled: true, ok: false, debug, page };
+    }
+  } else if (page?.keyboard && typeof page.keyboard.press === 'function') {
+    await page.keyboard.press('Enter').catch((error) => {
+      debug.enterError = error.message;
+      debug.enter_error = error.message;
+    });
+    debug.enterPressed = !debug.enterError;
+    debug.enter_pressed = !debug.enterError;
+  } else {
+    debug.ok = false;
+    debug.status = 'failed';
+    debug.statusMessage = 'Webmail-Suche konnte nicht abgeschickt werden, weil kein Button konfiguriert ist und Enter nicht verfuegbar war.';
+    debug.status_message = debug.statusMessage;
+
+    return { enabled: true, ok: false, debug, page };
+  }
+
+  if (debug.enterError) {
+    debug.ok = false;
+    debug.status = 'failed';
+    debug.statusMessage = `Webmail-Suche konnte per Enter nicht abgeschickt werden: ${debug.enterError}`;
+    debug.status_message = debug.statusMessage;
+
+    return { enabled: true, ok: false, debug, page };
+  }
+
+  if (searchWaitMs > 0) {
+    await wait(searchWaitMs);
+  }
+
+  const refreshedPage = await refreshActivePage(context, page);
+
+  debug.ok = true;
+  debug.status = 'applied';
+  debug.statusMessage = 'Webmail-Suche wurde ausgefuehrt.';
+  debug.status_message = debug.statusMessage;
+
+  return { enabled: true, ok: true, debug, page: refreshedPage };
 }
 
 function secondsLabel(seconds) {
@@ -95,6 +281,7 @@ function candidateDebug(candidate = {}, filters = {}) {
   const ageAccepted = maximumAgeSeconds <= 0
     || (hasAge ? ageNumber <= maximumAgeSeconds : filters.includeUnknownAge === true);
   const textAccepted = filterMatches(candidate, filters.subjectFilters || [], filters.titleFilters || []);
+  const subjectTitleFiltersIgnored = filters.subjectTitleFiltersIgnored === true;
   const accepted = idAccepted && ageAccepted && textAccepted;
   const reasons = [];
 
@@ -116,7 +303,9 @@ function candidateDebug(candidate = {}, filters = {}) {
     reasons.push('kein Zeitfilter aktiv');
   }
 
-  if (!textAccepted) {
+  if (subjectTitleFiltersIgnored) {
+    reasons.push('Betreff-/Titelfilter durch Webmail-Suche ignoriert');
+  } else if (!textAccepted) {
     reasons.push('Betreff-/Titelfilter passt nicht');
   } else if ((filters.subjectFilters || []).length > 0 || (filters.titleFilters || []).length > 0) {
     reasons.push('Betreff-/Titelfilter passt');
@@ -152,6 +341,8 @@ function candidateDebug(candidate = {}, filters = {}) {
     age_seconds: hasAge ? ageNumber : null,
     ageLabel: hasAge ? secondsLabel(ageNumber) : 'unbekannt',
     age_label: hasAge ? secondsLabel(ageNumber) : 'unbekannt',
+    subjectTitleFiltersIgnored,
+    subject_title_filters_ignored: subjectTitleFiltersIgnored,
     subject: candidate.subject || '',
     title: candidate.title || '',
     sender: candidate.sender || '',
@@ -195,7 +386,7 @@ async function publishMailScanDebug(context = {}, debug = {}) {
 }
 
 async function run(context = {}) {
-  const page = context.page;
+  let page = context.page;
   const input = context.input || {};
   const options = taskOptions(input);
   const scalarValue = scalarInputValue(input);
@@ -215,6 +406,29 @@ async function run(context = {}) {
   const subjectFilters = stringListFrom(optionString(options, input, ['subject_filter', 'subjectFilter', 'subject_must_contain', 'subjectMustContain'], ''), []);
   const titleFilters = stringListFrom(optionString(options, input, ['title_filter', 'titleFilter', 'title_must_contain', 'titleMustContain'], ''), []);
   const mailIds = stringListFrom(optionString(options, input, ['mail_ids', 'mailIds', 'message_ids', 'messageIds'], ''), []);
+  const searchInputSelector = optionString(options, input, [
+    'search_input_selector',
+    'searchInputSelector',
+    'search_field_selector',
+    'searchFieldSelector',
+  ], '');
+  const configuredSearchValue = optionString(options, input, [
+    'search_value',
+    'searchValue',
+    'search_field_value',
+    'searchFieldValue',
+    'search_text',
+    'searchText',
+  ], '');
+  const searchValue = resolveSearchValue(context, configuredSearchValue);
+  const searchButtonSelector = optionString(options, input, [
+    'search_button_selector',
+    'searchButtonSelector',
+    'search_submit_selector',
+    'searchSubmitSelector',
+  ], '');
+  const searchWaitMs = Math.max(0, Math.min(30000, optionNumber(options, input, ['search_wait_ms', 'searchWaitMs'], 1200)));
+  const searchTimeoutMs = Math.max(500, Math.min(120000, optionNumber(options, input, ['search_timeout_ms', 'searchTimeoutMs'], 12000)));
 
   if (!page || (typeof page.frames !== 'function' && typeof page.evaluate !== 'function')) {
     return { ok: false, status: 'failed', statusMessage: 'Kein Page-Handle fuer den Mail-Inbox-Scan vorhanden.' };
@@ -222,12 +436,28 @@ async function run(context = {}) {
 
   startTaskPreview(context);
 
+  const searchResult = await applyWebmailSearch(page, context, {
+    searchInputSelector,
+    configuredSearchValue,
+    searchValue,
+    searchButtonSelector,
+    searchWaitMs,
+    timeoutMs: searchTimeoutMs,
+  });
+  page = searchResult.page || page;
+  context.page = page;
+
+  const webmailSearchDebug = searchResult.debug || {};
+  const subjectTitleFiltersIgnored = searchResult.enabled === true && searchResult.ok === true;
+  const effectiveSubjectFilters = subjectTitleFiltersIgnored ? [] : subjectFilters;
+  const effectiveTitleFilters = subjectTitleFiltersIgnored ? [] : titleFilters;
   const filterConfig = {
     maximumAgeSeconds,
     includeUnknownAge,
-    subjectFilters,
-    titleFilters,
+    subjectFilters: effectiveSubjectFilters,
+    titleFilters: effectiveTitleFilters,
     mailIds,
+    subjectTitleFiltersIgnored,
   };
   const baseDebug = {
     task: 'mail.inbox_list_scan',
@@ -245,16 +475,26 @@ async function run(context = {}) {
     max_age_minutes: maximumAgeSeconds > 0 ? Math.round((maximumAgeSeconds / 60) * 100) / 100 : null,
     includeUnknownAge,
     include_unknown_age: includeUnknownAge,
-    subjectFilters,
-    subject_filters: subjectFilters,
-    titleFilters,
-    title_filters: titleFilters,
+    subjectFilters: effectiveSubjectFilters,
+    subject_filters: effectiveSubjectFilters,
+    titleFilters: effectiveTitleFilters,
+    title_filters: effectiveTitleFilters,
+    configuredSubjectFilters: subjectFilters,
+    configured_subject_filters: subjectFilters,
+    configuredTitleFilters: titleFilters,
+    configured_title_filters: titleFilters,
+    subjectTitleFiltersIgnored,
+    subject_title_filters_ignored: subjectTitleFiltersIgnored,
     mailIds,
     mail_ids: mailIds,
     waitForNewMailSeconds,
     wait_for_new_mail_seconds: waitForNewMailSeconds,
     mailTimeGmtOffsetHours,
     mail_time_gmt_offset_hours: mailTimeGmtOffsetHours,
+    webmailSearchEnabled: searchResult.enabled === true,
+    webmail_search_enabled: searchResult.enabled === true,
+    webmailSearch: webmailSearchDebug,
+    webmail_search: webmailSearchDebug,
   };
   let latestDebug = {
     ...baseDebug,
@@ -268,6 +508,29 @@ async function run(context = {}) {
     accepted_candidates: 0,
     candidates: [],
   };
+
+  if (searchResult.enabled === true && searchResult.ok !== true) {
+    latestDebug = {
+      ...latestDebug,
+      status: 'failed',
+      statusMessage: webmailSearchDebug.statusMessage || 'Webmail-Suche konnte nicht ausgefuehrt werden.',
+      status_message: webmailSearchDebug.status_message || webmailSearchDebug.statusMessage || 'Webmail-Suche konnte nicht ausgefuehrt werden.',
+    };
+
+    await publishMailScanDebug(context, latestDebug);
+
+    return captureTaskPreview(context, {
+      ok: false,
+      status: 'failed',
+      statusMessage: latestDebug.statusMessage,
+      status_message: latestDebug.statusMessage,
+      mailListScanDebug: latestDebug,
+      mail_list_scan_debug: latestDebug,
+      workflowVariables: context.workflowVariables,
+      workflow_variables: context.workflow_variables,
+    }, true);
+  }
+
   let pollCount = 0;
 
   const collectFiltered = async () => {
@@ -370,16 +633,26 @@ async function run(context = {}) {
     list_selector: listSelector,
     listItemSelector,
     list_item_selector: listItemSelector,
-    subjectFilters,
-    subject_filters: subjectFilters,
-    titleFilters,
-    title_filters: titleFilters,
+    subjectFilters: effectiveSubjectFilters,
+    subject_filters: effectiveSubjectFilters,
+    titleFilters: effectiveTitleFilters,
+    title_filters: effectiveTitleFilters,
+    configuredSubjectFilters: subjectFilters,
+    configured_subject_filters: subjectFilters,
+    configuredTitleFilters: titleFilters,
+    configured_title_filters: titleFilters,
+    subjectTitleFiltersIgnored,
+    subject_title_filters_ignored: subjectTitleFiltersIgnored,
     mailIds,
     mail_ids: mailIds,
     waitForNewMailSeconds,
     wait_for_new_mail_seconds: waitForNewMailSeconds,
     mailTimeGmtOffsetHours,
     mail_time_gmt_offset_hours: mailTimeGmtOffsetHours,
+    webmailSearchEnabled: searchResult.enabled === true,
+    webmail_search_enabled: searchResult.enabled === true,
+    webmailSearch: webmailSearchDebug,
+    webmail_search: webmailSearchDebug,
     pollCount,
     poll_count: pollCount,
     mailListScanDebug: {
