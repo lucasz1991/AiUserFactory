@@ -148,7 +148,13 @@
                         @php
                             $taskCardCount = $workflow->steps->sum(fn ($step) => count($step->task_cards));
                         @endphp
-                        <tr wire:key="workflow-row-{{ $workflow->id }}" class="hover:bg-slate-50">
+                        <tr
+                            wire:key="workflow-row-{{ $workflow->id }}"
+                            data-workflow-row-id="{{ $workflow->id }}"
+                            data-assistant-highlight="workflow_row:{{ $workflow->id }}"
+                            data-assistant-highlight-key="{{ $workflow->slug ?: $workflow->id }}"
+                            class="hover:bg-slate-50"
+                        >
                             <td class="px-3 py-3 align-middle">
                                 <input type="checkbox" wire:model.live="selectedWorkflowIds" value="{{ $workflow->id }}" class="rounded border-slate-300 text-blue-600 shadow-sm focus:ring-blue-500" aria-label="{{ $workflow->name }} auswählen">
                             </td>

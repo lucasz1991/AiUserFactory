@@ -1,6 +1,5 @@
 <div
     data-workflow-copilot-root
-    data-open="0"
     x-data="{
         showChat: false,
         draft: @entangle('message'),
@@ -9,6 +8,7 @@
         toolEvents: @entangle('toolEvents'),
         submitting: false,
         pendingLabel: '',
+        selectedChatOptions: {},
         voiceSupported: false,
         listening: false,
         recognition: null,
@@ -18,12 +18,16 @@
         autoRead: @js($assistantAutoReadDefault),
         speechRate: @js($assistantSpeechRate),
         ttsAudio: null,
-        ttsAbortController: null,
-        ttsObjectUrl: null,
         ttsError: '',
+        ttsQueue: [],
+        ttsPlaying: false,
+        ttsAbortController: null,
+        ttsObjectUrls: [],
+        ttsCurrentGeneration: 0,
         speaking: false,
         speakingIndex: null,
         lastAssistantMessageKey: null,
+        toolAlertTimers: {},
         refreshTimer: null,
         livewireComponent() {
             const root = this.$root.closest('[wire\\:id]');
@@ -47,19 +51,29 @@
             this.showChat = sessionStorage.getItem('workflow-copilot-open') === '1';
             this.autoRead = this.readBool('workflow-copilot-auto-read', this.autoRead);
             this.speechRate = this.readNumber('workflow-copilot-speech-rate', this.speechRate);
-            this.voiceSupported = ('SpeechRecognition' in window) || ('webkitSpeechRecognition' in window);
+            this.voiceSupported = Boolean(this.voiceApi());
             this.speechSupported = Boolean(this.ttsEndpoint && window.fetch && window.Audio && window.URL);
             this.lastAssistantMessageKey = this.latestAssistantMessageKey(this.chatHistory);
             this.$watch('chatHistory', (history) => {
                 this.handleNewAssistantMessage(history);
                 this.scrollMessages();
             });
+            this.$watch('isLoading', (loading) => {
+                if (loading) {
+                    this.stopSpeaking();
+                }
+            });
             this.$watch('autoRead', (enabled) => {
                 localStorage.setItem('workflow-copilot-auto-read', enabled ? '1' : '0');
                 if (!enabled) this.stopSpeaking();
             });
             this.$watch('speechRate', (rate) => localStorage.setItem('workflow-copilot-speech-rate', String(rate || 1)));
-            this.$nextTick(() => window.setTimeout(() => this.syncContext(), 0));
+            this.$watch('toolEvents', (events) => this.scheduleToolAlerts(events));
+            this.scheduleToolAlerts(this.toolEvents);
+            this.$nextTick(() => {
+                window.setTimeout(() => this.syncContext(), 0);
+                this.scrollMessages(false);
+            });
         },
         readBool(key, fallback) {
             const stored = localStorage.getItem(key);
@@ -74,17 +88,20 @@
             sessionStorage.setItem('workflow-copilot-open', this.showChat ? '1' : '0');
             if (this.showChat) {
                 this.syncContext();
-                this.scrollMessages();
+                this.scrollMessages(false);
             } else {
                 this.stopSpeaking();
+                this.stopListening();
             }
         },
         busy() {
             return this.submitting || this.isLoading;
         },
-        collectContext() {
+        collectContext(extra = {}) {
             const path = window.location.pathname;
             const workflowMatch = path.match(/\/netzwerk\/workflows\/([^/?#]+)/);
+            const selectedTask = document.querySelector('[data-workflow-task-node].assistant-highlight');
+            const selectedList = document.querySelector('[data-workflow-step-column].assistant-highlight');
 
             return {
                 route_name: null,
@@ -92,23 +109,26 @@
                 page_title: document.title,
                 workflow_id: workflowMatch && /^\\d+$/.test(workflowMatch[1]) ? workflowMatch[1] : null,
                 workflow_slug: workflowMatch && !/^\\d+$/.test(workflowMatch[1]) ? workflowMatch[1] : null,
+                highlighted_workflow_task: selectedTask?.dataset.workflowTaskNode || null,
+                highlighted_workflow_list: selectedList?.dataset.workflowStepAction || null,
+                ...extra,
             };
         },
-        async syncContext() {
-            await this.callLivewire('updatePageContext', this.collectContext());
+        async syncContext(extra = {}) {
+            await this.callLivewire('updatePageContext', this.collectContext(extra));
         },
-        scrollMessages() {
+        scrollMessages(smooth = true) {
             this.$nextTick(() => {
                 const messages = this.$refs.messages;
                 if (!messages) return;
-                messages.scrollTo({ top: messages.scrollHeight, behavior: 'smooth' });
+                messages.scrollTo({ top: messages.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
             });
         },
         resizeComposer() {
             const composer = this.$refs.composer;
             if (!composer) return;
             composer.style.height = 'auto';
-            composer.style.height = `${Math.min(composer.scrollHeight, 132)}px`;
+            composer.style.height = `${Math.min(composer.scrollHeight, 144)}px`;
         },
         async send() {
             if (this.busy()) return;
@@ -136,11 +156,84 @@
         async quick(prompt) {
             if (this.busy()) return;
             this.setOpen(true);
-            this.draft = prompt;
-            await this.send();
+            this.submitting = true;
+            this.pendingLabel = prompt;
+            this.draft = '';
+            this.scrollMessages();
+
+            try {
+                await this.syncContext();
+                await this.callLivewire('sendMessage', prompt);
+            } finally {
+                this.submitting = false;
+                this.pendingLabel = '';
+                this.resizeComposer();
+                this.scrollMessages();
+            }
+        },
+        selectedChatOptionIndex(messageIndex, selectedOptionIndex = null) {
+            if (Object.prototype.hasOwnProperty.call(this.selectedChatOptions, messageIndex)) {
+                return this.selectedChatOptions[messageIndex];
+            }
+
+            if (selectedOptionIndex === null || selectedOptionIndex === undefined) {
+                return null;
+            }
+
+            const storedIndex = Number(selectedOptionIndex);
+
+            return Number.isInteger(storedIndex) && storedIndex >= 0 ? storedIndex : null;
+        },
+        async chooseChatOption(messageIndex, selectedOptionIndex, option, optionIndex) {
+            if (this.busy() || this.selectedChatOptionIndex(messageIndex, selectedOptionIndex) !== null) return;
+
+            this.selectedChatOptions = {
+                ...this.selectedChatOptions,
+                [messageIndex]: optionIndex,
+            };
+            this.submitting = true;
+            this.pendingLabel = option?.prompt || option?.label || 'Auswahl wird gesendet.';
+            this.stopSpeaking();
+            this.scrollMessages();
+
+            try {
+                await this.syncContext();
+                this.draft = '';
+                await this.callLivewire('sendChatOption', messageIndex, optionIndex);
+            } finally {
+                const remainingSelections = { ...this.selectedChatOptions };
+                delete remainingSelections[messageIndex];
+                this.selectedChatOptions = remainingSelections;
+                this.submitting = false;
+                this.pendingLabel = '';
+                this.resizeComposer();
+                this.scrollMessages();
+            }
         },
         latestToolEvents() {
-            return Array.isArray(this.toolEvents) ? [...this.toolEvents].reverse().slice(0, 10) : [];
+            return Array.isArray(this.toolEvents) ? [...this.toolEvents].reverse().slice(0, 4) : [];
+        },
+        scheduleToolAlerts(events) {
+            (Array.isArray(events) ? events : []).forEach((event) => {
+                const id = String(event?.id || '');
+                if (!id || this.toolAlertTimers[id]) return;
+
+                this.toolAlertTimers[id] = window.setTimeout(async () => {
+                    delete this.toolAlertTimers[id];
+                    await this.callLivewire('dismissToolEvent', id);
+                }, 6500);
+            });
+        },
+        dismissToolAlert(id) {
+            const key = String(id || '');
+            if (!key) return;
+
+            if (this.toolAlertTimers[key]) {
+                window.clearTimeout(this.toolAlertTimers[key]);
+                delete this.toolAlertTimers[key];
+            }
+
+            this.callLivewire('dismissToolEvent', key);
         },
         latestAssistantMessageKey(history) {
             const messages = Array.isArray(history) ? history : [];
@@ -162,120 +255,292 @@
                 this.speak(item.content, index);
             }
         },
-        async speak(text, index = null) {
+        speak(text, index = null) {
             if (!this.speechSupported || !text) return;
 
             this.stopSpeaking();
             this.ttsError = '';
-            this.speaking = true;
-            this.speakingIndex = index;
-            this.ttsAbortController = new AbortController();
-
-            try {
-                const response = await fetch(this.ttsEndpoint, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Accept': 'audio/mpeg',
-                        'X-CSRF-TOKEN': this.csrfToken,
-                        'X-Requested-With': 'XMLHttpRequest',
-                    },
-                    credentials: 'same-origin',
-                    signal: this.ttsAbortController.signal,
-                    body: JSON.stringify({
-                        text: String(text).slice(0, 4000),
-                        speed: Number(this.speechRate || 1),
-                    }),
-                });
-
-                if (!response.ok) {
-                    throw new Error(await response.text() || `HTTP ${response.status}`);
-                }
-
-                const blob = await response.blob();
-                this.ttsObjectUrl = URL.createObjectURL(blob);
-                this.ttsAudio = new Audio(this.ttsObjectUrl);
-                this.ttsAudio.onended = () => this.stopSpeaking(false);
-                this.ttsAudio.onerror = () => this.stopSpeaking(false);
-                await this.ttsAudio.play();
-            } catch (error) {
-                if (error && error.name !== 'AbortError') {
-                    this.ttsError = 'Audioausgabe fehlgeschlagen.';
-                    console.warn('Workflow Copilot Audioausgabe fehlgeschlagen:', error);
-                }
-                this.stopSpeaking(false);
-            }
+            this.queueTtsSentence(String(text), index);
         },
-        stopSpeaking(abort = true) {
-            if (abort && this.ttsAbortController) {
-                this.ttsAbortController.abort();
-            }
-            if (this.ttsAudio) {
-                this.ttsAudio.pause();
-                this.ttsAudio.src = '';
-            }
-            if (this.ttsObjectUrl) {
-                URL.revokeObjectURL(this.ttsObjectUrl);
-            }
-            this.ttsAbortController = null;
-            this.ttsAudio = null;
-            this.ttsObjectUrl = null;
-            this.speaking = false;
-            this.speakingIndex = null;
+        queueTtsSentence(text, index = null) {
+            const cleanText = String(text || '').trim();
+            if (!cleanText) return;
+
+            this.ttsQueue.push({
+                text: cleanText.slice(0, 4000),
+                index,
+                generation: this.ttsCurrentGeneration,
+            });
+
+            this.playNextTts();
         },
-        toggleListening() {
-            if (this.listening) {
-                this.recognition && this.recognition.stop();
-                this.listening = false;
+        async playNextTts() {
+            if (this.ttsPlaying || !this.ttsQueue.length) return;
+
+            const item = this.ttsQueue.shift();
+
+            if (!item || item.generation !== this.ttsCurrentGeneration) {
+                this.playNextTts();
                 return;
             }
 
-            this.startListening();
+            this.ttsPlaying = true;
+            this.speaking = true;
+            this.speakingIndex = item.index;
+
+            try {
+                await this.playTtsViaBlob(item.text);
+            } catch (error) {
+                if (error?.name !== 'AbortError') {
+                    this.ttsError = this.ttsErrorMessage(error);
+                    console.warn('Workflow Copilot Audioausgabe fehlgeschlagen:', error);
+                }
+            } finally {
+                this.ttsPlaying = false;
+
+                if (this.ttsQueue.length) {
+                    this.playNextTts();
+                } else {
+                    this.speaking = false;
+                    this.speakingIndex = null;
+                }
+            }
         },
-        startListening() {
-            if (!this.voiceSupported || this.busy()) return;
+        ttsFetchOptions(text) {
+            this.ttsAbortController = new AbortController();
 
-            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-            this.recognition = new SpeechRecognition();
-            this.recognition.lang = 'de-DE';
-            this.recognition.interimResults = true;
-            this.recognition.continuous = false;
-            const baseDraft = String(this.draft || '').trim();
-            let finalTranscript = '';
+            return {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'audio/*, application/json',
+                    'X-CSRF-TOKEN': this.csrfToken,
+                    'X-Requested-With': 'XMLHttpRequest',
+                },
+                credentials: 'same-origin',
+                signal: this.ttsAbortController.signal,
+                body: JSON.stringify({
+                    text,
+                    speed: Number(this.speechRate || 1),
+                }),
+            };
+        },
+        async playTtsViaBlob(text) {
+            const response = await fetch(this.ttsEndpoint, this.ttsFetchOptions(text));
 
-            this.recognition.onresult = (event) => {
-                let interim = '';
-                for (let index = event.resultIndex; index < event.results.length; index++) {
-                    const transcript = event.results[index][0].transcript;
-                    if (event.results[index].isFinal) {
-                        finalTranscript = [finalTranscript, transcript].filter(Boolean).join(' ');
-                    } else {
-                        interim += transcript;
+            if (!response.ok) {
+                throw new Error(await this.ttsResponseError(response));
+            }
+
+            const blob = await response.blob();
+            const url = URL.createObjectURL(blob);
+            this.ttsObjectUrls.push(url);
+
+            await this.playAudioUrl(url);
+        },
+        playAudioUrl(url) {
+            return new Promise((resolve, reject) => {
+                const audio = new Audio(url);
+                this.ttsAudio = audio;
+
+                audio.onended = () => resolve();
+                audio.onerror = () => reject(new Error('Audio konnte nicht abgespielt werden.'));
+                audio.play().catch(reject);
+            });
+        },
+        async ttsResponseError(response) {
+            const raw = await response.text();
+            const responseConnectionId = response.headers.get('X-AI-Connection-ID');
+
+            try {
+                const payload = JSON.parse(raw);
+                const message = payload?.detail || payload?.message || `HTTP ${response.status}`;
+                const connectionId = payload?.connection_id || responseConnectionId;
+
+                return connectionId ? `${message} (Verbindungs-ID: ${connectionId})` : message;
+            } catch {
+                const message = raw || `HTTP ${response.status}`;
+
+                return responseConnectionId
+                    ? `${message} (Verbindungs-ID: ${responseConnectionId})`
+                    : message;
+            }
+        },
+        ttsErrorMessage(error) {
+            const message = String(error?.message || error || 'Unbekannter Audiofehler.');
+
+            if (message.includes('Failed to fetch')) {
+                return `Der Audio-Endpunkt ${this.ttsEndpoint || 'assistant.audio-output.stream'} ist nicht erreichbar.`;
+            }
+
+            if (error?.name === 'NotAllowedError') {
+                return 'Der Browser hat die Audiowiedergabe blockiert. Bitte den Audio-Test erneut anklicken.';
+            }
+
+            return message.length > 420 ? `${message.slice(0, 420)}...` : message;
+        },
+        stopSpeaking() {
+            this.ttsCurrentGeneration++;
+            this.ttsQueue = [];
+
+            if (this.ttsAbortController) {
+                this.ttsAbortController.abort();
+                this.ttsAbortController = null;
+            }
+
+            if (this.ttsAudio) {
+                this.ttsAudio.pause();
+                this.ttsAudio.src = '';
+                this.ttsAudio = null;
+            }
+
+            this.ttsObjectUrls.forEach((url) => URL.revokeObjectURL(url));
+            this.ttsObjectUrls = [];
+            this.ttsPlaying = false;
+            this.speaking = false;
+            this.speakingIndex = null;
+        },
+        voiceApi() {
+            return window.SpeechRecognition || window.webkitSpeechRecognition || null;
+        },
+        toggleVoice() {
+            if (this.busy()) return;
+
+            const SpeechRecognition = this.voiceApi();
+            this.voiceSupported = Boolean(SpeechRecognition);
+
+            if (!SpeechRecognition) {
+                this.ttsError = 'Spracheingabe wird von diesem Browser nicht unterstuetzt.';
+                return;
+            }
+
+            if (!this.recognition) {
+                this.recognition = new SpeechRecognition();
+                this.recognition.lang = 'de-DE';
+                this.recognition.continuous = false;
+                this.recognition.interimResults = true;
+                let baseDraft = '';
+                let finalTranscript = '';
+
+                this.recognition.onstart = () => {
+                    baseDraft = String(this.draft || '').trim();
+                    finalTranscript = '';
+                    this.listening = true;
+                };
+                this.recognition.onresult = (event) => {
+                    let interim = '';
+
+                    for (let index = event.resultIndex; index < event.results.length; index++) {
+                        const transcript = event.results[index][0].transcript;
+
+                        if (event.results[index].isFinal) {
+                            finalTranscript = [finalTranscript, transcript].filter(Boolean).join(' ');
+                        } else {
+                            interim += transcript;
+                        }
                     }
-                }
 
-                this.draft = [baseDraft, finalTranscript || interim].filter(Boolean).join(' ');
-                this.resizeComposer();
-            };
-            this.recognition.onend = () => {
-                this.listening = false;
-                if (finalTranscript.trim()) {
-                    this.draft = [baseDraft, finalTranscript.trim()].filter(Boolean).join(' ');
+                    this.draft = [baseDraft, finalTranscript || interim].filter(Boolean).join(' ');
                     this.resizeComposer();
-                }
-            };
-            this.recognition.onerror = () => {
+                };
+                this.recognition.onend = () => {
+                    this.listening = false;
+                    this.resizeComposer();
+                };
+                this.recognition.onerror = (event) => {
+                    this.listening = false;
+                    if (event?.error && !['no-speech', 'aborted'].includes(event.error)) {
+                        this.ttsError = `Spracheingabe: ${event.error}`;
+                    }
+                };
+            }
+
+            if (this.listening) {
+                this.stopListening();
+                return;
+            }
+
+            this.ttsError = '';
+            try {
+                this.recognition.start();
+            } catch (error) {
                 this.listening = false;
-            };
-            this.listening = true;
-            this.recognition.start();
+                this.ttsError = `Spracheingabe: ${error?.message || 'Start fehlgeschlagen.'}`;
+            }
+        },
+        stopListening() {
+            if (this.recognition && this.listening) {
+                this.recognition.stop();
+            }
+
+            this.listening = false;
+        },
+        normalizeEventDetail(event) {
+            return Array.isArray(event?.detail) ? (event.detail[0] || {}) : (event?.detail || {});
         },
         handleUiAction(event) {
-            const detail = Array.isArray(event.detail) ? (event.detail[0] || {}) : (event.detail || {});
+            const detail = this.normalizeEventDetail(event);
             const action = detail.action || detail;
-            if (action && action.type === 'navigate' && action.url) {
-                window.location.assign(action.url);
+
+            if (action?.type === 'navigate' && action.url) {
+                this.stopSpeaking();
+
+                if (window.Livewire?.navigate) {
+                    window.Livewire.navigate(action.url);
+                } else {
+                    window.location.assign(action.url);
+                }
+
+                return;
             }
+
+            if (action?.type === 'highlight' || action?.type === 'highlight_workflow_element') {
+                this.highlightElement(action);
+            }
+        },
+        cssEscape(value) {
+            const text = String(value ?? '');
+
+            if (window.CSS && typeof window.CSS.escape === 'function') {
+                return window.CSS.escape(text);
+            }
+
+            return text.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\r?\n/g, ' ');
+        },
+        highlightElement(action = {}) {
+            const selectors = [];
+            const type = String(action.target_type || action.element_type || action.target || '').trim();
+            const key = String(action.key || action.element_key || '').trim();
+            const workflowId = String(action.workflow_id || '').trim();
+            const stepId = String(action.step_id || '').trim();
+            const stepAction = String(action.step_action_key || action.step_action || '').trim();
+            const taskCardKey = String(action.task_card_key || action.task_key || '').trim();
+
+            if (action.selector) selectors.push(String(action.selector));
+            if (type && key) selectors.push(`[data-assistant-highlight='${this.cssEscape(type)}:${this.cssEscape(key)}']`);
+            if (key) selectors.push(`[data-assistant-highlight-key='${this.cssEscape(key)}']`);
+            if (workflowId) selectors.push(`[data-workflow-row-id='${this.cssEscape(workflowId)}']`);
+            if (stepId) selectors.push(`[data-workflow-step-id='${this.cssEscape(stepId)}']`);
+            if (stepAction) selectors.push(`[data-workflow-step-action='${this.cssEscape(stepAction)}']`);
+            if (stepAction && taskCardKey) selectors.push(`[data-workflow-task-node='${this.cssEscape(`${stepAction}::${taskCardKey}`)}']`);
+            if (taskCardKey) selectors.push(`[data-workflow-task-key='${this.cssEscape(taskCardKey)}']`);
+            if (taskCardKey) selectors.push(`[data-workflow-task-catalog-key='${this.cssEscape(taskCardKey)}']`);
+
+            const target = selectors
+                .map((selector) => {
+                    try { return document.querySelector(selector); } catch { return null; }
+                })
+                .find(Boolean);
+
+            if (!target) {
+                this.ttsError = 'Das besprochene Workflow-Element ist auf dieser Ansicht gerade nicht sichtbar.';
+                return;
+            }
+
+            document.querySelectorAll('.assistant-highlight').forEach((node) => node.classList.remove('assistant-highlight'));
+            target.classList.add('assistant-highlight');
+            target.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+            window.setTimeout(() => target.classList.remove('assistant-highlight'), 5500);
         },
         refreshWorkflowPage() {
             if (this.refreshTimer) {
@@ -284,6 +549,7 @@
 
             this.refreshTimer = window.setTimeout(() => {
                 this.refreshTimer = null;
+
                 try {
                     const roots = Array.from(document.querySelectorAll('[wire\\:id]'));
                     roots.forEach((element) => {
@@ -301,251 +567,498 @@
                 } catch (error) {
                     console.warn('Workflow Copilot Seitenrefresh fehlgeschlagen:', error);
                 }
-            }, 250);
+            }, 180);
         },
     }"
     x-on:assistant-ui-action.window="handleUiAction($event)"
     x-on:assistant-workflow-page-refresh.window="refreshWorkflowPage()"
     x-on:keydown.escape.window="if (showChat) setOpen(false)"
-    x-bind:data-open="showChat ? '1' : '0'"
-    class="fixed bottom-4 right-4 z-[80] sm:bottom-5 sm:right-5"
+    class="workflow-copilot"
 >
     <style>
         [x-cloak] { display: none !important; }
-        [data-workflow-copilot-root] .workflow-copilot-panel { display: none; }
-        [data-workflow-copilot-root][data-open="1"] .workflow-copilot-panel { display: flex; }
-        [data-workflow-copilot-root][data-open="1"] .workflow-copilot-button { display: none; }
-        [data-workflow-copilot-root][data-open="0"] .workflow-copilot-button { display: flex; }
+        .assistant-highlight {
+            position: relative;
+            z-index: 45;
+            outline: 3px solid rgb(34 211 238);
+            outline-offset: 4px;
+            box-shadow: 0 0 0 8px rgba(34, 211, 238, .18), 0 18px 40px -20px rgba(15, 23, 42, .45);
+            transition: outline-color .2s ease, box-shadow .2s ease;
+        }
     </style>
 
-    <button
-        type="button"
-        x-show="!showChat"
-        x-transition
-        x-on:click="setOpen(true)"
-        class="workflow-copilot-button group h-14 w-14 items-center justify-center rounded-full bg-slate-950 text-sm font-black text-white shadow-xl shadow-slate-900/25 ring-1 ring-white/20 transition hover:-translate-y-0.5 hover:bg-cyan-700"
-        aria-label="AI Workflow Copilot oeffnen"
-    >
-        AI
-        <span class="absolute -right-0.5 -top-0.5 h-3.5 w-3.5 rounded-full border-2 border-white bg-emerald-400"></span>
-    </button>
+    @if($assistantEnabled)
+        <button
+            type="button"
+            x-show="!showChat"
+            x-cloak
+            x-on:click="setOpen(true)"
+            class="fixed bottom-5 right-5 z-[80] flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-slate-950 via-cyan-800 to-emerald-700 text-sm font-black text-white shadow-2xl shadow-cyan-950/25 ring-1 ring-white/30 transition hover:-translate-y-0.5 hover:shadow-cyan-700/30"
+            aria-label="AI Workflow Copilot oeffnen"
+            title="AI Workflow Copilot oeffnen"
+        >
+            AI
+            <span class="absolute -right-0.5 -top-0.5 h-3.5 w-3.5 rounded-full border-2 border-white bg-emerald-400"></span>
+        </button>
 
-    <section
-        x-cloak
-        x-show="showChat"
-        x-transition:enter="transition ease-out duration-150"
-        x-transition:enter-start="translate-y-3 opacity-0"
-        x-transition:enter-end="translate-y-0 opacity-100"
-        x-transition:leave="transition ease-in duration-100"
-        x-transition:leave-start="translate-y-0 opacity-100"
-        x-transition:leave-end="translate-y-3 opacity-0"
-        style="display: none;"
-        class="workflow-copilot-panel h-[min(780px,calc(100vh-2rem))] w-[min(500px,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl shadow-slate-900/25"
-        aria-label="AI Workflow Copilot"
-    >
-        <header class="shrink-0 border-b border-slate-800 bg-slate-950 px-4 py-3 text-white">
-            <div class="flex items-start justify-between gap-3">
-                <div class="min-w-0">
-                    <div class="truncate text-sm font-black">{{ $assistantName }}</div>
-                    <div class="mt-0.5 truncate text-[11px] font-semibold uppercase tracking-[0.12em] text-cyan-200">Workflow-Seite aktiv</div>
-                </div>
-                <div class="flex shrink-0 items-center gap-1">
-                    <button type="button" x-on:click="autoRead = !autoRead" class="rounded px-2 py-1 text-xs font-semibold transition" :class="autoRead ? 'bg-emerald-400 text-slate-950' : 'bg-white/10 text-slate-200 hover:bg-white/15'">
-                        Audio
-                    </button>
-                    <button type="button" x-show="speaking" x-cloak x-on:click="stopSpeaking()" class="rounded bg-rose-500 px-2 py-1 text-xs font-semibold text-white">
-                        Stop
-                    </button>
-                    <button type="button" wire:click="clearChat" class="rounded px-2 py-1 text-xs font-semibold text-slate-200 hover:bg-white/10">
-                        Leeren
-                    </button>
-                    <button type="button" x-on:click="setOpen(false)" class="rounded px-2 py-1 text-lg leading-none text-slate-200 hover:bg-white/10" aria-label="Schliessen">
-                        &times;
-                    </button>
-                </div>
-            </div>
+        <div
+            x-show="showChat"
+            x-cloak
+            x-transition.opacity
+            x-on:click="setOpen(false)"
+            class="fixed inset-0 z-[70] bg-slate-950/45 backdrop-blur-[2px]"
+            aria-hidden="true"
+        ></div>
 
-            <div class="mt-3 flex items-center gap-2 text-xs text-slate-300">
-                <label class="flex items-center gap-2">
-                    <span class="text-slate-400">Tempo</span>
-                    <input type="range" min="0.5" max="2" step="0.1" x-model.number="speechRate" class="h-1.5 w-24 accent-cyan-400">
-                    <span class="w-8 text-right" x-text="Number(speechRate || 1).toFixed(1)"></span>
-                </label>
-                <span x-show="ttsError" x-cloak class="truncate text-rose-200" x-text="ttsError"></span>
-            </div>
-        </header>
-
-        <div class="shrink-0 border-b border-slate-200 bg-white px-3 py-2">
-            <div x-show="latestToolEvents().length === 0" class="flex items-center justify-between gap-2 text-xs text-slate-500">
-                <span>Bereit fuer Workflow-Analyse, Imports und Testlaeufe.</span>
-                <span x-show="busy()" x-cloak class="inline-flex items-center gap-1 font-semibold text-cyan-700">
-                    <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-cyan-500"></span>
-                    aktiv
-                </span>
-            </div>
-            <div x-show="latestToolEvents().length > 0" x-cloak class="scroll-container flex max-h-24 gap-2 overflow-x-auto pb-1">
-                <template x-for="event in latestToolEvents()" :key="event.id">
-                    <div class="flex min-w-[210px] items-start justify-between gap-2 rounded border bg-slate-50 px-2.5 py-2 text-xs shadow-sm" :class="event.status === 'success' ? 'border-emerald-200' : 'border-rose-200'">
-                        <div class="min-w-0">
-                            <div class="truncate font-black" :class="event.status === 'success' ? 'text-emerald-700' : 'text-rose-700'" x-text="event.tool || 'Tool'"></div>
-                            <div class="mt-0.5 line-clamp-2 text-slate-600" x-text="event.message || ''"></div>
-                            <div class="mt-1 text-[10px] text-slate-400" x-text="event.time || ''"></div>
-                        </div>
-                        <button type="button" x-on:click="callLivewire('dismissToolEvent', event.id)" class="shrink-0 rounded px-1 text-slate-400 hover:bg-white hover:text-slate-800" aria-label="Toolmeldung entfernen">&times;</button>
+        <aside
+            x-show="showChat"
+            x-cloak
+            x-transition:enter="transition ease-out duration-200"
+            x-transition:enter-start="translate-y-3 scale-95 opacity-0"
+            x-transition:enter-end="translate-y-0 scale-100 opacity-100"
+            x-transition:leave="transition ease-in duration-150"
+            x-transition:leave-start="translate-y-0 scale-100 opacity-100"
+            x-transition:leave-end="translate-y-3 scale-95 opacity-0"
+            class="fixed bottom-4 right-4 z-[90] flex h-[min(760px,calc(100vh-2rem))] w-[min(480px,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-2xl border border-white/80 bg-white shadow-[0_30px_90px_-22px_rgba(15,23,42,.55)] ring-1 ring-slate-900/5"
+            role="dialog"
+            aria-modal="true"
+            aria-label="AI Workflow Copilot"
+        >
+            <header class="relative shrink-0 overflow-visible border-b border-cyan-300/30 bg-gradient-to-r from-slate-950 via-cyan-900 to-emerald-800 px-4 py-3 text-white">
+                <div class="relative flex items-center justify-between gap-3">
+                    <div class="min-w-0">
+                        <div class="truncate text-sm font-black">{{ $assistantName }}</div>
+                        <div class="mt-0.5 truncate text-[11px] font-semibold uppercase tracking-[0.12em] text-cyan-100">Workflow-Seite aktiv</div>
                     </div>
-                </template>
-            </div>
-        </div>
 
-        <div x-ref="messages" class="scroll-container min-h-0 flex-1 space-y-3 overflow-y-auto bg-[linear-gradient(to_bottom,#f8fafc,#f1f5f9)] px-4 py-4">
-            @forelse($chatHistory as $index => $item)
-                @php
-                    $role = $item['role'] ?? 'assistant';
-                    $tone = $item['tone'] ?? 'neutral';
-                    $isUser = $role === 'user';
-                    $bubbleClass = $isUser
-                        ? 'ml-auto bg-slate-950 text-white shadow-slate-900/15'
-                        : ($tone === 'error'
-                            ? 'mr-auto border border-rose-200 bg-rose-50 text-rose-950'
-                            : ($tone === 'success'
-                                ? 'mr-auto border border-emerald-200 bg-emerald-50 text-emerald-950'
-                                : 'mr-auto border border-slate-200 bg-white text-slate-800'));
-                @endphp
-                <div class="max-w-[90%] rounded-2xl px-3.5 py-2.5 text-sm shadow-sm {{ $bubbleClass }}">
-                    <div class="mb-1 flex items-center justify-between gap-3">
-                        <span class="text-[10px] font-black uppercase tracking-[0.12em] {{ $isUser ? 'text-slate-300' : 'text-slate-400' }}">
-                            {{ $isUser ? 'Du' : $assistantName }}
-                        </span>
-                        @if(! $isUser)
-                            <button
-                                type="button"
-                                x-show="speechSupported"
-                                x-cloak
-                                x-on:click="speak(@js($item['content'] ?? ''), {{ $index }})"
-                                class="rounded-md border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-600 hover:border-cyan-300 hover:text-cyan-700"
-                            >
-                                Vorlesen
-                            </button>
-                        @endif
-                    </div>
-                    <div class="whitespace-pre-wrap break-words leading-relaxed">{!! nl2br(e($item['content'] ?? '')) !!}</div>
-                    @if(($item['options'] ?? null) && is_array($item['options']))
-                        <div class="mt-3 space-y-1.5">
-                            @foreach($item['options'] as $optionIndex => $option)
+                    <div class="flex shrink-0 items-center gap-1.5">
+                        <x-ui.dropdown.anchor-dropdown
+                            align="right"
+                            width="auto"
+                            :offset="8"
+                            dropdown-classes=""
+                            content-classes="w-72 rounded-xl border border-slate-200 bg-white text-slate-900"
+                        >
+                            <x-slot name="trigger">
                                 <button
                                     type="button"
-                                    wire:click="sendChatOption({{ $index }}, {{ $optionIndex }})"
-                                    @disabled(($item['selected_option_index'] ?? null) !== null)
-                                    class="block w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-left text-xs font-semibold text-slate-700 hover:border-cyan-300 hover:bg-cyan-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                    x-bind:aria-expanded="open"
+                                    class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/25 bg-white/10 text-white transition hover:bg-white/20"
+                                    title="Sprach-Einstellungen"
                                 >
-                                    {{ $option['label'] ?? 'Option' }}
-                                    @if(! blank($option['description'] ?? null))
-                                        <span class="block font-normal text-slate-500">{{ $option['description'] }}</span>
-                                    @endif
+                                    <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                        <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" stroke="currentColor" stroke-width="2"/>
+                                        <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21h-4v-.09A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3v-4h.09A1.7 1.7 0 0 0 4.6 8.6a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3h4v.09A1.7 1.7 0 0 0 15.4 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.1.38.31.73.6 1 .3.27.68.41 1.09.4H21v4h-.09A1.7 1.7 0 0 0 19.4 15Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                                    </svg>
                                 </button>
-                            @endforeach
-                        </div>
-                    @endif
-                    <div class="mt-1 text-[10px] {{ $isUser ? 'text-slate-300' : 'text-slate-400' }}">{{ $item['time'] ?? '' }}</div>
-                </div>
-            @empty
-                <div class="rounded-2xl border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-600 shadow-sm">
-                    <p class="font-black text-slate-900">Womit soll ich starten?</p>
-                    <p class="mt-1 leading-5">Frage nach einem Workflow, dem letzten Run, Task-Imports, Listen-Imports oder starte einen Testlauf.</p>
-                </div>
-            @endforelse
+                            </x-slot>
 
-            <div
-                x-show="busy() && pendingLabel"
-                x-cloak
-                class="ml-auto max-w-[90%] rounded-2xl bg-slate-950 px-3.5 py-2.5 text-sm text-white shadow-sm"
-            >
-                <div class="mb-1 text-[10px] font-black uppercase tracking-[0.12em] text-slate-300">Du</div>
-                <p class="whitespace-pre-line" x-text="pendingLabel"></p>
-            </div>
+                            <x-slot name="content">
+                                <div class="space-y-4 p-4 text-left">
+                                    <div>
+                                        <p class="text-xs font-black uppercase tracking-[.14em] text-slate-500">Sprachausgabe</p>
+                                        <p class="mt-1 text-xs leading-5 text-slate-500">AI-TTS-Audiostream mit gespeicherten OpenRouter-Audioeinstellungen.</p>
+                                    </div>
 
-            <div
-                x-show="busy()"
-                x-cloak
-                class="mr-auto max-w-[94%] rounded-2xl border border-cyan-200 bg-white px-3 py-3 text-sm text-slate-700 shadow-sm"
-                role="status"
-                aria-live="polite"
-            >
-                <div class="flex items-center gap-3">
-                    <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded bg-cyan-600 text-white">
-                        <span class="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white"></span>
-                    </span>
-                    <div class="min-w-0 flex-1">
-                        <div class="flex items-center justify-between gap-3">
-                            <p class="font-black text-slate-900">Copilot arbeitet</p>
-                            <span class="flex shrink-0 items-center gap-1">
-                                <span class="h-1.5 w-1.5 animate-bounce rounded-full bg-cyan-500 [animation-delay:-.3s]"></span>
-                                <span class="h-1.5 w-1.5 animate-bounce rounded-full bg-emerald-500 [animation-delay:-.15s]"></span>
-                                <span class="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-500"></span>
-                            </span>
-                        </div>
-                        <p wire:stream="assistant-status-stream" class="mt-1 text-xs text-slate-500">Kontext wird geprueft.</p>
+                                    <div class="flex items-center justify-between gap-4">
+                                        <div>
+                                            <p class="text-sm font-bold text-slate-800">Automatisch vorlesen</p>
+                                            <p class="text-[11px] text-slate-500">Neue Antworten direkt abspielen</p>
+                                        </div>
+                                        <x-ui.forms.toggle-button id="workflow-assistant-auto-read" alpine-model="autoRead" />
+                                    </div>
+
+                                    <div>
+                                        <label for="workflow-assistant-speech-rate" class="mb-1 block text-xs font-bold text-slate-600">Sprechgeschwindigkeit</label>
+                                        <select
+                                            id="workflow-assistant-speech-rate"
+                                            x-model.number="speechRate"
+                                            class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 focus:border-cyan-500 focus:ring-cyan-500"
+                                        >
+                                            <option value="0.8">Ruhig</option>
+                                            <option value="1">Normal</option>
+                                            <option value="1.2">Schnell</option>
+                                            <option value="1.4">Sehr schnell</option>
+                                        </select>
+                                    </div>
+
+                                    <div class="flex gap-2">
+                                        <button
+                                            type="button"
+                                            x-on:click="speak('Die AI Audioausgabe ist einsatzbereit.')"
+                                            x-bind:disabled="!speechSupported"
+                                            class="inline-flex flex-1 items-center justify-center rounded-lg border border-slate-300 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                                        >
+                                            Audio testen
+                                        </button>
+                                        <button
+                                            type="button"
+                                            x-show="speaking"
+                                            x-cloak
+                                            x-on:click="stopSpeaking()"
+                                            class="inline-flex items-center justify-center rounded-lg bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700"
+                                        >
+                                            Stop
+                                        </button>
+                                    </div>
+
+                                    <div
+                                        x-show="ttsError"
+                                        x-cloak
+                                        class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs leading-5 text-rose-800"
+                                        x-text="ttsError"
+                                    ></div>
+                                </div>
+                            </x-slot>
+                        </x-ui.dropdown.anchor-dropdown>
+
+                        <button
+                            type="button"
+                            wire:click="clearChat"
+                            x-on:click="stopSpeaking(); stopListening(); selectedChatOptions = {}"
+                            class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/25 bg-white/10 text-white transition hover:bg-white/20"
+                            title="Chat leeren"
+                        >
+                            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                <path d="M4 7h16M10 11v6M14 11v6M6 7l1 14h10l1-14M9 7V4h6v3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
+                        </button>
+                        <button
+                            type="button"
+                            x-on:click="setOpen(false)"
+                            class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/25 bg-white/10 text-white transition hover:bg-white/20"
+                            title="Schliessen"
+                        >
+                            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                <path d="m6 6 12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                            </svg>
+                        </button>
                     </div>
                 </div>
-                <p wire:stream="assistant-response-stream" class="mt-3 whitespace-pre-line border-t border-cyan-100 pt-3 text-sm leading-6 text-slate-700 [&:empty]:hidden"></p>
-            </div>
-        </div>
-
-        <div class="shrink-0 border-t border-slate-200 bg-white p-3">
-            <div class="mb-2 rounded-lg border border-slate-200 bg-slate-50 p-2 transition focus-within:border-cyan-300 focus-within:ring-2 focus-within:ring-cyan-100">
-                <div class="flex items-center gap-2">
-                    <input type="file" wire:model="workflowImportFile" accept=".csv,.zip" class="block min-w-0 flex-1 text-xs text-slate-600 file:mr-2 file:rounded-md file:border-0 file:bg-slate-950 file:px-2.5 file:py-1.5 file:text-xs file:font-semibold file:text-white hover:file:bg-cyan-700">
-                    <button type="button" wire:click="importWorkflowUpdate" wire:loading.attr="disabled" wire:target="workflowImportFile,importWorkflowUpdate" class="inline-flex h-8 shrink-0 items-center rounded-md bg-slate-950 px-3 text-xs font-semibold text-white shadow-sm hover:bg-cyan-700 disabled:cursor-not-allowed disabled:opacity-50">
-                        Import
-                    </button>
+                <div x-show="busy()" x-cloak class="absolute inset-x-0 bottom-0 h-0.5 overflow-hidden bg-white/20">
+                    <span class="block h-full w-1/2 animate-[pulse_1s_ease-in-out_infinite] rounded-full bg-white shadow-[0_0_12px_rgba(255,255,255,.9)]"></span>
                 </div>
-                @error('workflowImportFile') <div class="mt-1 text-xs text-rose-600">{{ $message }}</div> @enderror
-            </div>
+            </header>
 
-            <div class="scroll-container mb-2 flex gap-1.5 overflow-x-auto pb-1">
-                <button type="button" x-on:click="quick('Analysiere bitte den letzten Workflow-Lauf und nenne Fehlerursache, betroffene Liste/Task und naechste Reparatur.')" class="shrink-0 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:border-cyan-300 hover:bg-cyan-50">Letzten Run</button>
-                <button type="button" x-on:click="quick('Finde den Workflow DIBAG oeffnen, analysiere den letzten Lauf und schlage konkrete Korrekturen vor.')" class="shrink-0 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:border-cyan-300 hover:bg-cyan-50">DIBAG</button>
-                <button type="button" x-on:click="quick('Zeige mir verfuegbare Variablen und aktuelle Werte fuer diesen Workflow.')" class="shrink-0 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:border-cyan-300 hover:bg-cyan-50">Variablen</button>
-                <button type="button" x-on:click="quick('Hilf mir, einen neuen Workflow zu planen. Frage zuerst nach Ziel, Webseiten, benoetigten Listen, Tasks und eingebetteten Workflows.')" class="shrink-0 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:border-cyan-300 hover:bg-cyan-50">Neu</button>
-                <button type="button" x-on:click="quick('Welche Assistant-Tools stehen dir fuer Workflow-Analyse, Imports, Testlauf und Navigation zur Verfuegung?')" class="shrink-0 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:border-cyan-300 hover:bg-cyan-50">Tools</button>
-            </div>
+            <section class="relative flex min-h-0 flex-1 flex-col">
+                <div class="pointer-events-none absolute inset-x-3 top-3 z-30 space-y-2">
+                    <template x-for="event in latestToolEvents()" :key="event.id">
+                        <div
+                            x-transition:enter="transition ease-out duration-200"
+                            x-transition:enter-start="-translate-y-2 opacity-0"
+                            x-transition:enter-end="translate-y-0 opacity-100"
+                            x-transition:leave="transition ease-in duration-150"
+                            x-transition:leave-start="translate-y-0 opacity-100"
+                            x-transition:leave-end="-translate-y-2 opacity-0"
+                            class="pointer-events-auto rounded-xl border px-3 py-3 shadow-lg backdrop-blur"
+                            :class="event.status === 'success'
+                                ? 'border-emerald-200 bg-emerald-50/95 text-emerald-950'
+                                : 'border-rose-200 bg-rose-50/95 text-rose-950'"
+                            role="status"
+                        >
+                            <div class="flex items-start gap-3">
+                                <span
+                                    class="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-black text-white"
+                                    :class="event.status === 'success' ? 'bg-emerald-600' : 'bg-rose-600'"
+                                    x-text="event.status === 'success' ? 'OK' : '!'"
+                                ></span>
+                                <div class="min-w-0 flex-1">
+                                    <div class="flex items-start justify-between gap-3">
+                                        <strong class="truncate text-xs" x-text="event.tool || 'Tool'"></strong>
+                                        <span class="shrink-0 text-[10px] opacity-60" x-text="event.time || ''"></span>
+                                    </div>
+                                    <p class="mt-1 text-xs leading-5 opacity-80" x-text="event.message || ''"></p>
+                                </div>
+                                <button
+                                    type="button"
+                                    x-on:click="dismissToolAlert(event.id)"
+                                    class="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-current opacity-50 transition hover:bg-black/5 hover:opacity-100"
+                                    aria-label="Meldung schliessen"
+                                >
+                                    <span aria-hidden="true">&times;</span>
+                                </button>
+                            </div>
+                        </div>
+                    </template>
+                </div>
 
-            <form x-on:submit.prevent="send()" class="overflow-hidden rounded-lg border border-slate-300 bg-white shadow-sm transition focus-within:border-cyan-400 focus-within:ring-2 focus-within:ring-cyan-100">
-                <textarea
-                    x-ref="composer"
-                    x-model="draft"
-                    rows="1"
-                    placeholder="Workflow besprechen, Task einstellen, Import planen..."
-                    class="block min-h-[58px] max-h-32 w-full resize-none border-0 bg-transparent px-3.5 pb-2 pt-3 text-sm leading-6 text-slate-900 placeholder:text-slate-400 focus:ring-0"
-                    x-on:input="resizeComposer()"
-                    x-on:keydown.enter.exact.prevent="send()"
-                    x-on:keydown.enter.meta.prevent="send()"
-                    x-on:keydown.enter.ctrl.prevent="send()"
-                ></textarea>
+                <div
+                    x-ref="messages"
+                    class="scroll-container min-h-0 flex-1 space-y-3 overflow-y-auto bg-slate-50 px-4 py-4"
+                >
+                    @forelse($chatHistory as $index => $item)
+                        @php
+                            $role = $item['role'] ?? 'assistant';
+                            $tone = $item['tone'] ?? 'neutral';
+                            $isUser = $role === 'user';
+                            $bubbleClass = $isUser
+                                ? 'ml-auto border-slate-300 bg-white text-slate-900'
+                                : ($tone === 'error'
+                                    ? 'mr-auto border-rose-200 bg-rose-50 text-rose-950'
+                                    : ($tone === 'success'
+                                        ? 'mr-auto border-emerald-200 bg-emerald-50 text-emerald-950'
+                                        : 'mr-auto border-cyan-200 bg-white text-slate-800'));
+                        @endphp
+                        <div class="max-w-[92%] rounded-xl border px-4 py-3 text-sm leading-6 shadow-sm {{ $bubbleClass }}">
+                            <div class="mb-1 flex items-center justify-between gap-3">
+                                <strong class="text-xs uppercase tracking-[.14em] {{ $isUser ? 'text-slate-500' : 'text-cyan-700' }}">
+                                    {{ $isUser ? 'Du' : $assistantName }}
+                                </strong>
+                                <div class="flex items-center gap-2">
+                                    @if(! $isUser)
+                                        <button
+                                            type="button"
+                                            x-show="speechSupported"
+                                            x-cloak
+                                            x-on:click="speaking && speakingIndex === {{ $index }} ? stopSpeaking() : speak(@js($item['content'] ?? ''), {{ $index }})"
+                                            class="inline-flex h-6 w-6 items-center justify-center rounded-md text-slate-400 transition hover:bg-slate-100 hover:text-cyan-700"
+                                            x-bind:title="speaking && speakingIndex === {{ $index }} ? 'Vorlesen stoppen' : 'Antwort vorlesen'"
+                                        >
+                                            <svg x-show="!(speaking && speakingIndex === {{ $index }})" class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                                <path d="M5 9v6h4l5 4V5L9 9H5Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+                                                <path d="M17 9a4 4 0 0 1 0 6M19.5 6.5a7.5 7.5 0 0 1 0 11" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                                            </svg>
+                                            <svg x-show="speaking && speakingIndex === {{ $index }}" class="h-3.5 w-3.5 text-rose-600" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                                <rect x="6" y="6" width="12" height="12" rx="2"/>
+                                            </svg>
+                                        </button>
+                                    @endif
+                                    <span class="text-[11px] text-slate-400">{{ $item['time'] ?? '' }}</span>
+                                </div>
+                            </div>
+                            <div class="whitespace-pre-line break-words">{!! nl2br(e($item['content'] ?? '')) !!}</div>
 
-                <div class="flex items-center justify-between gap-2 border-t border-slate-100 bg-slate-50 px-2 py-2">
-                    <button
-                        type="button"
-                        x-on:click="toggleListening()"
-                        x-bind:disabled="!voiceSupported || busy()"
-                        class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border text-[11px] font-black transition disabled:cursor-not-allowed disabled:opacity-40"
-                        :class="listening ? 'border-rose-300 bg-rose-50 text-rose-700' : 'border-slate-300 bg-white text-slate-600 hover:border-cyan-300 hover:text-cyan-700'"
-                        aria-label="Spracheingabe"
-                        title="Spracheingabe"
+                            @if(($item['options'] ?? null) && is_array($item['options']))
+                                <div class="mt-3 space-y-2 border-t border-slate-100 pt-3">
+                                    <div class="grid gap-2">
+                                        @foreach($item['options'] as $optionIndex => $option)
+                                            <button
+                                                type="button"
+                                                x-show="selectedChatOptionIndex({{ $index }}, @js($item['selected_option_index'] ?? null)) === null || selectedChatOptionIndex({{ $index }}, @js($item['selected_option_index'] ?? null)) === {{ $optionIndex }}"
+                                                x-on:click="chooseChatOption({{ $index }}, @js($item['selected_option_index'] ?? null), @js($option), {{ $optionIndex }})"
+                                                x-bind:disabled="busy() || selectedChatOptionIndex({{ $index }}, @js($item['selected_option_index'] ?? null)) !== null"
+                                                x-bind:class="selectedChatOptionIndex({{ $index }}, @js($item['selected_option_index'] ?? null)) === {{ $optionIndex }}
+                                                    ? 'cursor-default border-emerald-500 bg-emerald-100 shadow-sm'
+                                                    : 'border-cyan-200 bg-gradient-to-r from-cyan-50 to-emerald-50/70 hover:-translate-y-0.5 hover:border-cyan-400 hover:shadow-sm disabled:cursor-wait disabled:opacity-50'"
+                                                class="group flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition"
+                                            >
+                                                <span
+                                                    class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white shadow-sm ring-1 transition"
+                                                    x-bind:class="selectedChatOptionIndex({{ $index }}, @js($item['selected_option_index'] ?? null)) === {{ $optionIndex }}
+                                                        ? 'text-emerald-700 ring-emerald-200'
+                                                        : 'text-cyan-700 ring-cyan-100 group-hover:bg-cyan-600 group-hover:text-white'"
+                                                >
+                                                    <svg x-show="selectedChatOptionIndex({{ $index }}, @js($item['selected_option_index'] ?? null)) !== {{ $optionIndex }}" class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                                        <path d="m9 6 6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                                    </svg>
+                                                    <svg x-show="selectedChatOptionIndex({{ $index }}, @js($item['selected_option_index'] ?? null)) === {{ $optionIndex }}" class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                                        <path d="m5 12 4 4L19 6" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                                                    </svg>
+                                                </span>
+                                                <span class="min-w-0 flex-1">
+                                                    <span class="block text-xs font-black text-slate-900">{{ $option['label'] ?? 'Option' }}</span>
+                                                    @if(! blank($option['description'] ?? null))
+                                                        <span class="mt-0.5 block text-[11px] leading-4 text-slate-500">{{ $option['description'] }}</span>
+                                                    @endif
+                                                </span>
+                                            </button>
+                                        @endforeach
+                                    </div>
+                                </div>
+                            @endif
+                        </div>
+                    @empty
+                        <div class="space-y-3.5">
+                            <div class="relative overflow-hidden rounded-2xl border border-cyan-100 bg-white/90 p-4 shadow-sm backdrop-blur">
+                                <div class="relative flex items-start gap-3">
+                                    <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan-600 to-emerald-600 text-white shadow-lg shadow-cyan-200/60">
+                                        <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                            <path d="M12 3 4 7v6c0 4.5 3.4 7.4 8 8 4.6-.6 8-3.5 8-8V7l-8-4Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+                                            <path d="M8.5 12h7M12 8.5v7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                                        </svg>
+                                    </span>
+                                    <div>
+                                        <p class="text-sm font-black text-slate-950">Womit soll ich starten?</p>
+                                        <p class="mt-1 text-xs leading-5 text-slate-500">Ich nutze die aktuelle Workflow-Seite, sichtbare Listen, Tasks, Runs und Imports als Kontext.</p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="grid grid-cols-2 gap-2.5">
+                                <button type="button" x-on:click="quick('Analysiere bitte den letzten Workflow-Lauf und nenne Fehlerursache, betroffene Liste/Task und naechste Reparatur.')" class="group rounded-2xl border border-sky-200/80 bg-white/90 p-3.5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-sky-300 hover:bg-sky-50 hover:shadow-md">
+                                    <span class="flex h-9 w-9 items-center justify-center rounded-xl bg-sky-100 text-sky-700 transition group-hover:bg-sky-600 group-hover:text-white">
+                                        <svg class="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 17 9 12l3 3 7-8M15 7h4v4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                                    </span>
+                                    <span class="mt-3 block text-xs font-black text-slate-900">Letzten Run</span>
+                                    <span class="mt-1 block text-[10px] leading-4 text-slate-500">Fehlerursache und nächste Reparatur finden.</span>
+                                </button>
+
+                                <button type="button" x-on:click="quick('Zeige mir verfuegbare Variablen und aktuelle Werte fuer diesen Workflow.')" class="group rounded-2xl border border-emerald-200/80 bg-white/90 p-3.5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-emerald-300 hover:bg-emerald-50 hover:shadow-md">
+                                    <span class="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700 transition group-hover:bg-emerald-600 group-hover:text-white">
+                                        <svg class="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                                    </span>
+                                    <span class="mt-3 block text-xs font-black text-slate-900">Variablen</span>
+                                    <span class="mt-1 block text-[10px] leading-4 text-slate-500">Kontextwerte und Step-Rückgaben sehen.</span>
+                                </button>
+
+                                <button type="button" x-on:click="quick('Hilf mir, einen neuen Workflow zu planen. Frage zuerst nach Ziel, Webseiten, benoetigten Listen, Tasks und eingebetteten Workflows.')" class="group rounded-2xl border border-violet-200/80 bg-white/90 p-3.5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-violet-300 hover:bg-violet-50 hover:shadow-md">
+                                    <span class="flex h-9 w-9 items-center justify-center rounded-xl bg-violet-100 text-violet-700 transition group-hover:bg-violet-600 group-hover:text-white">
+                                        <svg class="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                                    </span>
+                                    <span class="mt-3 block text-xs font-black text-slate-900">Neu planen</span>
+                                    <span class="mt-1 block text-[10px] leading-4 text-slate-500">Workflow, Listen und Tasks strukturieren.</span>
+                                </button>
+
+                                <button type="button" x-on:click="quick('Welche Assistant-Tools stehen dir fuer Workflow-Analyse, Imports, Testlauf, Navigation und Highlighting zur Verfuegung?')" class="group rounded-2xl border border-amber-200/80 bg-white/90 p-3.5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-amber-300 hover:bg-amber-50 hover:shadow-md">
+                                    <span class="flex h-9 w-9 items-center justify-center rounded-xl bg-amber-100 text-amber-700 transition group-hover:bg-amber-500 group-hover:text-white">
+                                        <svg class="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3 14.2 8.8 20 11l-5.8 2.2L12 19l-2.2-5.8L4 11l5.8-2.2L12 3Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+                                    </span>
+                                    <span class="mt-3 block text-xs font-black text-slate-900">Tools</span>
+                                    <span class="mt-1 block text-[10px] leading-4 text-slate-500">Funktionen und Möglichkeiten anzeigen.</span>
+                                </button>
+                            </div>
+                        </div>
+                    @endforelse
+
+                    <div
+                        x-show="busy() && pendingLabel"
+                        x-cloak
+                        x-transition:enter="transition ease-out duration-150"
+                        x-transition:enter-start="translate-y-2 opacity-0"
+                        x-transition:enter-end="translate-y-0 opacity-100"
+                        class="ml-auto max-w-[88%] rounded-2xl rounded-br-md bg-gradient-to-br from-slate-950 to-cyan-800 px-4 py-3 text-sm leading-6 text-white shadow-md shadow-cyan-200/60"
                     >
-                        Mic
-                    </button>
-                    <span class="min-w-0 flex-1 truncate text-[10px] font-semibold text-slate-400">Enter sendet, Shift+Enter erzeugt eine neue Zeile.</span>
-                    <button type="submit" x-bind:disabled="busy() || !(draft || '').trim()" class="inline-flex h-9 shrink-0 items-center rounded-md bg-slate-950 px-3.5 text-sm font-semibold text-white shadow-sm hover:bg-cyan-700 disabled:cursor-not-allowed disabled:opacity-50">
-                        Senden
-                    </button>
-                </div>
-            </form>
+                        <div class="mb-1 flex items-center justify-between gap-3">
+                            <strong class="text-[10px] uppercase tracking-[.14em] text-cyan-100">Du</strong>
+                            <span class="inline-flex items-center gap-1.5 text-[10px] text-cyan-100">
+                                Wird gesendet
+                                <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-white"></span>
+                            </span>
+                        </div>
+                        <p class="whitespace-pre-line" x-text="pendingLabel"></p>
+                    </div>
 
-            <div x-show="listening" x-cloak class="mt-2 flex items-center gap-2 rounded-md border border-rose-100 bg-rose-50 px-2.5 py-1.5 text-xs font-semibold text-rose-700">
-                <span class="h-2 w-2 animate-pulse rounded-full bg-rose-500"></span>
-                Spracheingabe aktiv.
-            </div>
-        </div>
-    </section>
+                    <div
+                        x-show="busy()"
+                        x-cloak
+                        x-transition:enter="transition ease-out duration-200"
+                        x-transition:enter-start="translate-y-2 opacity-0"
+                        x-transition:enter-end="translate-y-0 opacity-100"
+                        class="max-w-[94%] overflow-hidden rounded-2xl border border-cyan-200/80 bg-white/95 px-4 py-3.5 text-sm text-slate-600 shadow-lg shadow-cyan-100/50 backdrop-blur"
+                        role="status"
+                        aria-live="polite"
+                    >
+                        <div class="flex items-center gap-3">
+                            <span class="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan-600 to-emerald-600 text-white shadow-md shadow-cyan-200">
+                                <span class="absolute -inset-1 animate-ping rounded-2xl bg-cyan-300/25"></span>
+                                <svg class="relative h-5 w-5 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                    <circle class="opacity-30" cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3"></circle>
+                                    <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round"></path>
+                                </svg>
+                            </span>
+                            <div class="min-w-0 flex-1">
+                                <div class="flex items-center justify-between gap-3">
+                                    <p class="font-black text-slate-900">Copilot arbeitet</p>
+                                    <span class="flex shrink-0 items-center gap-1" aria-hidden="true">
+                                        <span class="h-1.5 w-1.5 animate-bounce rounded-full bg-sky-500 [animation-delay:-.3s]"></span>
+                                        <span class="h-1.5 w-1.5 animate-bounce rounded-full bg-cyan-500 [animation-delay:-.15s]"></span>
+                                        <span class="h-1.5 w-1.5 animate-bounce rounded-full bg-emerald-500"></span>
+                                    </span>
+                                </div>
+                                <p wire:stream="assistant-status-stream" class="mt-1 text-xs leading-5 text-slate-500">Kontext wird geprueft und passende Werkzeuge werden vorbereitet.</p>
+                            </div>
+                        </div>
+                        <div class="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-100">
+                            <div class="h-full w-full origin-left animate-pulse rounded-full bg-gradient-to-r from-sky-500 via-cyan-400 to-emerald-500"></div>
+                        </div>
+                        <p wire:stream="assistant-response-stream" class="mt-3 whitespace-pre-line border-t border-cyan-100 pt-3 text-sm leading-6 text-slate-700 [&:empty]:hidden"></p>
+                    </div>
+                </div>
+
+                <footer class="shrink-0 border-t border-slate-200 bg-white p-3">
+                    <div class="mb-2 rounded-xl border border-slate-200 bg-slate-50 p-2">
+                        <div class="flex items-center gap-2">
+                            <input type="file" wire:model="workflowImportFile" accept=".csv,.zip" class="block min-w-0 flex-1 text-xs text-slate-600 file:mr-2 file:rounded-lg file:border-0 file:bg-slate-950 file:px-2.5 file:py-1.5 file:text-xs file:font-semibold file:text-white hover:file:bg-cyan-700">
+                            <button type="button" wire:click="importWorkflowUpdate" wire:loading.attr="disabled" wire:target="workflowImportFile,importWorkflowUpdate" class="inline-flex h-8 shrink-0 items-center rounded-lg bg-slate-950 px-3 text-xs font-semibold text-white shadow-sm hover:bg-cyan-700 disabled:cursor-not-allowed disabled:opacity-50">
+                                Import
+                            </button>
+                        </div>
+                        @error('workflowImportFile') <div class="mt-1 text-xs text-rose-600">{{ $message }}</div> @enderror
+                    </div>
+
+                    <form x-on:submit.prevent="send()" class="overflow-hidden rounded-2xl border bg-white shadow-sm transition focus-within:border-cyan-400 focus-within:ring-4 focus-within:ring-cyan-100" :class="listening ? 'border-rose-300 ring-4 ring-rose-100' : 'border-slate-300'">
+                        <div
+                            x-show="listening === true"
+                            x-cloak
+                            style="display: none;"
+                            class="flex items-center gap-2 border-b border-rose-100 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700"
+                        >
+                            <span class="relative flex h-2 w-2">
+                                <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-400 opacity-75"></span>
+                                <span class="relative inline-flex h-2 w-2 rounded-full bg-rose-500"></span>
+                            </span>
+                            Spracheingabe aktiv. Ich hoere zu.
+                        </div>
+
+                        <textarea
+                            x-ref="composer"
+                            x-model="draft"
+                            x-init="$nextTick(() => resizeComposer())"
+                            rows="1"
+                            placeholder="Workflow besprechen, Task einstellen, Import planen..."
+                            class="block min-h-[58px] max-h-36 w-full resize-none border-0 bg-transparent px-4 pb-2 pt-3 text-sm leading-6 text-slate-950 placeholder:text-slate-400 focus:ring-0 disabled:bg-slate-50 disabled:text-slate-400"
+                            x-bind:disabled="busy()"
+                            x-on:input="resizeComposer()"
+                            x-on:keydown.enter.exact.prevent="send()"
+                            x-on:keydown.enter.meta.prevent="send()"
+                            x-on:keydown.enter.ctrl.prevent="send()"
+                        ></textarea>
+
+                        <div class="flex items-center justify-between gap-3 px-2 pb-2">
+                            <div class="flex items-center gap-1">
+                                <button
+                                    type="button"
+                                    x-on:click="toggleVoice()"
+                                    x-bind:disabled="busy()"
+                                    class="inline-flex h-9 w-9 items-center justify-center rounded-xl transition disabled:cursor-not-allowed disabled:opacity-30"
+                                    :class="listening ? 'bg-rose-100 text-rose-700' : 'text-slate-500 hover:bg-cyan-50 hover:text-cyan-700'"
+                                    :title="voiceSupported ? 'Spracheingabe' : 'Spracheingabe wird von diesem Browser nicht unterstuetzt'"
+                                >
+                                    <svg x-show="voiceSupported" class="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                        <path d="M12 14a3 3 0 0 0 3-3V7a3 3 0 0 0-6 0v4a3 3 0 0 0 3 3Z" stroke="currentColor" stroke-width="2"/>
+                                        <path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                                    </svg>
+                                    <svg x-show="!voiceSupported" class="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                        <path d="M12 14a3 3 0 0 0 3-3V8M9.4 5.4A3 3 0 0 1 15 7v4M5 11a7 7 0 0 0 11.7 5.2M12 18v3M8 21h8M3 3l18 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                                    </svg>
+                                </button>
+                                <button
+                                    type="button"
+                                    x-show="speaking"
+                                    x-cloak
+                                    x-on:click="stopSpeaking()"
+                                    class="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-rose-50 text-rose-700 transition hover:bg-rose-100"
+                                    title="Vorlesen stoppen"
+                                >
+                                    <svg class="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                        <rect x="6" y="6" width="12" height="12" rx="2"/>
+                                    </svg>
+                                </button>
+                            </div>
+
+                            <span class="min-w-0 flex-1"></span>
+
+                            <button
+                                type="submit"
+                                x-bind:disabled="busy() || !(draft || '').trim()"
+                                class="inline-flex h-9 shrink-0 items-center justify-center rounded-xl bg-slate-950 px-3.5 text-sm font-semibold text-white shadow-sm hover:bg-cyan-700 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                Senden
+                            </button>
+                        </div>
+                    </form>
+                </footer>
+            </section>
+        </aside>
+    @endif
 </div>

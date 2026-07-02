@@ -24,7 +24,7 @@ class SettingsPage extends Component
     public string $openRouterSpeechToTextModel = '';
     public string $openRouterTextToSpeechModel = '';
     public string $openRouterAudioOutputApiUrl = '';
-    public string $openRouterAudioOutputVoice = 'alloy';
+    public string $openRouterAudioOutputVoice = 'Eve';
     public string $openRouterAudioOutputFormat = 'mp3';
 
     public int $openRouterTimeout = 120;
@@ -122,7 +122,7 @@ class SettingsPage extends Component
             'text_to_speech_model' => trim($validated['openRouterTextToSpeechModel']),
             'audio_output_api_url' => trim((string) ($validated['openRouterAudioOutputApiUrl'] ?? '')),
             'audio_output_model' => trim($validated['openRouterTextToSpeechModel']),
-            'audio_output_voice' => trim((string) ($validated['openRouterAudioOutputVoice'] ?? 'alloy')) ?: 'alloy',
+            'audio_output_voice' => trim((string) ($validated['openRouterAudioOutputVoice'] ?? config('services.openrouter.audio_output_voice', 'Eve'))) ?: config('services.openrouter.audio_output_voice', 'Eve'),
             'audio_output_format' => trim($validated['openRouterAudioOutputFormat']),
 
             'timeout' => (int) $validated['openRouterTimeout'],
@@ -223,8 +223,14 @@ class SettingsPage extends Component
         $this->openRouterImageUnderstandingModel = trim((string) ($settings['image_understanding_model'] ?? $settings['vision_model'] ?? config('services.openrouter.image_understanding_model')));
         $this->openRouterSpeechToTextModel = trim((string) ($settings['speech_to_text_model'] ?? config('services.openrouter.speech_to_text_model')));
         $this->openRouterTextToSpeechModel = trim((string) ($settings['text_to_speech_model'] ?? config('services.openrouter.text_to_speech_model')));
+        if (in_array(strtolower($this->openRouterTextToSpeechModel), ['openai/tts-1', 'openai/tts-1-hd'], true)) {
+            $this->openRouterTextToSpeechModel = (string) config('services.openrouter.text_to_speech_model', 'x-ai/grok-voice-tts-1.0');
+        }
         $this->openRouterAudioOutputApiUrl = trim((string) ($settings['audio_output_api_url'] ?? config('services.openrouter.audio_output_api_url', 'https://openrouter.ai/api/v1/audio/speech')));
-        $this->openRouterAudioOutputVoice = trim((string) ($settings['audio_output_voice'] ?? config('services.openrouter.audio_output_voice', 'alloy'))) ?: 'alloy';
+        $this->openRouterAudioOutputVoice = trim((string) ($settings['audio_output_voice'] ?? config('services.openrouter.audio_output_voice', 'Eve'))) ?: config('services.openrouter.audio_output_voice', 'Eve');
+        if (str_starts_with(strtolower($this->openRouterTextToSpeechModel), 'x-ai/') && in_array(strtolower($this->openRouterAudioOutputVoice), ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer', 'kore'], true)) {
+            $this->openRouterAudioOutputVoice = (string) config('services.openrouter.audio_output_voice', 'Eve');
+        }
         $this->openRouterAudioOutputFormat = trim((string) ($settings['audio_output_format'] ?? config('services.openrouter.audio_output_format', 'mp3'))) ?: 'mp3';
 
         $this->openRouterTimeout = (int) ($settings['timeout'] ?? config('services.openrouter.timeout', 120));

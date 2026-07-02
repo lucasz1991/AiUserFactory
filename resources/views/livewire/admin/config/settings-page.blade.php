@@ -159,7 +159,7 @@
 
                         <div>
                             <label for="openrouter-tts-model" class="block text-sm font-medium text-gray-700">Text-to-Speech Modell</label>
-                            <input id="openrouter-tts-model" type="text" wire:model.defer="openRouterTextToSpeechModel" placeholder="openai/tts-1" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500" />
+                            <input id="openrouter-tts-model" type="text" wire:model.defer="openRouterTextToSpeechModel" placeholder="x-ai/grok-voice-tts-1.0" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500" />
                             @error('openRouterTextToSpeechModel') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
                         </div>
 
@@ -171,7 +171,7 @@
 
                         <div>
                             <label for="openrouter-audio-output-voice" class="block text-sm font-medium text-gray-700">Audioausgabe Stimme</label>
-                            <input id="openrouter-audio-output-voice" type="text" wire:model.defer="openRouterAudioOutputVoice" placeholder="alloy" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500" />
+                            <input id="openrouter-audio-output-voice" type="text" wire:model.defer="openRouterAudioOutputVoice" placeholder="Eve" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500" />
                             @error('openRouterAudioOutputVoice') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
                         </div>
 

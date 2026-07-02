@@ -30,6 +30,7 @@ class WorkflowAssistantToolService
             'Nutze search_workflow_tasks und get_nodescript_content_debugg, wenn du bestehende Tasks oder Node-Skripte verstehen musst.',
             'Bei eingebetteten Workflows: nutze list_embedded_workflow_candidates und erklaere kurz, warum ein Workflow eingebettet werden sollte.',
             'Wenn du dem Nutzer mehrere klare Optionen anbietest, nutze present_chat_options, damit klickbare Auswahlbuttons erscheinen.',
+            'Wenn du ein sichtbares Workflow-Element besprichst, nutze highlight_workflow_element fuer workflow_row, workflow_list, workflow_task oder workflow_task_catalog.',
             'Lege keine Loeschoperationen an. Fuer gefaehrliche Aenderungen erst eine kurze Zusammenfassung geben und dann eine konkrete Aktualisierungsfunktion nutzen, wenn der Nutzer es beauftragt.',
             trim($extraInstructions),
         ])));
@@ -315,6 +316,20 @@ class WorkflowAssistantToolService
                 ],
                 'required' => ['target'],
             ]),
+            $this->tool('highlight_workflow_element', 'Markiere ein sichtbares Workflow-Element in der aktuellen Ansicht.', [
+                'type' => 'object',
+                'properties' => [
+                    'target_type' => ['type' => 'string', 'enum' => ['workflow_row', 'workflow_list', 'workflow_task', 'workflow_task_catalog', 'workflow_canvas', 'run_preview']],
+                    'workflow_id' => ['type' => 'integer'],
+                    'step_id' => ['type' => 'integer'],
+                    'step_action_key' => ['type' => 'string'],
+                    'task_card_key' => ['type' => 'string'],
+                    'key' => ['type' => 'string'],
+                    'selector' => ['type' => 'string'],
+                    'label' => ['type' => 'string'],
+                ],
+                'required' => ['target_type'],
+            ]),
             $this->tool('present_chat_options', 'Zeige dem Nutzer anklickbare Antwortoptionen.', [
                 'type' => 'object',
                 'properties' => [
@@ -367,6 +382,7 @@ class WorkflowAssistantToolService
             'update_task_import' => $this->updateTaskImport($arguments),
             'workflow_test_run' => $this->workflowTestRun($arguments),
             'navigate' => $this->navigate($arguments),
+            'highlight_workflow_element' => $this->highlightWorkflowElement($arguments),
             'present_chat_options' => $this->presentChatOptions($arguments),
             default => $this->error('UNKNOWN_TOOL', 'Unbekanntes Tool: '.$name),
         };
@@ -392,6 +408,8 @@ class WorkflowAssistantToolService
                 'title' => $this->stringValue($pageContext['page_title'] ?? null),
                 'workflow_id' => $this->positiveInteger($pageContext['workflow_id'] ?? null),
                 'workflow_slug' => $this->stringValue($pageContext['workflow_slug'] ?? null),
+                'highlighted_workflow_task' => $this->stringValue($pageContext['highlighted_workflow_task'] ?? null),
+                'highlighted_workflow_list' => $this->stringValue($pageContext['highlighted_workflow_list'] ?? null),
             ],
             'workflow_counts' => [
                 'workflows' => Workflow::query()->count(),
@@ -1458,6 +1476,38 @@ class WorkflowAssistantToolService
             'ui_action' => [
                 'type' => 'navigate',
                 'url' => $url,
+            ],
+        ];
+    }
+
+    protected function highlightWorkflowElement(array $arguments): array
+    {
+        $targetType = Str::slug((string) ($arguments['target_type'] ?? 'workflow_task'), '_') ?: 'workflow_task';
+        $stepActionKey = trim((string) ($arguments['step_action_key'] ?? $arguments['step_action'] ?? ''));
+        $taskCardKey = trim((string) ($arguments['task_card_key'] ?? $arguments['task_key'] ?? ''));
+        $key = trim((string) ($arguments['key'] ?? ''));
+
+        if ($key === '' && $stepActionKey !== '' && $taskCardKey !== '') {
+            $key = $stepActionKey.'::'.$taskCardKey;
+        } elseif ($key === '' && $stepActionKey !== '') {
+            $key = $stepActionKey;
+        } elseif ($key === '' && $this->positiveInteger($arguments['workflow_id'] ?? null)) {
+            $key = (string) $this->positiveInteger($arguments['workflow_id'] ?? null);
+        }
+
+        return [
+            'ok' => true,
+            'message' => 'Workflow-Element wird markiert.',
+            'ui_action' => [
+                'type' => 'highlight',
+                'target_type' => $targetType,
+                'workflow_id' => $this->positiveInteger($arguments['workflow_id'] ?? null),
+                'step_id' => $this->positiveInteger($arguments['step_id'] ?? null),
+                'step_action_key' => $stepActionKey !== '' ? $stepActionKey : null,
+                'task_card_key' => $taskCardKey !== '' ? $taskCardKey : null,
+                'key' => $key !== '' ? $key : null,
+                'selector' => $this->stringValue($arguments['selector'] ?? null, 300),
+                'label' => $this->stringValue($arguments['label'] ?? null, 120),
             ],
         ];
     }

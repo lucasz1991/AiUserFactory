@@ -447,6 +447,7 @@ class Chatbot extends Component
             'update_task_import' => 'Tasks werden importiert.',
             'workflow_test_run' => 'Workflow-Testlauf wird gestartet.',
             'navigate' => 'Ansicht wird vorbereitet.',
+            'highlight_workflow_element' => 'Workflow-Element wird markiert.',
             default => 'Werkzeug '.$toolName.' wird ausgefuehrt.',
         };
     }
@@ -487,6 +488,8 @@ class Chatbot extends Component
             'page_title' => $stringValue($context['page_title'] ?? null),
             'workflow_id' => $positiveInteger($context['workflow_id'] ?? null),
             'workflow_slug' => $stringValue($context['workflow_slug'] ?? null),
+            'highlighted_workflow_task' => $stringValue($context['highlighted_workflow_task'] ?? null),
+            'highlighted_workflow_list' => $stringValue($context['highlighted_workflow_list'] ?? null),
         ];
     }
 

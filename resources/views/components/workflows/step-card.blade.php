@@ -45,7 +45,10 @@
 
 <div
     data-workflow-step-column
+    data-workflow-step-id="{{ $step->id }}"
     data-workflow-step-action="{{ $step->action_key }}"
+    data-assistant-highlight="workflow_list:{{ $step->action_key }}"
+    data-assistant-highlight-key="{{ $step->action_key }}"
     data-step-route-success="{{ $stepSuccessTarget }}"
     data-step-route-failed="{{ $stepFailedTarget }}"
     {{ $attributes->merge(['class' => 'relative flex min-h-[300px] w-[296px] min-w-[296px] max-w-[296px] shrink-0 flex-col rounded-xl border '.$enabledClass]) }}
@@ -177,6 +180,9 @@
                     <div
                         data-workflow-task-node="{{ $sourceNode }}"
                         data-workflow-step-action="{{ $step->action_key }}"
+                        data-workflow-task-key="{{ $taskKey }}"
+                        data-assistant-highlight="workflow_task:{{ $sourceNode }}"
+                        data-assistant-highlight-key="{{ $taskKey }}"
                         data-route-success="{{ $successTarget }}"
                         data-route-failed="{{ $failedTarget }}"
                         @if(! $locked) draggable="true" @endif

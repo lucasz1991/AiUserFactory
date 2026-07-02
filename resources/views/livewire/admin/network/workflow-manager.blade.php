@@ -609,6 +609,9 @@
                 <div class="flex-1 space-y-3 overflow-y-auto p-4">
                     @foreach($visibleTaskDefinitions as $taskDefinition)
                         <div
+                            data-workflow-task-catalog-key="{{ $taskDefinition['key'] }}"
+                            data-assistant-highlight="workflow_task_catalog:{{ $taskDefinition['key'] }}"
+                            data-assistant-highlight-key="{{ $taskDefinition['key'] }}"
                             draggable="true"
                             x-on:dragstart.stop="$event.dataTransfer.setData('application/x-workflow-task-catalog', @js($taskDefinition['key'])); $event.dataTransfer.setData('text/plain', @js($taskDefinition['key'])); $event.dataTransfer.effectAllowed = 'copy'"
                             class="cursor-grab rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-slate-400 hover:shadow-md active:cursor-grabbing"
