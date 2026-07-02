@@ -547,6 +547,98 @@ function taskInput(task, context = {}) {
   return input;
 }
 
+function normalizedTaskReference(value = '') {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/ä/g, 'ae')
+    .replace(/ö/g, 'oe')
+    .replace(/ü/g, 'ue')
+    .replace(/ß/g, 'ss')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function taskMatchesOverride(task = {}, override = {}) {
+  const expected = normalizedTaskReference(
+    override.matchNormalized
+    || override.match
+    || override.task
+    || override.taskTitle
+    || override.task_title
+    || '',
+  );
+
+  if (expected === '') {
+    return false;
+  }
+
+  return [
+    task.title,
+    task.key,
+    task.task_key,
+    task.name,
+  ].some((value) => normalizedTaskReference(value) === expected);
+}
+
+function cleanOverrideFieldName(value = '') {
+  return String(value || '')
+    .trim()
+    .replace(/[^A-Za-z0-9_.-]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+function applyTaskOverrides(runtimeTasks = [], currentIndex = 0, result = {}) {
+  const overrides = []
+    .concat(Array.isArray(result.task_overrides) ? result.task_overrides : [])
+    .concat(Array.isArray(result.taskOverrides) ? result.taskOverrides : [])
+    .filter((override) => override && typeof override === 'object');
+  const applied = [];
+
+  if (overrides.length === 0) {
+    return applied;
+  }
+
+  for (const override of overrides) {
+    const values = override.values && typeof override.values === 'object'
+      ? override.values
+      : {};
+
+    if (Object.keys(values).length === 0) {
+      continue;
+    }
+
+    for (let index = currentIndex + 1; index < runtimeTasks.length; index += 1) {
+      const candidate = runtimeTasks[index];
+
+      if (!candidate || typeof candidate !== 'object' || !taskMatchesOverride(candidate, override)) {
+        continue;
+      }
+
+      for (const [field, value] of Object.entries(values)) {
+        const cleanField = cleanOverrideFieldName(field);
+
+        if (cleanField === '') {
+          continue;
+        }
+
+        candidate[cleanField] = value;
+        applied.push({
+          taskKey: candidate.key || '',
+          taskTitle: candidate.title || '',
+          taskType: candidate.task_key || '',
+          field: cleanField,
+          value,
+        });
+      }
+
+      break;
+    }
+  }
+
+  return applied;
+}
+
 function runtimePerson() {
   return runtime.workflow && typeof runtime.workflow === 'object' && runtime.workflow.person
     ? runtime.workflow.person
@@ -1672,6 +1764,17 @@ async function run() {
       }
 
       result = cleanForJson(result || {});
+      const appliedTaskOverrides = applyTaskOverrides(runtimeTasks, taskIndex, result);
+
+      if (appliedTaskOverrides.length > 0) {
+        result.applied_task_overrides = appliedTaskOverrides;
+        result.appliedTaskOverrides = appliedTaskOverrides;
+        pushEvent('task-overrides-applied', 'Eingabewerte wurden in folgende Tasks uebernommen.', {
+          taskKey: task.key,
+          overrides: appliedTaskOverrides,
+        });
+      }
+
       context.lastResult = result;
 
       const resultWorkflowVariables = {
