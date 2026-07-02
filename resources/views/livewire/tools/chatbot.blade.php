@@ -75,6 +75,9 @@
             });
             this.$watch('speechRate', (rate) => localStorage.setItem('workflow-copilot-speech-rate', String(rate || 1)));
             this.$watch('toolEvents', (events) => this.scheduleToolAlerts(events));
+            this.$watch('voiceSupported', (supported) => {
+                if (!supported) this.clearVoiceCaptureState();
+            });
             this.scheduleToolAlerts(this.toolEvents);
             this.$nextTick(() => {
                 window.setTimeout(() => this.syncContext(), 0);
@@ -422,7 +425,7 @@
 
             if (!SpeechRecognition) {
                 this.clearVoiceCaptureState();
-                this.ttsError = 'Spracheingabe wird von diesem Browser nicht unterstuetzt.';
+                this.ttsError = '';
                 return;
             }
 
@@ -1008,7 +1011,7 @@
                 </div>
 
                 <footer class="shrink-0 border-t border-slate-200 bg-white p-3">
-                    <form x-on:submit.prevent="send()" class="overflow-hidden rounded-2xl border bg-white shadow-sm transition focus-within:border-cyan-400 focus-within:ring-4 focus-within:ring-cyan-100" :class="voiceCaptureActive ? 'border-rose-300 ring-4 ring-rose-100' : 'border-slate-300'">
+                    <form x-on:submit.prevent="send()" class="overflow-hidden rounded-2xl border bg-white shadow-sm transition focus-within:border-cyan-400 focus-within:ring-4 focus-within:ring-cyan-100" :class="voiceSupported && voiceCaptureActive ? 'border-rose-300 ring-4 ring-rose-100' : 'border-slate-300'">
                         <div
                             x-show="showImportPanel"
                             x-cloak
@@ -1023,18 +1026,15 @@
                             </div>
                             @error('workflowImportFile') <div class="mt-1 text-xs text-rose-600">{{ $message }}</div> @enderror
                         </div>
-                        <div
-                            x-show="voiceCaptureActive === true"
-                            x-cloak
-                            style="display: none;"
-                            class="flex items-center gap-2 border-b border-rose-100 bg-rose-50 px-3 py-1.5 text-[11px] font-bold text-rose-700"
-                        >
-                            <span class="relative flex h-2 w-2">
-                                <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-400 opacity-75"></span>
-                                <span class="relative inline-flex h-2 w-2 rounded-full bg-rose-500"></span>
-                            </span>
-                            Hoere zu
-                        </div>
+                        <template x-if="voiceSupported && voiceCaptureActive">
+                            <div class="flex items-center gap-2 border-b border-rose-100 bg-rose-50 px-3 py-1.5 text-[11px] font-bold text-rose-700">
+                                <span class="relative flex h-2 w-2">
+                                    <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-400 opacity-75"></span>
+                                    <span class="relative inline-flex h-2 w-2 rounded-full bg-rose-500"></span>
+                                </span>
+                                Hoere zu
+                            </div>
+                        </template>
 
                         <textarea
                             x-ref="composer"
@@ -1067,9 +1067,9 @@
                                 <button
                                     type="button"
                                     x-on:click="toggleVoice()"
-                                    x-bind:disabled="busy()"
+                                    x-bind:disabled="busy() || !voiceSupported"
                                     class="inline-flex h-8 w-8 items-center justify-center rounded-xl transition disabled:cursor-not-allowed disabled:opacity-30"
-                                    :class="voiceCaptureActive ? 'bg-rose-100 text-rose-700' : 'text-slate-400 hover:bg-slate-100 hover:text-cyan-700'"
+                                    :class="voiceSupported && voiceCaptureActive ? 'bg-rose-100 text-rose-700' : (voiceSupported ? 'text-slate-400 hover:bg-slate-100 hover:text-cyan-700' : 'text-slate-300')"
                                     :title="voiceSupported ? 'Spracheingabe' : 'Spracheingabe wird von diesem Browser nicht unterstuetzt'"
                                 >
                                     <svg x-show="voiceSupported" class="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none" aria-hidden="true">
