@@ -1692,6 +1692,17 @@ function routeAttemptKey(task = {}, route = {}, targetCardKey = '') {
   ].join(':');
 }
 
+function routeTransitionLimit(tasks = []) {
+  const loopLimit = tasks
+    .filter((task) => String(task?.task_key || '') === 'loop.for_each_element')
+    .reduce((maximum, task) => {
+      const configured = Number(task?.limit ?? 0);
+      return Math.max(maximum, Number.isFinite(configured) && configured > 0 ? Math.floor(configured) : 1000);
+    }, 0);
+
+  return Math.max(100, tasks.length * 20, loopLimit * 5);
+}
+
 function workflowBoundaryIndex(runtimeTasks = [], frameKey = '', fromIndex = -1, boundaryKey = '') {
   const normalizedBoundaryKey = String(boundaryKey || '').trim();
 
@@ -1755,6 +1766,7 @@ async function run() {
   };
 
   const runtimeTasks = runtime.tasks || [];
+  const maxRouteTransitions = routeTransitionLimit(runtimeTasks);
   let taskIndex = 0;
   let requestedSuccessRouteTask = null;
   let requestedFailureRouteTask = null;
@@ -2042,6 +2054,28 @@ async function run() {
     pushEvent(taskEventStage, result.statusMessage || taskLabel, { taskKey: task.key, status, branchOutcome });
     writeStatus('running', taskEventStage, result.statusMessage || taskLabel);
 
+    const dynamicRouteTarget = String(result.route_target_key || result.routeTargetKey || '').trim();
+
+    if (dynamicRouteTarget !== '') {
+      const dynamicTargetIndex = runtimeTasks.findIndex((candidate) => String(candidate.key || '') === dynamicRouteTarget);
+
+      if (dynamicTargetIndex >= 0) {
+        routeTransitions += 1;
+
+        if (routeTransitions > maxRouteTransitions) {
+          throw new Error('Zu viele dynamische Task-Routenwechsel. Moegliche Schleife in der Task-Konfiguration.');
+        }
+
+        pushEvent('task-dynamic-route-followed', `Dynamische Task-Route wird fortgesetzt: ${dynamicRouteTarget}.`, {
+          taskKey: task.key,
+          targetTaskKey: dynamicRouteTarget,
+          routeOutcome: result.route_outcome || result.routeOutcome || null,
+        });
+        taskIndex = dynamicTargetIndex;
+        continue;
+      }
+    }
+
     const embeddedWorkflowFrameKey = embeddedFrameKeyForTask(task);
     const hasWorkflowReturn = (
       Object.prototype.hasOwnProperty.call(result, 'workflow_return')
@@ -2107,7 +2141,7 @@ async function run() {
         if (boundaryIndex >= 0) {
           routeTransitions += 1;
 
-          if (routeTransitions > Math.max(100, runtimeTasks.length * 20)) {
+          if (routeTransitions > maxRouteTransitions) {
             throw new Error('Zu viele Task-Routenwechsel. Moegliche Schleife in der Fehlerroute.');
           }
 
@@ -2144,7 +2178,7 @@ async function run() {
 
           routeTransitions += 1;
 
-          if (routeTransitions > Math.max(100, runtimeTasks.length * 20)) {
+          if (routeTransitions > maxRouteTransitions) {
             throw new Error('Zu viele Task-Routenwechsel. Moegliche Schleife in der Fehlerroute.');
           }
 
@@ -2231,7 +2265,7 @@ async function run() {
       if (targetTaskIndex >= 0) {
         routeTransitions += 1;
 
-        if (routeTransitions > Math.max(100, runtimeTasks.length * 20)) {
+        if (routeTransitions > maxRouteTransitions) {
           throw new Error('Zu viele Task-Routenwechsel. Moegliche Schleife in der Erfolgsroute.');
         }
 
@@ -2251,7 +2285,7 @@ async function run() {
         if (boundaryIndex >= 0) {
           routeTransitions += 1;
 
-          if (routeTransitions > Math.max(100, runtimeTasks.length * 20)) {
+          if (routeTransitions > maxRouteTransitions) {
             throw new Error('Zu viele Task-Routenwechsel. Moegliche Schleife in der Erfolgsroute.');
           }
 

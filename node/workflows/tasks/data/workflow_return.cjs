@@ -93,6 +93,8 @@ async function run(context = {}) {
     [key]: value,
     workflow_return: value,
     workflow_return_ok: ok,
+    workflow_return_preview: Array.isArray(value) ? value.slice(0, 3) : value,
+    workflowReturnPreview: Array.isArray(value) ? value.slice(0, 3) : value,
   };
 
   context.workflow_variables = variables;
@@ -115,6 +117,8 @@ async function run(context = {}) {
     workflow_return: value,
     workflowReturn: value,
     workflow_return_ok: ok,
+    workflow_return_preview: Array.isArray(value) ? value.slice(0, 3) : value,
+    workflowReturnPreview: Array.isArray(value) ? value.slice(0, 3) : value,
     workflowVariables: context.workflowVariables,
     workflow_variables: context.workflow_variables,
   };

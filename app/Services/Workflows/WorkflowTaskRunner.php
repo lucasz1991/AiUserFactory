@@ -1005,6 +1005,12 @@ class WorkflowTaskRunner
     {
         $script = match ((string) ($task['task_key'] ?? '')) {
             'browser.hover' => 'node/workflows/tasks/browser/hover.cjs',
+            'browser.scroll' => 'node/workflows/tasks/browser/scroll.cjs',
+            'loop.for_each_element' => 'node/workflows/tasks/loop/for_each_element.cjs',
+            'browser.read_element_fields' => 'node/workflows/tasks/browser/read_element_fields.cjs',
+            'browser.read_searchengine_result' => 'node/workflows/tasks/browser/read_searchengine_result.cjs',
+            'data.append_to_array' => 'node/workflows/tasks/data/append_to_array.cjs',
+            'decision.array_length' => 'node/workflows/tasks/decision/array_length.cjs',
             'data.validate_inputs' => 'node/workflows/tasks/data/validate_inputs.cjs',
             'data.read_account_data' => 'node/workflows/tasks/data/read_account_data.cjs',
             'data.resolve_person' => 'node/workflows/tasks/data/resolve_person.cjs',
