@@ -424,6 +424,11 @@ function resolveString(value, context = {}) {
     'workflow_return',
     'workflowReturn',
     'workflow_return_ok',
+    'browser_window',
+    'browserWindow',
+    'browser_window_name',
+    'browserWindowName',
+    'activeBrowserWindow',
   ];
 
   if ((!normalized.includes('.') && !directRuntimeKeys.includes(normalized)) || normalized.includes('://')) {
@@ -498,6 +503,11 @@ function resolveString(value, context = {}) {
     workflow_return: context.workflow_return ?? context.workflowReturn ?? context.lastResult?.workflow_return ?? context.lastResult?.workflowReturn ?? '',
     workflowReturn: context.workflowReturn ?? context.workflow_return ?? context.lastResult?.workflowReturn ?? context.lastResult?.workflow_return ?? '',
     workflow_return_ok: context.workflow_return_ok ?? context.lastResult?.workflow_return_ok ?? '',
+    browser_window: context.browser_window || context.browserWindow || context.workflow_variables?.browser_window || context.workflowVariables?.browser_window || '',
+    browserWindow: context.browserWindow || context.browser_window || context.workflowVariables?.browserWindow || context.workflow_variables?.browserWindow || '',
+    browser_window_name: context.browser_window_name || context.browserWindowName || context.workflow_variables?.browser_window_name || context.workflowVariables?.browser_window_name || '',
+    browserWindowName: context.browserWindowName || context.browser_window_name || context.workflowVariables?.browserWindowName || context.workflow_variables?.browserWindowName || '',
+    activeBrowserWindow: context.activeBrowserWindow || '',
   };
   const resolved = valueFromPath(lookupRoot, normalized);
 
@@ -508,16 +518,35 @@ function resolveString(value, context = {}) {
   return resolved;
 }
 
+function browserWindowNameFromValue(value, context = {}) {
+  const resolved = resolveString(value, context);
+
+  if (resolved && typeof resolved === 'object') {
+    return normalizeBrowserWindowName(
+      resolved.browser_window_name
+      || resolved.browserWindowName
+      || resolved.browser_window
+      || resolved.browserWindow
+      || resolved.key
+      || resolved.name
+      || '',
+    );
+  }
+
+  return normalizeBrowserWindowName(resolved || value);
+}
+
 function taskInput(task, context = {}) {
   const mailboxSource = normalizeMailboxSource(task.script_person_source || task.scriptPersonSource || task.mailbox_source || task.mailboxSource || 'person');
   const valueContext = scopedWorkflowContext(context, mailboxSource);
-  const browserWindow = normalizeBrowserWindowName(
+  const browserWindow = browserWindowNameFromValue(
     task.browser_window_name
     || task.browser_window
     || task.browserWindowName
     || task.browserWindow
     || context.activeBrowserWindow
     || 'main',
+    valueContext,
   );
   const input = {
     ...task,
