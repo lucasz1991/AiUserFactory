@@ -385,7 +385,7 @@ class WorkflowExecutionService
         $deviceId = (int) data_get($run->context_json, 'device_id', 0);
         $node = NetworkNode::query()->find($nodeId);
 
-        if (! $node || $node->status !== 'active') {
+        if (! $node || ! $node->isAvailable()) {
             throw new \RuntimeException('Der ausgewaehlte ClientController-Node ist nicht verfuegbar.');
         }
 

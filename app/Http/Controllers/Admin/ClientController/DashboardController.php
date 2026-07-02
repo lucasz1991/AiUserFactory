@@ -16,12 +16,13 @@ class DashboardController extends Controller
 {
     public function index(): View
     {
+        NetworkNode::expireStale();
         $settings = Setting::getValue('client_controller', 'server') ?? [];
 
         return view('admin.client-controller.dashboard', [
             'stats' => [
                 'nodes_total' => NetworkNode::query()->count(),
-                'nodes_online' => NetworkNode::query()->where('is_online', true)->count(),
+                'nodes_online' => NetworkNode::query()->available()->count(),
                 'devices_total' => Device::query()->count(),
                 'jobs_pending' => NetworkJob::query()->whereIn('status', ['pending', 'dispatched'])->count(),
                 'targets_total' => NetworkTarget::query()->count(),

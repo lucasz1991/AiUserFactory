@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -37,6 +38,42 @@ class NetworkNode extends Model
         'capabilities_json' => 'array',
         'settings_json' => 'array',
     ];
+
+    public static function heartbeatTimeoutSeconds(): int
+    {
+        $settings = Setting::getValue('client_controller', 'server');
+        $heartbeatInterval = (int) data_get($settings, 'default_heartbeat_interval_seconds', 30);
+
+        return max(60, min(10800, $heartbeatInterval * 3));
+    }
+
+    public static function expireStale(): int
+    {
+        return static::query()
+            ->where('is_online', true)
+            ->where(function (Builder $query): void {
+                $query->whereNull('last_seen_at')
+                    ->orWhere('last_seen_at', '<', now()->subSeconds(static::heartbeatTimeoutSeconds()));
+            })
+            ->update(['is_online' => false]);
+    }
+
+    public function isAvailable(): bool
+    {
+        return $this->status === 'active'
+            && $this->is_online
+            && $this->last_seen_at !== null
+            && $this->last_seen_at->gte(now()->subSeconds(static::heartbeatTimeoutSeconds()));
+    }
+
+    public function scopeAvailable(Builder $query): Builder
+    {
+        return $query
+            ->where('status', 'active')
+            ->where('is_online', true)
+            ->whereNotNull('last_seen_at')
+            ->where('last_seen_at', '>=', now()->subSeconds(static::heartbeatTimeoutSeconds()));
+    }
 
     public function devices(): HasMany
     {

@@ -5,6 +5,7 @@ namespace App\Console;
 use App\Jobs\ExpireWorkflowRunsJob;
 use App\Jobs\SyncManagedProcessesJob;
 use App\Jobs\SuperviseManagedProcessesJob;
+use App\Models\NetworkNode;
 use App\Services\Simulation\NetworkActivityPlanningSettings;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Foundation\Console\Kernel as ConsoleKernel;
@@ -28,6 +29,13 @@ class Kernel extends ConsoleKernel
 
         if (Schema::hasTable('workflow_step_runs')) {
             $schedule->job(new ExpireWorkflowRunsJob)
+                ->everyMinute()
+                ->withoutOverlapping(5);
+        }
+
+        if (Schema::hasTable('network_nodes')) {
+            $schedule->call(static fn (): int => NetworkNode::expireStale())
+                ->name('client-controller-expire-stale-nodes')
                 ->everyMinute()
                 ->withoutOverlapping(5);
         }

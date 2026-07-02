@@ -55,10 +55,10 @@ class ClientControllerApiController extends Controller
         }
 
         $node->fill([
-            'name' => $validated['name'],
+            'name' => $node->exists ? $node->name : $validated['name'],
             'version' => $validated['version'] ?? $node->version,
             'os' => $validated['os'] ?? $node->os,
-            'public_ip' => $validated['public_ip'] ?? $node->public_ip,
+            'public_ip' => $validated['public_ip'] ?? $request->ip() ?? $node->public_ip,
             'country' => $validated['country'] ?? $node->country,
             'city' => $validated['city'] ?? $node->city,
             'current_server_domain' => $validated['current_server_domain'] ?? $node->current_server_domain,
@@ -128,7 +128,7 @@ class ClientControllerApiController extends Controller
         $node->forceFill([
             'is_online' => true,
             'last_seen_at' => now(),
-            'public_ip' => $validated['public_ip'] ?? $node->public_ip,
+            'public_ip' => $validated['public_ip'] ?? $request->ip() ?? $node->public_ip,
             'version' => $validated['version'] ?? $node->version,
             'os' => $validated['os'] ?? $node->os,
             'current_server_domain' => $validated['current_server_domain'] ?? $node->current_server_domain,

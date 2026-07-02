@@ -13,6 +13,7 @@ class NodeController extends Controller
 {
     public function index(Request $request): View
     {
+        NetworkNode::expireStale();
         $query = NetworkNode::query()->latest('id');
 
         if ($request->filled('search')) {
@@ -20,7 +21,9 @@ class NodeController extends Controller
             $query->where(function ($q) use ($search): void {
                 $q->where('name', 'like', '%'.$search.'%')
                     ->orWhere('node_uuid', 'like', '%'.$search.'%')
-                    ->orWhere('current_server_domain', 'like', '%'.$search.'%');
+                    ->orWhere('current_server_domain', 'like', '%'.$search.'%')
+                    ->orWhere('public_ip', 'like', '%'.$search.'%')
+                    ->orWhere('os', 'like', '%'.$search.'%');
             });
         }
 

@@ -10,6 +10,7 @@ use App\Livewire\Admin\Network\ActionsPage;
 use App\Livewire\Admin\Network\WorkflowManager;
 use App\Livewire\Admin\Network\WorkflowsIndex;
 use App\Livewire\Admin\Processes\ProcessMonitor;
+use App\Livewire\Admin\ClientController\NodeDetail as ClientControllerNodeDetail;
 use App\Http\Controllers\Admin\ClientController\DashboardController as ClientControllerDashboardController;
 use App\Http\Controllers\Admin\ClientController\NodeController as ClientControllerNodeController;
 use App\Http\Controllers\Admin\ClientController\DeviceController as ClientControllerDeviceController;
@@ -45,6 +46,7 @@ Route::middleware(['auth:sanctum', config('jetstream.auth_session')])->group(fun
 
             Route::get('/nodes', [ClientControllerNodeController::class, 'index'])->name('nodes.index');
             Route::post('/nodes', [ClientControllerNodeController::class, 'store'])->name('nodes.store');
+            Route::get('/nodes/{node}', ClientControllerNodeDetail::class)->name('nodes.show');
             Route::put('/nodes/{node}', [ClientControllerNodeController::class, 'update'])->name('nodes.update');
             Route::post('/nodes/{node}/regenerate-api-key', [ClientControllerNodeController::class, 'regenerateApiKey'])->name('nodes.regenerate-api-key');
             Route::delete('/nodes/{node}', [ClientControllerNodeController::class, 'destroy'])->name('nodes.destroy');

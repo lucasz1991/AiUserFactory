@@ -218,7 +218,7 @@ class WorkflowManager extends Component
             'quickPreviewRun' => $quickPreviewRun,
             'previewWorkflowRun' => $this->previewWorkflowRun(),
             'persons' => $persons,
-            'runNetworkNodes' => NetworkNode::query()->where('status', 'active')->orderByDesc('is_online')->orderBy('name')->get(),
+            'runNetworkNodes' => NetworkNode::query()->available()->orderBy('name')->get(),
             'runDevices' => Device::query()->with('networkNode')->orderBy('name')->get(),
             'personOptions' => $catalog->personOptions($catalogPersons),
             'actions' => $actions,
