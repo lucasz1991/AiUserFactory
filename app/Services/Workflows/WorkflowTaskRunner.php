@@ -457,14 +457,6 @@ class WorkflowTaskRunner
             $rootTaskKey = $parentTaskKey ?? $taskKey;
             $workflowMailboxSource = $inheritedMailboxSource
                 ?? $this->normalizeMailboxSource($task['script_person_source'] ?? $task['mailbox_source'] ?? null);
-            $workflowBrowserWindow = $this->mappedEmbeddedBrowserWindowName(
-                $embeddedBrowserWindowName,
-                [
-                    'browser_window_name' => $task['browser_window_name'] ?? null,
-                    'browser_window' => $task['browser_window'] ?? null,
-                ],
-            ) ?? $embeddedBrowserWindowName;
-
             if ($workflowId <= 0) {
                 throw new \RuntimeException('Die Workflow-Task "'.$taskKey.'" hat keine gueltige Workflow-Referenz.');
             }
@@ -484,6 +476,12 @@ class WorkflowTaskRunner
             if (! $workflow->is_active) {
                 throw new \RuntimeException('Der eingebettete Workflow "'.$workflow->name.'" ist deaktiviert.');
             }
+
+            $workflowBrowserWindow = $this->embeddedWorkflowBrowserWindowName(
+                $task,
+                $embeddedBrowserWindowName,
+                $workflow,
+            );
 
             $steps = $workflow->steps->where('is_enabled', true)->values();
 
@@ -770,6 +768,51 @@ class WorkflowTaskRunner
         }
 
         return $this->normalizeBrowserWindowName($embeddedBrowserWindowName.'-'.$taskBrowserWindow);
+    }
+
+    protected function embeddedWorkflowBrowserWindowName(array $task, ?string $parentBrowserWindowName, Workflow $workflow): string
+    {
+        $parentBrowserWindowName = $this->normalizeBrowserWindowName($parentBrowserWindowName);
+        $configuredBrowserWindow = $this->normalizeBrowserWindowName(
+            $task['embedded_workflow_browser_window']
+            ?? $task['embeddedWorkflowBrowserWindow']
+            ?? $task['browser_window_after_embedding']
+            ?? $task['browserWindowAfterEmbedding']
+            ?? $task['browser_window_name']
+            ?? $task['browser_window']
+            ?? $task['browserWindowName']
+            ?? $task['browserWindow']
+            ?? null,
+        );
+
+        if ($parentBrowserWindowName !== null) {
+            return $this->mappedEmbeddedBrowserWindowName($parentBrowserWindowName, [
+                'browser_window_name' => $configuredBrowserWindow,
+                'browser_window' => $configuredBrowserWindow,
+            ]) ?? $parentBrowserWindowName;
+        }
+
+        if ($configuredBrowserWindow !== null && $configuredBrowserWindow !== 'main') {
+            return $configuredBrowserWindow;
+        }
+
+        return $this->fallbackEmbeddedWorkflowBrowserWindowName($task, $workflow);
+    }
+
+    protected function fallbackEmbeddedWorkflowBrowserWindowName(array $task, Workflow $workflow): string
+    {
+        $base = trim((string) ($workflow->slug ?: $workflow->name ?: ($task['key'] ?? 'workflow')));
+        $name = $this->normalizeBrowserWindowName('workflow-'.$base);
+
+        if ($name !== null && $name !== 'main') {
+            return $name;
+        }
+
+        $taskKey = $this->normalizeBrowserWindowName((string) ($task['key'] ?? $task['task_key'] ?? 'workflow'));
+
+        return ($taskKey !== null && $taskKey !== 'main')
+            ? $taskKey
+            : 'embedded-workflow';
     }
 
     protected function normalizeBrowserWindowName(mixed $value): ?string
