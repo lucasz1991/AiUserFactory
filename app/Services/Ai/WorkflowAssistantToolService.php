@@ -5,10 +5,12 @@ namespace App\Services\Ai;
 use App\Models\Workflow;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowStep;
+use App\Services\Workflows\WorkflowExecutionService;
 use App\Services\Workflows\WorkflowTaskCatalog;
 use App\Services\Workflows\WorkflowTaskOrderingService;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\File;
 use Illuminate\Support\Str;
 
 class WorkflowAssistantToolService
@@ -25,6 +27,7 @@ class WorkflowAssistantToolService
             'Sprich Deutsch, kurz, konkret und operativ. Nutze vorhandene Workflow-Daten und Tools, bevor du Vermutungen anstellst.',
             'Du kannst Workflows analysieren, neue Workflows anlegen, Listen/Steps erstellen, Tags setzen, Tasks konfigurieren und vorhandene Workflows aktualisieren.',
             'Nutze list_task_catalog, bevor du konkrete Task-Keys erfindest. Nutze get_workflow_context oder analyze_last_workflow_run, bevor du Fehlerursachen bewertest.',
+            'Nutze search_workflow_tasks und get_nodescript_content_debugg, wenn du bestehende Tasks oder Node-Skripte verstehen musst.',
             'Bei eingebetteten Workflows: nutze list_embedded_workflow_candidates und erklaere kurz, warum ein Workflow eingebettet werden sollte.',
             'Wenn du dem Nutzer mehrere klare Optionen anbietest, nutze present_chat_options, damit klickbare Auswahlbuttons erscheinen.',
             'Lege keine Loeschoperationen an. Fuer gefaehrliche Aenderungen erst eine kurze Zusammenfassung geben und dann eine konkrete Aktualisierungsfunktion nutzen, wenn der Nutzer es beauftragt.',
@@ -63,6 +66,43 @@ class WorkflowAssistantToolService
                     'include_debug_excerpt' => ['type' => 'boolean'],
                 ],
             ]),
+            $this->tool('get_workflow_variables', 'Zeige Variablen und aktuelle Werte aus Workflow-Kontext, letztem Run und Task-Konfigurationen.', [
+                'type' => 'object',
+                'properties' => [
+                    'workflow_id' => ['type' => 'integer'],
+                    'workflow_slug' => ['type' => 'string'],
+                    'workflow_query' => ['type' => 'string'],
+                    'run_id' => ['type' => 'integer'],
+                    'limit' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 120],
+                ],
+            ]),
+            $this->tool('search_workflow_tasks', 'Suche Task-Karten workflowweit nach Task-Key, Titel, Selector, Node-Skript oder Text.', [
+                'type' => 'object',
+                'properties' => [
+                    'query' => ['type' => 'string'],
+                    'workflow_id' => ['type' => 'integer'],
+                    'workflow_slug' => ['type' => 'string'],
+                    'workflow_query' => ['type' => 'string'],
+                    'task_key' => ['type' => 'string'],
+                    'node_script' => ['type' => 'string'],
+                    'limit' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 100],
+                ],
+            ]),
+            $this->tool('get_nodescript_content_debugg', 'Lade den Inhalt eines Workflow-Node-Skripts fuer Debugging. Nur node/workflows-Dateien sind erlaubt.', [
+                'type' => 'object',
+                'properties' => [
+                    'task_key' => ['type' => 'string'],
+                    'node_script' => ['type' => 'string'],
+                    'workflow_id' => ['type' => 'integer'],
+                    'workflow_slug' => ['type' => 'string'],
+                    'workflow_query' => ['type' => 'string'],
+                    'step_id' => ['type' => 'integer'],
+                    'step_action_key' => ['type' => 'string'],
+                    'step_name' => ['type' => 'string'],
+                    'task_card_key' => ['type' => 'string'],
+                    'limit' => ['type' => 'integer', 'minimum' => 500, 'maximum' => 40000],
+                ],
+            ]),
             $this->tool('create_workflow', 'Erstelle einen neuen Workflow.', [
                 'type' => 'object',
                 'properties' => [
@@ -74,6 +114,20 @@ class WorkflowAssistantToolService
                     'is_active' => ['type' => 'boolean'],
                 ],
                 'required' => ['name'],
+            ]),
+            $this->tool('duplicate_workflow', 'Dupliziere einen bestehenden Workflow inklusive Listen und Tasks als neue bearbeitbare Kopie.', [
+                'type' => 'object',
+                'properties' => [
+                    'workflow_id' => ['type' => 'integer'],
+                    'workflow_slug' => ['type' => 'string'],
+                    'workflow_query' => ['type' => 'string'],
+                    'name' => ['type' => 'string'],
+                    'description' => ['type' => 'string'],
+                    'category' => ['type' => 'string'],
+                    'subcategory' => ['type' => 'string'],
+                    'is_active' => ['type' => 'boolean'],
+                    'open_after_create' => ['type' => 'boolean'],
+                ],
             ]),
             $this->tool('update_workflow', 'Aktualisiere Workflow-Metadaten, Tags oder Settings.', [
                 'type' => 'object',
@@ -163,6 +217,22 @@ class WorkflowAssistantToolService
                 ],
                 'required' => ['task_card_key', 'fields'],
             ]),
+            $this->tool('set_workflow_task_routes', 'Setze Erfolgs-, Fehler- oder Teilroute einer vorhandenen Task-Karte.', [
+                'type' => 'object',
+                'properties' => [
+                    'workflow_id' => ['type' => 'integer'],
+                    'workflow_slug' => ['type' => 'string'],
+                    'workflow_query' => ['type' => 'string'],
+                    'step_id' => ['type' => 'integer'],
+                    'step_action_key' => ['type' => 'string'],
+                    'step_name' => ['type' => 'string'],
+                    'task_card_key' => ['type' => 'string'],
+                    'success_target' => ['type' => 'string', 'description' => 'end, fail oder step:<action_key>'],
+                    'partial_target' => ['type' => 'string', 'description' => 'end, fail oder step:<action_key>'],
+                    'error_target' => ['type' => 'string', 'description' => 'end, fail oder step:<action_key>'],
+                ],
+                'required' => ['task_card_key'],
+            ]),
             $this->tool('apply_workflow_definition', 'Erstelle oder aktualisiere einen Workflow aus einer kompakten Definition. Optional koennen alle Listen ersetzt werden.', [
                 'type' => 'object',
                 'properties' => [
@@ -189,6 +259,61 @@ class WorkflowAssistantToolService
                     ],
                 ],
                 'required' => ['name'],
+            ]),
+            $this->tool('update_list_import', 'Importiere Listen aus einem Quell-Workflow in einen Ziel-Workflow. Modi: append, replace_matching, replace_all.', [
+                'type' => 'object',
+                'properties' => [
+                    'workflow_id' => ['type' => 'integer', 'description' => 'Ziel-Workflow-ID'],
+                    'workflow_slug' => ['type' => 'string'],
+                    'workflow_query' => ['type' => 'string'],
+                    'source_workflow_id' => ['type' => 'integer'],
+                    'source_workflow_slug' => ['type' => 'string'],
+                    'source_workflow_query' => ['type' => 'string'],
+                    'list_names' => ['type' => 'array', 'items' => ['type' => 'string']],
+                    'mode' => ['type' => 'string', 'enum' => ['append', 'replace', 'replace_matching', 'replace_all']],
+                    'include_tasks' => ['type' => 'boolean'],
+                ],
+            ]),
+            $this->tool('update_task_import', 'Importiere Task-Karten aus einer Quell-Liste in eine Ziel-Liste. Modi: append, replace_matching, replace_all.', [
+                'type' => 'object',
+                'properties' => [
+                    'workflow_id' => ['type' => 'integer', 'description' => 'Ziel-Workflow-ID'],
+                    'workflow_slug' => ['type' => 'string'],
+                    'workflow_query' => ['type' => 'string'],
+                    'step_id' => ['type' => 'integer'],
+                    'step_action_key' => ['type' => 'string'],
+                    'step_name' => ['type' => 'string'],
+                    'source_workflow_id' => ['type' => 'integer'],
+                    'source_workflow_slug' => ['type' => 'string'],
+                    'source_workflow_query' => ['type' => 'string'],
+                    'source_step_id' => ['type' => 'integer'],
+                    'source_step_action_key' => ['type' => 'string'],
+                    'source_step_name' => ['type' => 'string'],
+                    'task_keys' => ['type' => 'array', 'items' => ['type' => 'string']],
+                    'mode' => ['type' => 'string', 'enum' => ['append', 'replace', 'replace_matching', 'replace_all']],
+                ],
+            ]),
+            $this->tool('workflow_test_run', 'Starte einen manuellen Testlauf fuer einen Workflow und gib Run- und Prozessmonitor-Link zurueck.', [
+                'type' => 'object',
+                'properties' => [
+                    'workflow_id' => ['type' => 'integer'],
+                    'workflow_slug' => ['type' => 'string'],
+                    'workflow_query' => ['type' => 'string'],
+                    'context' => ['type' => 'object'],
+                    'open_process_monitor' => ['type' => 'boolean'],
+                ],
+            ]),
+            $this->tool('navigate', 'Navigiere im Adminbereich zu Workflows, Workflow-Detail, Prozessen, Aktionen, Einstellungen oder Dashboard.', [
+                'type' => 'object',
+                'properties' => [
+                    'target' => ['type' => 'string', 'enum' => ['workflows', 'workflow', 'processes', 'settings', 'actions', 'dashboard']],
+                    'workflow_id' => ['type' => 'integer'],
+                    'workflow_slug' => ['type' => 'string'],
+                    'workflow_query' => ['type' => 'string'],
+                    'run_id' => ['type' => 'integer'],
+                    'tab' => ['type' => 'string'],
+                ],
+                'required' => ['target'],
             ]),
             $this->tool('present_chat_options', 'Zeige dem Nutzer anklickbare Antwortoptionen.', [
                 'type' => 'object',
@@ -225,14 +350,23 @@ class WorkflowAssistantToolService
             'list_workflows' => $this->listWorkflows($arguments),
             'get_workflow_context' => $this->getWorkflowContext($arguments),
             'analyze_last_workflow_run' => $this->analyzeLastWorkflowRun($arguments),
+            'get_workflow_variables' => $this->getWorkflowVariables($arguments),
+            'search_workflow_tasks' => $this->searchWorkflowTasks($arguments),
+            'get_nodescript_content_debugg' => $this->getNodeScriptContentDebugg($arguments),
             'create_workflow' => $this->createWorkflow($arguments),
+            'duplicate_workflow' => $this->duplicateWorkflow($arguments),
             'update_workflow' => $this->updateWorkflow($arguments),
             'create_workflow_list' => $this->createWorkflowList($arguments),
             'list_task_catalog' => $this->listTaskCatalog($arguments),
             'list_embedded_workflow_candidates' => $this->listEmbeddedWorkflowCandidates($arguments),
             'add_workflow_task' => $this->addWorkflowTask($arguments),
             'update_workflow_task' => $this->updateWorkflowTask($arguments),
+            'set_workflow_task_routes' => $this->setWorkflowTaskRoutes($arguments),
             'apply_workflow_definition' => $this->applyWorkflowDefinition($arguments),
+            'update_list_import' => $this->updateListImport($arguments),
+            'update_task_import' => $this->updateTaskImport($arguments),
+            'workflow_test_run' => $this->workflowTestRun($arguments),
+            'navigate' => $this->navigate($arguments),
             'present_chat_options' => $this->presentChatOptions($arguments),
             default => $this->error('UNKNOWN_TOOL', 'Unbekanntes Tool: '.$name),
         };
@@ -353,6 +487,212 @@ class WorkflowAssistantToolService
         ];
     }
 
+    protected function getWorkflowVariables(array $arguments): array
+    {
+        $limit = max(1, min(120, (int) ($arguments['limit'] ?? 60)));
+        $runId = $this->positiveInteger($arguments['run_id'] ?? null);
+        $workflow = $this->resolveWorkflow($arguments, false);
+        $run = $runId
+            ? WorkflowRun::query()->with(['workflow.steps', 'stepRuns.workflowStep'])->find($runId)
+            : null;
+
+        if (! $run && $workflow) {
+            $run = $workflow->runs()->with(['workflow.steps', 'stepRuns.workflowStep'])->latest('id')->first();
+        }
+
+        if (! $workflow && $run?->workflow) {
+            $workflow = $run->workflow;
+        }
+
+        if (! $workflow && ! $run) {
+            return $this->error('WORKFLOW_NOT_FOUND', 'Workflow oder Run wurde nicht gefunden.');
+        }
+
+        $variables = [];
+        $add = function (string $name, mixed $value, string $source, string $field = '') use (&$variables, $limit): void {
+            $name = trim($name);
+
+            if ($name === '' || count($variables) >= $limit) {
+                return;
+            }
+
+            $variables[] = [
+                'name' => Str::limit($name, 120, ''),
+                'current_value' => $this->valuePreview($value),
+                'source' => Str::limit($source, 160, ''),
+                'field' => Str::limit($field, 120, ''),
+            ];
+        };
+
+        if ($workflow) {
+            $workflow->loadMissing(['steps' => fn ($query) => $query->ordered()]);
+
+            foreach ($workflow->steps as $step) {
+                foreach ($step->task_cards as $task) {
+                    foreach ($this->taskVariableHints($task) as $hint) {
+                        $add(
+                            (string) $hint['name'],
+                            null,
+                            'Task '.$step->name.' / '.($task['title'] ?? $task['key'] ?? 'Task'),
+                            (string) $hint['field'],
+                        );
+                    }
+                }
+            }
+        }
+
+        if ($run) {
+            foreach (is_array($run->context_json) ? $run->context_json : [] as $key => $value) {
+                $add((string) $key, $value, 'Run-Kontext #'.$run->id, 'context_json');
+            }
+
+            foreach (is_array($run->result_json) ? $run->result_json : [] as $key => $value) {
+                $add((string) $key, $value, 'Run-Ergebnis #'.$run->id, 'result_json');
+            }
+
+            foreach ($run->stepRuns as $stepRun) {
+                foreach (is_array($stepRun->result_json) ? $stepRun->result_json : [] as $key => $value) {
+                    $add((string) $key, $value, 'Step-Run '.$stepRun->workflowStep?->name.' #'.$stepRun->id, 'result_json');
+                }
+            }
+        }
+
+        return [
+            'ok' => true,
+            'workflow' => $workflow ? $this->workflowSummary($workflow, false) : null,
+            'run_id' => $run?->id,
+            'variables' => collect($variables)
+                ->unique(fn (array $item): string => $item['name'].'|'.$item['source'].'|'.$item['field'])
+                ->values()
+                ->all(),
+        ];
+    }
+
+    protected function searchWorkflowTasks(array $arguments): array
+    {
+        $workflow = $this->resolveWorkflow($arguments, false);
+        $query = Str::lower(trim((string) ($arguments['query'] ?? '')));
+        $taskKey = Str::lower(trim((string) ($arguments['task_key'] ?? '')));
+        $nodeScript = Str::lower(trim((string) ($arguments['node_script'] ?? '')));
+        $limit = max(1, min(100, (int) ($arguments['limit'] ?? 40)));
+        $matches = [];
+
+        $workflows = Workflow::query()
+            ->with(['steps' => fn ($stepQuery) => $stepQuery->ordered()])
+            ->when($workflow, fn ($builder) => $builder->whereKey($workflow->id))
+            ->orderByDesc('updated_at')
+            ->limit($workflow ? 1 : 100)
+            ->get();
+
+        foreach ($workflows as $candidateWorkflow) {
+            foreach ($candidateWorkflow->steps as $step) {
+                foreach ($step->task_cards as $task) {
+                    $haystack = Str::lower(implode(' ', [
+                        $candidateWorkflow->name,
+                        $candidateWorkflow->slug,
+                        $step->name,
+                        $step->action_key,
+                        $task['key'] ?? '',
+                        $task['task_key'] ?? '',
+                        $task['title'] ?? '',
+                        $task['description'] ?? '',
+                        $task['selector'] ?? '',
+                        $task['input_selector'] ?? '',
+                        $task['node_script'] ?? '',
+                        $task['php_handler'] ?? '',
+                        $task['browser_window'] ?? '',
+                    ]));
+
+                    if ($query !== '' && ! str_contains($haystack, $query)) {
+                        continue;
+                    }
+
+                    if ($taskKey !== '' && Str::lower((string) ($task['task_key'] ?? '')) !== $taskKey) {
+                        continue;
+                    }
+
+                    if ($nodeScript !== '' && ! str_contains(Str::lower((string) ($task['node_script'] ?? '')), $nodeScript)) {
+                        continue;
+                    }
+
+                    $matches[] = [
+                        'workflow_id' => (int) $candidateWorkflow->id,
+                        'workflow_name' => $candidateWorkflow->name,
+                        'workflow_url' => route('network.workflows.manage', ['workflow' => $candidateWorkflow->id]),
+                        'step_id' => (int) $step->id,
+                        'step_name' => $step->name,
+                        'step_action_key' => $step->action_key,
+                        'task' => [
+                            'key' => $task['key'] ?? '',
+                            'task_key' => $task['task_key'] ?? '',
+                            'title' => $task['title'] ?? '',
+                            'runner' => $task['runner'] ?? '',
+                            'node_script' => $task['node_script'] ?? '',
+                            'selector' => $task['selector'] ?? '',
+                        ],
+                    ];
+
+                    if (count($matches) >= $limit) {
+                        break 3;
+                    }
+                }
+            }
+        }
+
+        return [
+            'ok' => true,
+            'matches' => $matches,
+        ];
+    }
+
+    protected function getNodeScriptContentDebugg(array $arguments): array
+    {
+        $nodeScript = trim((string) ($arguments['node_script'] ?? ''));
+        $taskKey = trim((string) ($arguments['task_key'] ?? ''));
+
+        if ($nodeScript === '' && $taskKey !== '') {
+            $nodeScript = trim((string) data_get($this->taskCatalog->task($taskKey), 'node_script', ''));
+        }
+
+        if ($nodeScript === '') {
+            $workflow = $this->resolveWorkflow($arguments, false);
+            $resolved = $workflow ? $this->resolveTaskCard($workflow, $arguments) : null;
+            $task = is_array($resolved) ? $resolved['task'] : null;
+            $nodeScript = trim((string) data_get($task, 'node_script', ''));
+
+            if ($nodeScript === '') {
+                $taskCatalogKey = trim((string) data_get($task, 'task_key', ''));
+                $nodeScript = $taskCatalogKey !== ''
+                    ? trim((string) data_get($this->taskCatalog->task($taskCatalogKey), 'node_script', ''))
+                    : '';
+            }
+        }
+
+        if ($nodeScript === '') {
+            return $this->error('NODE_SCRIPT_NOT_FOUND', 'Kein Node-Skript konnte aus Task-Key oder Workflow-Task ermittelt werden.');
+        }
+
+        $path = ltrim(str_replace('\\', '/', $nodeScript), '/');
+        $absolutePath = base_path($path);
+        $allowedRoot = realpath(base_path('node/workflows'));
+        $realPath = realpath($absolutePath);
+
+        if (! $allowedRoot || ! $realPath || ! str_starts_with($realPath, $allowedRoot.DIRECTORY_SEPARATOR)) {
+            return $this->error('NODE_SCRIPT_FORBIDDEN', 'Nur Dateien unter node/workflows duerfen geladen werden.');
+        }
+
+        $limit = max(500, min(40000, (int) ($arguments['limit'] ?? 12000)));
+        $content = File::get($realPath);
+
+        return [
+            'ok' => true,
+            'node_script' => $path,
+            'bytes' => strlen($content),
+            'content_excerpt' => Str::limit($content, $limit, ''),
+            'truncated' => strlen($content) > $limit,
+        ];
+    }
+
     protected function createWorkflow(array $arguments): array
     {
         $name = trim((string) ($arguments['name'] ?? ''));
@@ -379,6 +719,73 @@ class WorkflowAssistantToolService
             'ok' => true,
             'message' => 'Workflow wurde erstellt.',
             'workflow' => $this->workflowSummary($workflow->fresh(), true),
+            'refresh_page' => true,
+        ];
+    }
+
+    protected function duplicateWorkflow(array $arguments): array
+    {
+        $source = $this->resolveWorkflow([
+            'workflow_id' => $arguments['workflow_id'] ?? null,
+            'workflow_slug' => $arguments['workflow_slug'] ?? null,
+            'workflow_query' => $arguments['workflow_query'] ?? null,
+        ]);
+
+        if (! $source) {
+            return $this->error('WORKFLOW_NOT_FOUND', 'Quell-Workflow wurde nicht gefunden.');
+        }
+
+        $source->load(['steps' => fn ($query) => $query->ordered()]);
+        $name = trim((string) ($arguments['name'] ?? ''));
+        $name = $name !== '' ? $name : $source->name.' Kopie';
+
+        $workflow = DB::transaction(function () use ($arguments, $source, $name): Workflow {
+            $sourceSettings = is_array($source->settings_json) ? $source->settings_json : [];
+
+            $workflow = Workflow::query()->create([
+                'name' => Str::limit($name, 160, ''),
+                'slug' => $this->uniqueWorkflowSlug($name),
+                'description' => Str::limit(trim((string) ($arguments['description'] ?? $source->description)), 1000, ''),
+                'category' => $this->slugValue($arguments['category'] ?? $source->category ?? 'custom', 'custom'),
+                'subcategory' => array_key_exists('subcategory', $arguments)
+                    ? $this->optionalSlug($arguments['subcategory'])
+                    : $source->subcategory,
+                'is_active' => array_key_exists('is_active', $arguments) ? (bool) $arguments['is_active'] : false,
+                'trigger_type' => $source->trigger_type ?: 'manual',
+                'settings_json' => array_replace_recursive($sourceSettings, [
+                    'copied_from_workflow_id' => (int) $source->id,
+                    'copied_from_workflow_slug' => (string) $source->slug,
+                    'copied_from' => 'ai_workflow_assistant',
+                ]),
+            ]);
+
+            foreach ($source->steps as $step) {
+                $workflow->steps()->create([
+                    'name' => $step->name,
+                    'type' => $step->type,
+                    'action_key' => $this->uniqueStepActionKeyFromBase($workflow, (string) $step->action_key ?: $step->name),
+                    'position' => (int) $step->position,
+                    'is_enabled' => (bool) $step->is_enabled,
+                    'config_json' => is_array($step->config_json) ? $step->config_json : [],
+                    'retry_attempts' => (int) $step->retry_attempts,
+                    'wait_after_seconds' => (int) $step->wait_after_seconds,
+                ]);
+            }
+
+            $workflow->syncIncludedWorkflowReferences();
+
+            return $workflow;
+        });
+
+        return [
+            'ok' => true,
+            'message' => 'Workflow wurde dupliziert.',
+            'workflow' => $this->workflowSummary($workflow->fresh(['steps']), true),
+            'refresh_page' => true,
+            'ui_action' => (bool) ($arguments['open_after_create'] ?? false) ? [
+                'type' => 'navigate',
+                'url' => route('network.workflows.manage', ['workflow' => $workflow->id]),
+            ] : null,
         ];
     }
 
@@ -431,6 +838,7 @@ class WorkflowAssistantToolService
             'ok' => true,
             'message' => 'Workflow wurde aktualisiert.',
             'workflow' => $this->workflowSummary($workflow->fresh(['steps']), true),
+            'refresh_page' => true,
         ];
     }
 
@@ -493,6 +901,7 @@ class WorkflowAssistantToolService
             'message' => 'Workflow-Liste wurde erstellt.',
             'workflow' => $this->workflowSummary($workflow->fresh(['steps']), true),
             'step' => $this->stepSummary($step->fresh(), true),
+            'refresh_page' => true,
         ];
     }
 
@@ -598,6 +1007,7 @@ class WorkflowAssistantToolService
             'workflow' => $this->workflowSummary($workflow->fresh(['steps']), true),
             'step' => $this->stepSummary($step->fresh(), true),
             'task' => $card,
+            'refresh_page' => true,
         ];
     }
 
@@ -661,6 +1071,70 @@ class WorkflowAssistantToolService
             'message' => 'Task wurde aktualisiert.',
             'step' => $this->stepSummary($step->fresh(), true),
             'task' => $updated,
+            'refresh_page' => true,
+        ];
+    }
+
+    protected function setWorkflowTaskRoutes(array $arguments): array
+    {
+        $workflow = $this->resolveEditableWorkflow($arguments);
+
+        if (! $workflow) {
+            return $this->error('WORKFLOW_NOT_EDITABLE', 'Workflow wurde nicht gefunden oder ist gesperrt.');
+        }
+
+        $resolved = $this->resolveTaskCard($workflow, $arguments);
+
+        if (! $resolved) {
+            return $this->error('TASK_NOT_FOUND', 'Task-Karte wurde nicht gefunden.');
+        }
+
+        /** @var WorkflowStep $step */
+        $step = $resolved['step'];
+        $taskIndex = (int) $resolved['index'];
+        $config = is_array($step->config_json) ? $step->config_json : [];
+        $tasks = collect(is_array($config['tasks'] ?? null) ? $config['tasks'] : [])->values()->all();
+
+        if (! isset($tasks[$taskIndex]) || ! is_array($tasks[$taskIndex])) {
+            return $this->error('TASK_NOT_FOUND', 'Task-Karte wurde nicht gefunden.');
+        }
+
+        $routeMap = [
+            'success_target' => 'next',
+            'partial_target' => 'on_partial',
+            'error_target' => 'on_error',
+        ];
+
+        foreach ($routeMap as $argumentKey => $taskField) {
+            if (! array_key_exists($argumentKey, $arguments)) {
+                continue;
+            }
+
+            $value = trim((string) $arguments[$argumentKey]);
+
+            if ($value === '') {
+                unset($tasks[$taskIndex][$taskField]);
+                continue;
+            }
+
+            $route = $this->routeTargetFromValue($workflow, $value);
+
+            if (! $route) {
+                return $this->error('ROUTE_TARGET_INVALID', 'Route konnte nicht aufgeloest werden: '.$value);
+            }
+
+            $tasks[$taskIndex][$taskField] = $route;
+        }
+
+        $config['tasks'] = $this->normalizeTaskOrder($tasks);
+        $step->forceFill(['config_json' => $config])->save();
+
+        return [
+            'ok' => true,
+            'message' => 'Task-Routen wurden aktualisiert.',
+            'step' => $this->stepSummary($step->fresh(), true),
+            'task' => $this->resolveTaskCard($workflow->fresh(['steps']), $arguments)['task'] ?? null,
+            'refresh_page' => true,
         ];
     }
 
@@ -726,8 +1200,266 @@ class WorkflowAssistantToolService
                 'ok' => true,
                 'message' => 'Workflow-Definition wurde angewendet.',
                 'workflow' => $this->workflowSummary($workflow->fresh(['steps']), true),
+                'refresh_page' => true,
             ];
         });
+    }
+
+    protected function updateListImport(array $arguments): array
+    {
+        $target = $this->resolveEditableWorkflow($arguments);
+        $source = $this->resolveWorkflow($this->sourceWorkflowArguments($arguments));
+
+        if (! $target) {
+            return $this->error('WORKFLOW_NOT_EDITABLE', 'Ziel-Workflow wurde nicht gefunden oder ist gesperrt.');
+        }
+
+        if (! $source) {
+            return $this->error('SOURCE_WORKFLOW_NOT_FOUND', 'Quell-Workflow wurde nicht gefunden.');
+        }
+
+        if ((int) $target->id === (int) $source->id) {
+            return $this->error('VALIDATION', 'Quelle und Ziel duerfen nicht derselbe Workflow sein.');
+        }
+
+        $identifiers = $this->normalizeIdentifierList($arguments['list_names'] ?? []);
+        $mode = $this->importMode($arguments['mode'] ?? 'append');
+        $includeTasks = array_key_exists('include_tasks', $arguments) ? (bool) $arguments['include_tasks'] : true;
+        $sourceSteps = $source->steps()
+            ->ordered()
+            ->get()
+            ->filter(fn (WorkflowStep $step): bool => $this->stepMatchesIdentifiers($step, $identifiers))
+            ->values();
+
+        if ($sourceSteps->isEmpty()) {
+            return $this->error('SOURCE_LISTS_NOT_FOUND', 'Keine passenden Quell-Listen gefunden.');
+        }
+
+        $stats = DB::transaction(function () use ($target, $sourceSteps, $mode, $includeTasks, $identifiers): array {
+            $created = 0;
+            $updated = 0;
+            $deleted = 0;
+
+            if ($mode === 'replace_all') {
+                $query = $target->steps();
+
+                if ($identifiers !== []) {
+                    $query->where(function ($inner) use ($identifiers): void {
+                        foreach ($identifiers as $identifier) {
+                            $inner
+                                ->orWhereRaw('LOWER(name) = ?', [$identifier])
+                                ->orWhereRaw('LOWER(action_key) = ?', [$identifier]);
+                        }
+                    });
+                }
+
+                $deleted = (int) $query->count();
+                $query->delete();
+            }
+
+            foreach ($sourceSteps as $sourceStep) {
+                $config = is_array($sourceStep->config_json) ? $sourceStep->config_json : [];
+
+                if (! $includeTasks) {
+                    $config['tasks'] = [];
+                }
+
+                $targetStep = $mode === 'replace_matching'
+                    ? $target->steps()
+                        ->where(function ($query) use ($sourceStep): void {
+                            $query
+                                ->where('action_key', $sourceStep->action_key)
+                                ->orWhereRaw('LOWER(name) = ?', [Str::lower($sourceStep->name)]);
+                        })
+                        ->first()
+                    : null;
+
+                if ($targetStep) {
+                    $targetStep->forceFill([
+                        'name' => $sourceStep->name,
+                        'type' => $sourceStep->type,
+                        'is_enabled' => (bool) $sourceStep->is_enabled,
+                        'config_json' => $config,
+                        'retry_attempts' => (int) $sourceStep->retry_attempts,
+                        'wait_after_seconds' => (int) $sourceStep->wait_after_seconds,
+                    ])->save();
+                    $updated++;
+
+                    continue;
+                }
+
+                $target->steps()->create([
+                    'name' => $sourceStep->name,
+                    'type' => $sourceStep->type,
+                    'action_key' => $this->uniqueStepActionKeyFromBase($target, (string) $sourceStep->action_key ?: $sourceStep->name),
+                    'position' => ((int) $target->steps()->max('position')) + 10,
+                    'is_enabled' => (bool) $sourceStep->is_enabled,
+                    'config_json' => $config,
+                    'retry_attempts' => (int) $sourceStep->retry_attempts,
+                    'wait_after_seconds' => (int) $sourceStep->wait_after_seconds,
+                ]);
+                $created++;
+            }
+
+            $this->normalizeStepPositions($target);
+            $target->syncIncludedWorkflowReferences();
+
+            return compact('created', 'updated', 'deleted');
+        });
+
+        return [
+            'ok' => true,
+            'message' => 'Listen-Import abgeschlossen.',
+            'stats' => $stats,
+            'workflow' => $this->workflowSummary($target->fresh(['steps']), true),
+            'refresh_page' => true,
+        ];
+    }
+
+    protected function updateTaskImport(array $arguments): array
+    {
+        $target = $this->resolveEditableWorkflow($arguments);
+        $source = $this->resolveWorkflow($this->sourceWorkflowArguments($arguments));
+
+        if (! $target) {
+            return $this->error('WORKFLOW_NOT_EDITABLE', 'Ziel-Workflow wurde nicht gefunden oder ist gesperrt.');
+        }
+
+        if (! $source) {
+            return $this->error('SOURCE_WORKFLOW_NOT_FOUND', 'Quell-Workflow wurde nicht gefunden.');
+        }
+
+        $targetStep = $this->resolveWorkflowStep($target, $arguments);
+
+        if (! $targetStep) {
+            return $this->error('TARGET_STEP_NOT_FOUND', 'Ziel-Liste wurde nicht gefunden.');
+        }
+
+        $sourceStepArguments = [
+            'step_id' => $arguments['source_step_id'] ?? null,
+            'step_action_key' => $arguments['source_step_action_key'] ?? null,
+            'step_name' => $arguments['source_step_name'] ?? null,
+        ];
+        $sourceStep = $this->resolveWorkflowStep($source, $sourceStepArguments);
+        $sourceSteps = $sourceStep
+            ? collect([$sourceStep])
+            : $source->steps()->ordered()->get();
+        $taskIdentifiers = $this->normalizeIdentifierList($arguments['task_keys'] ?? []);
+        $importTasks = $sourceSteps
+            ->flatMap(fn (WorkflowStep $step): Collection => collect($step->task_cards))
+            ->filter(fn (array $task): bool => $this->taskMatchesIdentifiers($task, $taskIdentifiers))
+            ->values();
+
+        if ($importTasks->isEmpty()) {
+            return $this->error('SOURCE_TASKS_NOT_FOUND', 'Keine passenden Quell-Tasks gefunden.');
+        }
+
+        $mode = $this->importMode($arguments['mode'] ?? 'append');
+        $config = is_array($targetStep->config_json) ? $targetStep->config_json : [];
+        $existingTasks = collect(is_array($config['tasks'] ?? null) ? $config['tasks'] : [])
+            ->filter(fn (mixed $task): bool => is_array($task))
+            ->values()
+            ->all();
+        $created = 0;
+        $updated = 0;
+
+        if ($mode === 'replace_all') {
+            $existingTasks = [];
+        }
+
+        foreach ($importTasks as $task) {
+            $copy = $task;
+            $copy['status'] = $copy['status'] ?? 'configured';
+            $matchIndex = $mode === 'replace_matching'
+                ? $this->matchingTaskIndex($existingTasks, $copy)
+                : null;
+
+            if ($matchIndex !== null) {
+                $copy['key'] = (string) ($existingTasks[$matchIndex]['key'] ?? $copy['key'] ?? '');
+                $existingTasks[$matchIndex] = $copy;
+                $updated++;
+
+                continue;
+            }
+
+            $copy['key'] = $this->uniqueTaskKeyInList($existingTasks, (string) ($copy['key'] ?? $copy['title'] ?? $copy['task_key'] ?? 'task'));
+            $existingTasks[] = $copy;
+            $created++;
+        }
+
+        $config['tasks'] = $this->normalizeTaskOrder($existingTasks);
+        $targetStep->forceFill(['config_json' => $config])->save();
+        $target->syncIncludedWorkflowReferences();
+
+        return [
+            'ok' => true,
+            'message' => 'Task-Import abgeschlossen.',
+            'stats' => [
+                'created' => $created,
+                'updated' => $updated,
+                'target_step_id' => (int) $targetStep->id,
+            ],
+            'step' => $this->stepSummary($targetStep->fresh(), true),
+            'refresh_page' => true,
+        ];
+    }
+
+    protected function workflowTestRun(array $arguments): array
+    {
+        $workflow = $this->resolveWorkflow($arguments);
+
+        if (! $workflow) {
+            return $this->error('WORKFLOW_NOT_FOUND', 'Workflow wurde nicht gefunden.');
+        }
+
+        try {
+            $context = is_array($arguments['context'] ?? null) ? $arguments['context'] : [];
+            $run = app(WorkflowExecutionService::class)->start($workflow, [
+                ...$context,
+                'started_from' => 'ai_workflow_chatbot',
+                'test_run' => true,
+            ], 'ai-workflow-chatbot');
+        } catch (\Throwable $exception) {
+            return $this->error('WORKFLOW_TEST_RUN_FAILED', $exception->getMessage());
+        }
+
+        $url = route('processes.index', ['runId' => $run->id]);
+
+        return [
+            'ok' => true,
+            'message' => 'Workflow-Testlauf wurde gestartet.',
+            'run' => $this->runSummary($run->fresh(['workflow', 'stepRuns.workflowStep']), false),
+            'process_monitor_url' => $url,
+            'refresh_page' => true,
+            'ui_action' => (bool) ($arguments['open_process_monitor'] ?? false) ? [
+                'type' => 'navigate',
+                'url' => $url,
+            ] : null,
+        ];
+    }
+
+    protected function navigate(array $arguments): array
+    {
+        $target = Str::slug((string) ($arguments['target'] ?? 'workflows'), '_');
+        $url = match ($target) {
+            'workflow' => $this->workflowUrlForNavigation($arguments),
+            'processes' => route('processes.index', array_filter([
+                'runId' => $this->positiveInteger($arguments['run_id'] ?? null),
+            ])),
+            'settings' => route('admin.settings', ['tab' => trim((string) ($arguments['tab'] ?? 'assistant')) ?: 'assistant']),
+            'actions' => route('network.actions'),
+            'dashboard' => route('admin.dashboard'),
+            default => route('network.workflows'),
+        };
+
+        return [
+            'ok' => true,
+            'message' => 'Navigation vorbereitet.',
+            'ui_action' => [
+                'type' => 'navigate',
+                'url' => $url,
+            ],
+        ];
     }
 
     protected function presentChatOptions(array $arguments): array
@@ -935,6 +1667,42 @@ class WorkflowAssistantToolService
         return $workflow->steps()->ordered()->first();
     }
 
+    protected function resolveTaskCard(Workflow $workflow, array $arguments): ?array
+    {
+        $step = $this->resolveWorkflowStep($workflow, $arguments);
+        $taskKey = trim((string) ($arguments['task_card_key'] ?? $arguments['key'] ?? ''));
+
+        $steps = $step
+            ? collect([$step])
+            : $workflow->steps()->ordered()->get();
+
+        foreach ($steps as $candidateStep) {
+            foreach ($candidateStep->task_cards as $index => $task) {
+                if ($taskKey === '') {
+                    return [
+                        'step' => $candidateStep,
+                        'task' => $task,
+                        'index' => $index,
+                    ];
+                }
+
+                if (
+                    (string) ($task['key'] ?? '') === $taskKey
+                    || (string) ($task['task_key'] ?? '') === $taskKey
+                    || Str::lower((string) ($task['title'] ?? '')) === Str::lower($taskKey)
+                ) {
+                    return [
+                        'step' => $candidateStep,
+                        'task' => $task,
+                        'index' => $index,
+                    ];
+                }
+            }
+        }
+
+        return null;
+    }
+
     protected function resolveEmbeddedWorkflow(array $arguments): ?Workflow
     {
         $id = $this->positiveInteger($arguments['embedded_workflow_id'] ?? null);
@@ -951,6 +1719,148 @@ class WorkflowAssistantToolService
         }
 
         return null;
+    }
+
+    protected function sourceWorkflowArguments(array $arguments): array
+    {
+        return [
+            'workflow_id' => $arguments['source_workflow_id'] ?? null,
+            'workflow_slug' => $arguments['source_workflow_slug'] ?? null,
+            'workflow_query' => $arguments['source_workflow_query'] ?? null,
+        ];
+    }
+
+    protected function importMode(mixed $mode): string
+    {
+        $value = trim((string) $mode);
+
+        return match ($value) {
+            'replace', 'replace_matching' => 'replace_matching',
+            'replace_all' => 'replace_all',
+            default => 'append',
+        };
+    }
+
+    protected function normalizeIdentifierList(mixed $value): array
+    {
+        return collect(is_array($value) ? $value : explode(',', (string) $value))
+            ->map(fn (mixed $item): string => Str::lower(trim((string) $item)))
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    protected function stepMatchesIdentifiers(WorkflowStep $step, array $identifiers): bool
+    {
+        if ($identifiers === []) {
+            return true;
+        }
+
+        $candidates = [
+            Str::lower((string) $step->name),
+            Str::lower((string) $step->action_key),
+            Str::slug((string) $step->name),
+        ];
+
+        foreach ($identifiers as $identifier) {
+            if (in_array($identifier, $candidates, true)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    protected function taskMatchesIdentifiers(array $task, array $identifiers): bool
+    {
+        if ($identifiers === []) {
+            return true;
+        }
+
+        $candidates = [
+            Str::lower((string) ($task['key'] ?? '')),
+            Str::lower((string) ($task['task_key'] ?? '')),
+            Str::lower((string) ($task['title'] ?? '')),
+            Str::slug((string) ($task['title'] ?? '')),
+        ];
+
+        foreach ($identifiers as $identifier) {
+            if (in_array($identifier, $candidates, true)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    protected function matchingTaskIndex(array $existingTasks, array $incomingTask): ?int
+    {
+        $incomingKey = trim((string) ($incomingTask['key'] ?? ''));
+        $incomingTaskKey = trim((string) ($incomingTask['task_key'] ?? ''));
+        $incomingTitle = Str::lower(trim((string) ($incomingTask['title'] ?? '')));
+
+        foreach ($existingTasks as $index => $existingTask) {
+            if (! is_array($existingTask)) {
+                continue;
+            }
+
+            if ($incomingKey !== '' && (string) ($existingTask['key'] ?? '') === $incomingKey) {
+                return $index;
+            }
+
+            if ($incomingTaskKey !== '' && (string) ($existingTask['task_key'] ?? '') === $incomingTaskKey) {
+                return $index;
+            }
+
+            if ($incomingTitle !== '' && Str::lower((string) ($existingTask['title'] ?? '')) === $incomingTitle) {
+                return $index;
+            }
+        }
+
+        return null;
+    }
+
+    protected function uniqueStepActionKeyFromBase(Workflow $workflow, string $base): string
+    {
+        $base = Str::slug($base) ?: 'liste';
+        $key = $base;
+        $index = 2;
+
+        while ($workflow->steps()->where('action_key', $key)->exists()) {
+            $key = $base.'-'.$index;
+            $index++;
+        }
+
+        return $key;
+    }
+
+    protected function uniqueTaskKeyInList(array $tasks, string $base): string
+    {
+        $base = Str::slug($base) ?: 'task';
+        $existing = collect($tasks)
+            ->filter(fn (mixed $task): bool => is_array($task))
+            ->map(fn (array $task): string => (string) ($task['key'] ?? ''))
+            ->filter()
+            ->all();
+        $key = $base;
+        $index = 2;
+
+        while (in_array($key, $existing, true)) {
+            $key = $base.'-'.$index;
+            $index++;
+        }
+
+        return $key;
+    }
+
+    protected function workflowUrlForNavigation(array $arguments): string
+    {
+        $workflow = $this->resolveWorkflow($arguments, false);
+
+        return $workflow
+            ? route('network.workflows.manage', ['workflow' => $workflow->id])
+            : route('network.workflows');
     }
 
     protected function workflowSummary(Workflow $workflow, bool $includeSteps = false): array
@@ -1134,6 +2044,75 @@ class WorkflowAssistantToolService
             ->take(25)
             ->values()
             ->all();
+    }
+
+    protected function taskVariableHints(array $task): array
+    {
+        $variableFields = [
+            'array_name',
+            'context_key',
+            'mail_id_variable',
+            'message_id_variable',
+            'output_array_name',
+            'output_name',
+            'output_variable',
+            'result_key',
+            'save_as',
+            'store_as',
+            'target_variable',
+            'variable',
+            'variable_name',
+            'verification_code_variable',
+            'workflow_return_key',
+        ];
+        $hints = [];
+        $walk = function (array $items, string $prefix = '') use (&$walk, &$hints, $variableFields): void {
+            foreach ($items as $key => $value) {
+                $field = $prefix !== '' ? $prefix.'.'.$key : (string) $key;
+
+                if (is_array($value)) {
+                    $walk($value, $field);
+                    continue;
+                }
+
+                if (! in_array((string) $key, $variableFields, true) || ! is_scalar($value)) {
+                    continue;
+                }
+
+                $name = trim((string) $value);
+
+                if ($name !== '') {
+                    $hints[] = [
+                        'name' => $name,
+                        'field' => $field,
+                    ];
+                }
+            }
+        };
+
+        $walk($task);
+
+        return collect($hints)
+            ->unique(fn (array $hint): string => $hint['name'].'|'.$hint['field'])
+            ->values()
+            ->all();
+    }
+
+    protected function valuePreview(mixed $value): mixed
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        if (is_bool($value) || is_int($value) || is_float($value)) {
+            return $value;
+        }
+
+        if (is_string($value)) {
+            return Str::limit($value, 500, '');
+        }
+
+        return Str::limit(json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?: '', 1200, '');
     }
 
     protected function slugValue(mixed $value, string $fallback): string

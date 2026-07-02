@@ -3,9 +3,11 @@
 namespace App\Services\Ai;
 
 use App\Models\Setting;
+use GuzzleHttp\Psr7\Utils;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Psr\Http\Message\StreamInterface;
 use RuntimeException;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
@@ -30,6 +32,62 @@ class AiConnectionService
         $this->throwIfFailed($response);
 
         return $response->json() ?? [];
+    }
+
+    public function requestStreamed(array $payload, ?string $profile = null, ?callable $onTextDelta = null): array
+    {
+        if (! (bool) $this->setting('stream_enabled', true)) {
+            $response = $this->request($payload, $profile);
+            $content = data_get($response, 'choices.0.message.content');
+            $toolCalls = data_get($response, 'choices.0.message.tool_calls', []);
+
+            if (is_callable($onTextDelta) && is_string($content) && $content !== '' && $toolCalls === []) {
+                $this->streamBufferedText($content, $onTextDelta);
+            }
+
+            return $response;
+        }
+
+        $timeout = (int) ($payload['_timeout'] ?? $this->setting('timeout', 120));
+        unset($payload['_timeout']);
+
+        $payload = $this->preparePayload([
+            ...$payload,
+            'stream' => true,
+        ], $profile);
+        $apiUrl = $this->apiUrl();
+
+        $response = Http::timeout(max(5, $timeout))
+            ->withOptions([
+                'stream' => true,
+                'http_errors' => false,
+            ])
+            ->withHeaders($this->headers())
+            ->post($apiUrl, $payload);
+
+        $this->throwIfFailed($response);
+
+        $body = $response->toPsrResponse()->getBody();
+        $contentType = strtolower((string) $response->header('Content-Type'));
+
+        if (str_contains($contentType, 'text/event-stream')) {
+            return $this->parseChatEventStream($body, $onTextDelta);
+        }
+
+        $decoded = json_decode((string) $body, true);
+
+        if (! is_array($decoded)) {
+            throw new RuntimeException('AI connection returned invalid JSON.');
+        }
+
+        $content = data_get($decoded, 'choices.0.message.content');
+        $toolCalls = data_get($decoded, 'choices.0.message.tool_calls', []);
+
+        if (is_callable($onTextDelta) && is_string($content) && $content !== '' && $toolCalls === []) {
+            $this->streamBufferedText($content, $onTextDelta);
+        }
+
+        return $decoded;
     }
 
     public function text(string $prompt, ?string $system = null, array $options = []): string
@@ -97,6 +155,142 @@ class AiConnectionService
             'Cache-Control' => 'no-cache',
             'X-Accel-Buffering' => 'no',
         ]);
+    }
+
+    protected function parseChatEventStream(StreamInterface $body, ?callable $onTextDelta = null): array
+    {
+        $content = '';
+        $toolCalls = [];
+        $finishReason = null;
+
+        while (! $body->eof()) {
+            $line = trim(Utils::readLine($body));
+
+            if ($line === '' || str_starts_with($line, ':') || ! str_starts_with($line, 'data:')) {
+                continue;
+            }
+
+            $data = trim(substr($line, 5));
+
+            if ($data === '[DONE]') {
+                break;
+            }
+
+            $event = json_decode($data, true);
+
+            if (! is_array($event)) {
+                continue;
+            }
+
+            $providerError = data_get($event, 'error.message');
+
+            if (is_string($providerError) && $providerError !== '') {
+                throw new RuntimeException('AI streaming error: '.$providerError);
+            }
+
+            $choice = data_get($event, 'choices.0', []);
+
+            if (! is_array($choice)) {
+                continue;
+            }
+
+            $delta = $choice['delta'] ?? $choice['message'] ?? [];
+            $textDelta = is_array($delta) ? ($delta['content'] ?? '') : '';
+
+            if (is_string($textDelta) && $textDelta !== '') {
+                $content .= $textDelta;
+
+                if (is_callable($onTextDelta)) {
+                    $onTextDelta($textDelta);
+                }
+            }
+
+            foreach (is_array($delta) ? ($delta['tool_calls'] ?? []) : [] as $toolCallDelta) {
+                if (! is_array($toolCallDelta)) {
+                    continue;
+                }
+
+                $index = max(0, (int) ($toolCallDelta['index'] ?? 0));
+                $toolCalls[$index] ??= [
+                    'id' => '',
+                    'type' => 'function',
+                    'function' => [
+                        'name' => '',
+                        'arguments' => '',
+                    ],
+                ];
+
+                $idDelta = (string) ($toolCallDelta['id'] ?? '');
+                $typeDelta = (string) ($toolCallDelta['type'] ?? '');
+                $nameDelta = (string) data_get($toolCallDelta, 'function.name', '');
+                $argumentsDelta = (string) data_get($toolCallDelta, 'function.arguments', '');
+
+                if ($idDelta !== '') {
+                    $toolCalls[$index]['id'] = $idDelta;
+                }
+
+                if ($typeDelta !== '') {
+                    $toolCalls[$index]['type'] = $typeDelta;
+                }
+
+                if ($nameDelta !== '') {
+                    $currentName = (string) $toolCalls[$index]['function']['name'];
+
+                    if ($currentName === '' || str_starts_with($nameDelta, $currentName)) {
+                        $toolCalls[$index]['function']['name'] = $nameDelta;
+                    } elseif (! str_ends_with($currentName, $nameDelta)) {
+                        $toolCalls[$index]['function']['name'] .= $nameDelta;
+                    }
+                }
+
+                if ($argumentsDelta !== '') {
+                    $toolCalls[$index]['function']['arguments'] .= $argumentsDelta;
+                }
+            }
+
+            if (is_string($choice['finish_reason'] ?? null)) {
+                $finishReason = $choice['finish_reason'];
+            }
+        }
+
+        $message = [
+            'role' => 'assistant',
+            'content' => $content,
+        ];
+
+        if ($toolCalls !== []) {
+            ksort($toolCalls);
+            $message['tool_calls'] = array_values($toolCalls);
+        }
+
+        return [
+            'choices' => [[
+                'message' => $message,
+                'finish_reason' => $finishReason,
+            ]],
+        ];
+    }
+
+    protected function streamBufferedText(string $content, callable $onTextDelta): void
+    {
+        $parts = preg_split('/(\s+)/u', $content, -1, PREG_SPLIT_DELIM_CAPTURE | PREG_SPLIT_NO_EMPTY) ?: [$content];
+        $chunk = '';
+
+        foreach ($parts as $part) {
+            $chunk .= $part;
+
+            if (mb_strlen($chunk) < 36) {
+                continue;
+            }
+
+            $onTextDelta($chunk);
+            $chunk = '';
+            usleep(12000);
+        }
+
+        if ($chunk !== '') {
+            $onTextDelta($chunk);
+        }
     }
 
     public function imageGeneration(string $prompt, array $options = []): array

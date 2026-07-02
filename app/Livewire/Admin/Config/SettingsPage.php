@@ -23,6 +23,9 @@ class SettingsPage extends Component
     public string $openRouterImageUnderstandingModel = '';
     public string $openRouterSpeechToTextModel = '';
     public string $openRouterTextToSpeechModel = '';
+    public string $openRouterAudioOutputApiUrl = '';
+    public string $openRouterAudioOutputVoice = 'alloy';
+    public string $openRouterAudioOutputFormat = 'mp3';
 
     public int $openRouterTimeout = 120;
     public float $openRouterTemperature = 0.4;
@@ -34,6 +37,8 @@ class SettingsPage extends Component
     public string $assistantName = 'Workflow Copilot';
     public string $assistantInstructions = '';
     public int $assistantMaxToolRounds = 5;
+    public bool $assistantAutoReadDefault = false;
+    public float $assistantSpeechRate = 1.0;
 
     // ClientController settings tab
     public string $ccServerDomain = '';
@@ -93,6 +98,9 @@ class SettingsPage extends Component
             'openRouterImageUnderstandingModel' => ['required', 'string', 'max:255'],
             'openRouterSpeechToTextModel' => ['required', 'string', 'max:255'],
             'openRouterTextToSpeechModel' => ['required', 'string', 'max:255'],
+            'openRouterAudioOutputApiUrl' => ['nullable', 'url', 'max:2048'],
+            'openRouterAudioOutputVoice' => ['nullable', 'string', 'max:80'],
+            'openRouterAudioOutputFormat' => ['required', 'string', 'in:mp3,wav,opus,pcm'],
 
             'openRouterTimeout' => ['required', 'integer', 'min:5', 'max:600'],
             'openRouterTemperature' => ['required', 'numeric', 'min:0', 'max:2'],
@@ -112,6 +120,10 @@ class SettingsPage extends Component
             'image_understanding_model' => trim($validated['openRouterImageUnderstandingModel']),
             'speech_to_text_model' => trim($validated['openRouterSpeechToTextModel']),
             'text_to_speech_model' => trim($validated['openRouterTextToSpeechModel']),
+            'audio_output_api_url' => trim((string) ($validated['openRouterAudioOutputApiUrl'] ?? '')),
+            'audio_output_model' => trim($validated['openRouterTextToSpeechModel']),
+            'audio_output_voice' => trim((string) ($validated['openRouterAudioOutputVoice'] ?? 'alloy')) ?: 'alloy',
+            'audio_output_format' => trim($validated['openRouterAudioOutputFormat']),
 
             'timeout' => (int) $validated['openRouterTimeout'],
             'temperature' => (float) $validated['openRouterTemperature'],
@@ -130,6 +142,8 @@ class SettingsPage extends Component
             'assistantName' => ['required', 'string', 'max:80'],
             'assistantInstructions' => ['nullable', 'string', 'max:8000'],
             'assistantMaxToolRounds' => ['required', 'integer', 'min:1', 'max:8'],
+            'assistantAutoReadDefault' => ['boolean'],
+            'assistantSpeechRate' => ['required', 'numeric', 'min:0.5', 'max:2'],
         ]);
 
         Setting::setValue('ai_assistant', 'workflow_copilot', [
@@ -137,6 +151,8 @@ class SettingsPage extends Component
             'name' => trim($validated['assistantName']),
             'instructions' => trim((string) ($validated['assistantInstructions'] ?? '')),
             'max_tool_rounds' => (int) $validated['assistantMaxToolRounds'],
+            'auto_read_default' => (bool) $validated['assistantAutoReadDefault'],
+            'speech_rate' => (float) $validated['assistantSpeechRate'],
         ]);
 
         session()->flash('success', 'AI Chatbot-Einstellungen wurden gespeichert.');
@@ -207,6 +223,9 @@ class SettingsPage extends Component
         $this->openRouterImageUnderstandingModel = trim((string) ($settings['image_understanding_model'] ?? $settings['vision_model'] ?? config('services.openrouter.image_understanding_model')));
         $this->openRouterSpeechToTextModel = trim((string) ($settings['speech_to_text_model'] ?? config('services.openrouter.speech_to_text_model')));
         $this->openRouterTextToSpeechModel = trim((string) ($settings['text_to_speech_model'] ?? config('services.openrouter.text_to_speech_model')));
+        $this->openRouterAudioOutputApiUrl = trim((string) ($settings['audio_output_api_url'] ?? config('services.openrouter.audio_output_api_url', 'https://openrouter.ai/api/v1/audio/speech')));
+        $this->openRouterAudioOutputVoice = trim((string) ($settings['audio_output_voice'] ?? config('services.openrouter.audio_output_voice', 'alloy'))) ?: 'alloy';
+        $this->openRouterAudioOutputFormat = trim((string) ($settings['audio_output_format'] ?? config('services.openrouter.audio_output_format', 'mp3'))) ?: 'mp3';
 
         $this->openRouterTimeout = (int) ($settings['timeout'] ?? config('services.openrouter.timeout', 120));
         $this->openRouterTemperature = (float) ($settings['temperature'] ?? config('services.openrouter.temperature', 0.4));
@@ -223,6 +242,8 @@ class SettingsPage extends Component
         $this->assistantName = trim((string) ($settings['name'] ?? 'Workflow Copilot')) ?: 'Workflow Copilot';
         $this->assistantInstructions = trim((string) ($settings['instructions'] ?? ''));
         $this->assistantMaxToolRounds = max(1, min(8, (int) ($settings['max_tool_rounds'] ?? 5)));
+        $this->assistantAutoReadDefault = (bool) ($settings['auto_read_default'] ?? false);
+        $this->assistantSpeechRate = max(0.5, min(2.0, (float) ($settings['speech_rate'] ?? 1.0)));
     }
 
     protected function loadClientControllerSettings(): void

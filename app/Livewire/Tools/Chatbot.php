@@ -35,6 +35,10 @@ class Chatbot extends Component
 
     public string $assistantName = 'Workflow Copilot';
 
+    public bool $assistantAutoReadDefault = false;
+
+    public float $assistantSpeechRate = 1.0;
+
     public mixed $workflowImportFile = null;
 
     protected $listeners = [
@@ -48,6 +52,8 @@ class Chatbot extends Component
 
         $this->assistantEnabled = (bool) ($settings['enabled'] ?? true);
         $this->assistantName = trim((string) ($settings['name'] ?? 'Workflow Copilot')) ?: 'Workflow Copilot';
+        $this->assistantAutoReadDefault = (bool) ($settings['auto_read_default'] ?? false);
+        $this->assistantSpeechRate = max(0.5, min(2.0, (float) ($settings['speech_rate'] ?? 1.0)));
         $this->chatHistory = Session::get(self::DISPLAY_HISTORY_KEY, []);
         $this->toolEvents = [];
         $this->pageContext = $this->initialPageContext();
@@ -123,6 +129,14 @@ class Chatbot extends Component
                 'neutral',
                 $response['chat_options'] ?? null,
             );
+
+            if (is_array($response['ui_action'] ?? null)) {
+                $this->dispatch('assistant-ui-action', action: $response['ui_action']);
+            }
+
+            if ((bool) ($response['refresh_page'] ?? false)) {
+                $this->dispatch('assistant-workflow-page-refresh');
+            }
         } catch (\Throwable $exception) {
             Log::warning('AI User Factory Chatbot fehlgeschlagen.', [
                 'error' => $exception->getMessage(),
@@ -157,6 +171,7 @@ class Chatbot extends Component
                 'Workflow-Import abgeschlossen: '.$result['total'].' verarbeitet, '.$result['created'].' neu, '.$result['updated'].' aktualisiert.',
                 'success',
             );
+            $this->dispatch('assistant-workflow-page-refresh');
         } catch (\Throwable $exception) {
             $this->addError('workflowImportFile', $exception->getMessage());
             $this->appendDisplayMessage('assistant', 'Workflow-Import fehlgeschlagen: '.$exception->getMessage(), 'error');
@@ -205,18 +220,34 @@ class Chatbot extends Component
         ];
         $chatOptions = null;
         $finalMessage = '';
+        $uiAction = null;
+        $refreshPage = false;
+
+        $this->stream('assistant-response-stream', '', true);
+        $this->stream('assistant-status-stream', 'Kontext wird geprueft und die Anfrage vorbereitet.', true);
 
         for ($round = 0; $round < $toolRounds; $round++) {
-            $response = $ai->request([
+            if ($round > 0) {
+                $this->stream('assistant-status-stream', 'Werkzeugergebnisse werden ausgewertet.', true);
+            }
+
+            $response = $ai->requestStreamed([
                 'messages' => $messages,
                 'tools' => $toolService->tools(),
                 'tool_choice' => 'auto',
-            ], 'text');
+            ], 'text', function (string $chunk): void {
+                $chunk = $this->sanitizeAssistantChunk($chunk);
+
+                if ($chunk !== '') {
+                    $this->stream('assistant-response-stream', e($chunk));
+                }
+            });
             $assistantMessage = data_get($response, 'choices.0.message', []);
             $content = trim((string) data_get($assistantMessage, 'content', ''));
             $toolCalls = $this->normalizeToolCalls(data_get($assistantMessage, 'tool_calls', data_get($assistantMessage, 'toolCalls', [])));
 
             if ($toolCalls === []) {
+                $this->stream('assistant-status-stream', 'Antwort wird fertiggestellt.', true);
                 $finalMessage = $content;
                 $messages[] = [
                     'role' => 'assistant',
@@ -233,12 +264,20 @@ class Chatbot extends Component
             ];
 
             foreach ($toolCalls as $toolCall) {
+                $this->stream('assistant-status-stream', $this->assistantToolStatus($toolCall['name']), true);
+
                 $result = $toolService->execute($toolCall['name'], $toolCall['arguments'], Auth::user());
 
                 $this->appendToolEvent($toolCall['name'], $toolCall['arguments'], $result);
+                $refreshPage = true;
+                $this->dispatch('assistant-workflow-page-refresh');
 
                 if (is_array($result['chat_options'] ?? null)) {
                     $chatOptions = $result['chat_options'];
+                }
+
+                if (($result['ok'] ?? false) && is_array($result['ui_action'] ?? null)) {
+                    $uiAction = $result['ui_action'];
                 }
 
                 $messages[] = [
@@ -251,7 +290,8 @@ class Chatbot extends Component
         }
 
         if ($finalMessage === '') {
-            $response = $ai->request([
+            $this->stream('assistant-status-stream', 'Tool-Ergebnisse werden zusammengefasst.', true);
+            $response = $ai->requestStreamed([
                 'messages' => [
                     ...$messages,
                     [
@@ -261,7 +301,13 @@ class Chatbot extends Component
                 ],
                 'tools' => $toolService->tools(),
                 'tool_choice' => 'none',
-            ], 'text');
+            ], 'text', function (string $chunk): void {
+                $chunk = $this->sanitizeAssistantChunk($chunk);
+
+                if ($chunk !== '') {
+                    $this->stream('assistant-response-stream', e($chunk));
+                }
+            });
             $finalMessage = trim((string) data_get($response, 'choices.0.message.content', ''));
             $messages[] = [
                 'role' => 'assistant',
@@ -274,6 +320,8 @@ class Chatbot extends Component
         return [
             'message' => $this->sanitizeAssistantText($finalMessage),
             'chat_options' => $this->normalizeChatOptions($chatOptions),
+            'ui_action' => $uiAction,
+            'refresh_page' => $refreshPage,
         ];
     }
 
@@ -375,7 +423,32 @@ class Chatbot extends Component
             'time' => now()->format('H:i:s'),
         ];
 
-        $this->toolEvents = array_slice($this->toolEvents, -10);
+        $this->toolEvents = array_slice($this->toolEvents, -24);
+    }
+
+    private function assistantToolStatus(string $toolName): string
+    {
+        return match ($toolName) {
+            'list_workflows' => 'Workflows werden gesucht.',
+            'get_workflow_context' => 'Workflow-Kontext wird geladen.',
+            'analyze_last_workflow_run' => 'Letzter Workflow-Lauf wird analysiert.',
+            'get_workflow_variables' => 'Variablen und Werte werden gelesen.',
+            'search_workflow_tasks' => 'Workflow-Tasks werden durchsucht.',
+            'get_nodescript_content_debugg' => 'Node-Skript wird geladen.',
+            'create_workflow' => 'Workflow wird erstellt.',
+            'duplicate_workflow' => 'Workflow wird dupliziert.',
+            'update_workflow' => 'Workflow wird aktualisiert.',
+            'create_workflow_list' => 'Workflow-Liste wird angelegt.',
+            'add_workflow_task' => 'Task wird hinzugefuegt.',
+            'update_workflow_task' => 'Task wird aktualisiert.',
+            'set_workflow_task_routes' => 'Task-Routen werden gesetzt.',
+            'apply_workflow_definition' => 'Workflow-Definition wird angewendet.',
+            'update_list_import' => 'Listen werden importiert.',
+            'update_task_import' => 'Tasks werden importiert.',
+            'workflow_test_run' => 'Workflow-Testlauf wird gestartet.',
+            'navigate' => 'Ansicht wird vorbereitet.',
+            default => 'Werkzeug '.$toolName.' wird ausgefuehrt.',
+        };
     }
 
     private function assistantSettings(): array
@@ -442,6 +515,13 @@ class Chatbot extends Component
         $text = preg_replace('/\n{3,}/', "\n\n", trim($text)) ?? trim($text);
 
         return Str::limit($text, 12000, '');
+    }
+
+    private function sanitizeAssistantChunk(string $chunk): string
+    {
+        $chunk = str_replace(["\0", "\r"], ['', ''], $chunk);
+
+        return Str::limit($chunk, 4000, '');
     }
 
     private function encodeJson(mixed $value): string

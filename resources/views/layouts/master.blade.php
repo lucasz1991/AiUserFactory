@@ -46,7 +46,9 @@
             </main>
         @endif
         @auth
-            @livewire('tools.chatbot')
+            @if(request()->routeIs('network.workflows', 'network.workflows.manage'))
+                @livewire('tools.chatbot')
+            @endif
         @endauth
         <!-- script -->
         @include('layouts.vendor-scripts')

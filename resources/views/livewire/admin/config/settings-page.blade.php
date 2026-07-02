@@ -162,6 +162,29 @@
                             <input id="openrouter-tts-model" type="text" wire:model.defer="openRouterTextToSpeechModel" placeholder="openai/tts-1" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500" />
                             @error('openRouterTextToSpeechModel') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
                         </div>
+
+                        <div>
+                            <label for="openrouter-audio-output-api-url" class="block text-sm font-medium text-gray-700">Audioausgabe API URL</label>
+                            <input id="openrouter-audio-output-api-url" type="url" wire:model.defer="openRouterAudioOutputApiUrl" placeholder="https://openrouter.ai/api/v1/audio/speech" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500" />
+                            @error('openRouterAudioOutputApiUrl') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                        </div>
+
+                        <div>
+                            <label for="openrouter-audio-output-voice" class="block text-sm font-medium text-gray-700">Audioausgabe Stimme</label>
+                            <input id="openrouter-audio-output-voice" type="text" wire:model.defer="openRouterAudioOutputVoice" placeholder="alloy" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500" />
+                            @error('openRouterAudioOutputVoice') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                        </div>
+
+                        <div>
+                            <label for="openrouter-audio-output-format" class="block text-sm font-medium text-gray-700">Audioformat</label>
+                            <select id="openrouter-audio-output-format" wire:model.defer="openRouterAudioOutputFormat" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                                <option value="mp3">mp3</option>
+                                <option value="wav">wav</option>
+                                <option value="opus">opus</option>
+                                <option value="pcm">pcm</option>
+                            </select>
+                            @error('openRouterAudioOutputFormat') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                        </div>
                     </div>
                 </div>
 
@@ -205,7 +228,7 @@
                     <p class="mt-1">
                         Gruppe: <code>services</code>, Key: <code>openrouter</code>.
                         Enthalten sind <code>api_url</code>, <code>api_key</code>, <code>referer_url</code>, <code>model_title</code>,
-                        alle Modell-Profile sowie <code>timeout</code>, <code>temperature</code>, <code>max_completion_tokens</code> und <code>stream_enabled</code>.
+                        alle Modell-Profile, Audioausgabe sowie <code>timeout</code>, <code>temperature</code>, <code>max_completion_tokens</code> und <code>stream_enabled</code>.
                     </p>
                 </div>
 
@@ -242,12 +265,26 @@
                             @error('assistantMaxToolRounds') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
                         </div>
 
+                        <div>
+                            <label for="assistant-speech-rate" class="block text-sm font-medium text-gray-700">Vorlese-Geschwindigkeit</label>
+                            <input id="assistant-speech-rate" type="number" min="0.5" max="2" step="0.1" wire:model.defer="assistantSpeechRate" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500" />
+                            @error('assistantSpeechRate') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                        </div>
+
                         <div class="md:col-span-2">
                             <label class="inline-flex items-center gap-2 text-sm font-medium text-gray-700">
                                 <input type="checkbox" wire:model.defer="assistantEnabled" class="rounded border-gray-300 text-slate-900 shadow-sm focus:ring-slate-900">
                                 <span>AI Chatbot aktivieren</span>
                             </label>
                             @error('assistantEnabled') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                        </div>
+
+                        <div class="md:col-span-2">
+                            <label class="inline-flex items-center gap-2 text-sm font-medium text-gray-700">
+                                <input type="checkbox" wire:model.defer="assistantAutoReadDefault" class="rounded border-gray-300 text-slate-900 shadow-sm focus:ring-slate-900">
+                                <span>Antworten automatisch vorlesen</span>
+                            </label>
+                            @error('assistantAutoReadDefault') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
                         </div>
                     </div>
                 </div>
