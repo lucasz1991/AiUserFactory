@@ -20,6 +20,21 @@ const SCRIPT_NAME = process.env.VERIFICATION_WEBMAIL_CHECK_SCRIPT_NAME || 'check
 const SCRIPT_VERSION = 1;
 const DEFAULT_VIEWPORT = { width: 1365, height: 900 };
 
+function runtimeTimezone(runtimeConfig = {}) {
+  return runtimeConfig.timeZone
+    || runtimeConfig.timezone
+    || runtimeConfig.subject?.timezone
+    || runtimeConfig.workflow?.person?.timezone
+    || runtimeConfig.workflow?.person?.person_timezone
+    || process.env.APP_TIMEZONE
+    || process.env.TZ
+    || 'Europe/Berlin';
+}
+
+function applyRuntimeTimezone(runtimeConfig = {}) {
+  process.env.TZ = runtimeTimezone(runtimeConfig);
+}
+
 function normalizeText(value) {
   return String(value || '').trim();
 }
@@ -538,6 +553,7 @@ async function waitForVerificationEmail(page, timeoutMs) {
 async function main() {
   const runtimeConfigPath = process.argv[2] || '';
   const runtimeConfig = readJsonFile(runtimeConfigPath, {});
+  applyRuntimeTimezone(runtimeConfig);
   const mailbox = verificationMailboxFromConfig(runtimeConfig);
   const warnings = [];
   let browser = null;
@@ -620,6 +636,8 @@ async function main() {
       activeBrowserEngine: launchResult.activeEngine,
       browserFallbackReason: launchResult.fallbackReason || null,
       warnings,
+      timezone: runtimeTimezone(runtimeConfig),
+      timeZone: runtimeTimezone(runtimeConfig),
       scriptName: SCRIPT_NAME,
       scriptVersion: SCRIPT_VERSION,
       scriptVersions: {

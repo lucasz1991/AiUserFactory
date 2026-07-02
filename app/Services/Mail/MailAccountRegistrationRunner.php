@@ -153,6 +153,7 @@ class MailAccountRegistrationRunner
         $livePreviewPath = $publicRunDirectory.DIRECTORY_SEPARATOR.'live.png';
         $webmailLivePreviewPath = $publicRunDirectory.DIRECTORY_SEPARATOR.'live-webmail.png';
         $normalizedSubject = $this->normalizeSubject($subject);
+        $timezone = $this->runtimeTimezone($normalizedSubject['timezone'] ?? null);
         $verificationMailbox = is_array($settings['verification_mailbox'] ?? null) ? $settings['verification_mailbox'] : [];
         $workflowContext = $this->normalizeWorkflowContext($workflowContext);
 
@@ -168,6 +169,8 @@ class MailAccountRegistrationRunner
             'runId' => $runId,
             'workflow' => $workflowContext,
             'processIdentity' => $this->processIdentity($runId, 'main', $normalizedSubject['personId'] ?? null),
+            'timezone' => $timezone,
+            'timeZone' => $timezone,
             'processHeartbeatIntervalSeconds' => max(5, (int) $settings['live_preview_interval_seconds']),
             'supervisor' => [
                 'enabled' => true,
@@ -254,6 +257,7 @@ class MailAccountRegistrationRunner
                 base_path(),
                 $stdoutPath,
                 $stderrPath,
+                $this->nodeProcessEnvironment($timezone),
             );
 
             $status = $this->readJsonFile($statusPath) ?: [];
@@ -1206,12 +1210,13 @@ class MailAccountRegistrationRunner
         throw new \RuntimeException('Node.js wurde fuer die Mail-Registrierung nicht gefunden.');
     }
 
-    protected function spawnDetachedProcess(array $command, string $workingDirectory, string $stdoutPath, string $stderrPath): ?int
+    protected function spawnDetachedProcess(array $command, string $workingDirectory, string $stdoutPath, string $stderrPath, array $environment = []): ?int
     {
         File::ensureDirectoryExists(dirname($stdoutPath));
         File::ensureDirectoryExists(dirname($stderrPath));
 
         if (PHP_OS_FAMILY === 'Windows') {
+            $environmentScript = $this->powershellEnvironmentScript($environment);
             $script = '$p = Start-Process'
                 .' -FilePath '.$this->powershellQuote($command[0])
                 .' -ArgumentList @('.implode(',', array_map(fn (string $argument): string => $this->powershellQuote($argument), array_slice($command, 1))).')'
@@ -1227,16 +1232,20 @@ class MailAccountRegistrationRunner
                 '-ExecutionPolicy',
                 'Bypass',
                 '-Command',
-                $script,
+                $environmentScript.$script,
             ]);
         } else {
+            $environmentPrefix = $this->shellEnvironmentPrefix($environment);
+            $commandLine = implode(' ', array_map('escapeshellarg', $command));
             $shellCommand = sprintf(
-                'cd %s && if command -v setsid >/dev/null 2>&1; then setsid nohup %s > %s 2> %s < /dev/null & echo $!; else nohup %s > %s 2> %s < /dev/null & echo $!; fi',
+                'cd %s && if command -v setsid >/dev/null 2>&1; then %s setsid nohup %s > %s 2> %s < /dev/null & echo $!; else %s nohup %s > %s 2> %s < /dev/null & echo $!; fi',
                 escapeshellarg($workingDirectory),
-                implode(' ', array_map('escapeshellarg', $command)),
+                $environmentPrefix,
+                $commandLine,
                 escapeshellarg($stdoutPath),
                 escapeshellarg($stderrPath),
-                implode(' ', array_map('escapeshellarg', $command)),
+                $environmentPrefix,
+                $commandLine,
                 escapeshellarg($stdoutPath),
                 escapeshellarg($stderrPath),
             );
@@ -1251,6 +1260,49 @@ class MailAccountRegistrationRunner
         $pid = (int) trim($result->output());
 
         return $pid > 0 ? $pid : null;
+    }
+
+    protected function runtimeTimezone(mixed $timezone = null): string
+    {
+        $timezone = trim((string) ($timezone ?: (getenv('APP_TIMEZONE') ?: null) ?: (getenv('TZ') ?: null) ?: config('app.timezone', 'Europe/Berlin')));
+
+        if ($timezone !== '') {
+            try {
+                new \DateTimeZone($timezone);
+
+                return $timezone;
+            } catch (\Throwable) {
+                // Fall through to the stable default.
+            }
+        }
+
+        return 'Europe/Berlin';
+    }
+
+    protected function nodeProcessEnvironment(string $timezone): array
+    {
+        $timezone = $this->runtimeTimezone($timezone);
+
+        return [
+            'TZ' => $timezone,
+            'APP_TIMEZONE' => $timezone,
+        ];
+    }
+
+    protected function shellEnvironmentPrefix(array $environment): string
+    {
+        return collect($environment)
+            ->filter(fn (mixed $value, string $key): bool => trim((string) $key) !== '' && trim((string) $value) !== '')
+            ->map(fn (mixed $value, string $key): string => $key.'='.escapeshellarg((string) $value))
+            ->implode(' ');
+    }
+
+    protected function powershellEnvironmentScript(array $environment): string
+    {
+        return collect($environment)
+            ->filter(fn (mixed $value, string $key): bool => trim((string) $key) !== '' && trim((string) $value) !== '')
+            ->map(fn (mixed $value, string $key): string => '$env:'.$key.' = '.$this->powershellQuote((string) $value).';')
+            ->implode(' ');
     }
 
     protected function stopProcess(int $pid, bool $force = true): void

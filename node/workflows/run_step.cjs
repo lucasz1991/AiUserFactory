@@ -27,6 +27,16 @@ if (!runtimePath) {
 }
 
 const runtime = JSON.parse(fs.readFileSync(runtimePath, 'utf8'));
+const workflowTimezone = runtime.timeZone
+  || runtime.timezone
+  || runtime.workflow?.timeZone
+  || runtime.workflow?.timezone
+  || runtime.workflow?.person?.timezone
+  || runtime.workflow?.person?.person_timezone
+  || process.env.APP_TIMEZONE
+  || process.env.TZ
+  || 'Europe/Berlin';
+process.env.TZ = workflowTimezone;
 const basePath = path.resolve(__dirname, '..', '..');
 const startedAt = new Date().toISOString();
 const taskResults = [];
@@ -251,6 +261,8 @@ function statusPayload(state, stage, message, extra = {}) {
     workflowStepRunId: runtime.workflowStepRunId,
     workflowStepName: runtime.workflowStepName,
     workflowStepType: runtime.workflowStepType,
+    timezone: workflowTimezone,
+    timeZone: workflowTimezone,
     state,
     stage,
     message,
