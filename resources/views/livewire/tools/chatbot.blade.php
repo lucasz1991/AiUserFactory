@@ -1,8 +1,14 @@
 <style>
     [x-cloak] { display: none !important; }
+    [data-workflow-copilot-root] .workflow-copilot-panel { display: none; }
+    [data-workflow-copilot-root][data-open="1"] .workflow-copilot-panel { display: flex; }
+    [data-workflow-copilot-root][data-open="1"] .workflow-copilot-button { display: none; }
+    [data-workflow-copilot-root][data-open="0"] .workflow-copilot-button { display: flex; }
 </style>
 
 <div
+    data-workflow-copilot-root
+    data-open="0"
     x-data="{
         showChat: false,
         draft: @entangle('message'),
@@ -291,6 +297,7 @@
     x-on:assistant-ui-action.window="handleUiAction($event)"
     x-on:assistant-workflow-page-refresh.window="refreshWorkflowPage()"
     x-on:keydown.escape.window="if (showChat) setOpen(false)"
+    x-bind:data-open="showChat ? '1' : '0'"
     class="fixed bottom-4 right-4 z-[80] sm:bottom-5 sm:right-5"
 >
     <button
@@ -298,7 +305,7 @@
         x-show="!showChat"
         x-transition
         x-on:click="setOpen(true)"
-        class="group flex h-14 w-14 items-center justify-center rounded-full bg-slate-950 text-sm font-black text-white shadow-xl shadow-slate-900/25 ring-1 ring-white/20 transition hover:-translate-y-0.5 hover:bg-cyan-700"
+        class="workflow-copilot-button group h-14 w-14 items-center justify-center rounded-full bg-slate-950 text-sm font-black text-white shadow-xl shadow-slate-900/25 ring-1 ring-white/20 transition hover:-translate-y-0.5 hover:bg-cyan-700"
         aria-label="AI Workflow Copilot oeffnen"
     >
         AI
@@ -315,7 +322,7 @@
         x-transition:leave-start="translate-y-0 opacity-100"
         x-transition:leave-end="translate-y-3 opacity-0"
         style="display: none;"
-        class="flex h-[min(760px,calc(100vh-2rem))] w-[min(470px,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl shadow-slate-900/25"
+        class="workflow-copilot-panel h-[min(760px,calc(100vh-2rem))] w-[min(470px,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl shadow-slate-900/25"
         aria-label="AI Workflow Copilot"
     >
         <header class="shrink-0 border-b border-slate-800 bg-slate-950 px-4 py-3 text-white">

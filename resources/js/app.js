@@ -5,11 +5,21 @@ import resize from '@alpinejs/resize';
 import intersect from '@alpinejs/intersect';
 import sort from '@alpinejs/sort';
 
-Alpine.plugin(collapse);
-Alpine.plugin(mask);
-Alpine.plugin(resize);
-Alpine.plugin(intersect);
-Alpine.plugin(sort);
+function registerAlpinePlugins() {
+  if (!window.Alpine || window.Alpine.__aiUserFactoryPluginsRegistered) {
+    return;
+  }
+
+  window.Alpine.plugin(collapse);
+  window.Alpine.plugin(mask);
+  window.Alpine.plugin(resize);
+  window.Alpine.plugin(intersect);
+  window.Alpine.plugin(sort);
+  window.Alpine.__aiUserFactoryPluginsRegistered = true;
+}
+
+document.addEventListener('alpine:init', registerAlpinePlugins);
+registerAlpinePlugins();
 
 (function () {
   'use strict';
@@ -128,4 +138,3 @@ if (document.getElementById('studio-editor')) {
 
 
 feather.replace()
-
