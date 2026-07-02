@@ -291,6 +291,7 @@
                     'dom' => data_get($window, 'debugDomUrl') ?: $publicUrl(data_get($window, 'debugDomRelativePath')),
                     'step' => $stepRun->workflowStep?->name ?? 'Schritt',
                     'capturedAt' => data_get($window, 'capturedAt', data_get($window, 'liveScreenshotAt')),
+                    'targetId' => data_get($window, 'targetId'),
                 ];
                 $hasBrowserWindows = true;
             }
@@ -308,6 +309,7 @@
                     $panel['step'] = $stepRun->workflowStep?->name ?? 'Schritt';
                     $panel['windowKey'] = $panel['title'];
                     $panel['capturedAt'] = data_get($panel['window'], 'capturedAt', data_get($panel['window'], 'heartbeatAt'));
+                    $panel['targetId'] = data_get($panel['window'], 'targetId');
                     $panels[] = $panel;
                 }
             }
@@ -315,7 +317,13 @@
             return $panels;
         })
         ->filter(fn ($panel) => $panel['image'] || is_array($panel['window']) || $panel['dom'])
-        ->groupBy(fn ($panel) => (string) ($panel['windowKey'] ?? $panel['title'] ?? 'Browser'))
+        ->groupBy(function ($panel): string {
+            $targetId = trim((string) ($panel['targetId'] ?? ''));
+
+            return $targetId !== ''
+                ? 'target:'.$targetId
+                : (string) ($panel['windowKey'] ?? $panel['title'] ?? 'Browser');
+        })
         ->map(fn ($panels) => $panels->sortBy(fn ($panel) => (string) ($panel['capturedAt'] ?? ''))->last())
         ->values();
     $latestStatusResult = collect($stepRuns)
@@ -510,7 +518,12 @@
                         @endif
                     </div>
                     @if($panel['image'])
-                        <img src="{{ $panel['image'] }}" alt="Workflow Live Screenshot" class="aspect-video w-full object-contain">
+                        <div class="relative bg-slate-950">
+                            <img src="{{ $panel['image'] }}" alt="Workflow Live Screenshot" class="aspect-video w-full object-contain">
+                            <span class="absolute right-2 top-2 max-w-[70%] truncate rounded border border-white/20 bg-slate-950/85 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-white shadow-sm">
+                                {{ $panel['windowKey'] ?? $panel['title'] }}
+                            </span>
+                        </div>
                     @else
                         <div class="flex aspect-video items-center justify-center text-sm font-semibold text-slate-300">
                             Noch kein Screenshot verfuegbar.

@@ -53,6 +53,26 @@ function configuredWindowKey(config = {}, fallback = '') {
   );
 }
 
+function pageTargetId(page) {
+  if (!page || typeof page.target !== 'function') {
+    return '';
+  }
+
+  try {
+    return String(page.target()?._targetId || '');
+  } catch {
+    return '';
+  }
+}
+
+function windowIdentityKey(page, fallbackIndex = 0) {
+  const targetId = pageTargetId(page);
+
+  return targetId !== ''
+    ? `target:${targetId}`
+    : pageKey(page, fallbackIndex);
+}
+
 function withSuffix(filePath, suffix) {
   if (!filePath || suffix <= 1) {
     return filePath;
@@ -160,7 +180,7 @@ function normalizeWindows(context = {}) {
         return null;
       }
 
-      const identityKey = pageKey(page, index);
+      const identityKey = windowIdentityKey(page, index);
 
       if (seen.has(identityKey)) {
         return null;

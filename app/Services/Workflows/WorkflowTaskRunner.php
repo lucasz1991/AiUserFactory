@@ -791,7 +791,7 @@ class WorkflowTaskRunner
             ]) ?? $parentBrowserWindowName;
         }
 
-        if ($configuredBrowserWindow !== null && $configuredBrowserWindow !== 'main') {
+        if ($configuredBrowserWindow !== null) {
             return $configuredBrowserWindow;
         }
 
