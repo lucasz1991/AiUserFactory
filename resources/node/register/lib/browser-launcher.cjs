@@ -127,7 +127,7 @@ function resolveCommand(command) {
 }
 
 function systemChromeCandidates(runtimeConfig = {}) {
-  return [
+  const configuredCandidates = [
     runtimeConfig.browserExecutablePath,
     runtimeConfig.browser_executable_path,
     runtimeConfig.chromeExecutablePath,
@@ -135,6 +135,8 @@ function systemChromeCandidates(runtimeConfig = {}) {
     process.env.MAIL_REGISTRATION_BROWSER_EXECUTABLE_PATH,
     process.env.PUPPETEER_EXECUTABLE_PATH,
     process.env.CHROME_PATH,
+  ];
+  const systemCandidates = [
     '/usr/bin/google-chrome-stable',
     '/usr/bin/google-chrome',
     '/usr/bin/chromium-browser',
@@ -146,6 +148,11 @@ function systemChromeCandidates(runtimeConfig = {}) {
     resolveCommand('google-chrome'),
     resolveCommand('chromium-browser'),
     resolveCommand('chromium'),
+  ];
+
+  return [
+    ...configuredCandidates,
+    ...(process.env.CLIENTCONTROLLER_PORTABLE_RUNTIME === '1' ? [] : systemCandidates),
   ]
     .map(normalizeText)
     .filter((candidate, index, candidates) => candidate !== '' && candidates.indexOf(candidate) === index);
