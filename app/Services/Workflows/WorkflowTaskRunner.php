@@ -409,7 +409,7 @@ class WorkflowTaskRunner
 
             if ((string) ($task['runner'] ?? '') !== 'workflow') {
                 $runtimeTask = $this->normalizeRuntimeTask($task);
-                $mailboxSource = $this->normalizeMailboxSource($inheritedMailboxSource);
+                $mailboxSource = $this->effectiveEmbeddedMailboxSource($runtimeTask, $inheritedMailboxSource);
                 $browserWindow = $this->mappedEmbeddedBrowserWindowName($embeddedBrowserWindowName, $runtimeTask);
 
                 if ($mailboxSource !== null) {
@@ -455,8 +455,7 @@ class WorkflowTaskRunner
             $workflowId = (int) ($task['workflow_id'] ?? 0);
             $taskKey = trim((string) ($task['key'] ?? 'workflow')) ?: 'workflow';
             $rootTaskKey = $parentTaskKey ?? $taskKey;
-            $workflowMailboxSource = $inheritedMailboxSource
-                ?? $this->normalizeMailboxSource($task['script_person_source'] ?? $task['mailbox_source'] ?? null);
+            $workflowMailboxSource = $this->effectiveEmbeddedMailboxSource($task, $inheritedMailboxSource);
             if ($workflowId <= 0) {
                 throw new \RuntimeException('Die Workflow-Task "'.$taskKey.'" hat keine gueltige Workflow-Referenz.');
             }
@@ -841,6 +840,24 @@ class WorkflowTaskRunner
         return in_array($value, ['verification', 'verification_mailbox', 'veri-account', 'veri_account', 'main', 'master'], true)
             ? 'verification'
             : 'person';
+    }
+
+    protected function effectiveEmbeddedMailboxSource(array $task, ?string $inheritedMailboxSource = null): ?string
+    {
+        $taskMailboxSource = $this->normalizeMailboxSource(
+            $task['script_person_source']
+            ?? $task['scriptPersonSource']
+            ?? $task['mailbox_source']
+            ?? $task['mailboxSource']
+            ?? null,
+        );
+        $inheritedMailboxSource = $this->normalizeMailboxSource($inheritedMailboxSource);
+
+        if ($taskMailboxSource === 'verification') {
+            return 'verification';
+        }
+
+        return $inheritedMailboxSource ?? $taskMailboxSource;
     }
 
     protected function normalizeRuntimeTask(array $task): array
