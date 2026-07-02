@@ -45,6 +45,9 @@
                 </div>
             </main>
         @endif
+        @auth
+            @livewire('tools.chatbot')
+        @endauth
         <!-- script -->
         @include('layouts.vendor-scripts')
         <!-- Scripts -->

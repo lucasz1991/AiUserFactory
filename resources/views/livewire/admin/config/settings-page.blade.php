@@ -27,6 +27,10 @@
                     OpenRouter / AI Connection
                 </button>
 
+                <button type="button" wire:click="switchTab('assistant')" class="rounded-md px-4 py-2 text-sm font-semibold {{ $activeTab === 'assistant' ? 'bg-slate-900 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200' }}">
+                    AI Chatbot
+                </button>
+
                 <button type="button" wire:click="switchTab('client-controller')" class="rounded-md px-4 py-2 text-sm font-semibold {{ $activeTab === 'client-controller' ? 'bg-slate-900 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200' }}">
                     ClientController
                 </button>
@@ -207,6 +211,66 @@
 
                 <div class="flex justify-end">
                     <button type="button" wire:click="saveOpenRouter" class="inline-flex items-center justify-center rounded-md bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">
+                        Speichern
+                    </button>
+                </div>
+            </div>
+        @endif
+
+        @if($activeTab === 'assistant')
+            <div class="space-y-8 px-6 py-6">
+                <div>
+                    <h2 class="text-lg font-semibold text-gray-900">AI Workflow Chatbot</h2>
+                    <p class="mt-1 text-sm text-gray-500">
+                        Floating Copilot fuer Workflow-Analyse, neue Workflows, Listen, Tags, Tasks und Workflow-Imports.
+                    </p>
+                </div>
+
+                <div class="rounded-lg border border-gray-200 bg-white p-5">
+                    <h3 class="text-sm font-semibold text-gray-900">Darstellung und Verhalten</h3>
+
+                    <div class="mt-5 grid gap-6 md:grid-cols-2">
+                        <div>
+                            <label for="assistant-name" class="block text-sm font-medium text-gray-700">Name im Chatfenster</label>
+                            <input id="assistant-name" type="text" wire:model.defer="assistantName" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500" />
+                            @error('assistantName') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                        </div>
+
+                        <div>
+                            <label for="assistant-tool-rounds" class="block text-sm font-medium text-gray-700">Maximale Tool-Runden pro Nachricht</label>
+                            <input id="assistant-tool-rounds" type="number" min="1" max="8" wire:model.defer="assistantMaxToolRounds" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500" />
+                            @error('assistantMaxToolRounds') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                        </div>
+
+                        <div class="md:col-span-2">
+                            <label class="inline-flex items-center gap-2 text-sm font-medium text-gray-700">
+                                <input type="checkbox" wire:model.defer="assistantEnabled" class="rounded border-gray-300 text-slate-900 shadow-sm focus:ring-slate-900">
+                                <span>AI Chatbot aktivieren</span>
+                            </label>
+                            @error('assistantEnabled') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                        </div>
+                    </div>
+                </div>
+
+                <div class="rounded-lg border border-gray-200 bg-white p-5">
+                    <h3 class="text-sm font-semibold text-gray-900">Zusatzinstruktionen</h3>
+                    <p class="mt-1 text-sm text-gray-500">
+                        Diese Hinweise werden zusaetzlich zum festen Workflow-Copilot-Systemprompt an die AI gegeben.
+                    </p>
+                    <textarea rows="8" wire:model.defer="assistantInstructions" class="mt-4 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500" placeholder="Beispiel: Erstelle neue Workflows immer in Kategorie registration und nutze Webmail-Workflows bevorzugt als eingebettete Workflows."></textarea>
+                    @error('assistantInstructions') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                </div>
+
+                <div class="rounded-lg border border-slate-100 bg-slate-50 p-4 text-sm text-slate-600">
+                    <p class="font-semibold">Verfuegbare Chatbot-Funktionen</p>
+                    <p class="mt-1">
+                        Workflows/listen, Workflow-Kontext laden, letzten Run analysieren, Workflow erstellen/aktualisieren,
+                        Listen erstellen, Tags setzen, Task-Katalog abfragen, Tasks hinzufuegen/aendern, eingebettete Workflows vorschlagen und Workflow-CSV/ZIP importieren.
+                    </p>
+                </div>
+
+                <div class="flex justify-end">
+                    <button type="button" wire:click="saveAssistant" class="inline-flex items-center justify-center rounded-md bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">
                         Speichern
                     </button>
                 </div>

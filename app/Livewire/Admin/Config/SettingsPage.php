@@ -30,6 +30,11 @@ class SettingsPage extends Component
 
     public bool $openRouterStreamEnabled = true;
 
+    public bool $assistantEnabled = true;
+    public string $assistantName = 'Workflow Copilot';
+    public string $assistantInstructions = '';
+    public int $assistantMaxToolRounds = 5;
+
     // ClientController settings tab
     public string $ccServerDomain = '';
     public string $ccFallbackServerDomain = '';
@@ -45,6 +50,7 @@ class SettingsPage extends Component
 
         $this->loadScraperSettings();
         $this->loadOpenRouterSettings();
+        $this->loadAssistantSettings();
         $this->loadClientControllerSettings();
     }
 
@@ -115,6 +121,26 @@ class SettingsPage extends Component
 
         session()->flash('success', 'OpenRouter-Einstellungen wurden gespeichert.');
         $this->dispatch('showAlert', 'OpenRouter gespeichert.', 'success');
+    }
+
+    public function saveAssistant(): void
+    {
+        $validated = $this->validate([
+            'assistantEnabled' => ['boolean'],
+            'assistantName' => ['required', 'string', 'max:80'],
+            'assistantInstructions' => ['nullable', 'string', 'max:8000'],
+            'assistantMaxToolRounds' => ['required', 'integer', 'min:1', 'max:8'],
+        ]);
+
+        Setting::setValue('ai_assistant', 'workflow_copilot', [
+            'enabled' => (bool) $validated['assistantEnabled'],
+            'name' => trim($validated['assistantName']),
+            'instructions' => trim((string) ($validated['assistantInstructions'] ?? '')),
+            'max_tool_rounds' => (int) $validated['assistantMaxToolRounds'],
+        ]);
+
+        session()->flash('success', 'AI Chatbot-Einstellungen wurden gespeichert.');
+        $this->dispatch('showAlert', 'AI Chatbot gespeichert.', 'success');
     }
 
     public function saveClientControllerSettings(): void
@@ -188,6 +214,17 @@ class SettingsPage extends Component
         $this->openRouterStreamEnabled = (bool) ($settings['stream_enabled'] ?? config('services.openrouter.stream_enabled', true));
     }
 
+    protected function loadAssistantSettings(): void
+    {
+        $settings = Setting::getValue('ai_assistant', 'workflow_copilot');
+        $settings = is_array($settings) ? $settings : [];
+
+        $this->assistantEnabled = (bool) ($settings['enabled'] ?? true);
+        $this->assistantName = trim((string) ($settings['name'] ?? 'Workflow Copilot')) ?: 'Workflow Copilot';
+        $this->assistantInstructions = trim((string) ($settings['instructions'] ?? ''));
+        $this->assistantMaxToolRounds = max(1, min(8, (int) ($settings['max_tool_rounds'] ?? 5)));
+    }
+
     protected function loadClientControllerSettings(): void
     {
         $server = Setting::getValue('client_controller', 'server');
@@ -207,7 +244,7 @@ class SettingsPage extends Component
 
     protected function normalizeTab(string $tab): string
     {
-        return in_array($tab, ['scraper-transfer', 'openrouter', 'client-controller', 'activity-planning', 'processes', 'mail-registration'], true)
+        return in_array($tab, ['scraper-transfer', 'openrouter', 'assistant', 'client-controller', 'activity-planning', 'processes', 'mail-registration'], true)
             ? $tab
             : 'scraper-transfer';
     }
