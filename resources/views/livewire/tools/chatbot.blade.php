@@ -9,8 +9,11 @@
         submitting: false,
         pendingLabel: '',
         selectedChatOptions: {},
+        showImportPanel: false,
         voiceSupported: false,
         listening: false,
+        voiceCaptureActive: false,
+        voiceCaptureTimer: null,
         recognition: null,
         ttsEndpoint: @js(\Illuminate\Support\Facades\Route::has('assistant.audio-output.stream') ? route('assistant.audio-output.stream', [], false) : null),
         csrfToken: @js(csrf_token()),
@@ -52,6 +55,7 @@
             this.autoRead = this.readBool('workflow-copilot-auto-read', this.autoRead);
             this.speechRate = this.readNumber('workflow-copilot-speech-rate', this.speechRate);
             this.voiceSupported = Boolean(this.voiceApi());
+            this.clearVoiceCaptureState();
             this.speechSupported = Boolean(this.ttsEndpoint && window.fetch && window.Audio && window.URL);
             this.lastAssistantMessageKey = this.latestAssistantMessageKey(this.chatHistory);
             this.$watch('chatHistory', (history) => {
@@ -410,6 +414,7 @@
             this.voiceSupported = Boolean(SpeechRecognition);
 
             if (!SpeechRecognition) {
+                this.clearVoiceCaptureState();
                 this.ttsError = 'Spracheingabe wird von diesem Browser nicht unterstuetzt.';
                 return;
             }
@@ -426,6 +431,9 @@
                     baseDraft = String(this.draft || '').trim();
                     finalTranscript = '';
                     this.listening = true;
+                    this.voiceCaptureActive = true;
+                    this.clearVoiceCaptureTimer();
+                    this.voiceCaptureTimer = window.setTimeout(() => this.stopListening(), 45000);
                 };
                 this.recognition.onresult = (event) => {
                     let interim = '';
@@ -444,11 +452,10 @@
                     this.resizeComposer();
                 };
                 this.recognition.onend = () => {
-                    this.listening = false;
-                    this.resizeComposer();
+                    this.clearVoiceCaptureState();
                 };
                 this.recognition.onerror = (event) => {
-                    this.listening = false;
+                    this.clearVoiceCaptureState();
                     if (event?.error && !['no-speech', 'aborted'].includes(event.error)) {
                         this.ttsError = `Spracheingabe: ${event.error}`;
                     }
@@ -464,16 +471,34 @@
             try {
                 this.recognition.start();
             } catch (error) {
-                this.listening = false;
+                this.clearVoiceCaptureState();
                 this.ttsError = `Spracheingabe: ${error?.message || 'Start fehlgeschlagen.'}`;
             }
         },
-        stopListening() {
-            if (this.recognition && this.listening) {
-                this.recognition.stop();
-            }
+        clearVoiceCaptureTimer() {
+            if (!this.voiceCaptureTimer) return;
 
+            window.clearTimeout(this.voiceCaptureTimer);
+            this.voiceCaptureTimer = null;
+        },
+        clearVoiceCaptureState() {
+            this.clearVoiceCaptureTimer();
             this.listening = false;
+            this.voiceCaptureActive = false;
+            this.resizeComposer();
+        },
+        stopListening() {
+            const shouldStop = this.recognition && (this.listening || this.voiceCaptureActive);
+
+            this.clearVoiceCaptureState();
+
+            if (shouldStop) {
+                try {
+                    this.recognition.stop();
+                } catch (error) {
+                    this.ttsError = `Spracheingabe: ${error?.message || 'Stop fehlgeschlagen.'}`;
+                }
+            }
         },
         normalizeEventDetail(event) {
             return Array.isArray(event?.detail) ? (event.detail[0] || {}) : (event?.detail || {});
@@ -976,28 +1001,32 @@
                 </div>
 
                 <footer class="shrink-0 border-t border-slate-200 bg-white p-3">
-                    <div class="mb-2 rounded-xl border border-slate-200 bg-slate-50 p-2">
-                        <div class="flex items-center gap-2">
-                            <input type="file" wire:model="workflowImportFile" accept=".csv,.zip" class="block min-w-0 flex-1 text-xs text-slate-600 file:mr-2 file:rounded-lg file:border-0 file:bg-slate-950 file:px-2.5 file:py-1.5 file:text-xs file:font-semibold file:text-white hover:file:bg-cyan-700">
-                            <button type="button" wire:click="importWorkflowUpdate" wire:loading.attr="disabled" wire:target="workflowImportFile,importWorkflowUpdate" class="inline-flex h-8 shrink-0 items-center rounded-lg bg-slate-950 px-3 text-xs font-semibold text-white shadow-sm hover:bg-cyan-700 disabled:cursor-not-allowed disabled:opacity-50">
-                                Import
-                            </button>
-                        </div>
-                        @error('workflowImportFile') <div class="mt-1 text-xs text-rose-600">{{ $message }}</div> @enderror
-                    </div>
-
-                    <form x-on:submit.prevent="send()" class="overflow-hidden rounded-2xl border bg-white shadow-sm transition focus-within:border-cyan-400 focus-within:ring-4 focus-within:ring-cyan-100" :class="listening ? 'border-rose-300 ring-4 ring-rose-100' : 'border-slate-300'">
+                    <form x-on:submit.prevent="send()" class="overflow-hidden rounded-2xl border bg-white shadow-sm transition focus-within:border-cyan-400 focus-within:ring-4 focus-within:ring-cyan-100" :class="voiceCaptureActive ? 'border-rose-300 ring-4 ring-rose-100' : 'border-slate-300'">
                         <div
-                            x-show="listening === true"
+                            x-show="showImportPanel"
+                            x-cloak
+                            x-collapse.duration.180ms
+                            class="border-b border-slate-100 bg-slate-50/90 px-3 py-2"
+                        >
+                            <div class="flex items-center gap-2">
+                                <input type="file" wire:model="workflowImportFile" accept=".csv,.zip" class="block min-w-0 flex-1 text-xs text-slate-600 file:mr-2 file:rounded-lg file:border-0 file:bg-slate-900 file:px-2.5 file:py-1.5 file:text-xs file:font-semibold file:text-white hover:file:bg-cyan-700">
+                                <button type="button" wire:click="importWorkflowUpdate" wire:loading.attr="disabled" wire:target="workflowImportFile,importWorkflowUpdate" class="inline-flex h-8 shrink-0 items-center rounded-lg bg-slate-950 px-3 text-xs font-semibold text-white shadow-sm hover:bg-cyan-700 disabled:cursor-not-allowed disabled:opacity-50">
+                                    Import
+                                </button>
+                            </div>
+                            @error('workflowImportFile') <div class="mt-1 text-xs text-rose-600">{{ $message }}</div> @enderror
+                        </div>
+                        <div
+                            x-show="voiceCaptureActive === true"
                             x-cloak
                             style="display: none;"
-                            class="flex items-center gap-2 border-b border-rose-100 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700"
+                            class="flex items-center gap-2 border-b border-rose-100 bg-rose-50 px-3 py-1.5 text-[11px] font-bold text-rose-700"
                         >
                             <span class="relative flex h-2 w-2">
                                 <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-400 opacity-75"></span>
                                 <span class="relative inline-flex h-2 w-2 rounded-full bg-rose-500"></span>
                             </span>
-                            Spracheingabe aktiv. Ich hoere zu.
+                            Hoere zu
                         </div>
 
                         <textarea
@@ -1018,10 +1047,22 @@
                             <div class="flex items-center gap-1">
                                 <button
                                     type="button"
+                                    x-on:click="showImportPanel = !showImportPanel"
+                                    x-bind:aria-expanded="showImportPanel"
+                                    class="inline-flex h-8 w-8 items-center justify-center rounded-xl text-slate-400 transition hover:bg-slate-100 hover:text-cyan-700"
+                                    :class="showImportPanel ? 'bg-cyan-50 text-cyan-700' : ''"
+                                    title="Workflow-Import anhaengen"
+                                >
+                                    <svg class="h-[17px] w-[17px]" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                        <path d="m21.4 11.6-8.7 8.7a6 6 0 0 1-8.5-8.5l9.7-9.7a4 4 0 1 1 5.7 5.7l-9.8 9.8a2 2 0 0 1-2.8-2.8l8.8-8.8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                    </svg>
+                                </button>
+                                <button
+                                    type="button"
                                     x-on:click="toggleVoice()"
                                     x-bind:disabled="busy()"
-                                    class="inline-flex h-9 w-9 items-center justify-center rounded-xl transition disabled:cursor-not-allowed disabled:opacity-30"
-                                    :class="listening ? 'bg-rose-100 text-rose-700' : 'text-slate-500 hover:bg-cyan-50 hover:text-cyan-700'"
+                                    class="inline-flex h-8 w-8 items-center justify-center rounded-xl transition disabled:cursor-not-allowed disabled:opacity-30"
+                                    :class="voiceCaptureActive ? 'bg-rose-100 text-rose-700' : 'text-slate-400 hover:bg-slate-100 hover:text-cyan-700'"
                                     :title="voiceSupported ? 'Spracheingabe' : 'Spracheingabe wird von diesem Browser nicht unterstuetzt'"
                                 >
                                     <svg x-show="voiceSupported" class="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none" aria-hidden="true">
