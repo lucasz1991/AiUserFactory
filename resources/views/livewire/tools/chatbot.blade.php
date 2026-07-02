@@ -96,10 +96,14 @@
                 this.syncContext();
                 this.scrollMessages(false);
             } else {
-                this.showImportPanel = false;
-                this.stopSpeaking();
-                this.stopListening();
+                this.closeChat();
             }
+        },
+        closeChat() {
+            this.showChat = false;
+            this.showImportPanel = false;
+            this.stopSpeaking();
+            this.stopListening();
         },
         busy() {
             return this.submitting || this.isLoading;
@@ -604,7 +608,7 @@
     }"
     x-on:assistant-ui-action.window="handleUiAction($event)"
     x-on:assistant-workflow-page-refresh.window="refreshWorkflowPage()"
-    x-on:keydown.escape.window="if (showChat) setOpen(false)"
+    x-on:keydown.escape.window="if (showChat) closeChat()"
     class="workflow-copilot"
 >
     <style>
@@ -624,7 +628,7 @@
             type="button"
             x-show="!showChat"
             x-cloak
-            x-on:click="setOpen(true)"
+            x-on:click.stop.prevent="setOpen(true)"
             class="fixed bottom-5 right-5 z-[80] flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-slate-950 via-cyan-800 to-emerald-700 text-sm font-black text-white shadow-2xl shadow-cyan-950/25 ring-1 ring-white/30 transition hover:-translate-y-0.5 hover:shadow-cyan-700/30"
             aria-label="AI Workflow Copilot oeffnen"
             title="AI Workflow Copilot oeffnen"
@@ -637,7 +641,7 @@
             x-show="showChat"
             x-cloak
             x-transition.opacity
-            x-on:click="setOpen(false)"
+            x-on:click.stop.prevent="closeChat()"
             class="fixed inset-0 z-[70] bg-slate-950/45 backdrop-blur-[2px]"
             aria-hidden="true"
         ></div>
@@ -655,6 +659,7 @@
             role="dialog"
             aria-modal="true"
             aria-label="AI Workflow Copilot"
+            x-on:click.stop
         >
             <header class="relative shrink-0 overflow-visible border-b border-cyan-300/30 bg-gradient-to-r from-slate-950 via-cyan-900 to-emerald-800 px-4 py-3 text-white">
                 <div class="relative flex items-center justify-between gap-3">
@@ -757,7 +762,7 @@
                         </button>
                         <button
                             type="button"
-                            x-on:click="setOpen(false)"
+                            x-on:click.stop.prevent="closeChat()"
                             class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/25 bg-white/10 text-white transition hover:bg-white/20"
                             title="Schliessen"
                         >
