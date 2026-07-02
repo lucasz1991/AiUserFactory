@@ -637,30 +637,25 @@
             <span class="absolute -right-0.5 -top-0.5 h-3.5 w-3.5 rounded-full border-2 border-white bg-emerald-400"></span>
         </button>
 
-        <div
-            x-show="showChat"
-            x-cloak
-            x-transition.opacity
-            x-on:click.stop.prevent="closeChat()"
-            class="fixed inset-0 z-[70] bg-slate-950/45 backdrop-blur-[2px]"
-            aria-hidden="true"
-        ></div>
+        <template x-if="showChat">
+            <div>
+                <div
+                    x-transition.opacity
+                    x-on:click.stop.prevent="closeChat()"
+                    class="fixed inset-0 z-[70] bg-slate-950/45 backdrop-blur-[2px]"
+                    aria-hidden="true"
+                ></div>
 
-        <aside
-            x-show="showChat"
-            x-cloak
-            x-transition:enter="transition ease-out duration-200"
-            x-transition:enter-start="translate-y-3 scale-95 opacity-0"
-            x-transition:enter-end="translate-y-0 scale-100 opacity-100"
-            x-transition:leave="transition ease-in duration-150"
-            x-transition:leave-start="translate-y-0 scale-100 opacity-100"
-            x-transition:leave-end="translate-y-3 scale-95 opacity-0"
-            class="fixed bottom-4 right-4 z-[90] flex h-[min(760px,calc(100vh-2rem))] w-[min(480px,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-2xl border border-white/80 bg-white shadow-[0_30px_90px_-22px_rgba(15,23,42,.55)] ring-1 ring-slate-900/5"
-            role="dialog"
-            aria-modal="true"
-            aria-label="AI Workflow Copilot"
-            x-on:click.stop
-        >
+                <aside
+                    x-transition:enter="transition ease-out duration-200"
+                    x-transition:enter-start="translate-y-3 scale-95 opacity-0"
+                    x-transition:enter-end="translate-y-0 scale-100 opacity-100"
+                    class="fixed bottom-4 right-4 z-[90] flex h-[min(760px,calc(100vh-2rem))] w-[min(480px,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-2xl border border-white/80 bg-white shadow-[0_30px_90px_-22px_rgba(15,23,42,.55)] ring-1 ring-slate-900/5"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label="AI Workflow Copilot"
+                    x-on:click.stop
+                >
             <header class="relative shrink-0 overflow-visible border-b border-cyan-300/30 bg-gradient-to-r from-slate-950 via-cyan-900 to-emerald-800 px-4 py-3 text-white">
                 <div class="relative flex items-center justify-between gap-3">
                     <div class="min-w-0">
@@ -1112,6 +1107,8 @@
                     </form>
                 </footer>
             </section>
-        </aside>
+                </aside>
+            </div>
+        </template>
     @endif
 </div>
