@@ -22,10 +22,12 @@ class WorkflowResultNormalizer
             ->values();
 
         if ($tasks->isNotEmpty()) {
-            $result['tasks'] = $tasks
+            $normalizedTasks = $tasks
                 ->map(fn (array $task): array => $this->withNormalizedPayload($task, $status, $externalRunType, $task))
                 ->values()
                 ->all();
+            $result['tasks'] = $normalizedTasks;
+            $tasks = collect($normalizedTasks);
         }
 
         $normalized = $this->evaluatePayload($result, $status, $externalRunType);
@@ -65,9 +67,17 @@ class WorkflowResultNormalizer
             ->map(fn (WorkflowStepRun $stepRun): array => $this->stepRunEvaluation($stepRun))
             ->filter()
             ->values();
-        $technicalStatus = $stepEvaluations->contains(fn (array $item): bool => $item['technical_status'] === 'failed')
-            ? 'failed'
-            : 'success';
+        $technicalStatuses = $stepEvaluations
+            ->pluck('technical_status')
+            ->filter()
+            ->values();
+        $technicalStatus = match (true) {
+            $technicalStatuses->contains('failed') => 'failed',
+            $technicalStatuses->contains('timeout') => 'timeout',
+            $technicalStatuses->contains('cancelled') => 'cancelled',
+            $technicalStatuses->contains('running') => 'running',
+            default => 'success',
+        };
         $businessStatuses = $stepEvaluations
             ->pluck('business_status')
             ->filter()
@@ -77,7 +87,7 @@ class WorkflowResultNormalizer
         $reasonCode = 'workflow_success';
         $resultClass = 'workflow_success';
 
-        if ($technicalStatus === 'failed') {
+        if (in_array($technicalStatus, ['failed', 'timeout', 'cancelled'], true)) {
             $businessStatus = 'failed';
             $reasonCode = 'workflow_technical_failure';
             $resultClass = 'workflow_hard_failure';
@@ -294,6 +304,10 @@ class WorkflowResultNormalizer
             return 'retryable_failure';
         }
 
+        if ($reasonCode === 'same_state_retry_blocked') {
+            return 'stuck_state';
+        }
+
         if ($technicalStatus === 'failed') {
             return in_array($reasonCode, [
                 'selector_not_found',
@@ -316,6 +330,18 @@ class WorkflowResultNormalizer
 
     protected function reasonCode(array $payload, array $status, ?array $task, string $message): string
     {
+        $providedReason = Str::lower(trim((string) (
+            $payload['diagnostic_reason_code']
+            ?? $payload['reason_code']
+            ?? $payload['failureReasonCode']
+            ?? $payload['failure_reason_code']
+            ?? ''
+        )));
+
+        if ($providedReason !== '') {
+            return $providedReason;
+        }
+
         $messageLower = Str::lower($message);
         $taskKey = Str::lower(trim((string) ($payload['task_key'] ?? $payload['taskKey'] ?? $task['task_key'] ?? $task['taskKey'] ?? '')));
         $isMailTask = str_starts_with($taskKey, 'mail.') || str_contains($taskKey, 'webmail.');
@@ -368,12 +394,12 @@ class WorkflowResultNormalizer
             return 'state_not_reached';
         }
 
-        if (($payload['ok'] ?? null) === false || ($status['state'] ?? null) === 'failed') {
-            return 'hard_failure';
-        }
-
         if ($this->looksLikeMailTask($payload) && $this->emptyResult($payload, $this->mailScanDiagnostics($payload, $task))) {
             return 'valid_empty_result';
+        }
+
+        if (($payload['ok'] ?? null) === false || ($status['state'] ?? null) === 'failed') {
+            return 'hard_failure';
         }
 
         return 'success';

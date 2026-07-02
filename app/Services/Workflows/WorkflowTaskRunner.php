@@ -54,6 +54,7 @@ class WorkflowTaskRunner
             'observationTimeoutMs' => min(180000, max(30000, ((int) ($settings['observation_timeout_seconds'] ?? 60)) * 1000)),
             'scriptName' => 'run_step.cjs',
             'executionTarget' => 'client_controller',
+            'devDebug' => $this->devDebugRuntimeConfig($run, $step, $stepRun, false),
         ];
     }
 
@@ -108,6 +109,7 @@ class WorkflowTaskRunner
             'navigationTimeoutMs' => ((int) ($settings['navigation_timeout_seconds'] ?? 120)) * 1000,
             'observationTimeoutMs' => min(180000, max(30000, ((int) ($settings['observation_timeout_seconds'] ?? 60)) * 1000)),
             'scriptName' => 'run_step.cjs',
+            'devDebug' => $this->devDebugRuntimeConfig($run, $step, $stepRun),
         ];
 
         $initialBrowserWindows = $this->browserWindowsFromRuntimeContext($runtimeContext);
@@ -1042,6 +1044,44 @@ class WorkflowTaskRunner
     protected function workflowBrowserProfilePath(WorkflowRun $run): string
     {
         return storage_path('app/workflow-runs/'.$run->run_uuid.'/browser-profile');
+    }
+
+    protected function devDebugRuntimeConfig(WorkflowRun $run, WorkflowStep $step, WorkflowStepRun $stepRun, bool $localArtifacts = true): array
+    {
+        $settings = is_array($run->workflow?->settings_json) ? $run->workflow->settings_json : [];
+        $enabled = $localArtifacts && filter_var($settings['dev_mode'] ?? false, FILTER_VALIDATE_BOOL);
+
+        if (! $localArtifacts) {
+            return [
+                'enabled' => false,
+                'dev_mode' => false,
+                'status' => trim((string) ($settings['dev_status'] ?? '')),
+            ];
+        }
+
+        $relativeDirectory = 'workflow-runs/'.$run->run_uuid.'/debug-artifacts/step-'.$stepRun->id;
+
+        return [
+            'enabled' => $enabled,
+            'dev_mode' => $enabled,
+            'captureDomBeforeStep' => (bool) ($settings['dev_capture_dom_before_step'] ?? true),
+            'captureDomAfterStep' => (bool) ($settings['dev_capture_dom_after_step'] ?? true),
+            'captureScreenshotBeforeStep' => (bool) ($settings['dev_capture_screenshot_before_step'] ?? true),
+            'captureScreenshotAfterStep' => (bool) ($settings['dev_capture_screenshot_after_step'] ?? true),
+            'keepArtifacts' => (bool) ($settings['dev_keep_artifacts'] ?? true),
+            'status' => trim((string) ($settings['dev_status'] ?? '')),
+            'storageDisk' => 'local',
+            'storagePath' => $relativeDirectory,
+            'artifactDirectory' => storage_path('app/'.$relativeDirectory),
+            'manifestPath' => storage_path('app/'.$relativeDirectory.'/manifest.json'),
+            'workflowId' => $run->workflow_id,
+            'workflowRunId' => $run->id,
+            'workflowRunUuid' => $run->run_uuid,
+            'workflowStepId' => $step->id,
+            'workflowStepRunId' => $stepRun->id,
+            'stepPosition' => (int) $step->position,
+            'stepActionKey' => (string) $step->action_key,
+        ];
     }
 
     protected function publicRuntimeContext(array $runtimeContext): array

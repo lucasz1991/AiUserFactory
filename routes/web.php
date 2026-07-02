@@ -5,6 +5,7 @@ use App\Http\Controllers\Admin\ClientController\NetworkJobController as ClientCo
 use App\Http\Controllers\Admin\ClientController\NetworkTargetController as ClientControllerNetworkTargetController;
 use App\Http\Controllers\Admin\ClientController\NodeController as ClientControllerNodeController;
 use App\Http\Controllers\Ai\AssistantAudioOutputStreamController;
+use App\Http\Controllers\Workflows\WorkflowRunArtifactController;
 use App\Livewire\Admin\ClientController\Dashboard as ClientControllerDashboard;
 use App\Livewire\Admin\ClientController\NodeDetail as ClientControllerNodeDetail;
 use App\Livewire\Admin\ClientController\NodeIndex as ClientControllerNodeIndex;
@@ -38,6 +39,8 @@ Route::middleware(['auth:sanctum', config('jetstream.auth_session')])->group(fun
         Route::get('/netzwerk/aktionen', ActionsPage::class)->name('network.actions');
         Route::get('/netzwerk/workflows', WorkflowsIndex::class)->name('network.workflows');
         Route::get('/netzwerk/workflows/{workflow}', WorkflowManager::class)->name('network.workflows.manage');
+        Route::get('/workflow-runs/{run}/artifacts/{artifact}', [WorkflowRunArtifactController::class, 'show'])->name('workflow-run-artifacts.show');
+        Route::get('/workflow-runs/{run}/artifacts/{artifact}/download', [WorkflowRunArtifactController::class, 'download'])->name('workflow-run-artifacts.download');
         Route::post('/assistant/audio-output/stream', AssistantAudioOutputStreamController::class)->name('assistant.audio-output.stream');
         Route::get('/prozesse', ProcessMonitor::class)->name('processes.index');
         Route::get('/einstellungen/{tab?}', SettingsPage::class)->name('admin.settings');

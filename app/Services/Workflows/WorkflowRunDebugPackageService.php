@@ -3,6 +3,7 @@
 namespace App\Services\Workflows;
 
 use App\Models\WorkflowRun;
+use App\Models\WorkflowRunArtifact;
 use App\Models\WorkflowStep;
 use App\Models\WorkflowStepRun;
 use Illuminate\Support\Facades\File;
@@ -14,6 +15,7 @@ class WorkflowRunDebugPackageService
 {
     public function __construct(
         protected WorkflowTransferService $transferService,
+        protected WorkflowDebugArtifactService $artifactService,
     ) {}
 
     public function make(WorkflowRun $run): array
@@ -23,6 +25,7 @@ class WorkflowRunDebugPackageService
         }
 
         $run->loadMissing([
+            'artifacts.workflowStep',
             'workflow.steps' => fn ($query) => $query->ordered(),
             'stepRuns.workflowStep',
         ]);
@@ -203,6 +206,31 @@ class WorkflowRunDebugPackageService
                 ])
                 ->values()
                 ->all(),
+            'artifacts' => $run->artifacts
+                ->map(fn (WorkflowRunArtifact $artifact): array => [
+                    'id' => $artifact->id,
+                    'workflow_id' => $artifact->workflow_id,
+                    'workflow_run_id' => $artifact->workflow_run_id,
+                    'workflow_step_id' => $artifact->workflow_step_id,
+                    'workflow_step_run_id' => $artifact->workflow_step_run_id,
+                    'step_position' => $artifact->step_position,
+                    'step_action_key' => $artifact->step_action_key,
+                    'task_card_key' => $artifact->task_card_key,
+                    'phase' => $artifact->phase,
+                    'artifact_type' => $artifact->artifact_type,
+                    'browser_window' => $artifact->browser_window,
+                    'current_url' => $artifact->current_url,
+                    'title' => $artifact->title,
+                    'storage_disk' => $artifact->storage_disk,
+                    'storage_path' => $artifact->storage_path,
+                    'status' => $artifact->status,
+                    'error_message' => $artifact->error_message,
+                    'metadata_json' => $artifact->metadata_json,
+                    'created_at' => $artifact->created_at?->toIso8601String(),
+                    'updated_at' => $artifact->updated_at?->toIso8601String(),
+                ])
+                ->values()
+                ->all(),
         ];
 
         return $this->sanitize($payload);
@@ -255,6 +283,35 @@ class WorkflowRunDebugPackageService
                 'path' => $path,
                 'name' => 'dom/referenced/'.$this->safeSegment($reference['path']).'-'.$basename,
                 'source' => 'payload '.$reference['path'],
+            ];
+        }
+
+        foreach ($run->artifacts as $artifact) {
+            if ($artifact->status !== 'success') {
+                continue;
+            }
+
+            $path = $this->artifactService->absolutePath($artifact);
+
+            if ($path === null) {
+                continue;
+            }
+
+            $extension = pathinfo($path, PATHINFO_EXTENSION);
+            $filename = collect([
+                'step',
+                $artifact->step_position ?: $artifact->workflow_step_run_id ?: $artifact->workflow_step_id ?: 'run',
+                $artifact->step_action_key ?: 'workflow',
+                $artifact->phase ?: 'artifact',
+                $artifact->artifact_type ?: 'file',
+                $artifact->browser_window ?: 'main',
+            ])->map(fn ($part) => $this->safeSegment((string) $part))->implode('-');
+            $filename .= $extension !== '' ? '.'.$extension : '';
+
+            $candidates[] = [
+                'path' => $path,
+                'name' => 'debug-artifacts/'.$filename,
+                'source' => 'workflow_run_artifacts #'.$artifact->id,
             ];
         }
 
@@ -580,8 +637,9 @@ class WorkflowRunDebugPackageService
             'Contents:',
             '- workflow-export/workflows.csv: importable workflow CSV export.',
             '- run/workflow-run-'.$run->id.'.json: sanitized run, context, step runs and task results.',
+            '- debug-artifacts/*: private Dev-Debug DOM snapshots and screenshots captured by the workflow runtime.',
             '- external-runs/*/status.json and result.json: sanitized runner snapshots where available.',
-            '- dom/* and external-runs/*/artifacts/*: DOM snapshots and live screenshots found for the test.',
+            '- dom/* and external-runs/*/artifacts/*: legacy DOM snapshots and live screenshots found for the test.',
             '',
             'Common passwords, session payloads, tokens and websocket endpoints are redacted.',
             '',

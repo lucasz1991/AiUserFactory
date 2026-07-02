@@ -31,6 +31,8 @@ class WorkflowExecutionService
         protected WebmailSessionRunner $webmailSession,
         protected WorkflowTaskRunner $workflowTasks,
         protected NetworkJobDispatcher $networkJobs,
+        protected WorkflowResultNormalizer $resultNormalizer,
+        protected WorkflowDebugArtifactService $debugArtifacts,
     ) {}
 
     public function start(Workflow $workflow, array $context = [], string $requestedBy = 'admin-ui'): WorkflowRun
@@ -252,6 +254,8 @@ class WorkflowExecutionService
             return;
         }
 
+        $this->ingestDebugArtifacts($stepRun, $status);
+
         if ($this->externalStillRunning($status)) {
             if ($this->stepRunTimedOut($stepRun)) {
                 $this->expireStepRun($stepRun);
@@ -271,6 +275,8 @@ class WorkflowExecutionService
         }
 
         $result = $this->prepareExternalResult($stepRun, $this->readExternalResult($stepRun, $status));
+        $result = $this->normalizeStepResult($stepRun, $result, $status);
+        $this->ingestDebugArtifacts($stepRun, $status, $result);
 
         if (in_array($stepRun->external_run_type, ['workflow-task', 'client-controller-workflow-task'], true)) {
             $this->applyWorkflowVariablesResult($stepRun->workflowRun, $result);
@@ -522,6 +528,7 @@ class WorkflowExecutionService
     {
         $startedAt = $stepRun->started_at instanceof Carbon ? $stepRun->started_at : now();
         $finishedAt = now();
+        $result = $this->normalizeStepResult($stepRun, $result);
         $result = $this->withTaskStatuses($stepRun->workflowStep, $result, $taskStatus);
 
         $stepRun->forceFill([
@@ -538,7 +545,9 @@ class WorkflowExecutionService
     {
         $startedAt = $stepRun->started_at instanceof Carbon ? $stepRun->started_at : now();
         $finishedAt = now();
-        $result = $result ? $this->withTaskStatuses($stepRun->workflowStep, $result, 'failed', $message) : null;
+        $result = $result
+            ? $this->withTaskStatuses($stepRun->workflowStep, $this->normalizeStepResult($stepRun, $result), 'failed', $message)
+            : null;
 
         $stepRun->forceFill([
             'status' => 'failed',
@@ -584,6 +593,7 @@ class WorkflowExecutionService
         $run = $this->loadRun($run->id);
         $finishedAt = now();
         $durationMs = $this->workflowRunDurationMs($run, $finishedAt);
+        $normalizedWorkflow = $this->resultNormalizer->summarizeRun($run);
 
         $run->forceFill([
             'status' => 'completed',
@@ -596,6 +606,16 @@ class WorkflowExecutionService
                 'finishedAt' => $finishedAt->toIso8601String(),
                 'durationMs' => $durationMs,
                 'duration_ms' => $durationMs,
+                'normalized_result' => $normalizedWorkflow,
+                'technical_status' => $normalizedWorkflow['technical_status'],
+                'business_status' => $normalizedWorkflow['business_status'],
+                'result_class' => $normalizedWorkflow['result_class'],
+                'business_ok' => $normalizedWorkflow['business_ok'],
+                'empty_result' => $normalizedWorkflow['empty_result'],
+                'retryable' => $normalizedWorkflow['retryable'],
+                'state_mismatch' => $normalizedWorkflow['state_mismatch'],
+                'diagnostic_reason_code' => $normalizedWorkflow['diagnostic_reason_code'],
+                'diagnostic_reason' => $normalizedWorkflow['diagnostic_reason'],
                 ...$this->workflowReturnPayload($run),
             ],
             'error_message' => null,
@@ -608,6 +628,7 @@ class WorkflowExecutionService
     {
         $finishedAt = now();
         $durationMs = $this->workflowRunDurationMs($run, $finishedAt);
+        $normalizedWorkflow = $this->resultNormalizer->summarizeRun($this->loadRun($run->id));
 
         $run->forceFill([
             'status' => 'failed',
@@ -618,6 +639,17 @@ class WorkflowExecutionService
                 'failedAt' => $finishedAt->toIso8601String(),
                 'durationMs' => $durationMs,
                 'duration_ms' => $durationMs,
+                'normalized_result' => $normalizedWorkflow,
+                'technical_status' => 'failed',
+                'business_status' => 'failed',
+                'result_class' => $normalizedWorkflow['result_class'] ?? 'workflow_hard_failure',
+                'business_ok' => false,
+                'empty_result' => $normalizedWorkflow['empty_result'] ?? false,
+                'retryable' => $normalizedWorkflow['retryable'] ?? false,
+                'state_mismatch' => $normalizedWorkflow['state_mismatch'] ?? false,
+                'diagnostic_reason_code' => $normalizedWorkflow['diagnostic_reason_code'] ?? 'workflow_technical_failure',
+                'diagnostic_reason' => $normalizedWorkflow['diagnostic_reason'] ?? $message,
+                'statusMessage' => $message,
             ], $this->workflowReturnPayload($run)),
             'error_message' => $message,
         ])->save();
@@ -742,8 +774,14 @@ class WorkflowExecutionService
         $context = is_array($run->context_json) ? $run->context_json : [];
         $context = $this->mergeWorkflowBrowserState($context, $result);
 
-        if ($this->failedBackRouteExceeded($run, $stepRun, $outcome, $route, $context)) {
-            $this->failRun($run, 'Fehlerroute wurde zu oft wiederholt und der Workflow wurde abgebrochen.');
+        if ($this->failedBackRouteExceeded($run, $stepRun, $outcome, $route, $context, $result)) {
+            $blockedResult = $this->sameStateRetryBlockedResult($result, $route);
+            $stepRun->forceFill([
+                'result_json' => $this->publicRunSnapshot($this->normalizeStepResult($stepRun, $blockedResult)),
+                'logs_json' => $this->logsFromExternalStatus($blockedResult),
+                'error_message' => 'Fehlerroute wurde im gleichen Zustand zu oft wiederholt.',
+            ])->save();
+            $this->failRun($run, 'Fehlerroute wurde im gleichen Zustand zu oft wiederholt und der Workflow wurde abgebrochen.');
 
             return;
         }
@@ -934,6 +972,27 @@ class WorkflowExecutionService
             return $requestedRouteOutcome;
         }
 
+        $normalized = is_array($result['normalized_result'] ?? null) ? $result['normalized_result'] : [];
+
+        if ($normalized !== []) {
+            $technicalStatus = (string) ($normalized['technical_status'] ?? '');
+            $businessStatus = (string) ($normalized['business_status'] ?? '');
+
+            if ($technicalStatus === 'timeout') {
+                return 'timeout';
+            }
+
+            if (in_array($technicalStatus, ['failed', 'cancelled'], true) || $businessStatus === 'failed') {
+                return 'failed';
+            }
+
+            if (in_array($businessStatus, ['partial', 'unknown'], true)) {
+                return 'partial';
+            }
+
+            return 'success';
+        }
+
         if (strtolower(trim((string) ($result['status'] ?? $result['statusLevel'] ?? ''))) === 'timeout') {
             return 'timeout';
         }
@@ -993,10 +1052,14 @@ class WorkflowExecutionService
         };
     }
 
-    protected function failedBackRouteExceeded(WorkflowRun $run, WorkflowStepRun $stepRun, string $outcome, array $route, array $context): bool
+    protected function failedBackRouteExceeded(WorkflowRun $run, WorkflowStepRun $stepRun, string $outcome, array $route, array $context, array $result = []): bool
     {
         if ($outcome !== 'failed') {
             return false;
+        }
+
+        if ($this->sameStateRetryExceeded($stepRun, $route, $context, $result)) {
+            return true;
         }
 
         $maxAttempts = max(0, (int) ($route['max_attempts'] ?? $route['retry_limit'] ?? 0));
@@ -1010,6 +1073,40 @@ class WorkflowExecutionService
         $currentAttempts = max(0, (int) ($attempts[$attemptKey] ?? 0));
 
         return $currentAttempts >= $maxAttempts;
+    }
+
+    protected function sameStateRetryExceeded(WorkflowStepRun $stepRun, array $route, array $context, array $result): bool
+    {
+        $stepRun->loadMissing(['workflowRun.workflow', 'workflowStep']);
+
+        if (! $stepRun->workflowRun || ! $stepRun->workflowStep) {
+            return false;
+        }
+
+        if (! $this->isBackRoute($stepRun->workflowRun, $stepRun->workflowStep, $route)) {
+            return false;
+        }
+
+        $signature = trim((string) data_get($result, 'normalized_result.state_signature'));
+
+        if ($signature === '') {
+            $signature = trim((string) data_get($stepRun->result_json, 'normalized_result.state_signature'));
+        }
+
+        if ($signature === '') {
+            return false;
+        }
+
+        $limit = max(1, (int) (
+            data_get($route, 'same_state_retry_limit')
+            ?: data_get($stepRun->workflowRun?->workflow?->settings_json, 'same_state_retry_limit')
+            ?: 2
+        ));
+        $attemptKey = $this->stateSignatureAttemptKey($stepRun->workflowStep, $route, $signature);
+        $attempts = is_array($context['state_signature_attempts'] ?? null) ? $context['state_signature_attempts'] : [];
+        $currentAttempts = max(0, (int) ($attempts[$attemptKey] ?? 0));
+
+        return $currentAttempts >= $limit;
     }
 
     protected function isBackRoute(WorkflowRun $run, WorkflowStep $sourceStep, array $route): bool
@@ -1075,6 +1172,33 @@ class WorkflowExecutionService
         ]);
     }
 
+    protected function stateSignatureAttemptKey(WorkflowStep $step, array $route, string $signature): string
+    {
+        return implode(':', [
+            $step->id,
+            trim((string) ($route['type'] ?? 'step')),
+            trim((string) ($route['action_key'] ?? $route['step'] ?? '')),
+            trim((string) ($route['card_key'] ?? $route['card'] ?? '')),
+            trim((string) ($route['_source_card_key'] ?? '')),
+            $signature,
+        ]);
+    }
+
+    protected function sameStateRetryBlockedResult(array $result, array $route): array
+    {
+        return array_replace($result, [
+            'ok' => false,
+            'status' => 'failed',
+            'statusLevel' => 'failed',
+            'statusMessage' => 'Fehlerroute wurde im gleichen Zustand zu oft wiederholt.',
+            'diagnostic_reason_code' => 'same_state_retry_blocked',
+            'retryBlocked' => true,
+            'retry_blocked' => true,
+            'blockedRoute' => $route,
+            'blocked_route' => $route,
+        ]);
+    }
+
     protected function recordRoute(WorkflowRun $run, WorkflowStepRun $stepRun, string $outcome, array $route, ?array $context = null): void
     {
         $context = is_array($context) ? $context : (is_array($run->context_json) ? $run->context_json : []);
@@ -1094,6 +1218,15 @@ class WorkflowExecutionService
             $attemptKey = $this->routeAttemptKey($stepRun->workflowStep, $outcome, $route);
             $attempts[$attemptKey] = max(0, (int) ($attempts[$attemptKey] ?? 0)) + 1;
             $context['route_attempts'] = $attempts;
+
+            $signature = trim((string) data_get($stepRun->result_json, 'normalized_result.state_signature'));
+
+            if ($signature !== '') {
+                $stateAttempts = is_array($context['state_signature_attempts'] ?? null) ? $context['state_signature_attempts'] : [];
+                $stateAttemptKey = $this->stateSignatureAttemptKey($stepRun->workflowStep, $route, $signature);
+                $stateAttempts[$stateAttemptKey] = max(0, (int) ($stateAttempts[$stateAttemptKey] ?? 0)) + 1;
+                $context['state_signature_attempts'] = $stateAttempts;
+            }
         }
 
         $run->forceFill(['context_json' => $context])->save();
@@ -1146,6 +1279,40 @@ class WorkflowExecutionService
         return is_array($result) ? $result : $status;
     }
 
+    protected function normalizeStepResult(WorkflowStepRun $stepRun, array $result, array $status = []): array
+    {
+        $stepRun->loadMissing('workflowStep');
+
+        if (! $stepRun->workflowStep instanceof WorkflowStep) {
+            return $result;
+        }
+
+        return $this->resultNormalizer->normalizeStepResult(
+            $stepRun->workflowStep,
+            $status,
+            $result,
+            $stepRun->external_run_type,
+        );
+    }
+
+    protected function ingestDebugArtifacts(WorkflowStepRun $stepRun, array ...$payloads): void
+    {
+        foreach ($payloads as $payload) {
+            foreach ([
+                $payload['debugArtifacts'] ?? null,
+                $payload['debug_artifacts'] ?? null,
+                data_get($payload, 'result.debugArtifacts'),
+                data_get($payload, 'result.debug_artifacts'),
+            ] as $candidate) {
+                if (! is_array($candidate) || $candidate === []) {
+                    continue;
+                }
+
+                $this->debugArtifacts->ingestManifest($stepRun, array_is_list($candidate) ? ['artifacts' => $candidate] : $candidate);
+            }
+        }
+    }
+
     protected function externalStillRunning(array $status): bool
     {
         $state = (string) data_get($status, 'state', '');
@@ -1163,6 +1330,21 @@ class WorkflowExecutionService
 
     protected function externalSucceeded(WorkflowStep $step, array $status, array $result): bool
     {
+        $normalized = is_array($result['normalized_result'] ?? null) ? $result['normalized_result'] : [];
+
+        if ($normalized !== []) {
+            $technicalStatus = (string) ($normalized['technical_status'] ?? '');
+            $businessStatus = (string) ($normalized['business_status'] ?? '');
+
+            if (in_array($technicalStatus, ['failed', 'timeout', 'cancelled'], true)) {
+                return false;
+            }
+
+            if ($technicalStatus === 'success' && $businessStatus !== 'failed') {
+                return true;
+            }
+        }
+
         if ((bool) data_get($result, 'ok', false)) {
             return true;
         }

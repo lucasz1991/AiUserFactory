@@ -555,6 +555,43 @@
         $latestStatusResult,
         ...$stepDebugPanels->pluck('debug.result')->all(),
     );
+    $artifactService = app(\App\Services\Workflows\WorkflowDebugArtifactService::class);
+    $debugArtifactGroups = collect();
+
+    if ($workflowRun && \Illuminate\Support\Facades\Schema::hasTable('workflow_run_artifacts')) {
+        $debugArtifactGroups = \App\Models\WorkflowRunArtifact::query()
+            ->where('workflow_run_id', $workflowRun->id)
+            ->with('workflowStep')
+            ->orderBy('step_position')
+            ->orderBy('workflow_step_run_id')
+            ->orderBy('phase')
+            ->orderBy('artifact_type')
+            ->get()
+            ->groupBy(fn ($artifact) => (string) ($artifact->workflow_step_run_id ?: $artifact->workflow_step_id ?: 'run'))
+            ->map(function ($artifacts) use ($artifactService) {
+                $first = $artifacts->first();
+
+                return [
+                    'step' => $first?->workflowStep?->name ?: ($first?->step_action_key ?: 'Schritt'),
+                    'position' => $first?->step_position,
+                    'artifacts' => $artifacts->map(fn ($artifact) => [
+                        'id' => $artifact->id,
+                        'phase' => $artifact->phase,
+                        'type' => $artifact->artifact_type,
+                        'browser_window' => $artifact->browser_window ?: 'main',
+                        'status' => $artifact->status,
+                        'url' => $artifact->status === 'success' ? $artifactService->artifactUrl($artifact) : null,
+                        'download_url' => $artifact->status === 'success' ? $artifactService->artifactUrl($artifact, true) : null,
+                        'title' => $artifact->title,
+                        'current_url' => $artifact->current_url,
+                        'error' => $artifact->error_message,
+                        'created_at' => $artifact->created_at,
+                        'metadata' => is_array($artifact->metadata_json) ? $artifact->metadata_json : [],
+                    ])->values(),
+                ];
+            })
+            ->values();
+    }
 @endphp
 
 <div {{ $attributes->merge(['class' => 'space-y-5']) }}>
@@ -679,6 +716,86 @@
             </div>
         </div>
 
+        @if($debugArtifactGroups->isNotEmpty())
+            <details class="group rounded-lg border border-slate-200 bg-white shadow-sm" open>
+                <summary class="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 marker:hidden">
+                    <div>
+                        <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Debug-Artefakte</div>
+                        <div class="mt-1 text-sm text-slate-600">DOM-Snapshots und Screenshots aus dem Dev-Debug-Modus.</div>
+                    </div>
+                    <span class="rounded border border-slate-200 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                        {{ $debugArtifactGroups->sum(fn ($group) => $group['artifacts']->count()) }}
+                    </span>
+                </summary>
+
+                <div class="space-y-4 border-t border-slate-100 p-4">
+                    @foreach($debugArtifactGroups as $artifactGroup)
+                        <div class="rounded-lg border border-slate-100 bg-slate-50 p-3">
+                            <div class="flex flex-wrap items-center justify-between gap-2">
+                                <div class="min-w-0">
+                                    <div class="truncate text-sm font-semibold text-slate-900">
+                                        @if($artifactGroup['position'])
+                                            Schritt {{ $artifactGroup['position'] }} ·
+                                        @endif
+                                        {{ $artifactGroup['step'] }}
+                                    </div>
+                                    <div class="mt-1 text-xs text-slate-500">{{ $artifactGroup['artifacts']->count() }} Artefakte</div>
+                                </div>
+                            </div>
+
+                            <div class="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                                @foreach($artifactGroup['artifacts'] as $artifact)
+                                    <div class="overflow-hidden rounded-md border {{ $artifact['status'] === 'success' ? 'border-slate-200 bg-white' : 'border-amber-200 bg-amber-50' }}">
+                                        <div class="flex items-start justify-between gap-2 border-b border-slate-100 px-3 py-2 text-xs">
+                                            <div class="min-w-0">
+                                                <div class="font-semibold uppercase tracking-wide {{ $artifact['status'] === 'success' ? 'text-slate-700' : 'text-amber-800' }}">
+                                                    {{ $artifact['phase'] }} · {{ $artifact['type'] }}
+                                                </div>
+                                                <div class="mt-1 truncate text-[11px] text-slate-500">{{ $artifact['browser_window'] }}</div>
+                                            </div>
+                                            <span class="shrink-0 rounded border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide {{ $artifact['status'] === 'success' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-300 bg-amber-100 text-amber-800' }}">
+                                                {{ $artifact['status'] }}
+                                            </span>
+                                        </div>
+
+                                        @if($artifact['status'] === 'success' && $artifact['type'] === 'screenshot' && $artifact['url'])
+                                            <a href="{{ $artifact['url'] }}" target="_blank" rel="noopener" class="block bg-slate-950">
+                                                <img src="{{ $artifact['url'] }}" alt="Debug Screenshot" class="aspect-video w-full object-contain">
+                                            </a>
+                                        @elseif($artifact['status'] === 'success' && $artifact['type'] === 'dom')
+                                            <div class="flex aspect-video items-center justify-center bg-slate-900 px-3 text-center text-xs font-semibold text-slate-200">
+                                                DOM Snapshot
+                                            </div>
+                                        @else
+                                            <div class="flex aspect-video items-center justify-center px-3 text-center text-xs text-amber-800">
+                                                {{ $artifact['error'] ?: 'Capture fehlgeschlagen.' }}
+                                            </div>
+                                        @endif
+
+                                        <div class="space-y-2 px-3 py-2 text-[11px] text-slate-500">
+                                            @if($artifact['title'])
+                                                <div class="truncate font-semibold text-slate-700">{{ $artifact['title'] }}</div>
+                                            @endif
+                                            @if($artifact['current_url'])
+                                                <div class="truncate">{{ $artifact['current_url'] }}</div>
+                                            @endif
+                                            <div>{{ $formatWorkflowTimestamp($artifact['created_at']) }}</div>
+                                            @if($artifact['status'] === 'success')
+                                                <div class="flex flex-wrap gap-2">
+                                                    <a href="{{ $artifact['url'] }}" target="_blank" rel="noopener" class="rounded border border-slate-200 px-2 py-1 font-semibold text-slate-600 hover:bg-slate-50">Vorschau</a>
+                                                    <a href="{{ $artifact['download_url'] }}" class="rounded border border-slate-200 px-2 py-1 font-semibold text-slate-600 hover:bg-slate-50">Download</a>
+                                                </div>
+                                            @endif
+                                        </div>
+                                    </div>
+                                @endforeach
+                            </div>
+                        </div>
+                    @endforeach
+                </div>
+            </details>
+        @endif
+
         <details class="group rounded-lg border border-slate-200 bg-white shadow-sm" open>
             <summary class="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 marker:hidden">
                 <div>
@@ -767,6 +884,57 @@
 
                             @if($panel['message'])
                                 <div class="mt-2 rounded bg-white px-2 py-1 text-[11px] text-slate-600">{{ $panel['message'] }}</div>
+                            @endif
+
+                            @php
+                                $normalized = data_get($panel, 'debug.result.normalized_result');
+                                $normalizedMail = is_array($normalized) ? (array) data_get($normalized, 'mail_scan', []) : [];
+                                $normalizedCounts = is_array($normalized) ? (array) data_get($normalized, 'counts', []) : [];
+                                $embeddedDiagnostics = is_array($normalized) ? collect((array) data_get($normalized, 'embedded_workflows', [])) : collect();
+                            @endphp
+                            @if(is_array($normalized))
+                                <div class="mt-2 rounded border border-sky-100 bg-sky-50 p-2 text-[11px] text-sky-900">
+                                    <div class="flex flex-wrap gap-x-3 gap-y-1">
+                                        <span>Technisch: <span class="font-semibold">{{ data_get($normalized, 'technical_status', '-') }}</span></span>
+                                        <span>Fachlich: <span class="font-semibold">{{ data_get($normalized, 'business_status', '-') }}</span></span>
+                                        <span>Klasse: <span class="font-semibold">{{ data_get($normalized, 'result_class', '-') }}</span></span>
+                                        <span>Reason: <span class="font-semibold">{{ data_get($normalized, 'diagnostic_reason_code', '-') }}</span></span>
+                                        <span>UI: {{ data_get($normalized, 'ui_state', '-') }}</span>
+                                        <span>Retry: {{ data_get($normalized, 'retryable') ? 'ja' : 'nein' }}</span>
+                                        <span>State-Mismatch: {{ data_get($normalized, 'state_mismatch') ? 'ja' : 'nein' }}</span>
+                                    </div>
+                                    @if(data_get($normalized, 'state_signature'))
+                                        <div class="mt-1 truncate font-mono text-[10px] text-sky-700">State: {{ data_get($normalized, 'state_signature') }}</div>
+                                    @endif
+                                    @if($normalizedMail !== [])
+                                        <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-sky-800">
+                                            <span>Sichtbar: {{ data_get($normalizedMail, 'visible_mail_count', 0) }}</span>
+                                            <span>Kandidaten: {{ data_get($normalizedMail, 'candidate_count', 0) }}</span>
+                                            <span>Matches: {{ data_get($normalizedMail, 'matched_count', 0) }}</span>
+                                            <span>Zeitfilter: {{ data_get($normalizedMail, 'filtered_by_age_count', 0) }}</span>
+                                            <span>Betrefffilter: {{ data_get($normalizedMail, 'filtered_by_subject_count', 0) }}</span>
+                                            <span>Polls: {{ data_get($normalizedMail, 'poll_count', 0) }}</span>
+                                            <span>Liste: {{ data_get($normalizedMail, 'list_visible') ? 'sichtbar' : 'nicht sichtbar' }}</span>
+                                        </div>
+                                    @elseif($normalizedCounts !== [])
+                                        <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-sky-800">
+                                            @foreach($normalizedCounts as $countKey => $countValue)
+                                                <span>{{ $countKey }}: {{ $countValue }}</span>
+                                            @endforeach
+                                        </div>
+                                    @endif
+                                    @if($embeddedDiagnostics->isNotEmpty())
+                                        <div class="mt-2 space-y-1">
+                                            @foreach($embeddedDiagnostics as $embedded)
+                                                <div class="rounded border border-sky-200 bg-white/70 px-2 py-1 text-sky-800">
+                                                    <span class="font-semibold">{{ data_get($embedded, 'embedded_class', 'embedded') }}</span>
+                                                    <span>· {{ data_get($embedded, 'embedded_workflow_name') ?: data_get($embedded, 'parent_task_key') ?: 'Embedded Workflow' }}</span>
+                                                    <span>· Tasks: {{ data_get($embedded, 'task_count', 0) }}</span>
+                                                </div>
+                                            @endforeach
+                                        </div>
+                                    @endif
+                                </div>
                             @endif
 
                             @if($panel['return']['has'])

@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class WorkflowStepRun extends Model
 {
@@ -40,5 +41,10 @@ class WorkflowStepRun extends Model
     public function workflowStep(): BelongsTo
     {
         return $this->belongsTo(WorkflowStep::class);
+    }
+
+    public function artifacts(): HasMany
+    {
+        return $this->hasMany(WorkflowRunArtifact::class)->orderBy('id');
     }
 }

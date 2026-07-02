@@ -49,4 +49,9 @@ class WorkflowRun extends Model
     {
         return $this->hasMany(WorkflowStepRun::class)->orderBy('id');
     }
+
+    public function artifacts(): HasMany
+    {
+        return $this->hasMany(WorkflowRunArtifact::class)->orderBy('id');
+    }
 }

@@ -41,6 +41,7 @@ const basePath = path.resolve(__dirname, '..', '..');
 const startedAt = new Date().toISOString();
 const taskResults = [];
 const events = [];
+const debugArtifacts = [];
 const embeddedWorkflowResults = new Map();
 let browser = null;
 let browserDriver = '';
@@ -291,6 +292,8 @@ function statusPayload(state, stage, message, extra = {}) {
       return redactPublicSecrets({ ...task, status: task.status || 'configured' });
     }),
     events: redactPublicSecrets(events),
+    debugArtifacts: redactPublicSecrets(debugArtifacts),
+    debug_artifacts: redactPublicSecrets(debugArtifacts),
     browserWindows: lastBrowserWindows,
     ...publicExtra,
   };
@@ -982,6 +985,297 @@ async function restoreBrowserWindowState(context, nextPage, windowName = 'main')
 
     return false;
   }
+}
+
+function devDebugConfig() {
+  return runtime.devDebug && typeof runtime.devDebug === 'object'
+    ? runtime.devDebug
+    : (runtime.dev_debug && typeof runtime.dev_debug === 'object' ? runtime.dev_debug : {});
+}
+
+function devDebugEnabled() {
+  const config = devDebugConfig();
+
+  return config.enabled === true || config.dev_mode === true;
+}
+
+function cleanFileSegment(value, fallback = 'item') {
+  const normalized = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/ä/g, 'ae')
+    .replace(/ö/g, 'oe')
+    .replace(/ü/g, 'ue')
+    .replace(/ß/g, 'ss')
+    .replace(/[^a-z0-9._-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 80);
+
+  return normalized || fallback;
+}
+
+function phaseCaptureEnabled(phase, type) {
+  const config = devDebugConfig();
+  const normalizedPhase = String(phase || '').toLowerCase();
+  const normalizedType = String(type || '').toLowerCase();
+
+  if (!devDebugEnabled()) {
+    return false;
+  }
+
+  if (normalizedType === 'dom') {
+    return normalizedPhase === 'before'
+      ? config.captureDomBeforeStep !== false
+      : config.captureDomAfterStep !== false;
+  }
+
+  if (normalizedType === 'screenshot') {
+    return normalizedPhase === 'before'
+      ? config.captureScreenshotBeforeStep !== false
+      : config.captureScreenshotAfterStep !== false;
+  }
+
+  return false;
+}
+
+function debugArtifactFilename(phase, type, browserWindow = 'main') {
+  const config = devDebugConfig();
+  const position = Number(config.stepPosition || config.step_position || runtime.workflowStepPosition || 0);
+  const actionKey = cleanFileSegment(config.stepActionKey || config.step_action_key || runtime.workflowStepName || 'step', 'step');
+  const windowKey = cleanFileSegment(browserWindow, 'main');
+  const extension = type === 'screenshot' ? 'png' : 'html';
+  const windowPart = windowKey && windowKey !== 'main' ? `_${windowKey}` : '';
+
+  return `step_${position}_${actionKey}${windowPart}_${phase}.${extension}`;
+}
+
+function debugArtifactPaths(filename) {
+  const config = devDebugConfig();
+  const directory = String(config.artifactDirectory || config.artifact_directory || '').trim();
+  const storagePath = String(config.storagePath || config.storage_path || '').trim();
+
+  if (!directory || !storagePath) {
+    return null;
+  }
+
+  return {
+    absolutePath: path.join(directory, filename),
+    storagePath: `${storagePath.replace(/\/+$/g, '')}/${filename}`,
+  };
+}
+
+function appendDebugArtifact(artifact) {
+  const config = devDebugConfig();
+  const cleanArtifact = cleanForJson({
+    workflow_id: config.workflowId || config.workflow_id || runtime.workflow?.workflowId || runtime.workflowId || null,
+    workflow_run_id: config.workflowRunId || config.workflow_run_id || runtime.workflowRunId || null,
+    workflow_step_id: config.workflowStepId || config.workflow_step_id || runtime.workflowStepId || null,
+    workflow_step_run_id: config.workflowStepRunId || config.workflow_step_run_id || runtime.workflowStepRunId || null,
+    step_position: config.stepPosition || config.step_position || null,
+    step_action_key: config.stepActionKey || config.step_action_key || '',
+    storage_disk: config.storageDisk || config.storage_disk || 'local',
+    created_at: now(),
+    ...artifact,
+  });
+
+  debugArtifacts.push(cleanArtifact);
+
+  if (debugArtifacts.length > 500) {
+    debugArtifacts.splice(0, debugArtifacts.length - 500);
+  }
+
+  const manifestPath = String(config.manifestPath || config.manifest_path || '').trim();
+
+  if (manifestPath) {
+    writeJson(manifestPath, {
+      updatedAt: now(),
+      workflowRunId: config.workflowRunId || runtime.workflowRunId || null,
+      workflowStepRunId: config.workflowStepRunId || runtime.workflowStepRunId || null,
+      artifacts: debugArtifacts,
+    });
+  }
+
+  return cleanArtifact;
+}
+
+async function devDomSnapshot(targetPage) {
+  return targetPage.evaluate(() => {
+    const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+    const visibleText = normalize(document.body ? document.body.innerText || '' : '');
+    const classifyUiState = () => {
+      const haystack = `${window.location.href} ${document.title} ${visibleText}`.toLowerCase();
+
+      if (haystack.includes('captcha')) return 'captcha_blocked';
+      if (haystack.includes('consent') || haystack.includes('cookie') || haystack.includes('einwilligung')) return 'consent_blocked';
+      if (haystack.includes('login') || haystack.includes('signin') || haystack.includes('anmelden')) return 'login_page';
+      if (haystack.includes('register') || haystack.includes('signup') || haystack.includes('registr')) return 'registration_form';
+      if (haystack.includes('verification') || haystack.includes('verifizierung') || haystack.includes('code')) return 'verification_pending';
+      if (haystack.includes('inbox') || haystack.includes('posteingang')) return 'inbox_visible';
+      if (haystack.includes('empty inbox') || haystack.includes('keine mail') || haystack.includes('0 mail')) return 'empty_inbox';
+      if (haystack.includes('expired') || haystack.includes('abgelaufen') || haystack.includes('logged out')) return 'session_expired';
+
+      return 'unknown_browser_state';
+    };
+    const selectorFor = (element) => {
+      const tag = String(element.tagName || '').toLowerCase();
+      const escapeCss = (value) => {
+        if (window.CSS && typeof window.CSS.escape === 'function') {
+          return window.CSS.escape(String(value));
+        }
+
+        return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+      };
+
+      if (!tag) return '';
+      if (element.id) return `#${escapeCss(element.id)}`;
+
+      for (const attribute of ['data-testid', 'data-test', 'data-cy', 'data-qa', 'aria-label', 'name']) {
+        const value = element.getAttribute(attribute);
+
+        if (value) return `${tag}[${attribute}="${escapeCss(value)}"]`;
+      }
+
+      const role = element.getAttribute('role');
+      const text = normalize(element.innerText || element.textContent || element.getAttribute('value') || '').slice(0, 80);
+
+      if (role) return `${tag}[role="${escapeCss(role)}"]${text ? ` /* text: ${text} */` : ''}`;
+      if (text && ['a', 'button', 'label', 'span', 'div'].includes(tag)) return `${tag} /* text: ${text} */`;
+
+      return tag;
+    };
+    const selectorSuggestions = Array.from(document.querySelectorAll('button,a,input,textarea,select,[role],[aria-label],[data-testid],[data-test],[data-cy],[data-qa]'))
+      .map((element) => ({
+        selector: selectorFor(element),
+        tag: String(element.tagName || '').toLowerCase(),
+        text: normalize(element.innerText || element.textContent || element.getAttribute('value') || '').slice(0, 120),
+        id: element.id || '',
+        role: element.getAttribute('role') || '',
+        ariaLabel: element.getAttribute('aria-label') || '',
+      }))
+      .filter((item) => item.selector && !/nth-child/i.test(item.selector))
+      .slice(0, 50);
+
+    return {
+      html: document.documentElement ? document.documentElement.outerHTML || '' : '',
+      title: document.title || '',
+      url: window.location.href,
+      readyState: document.readyState,
+      visibleTextExcerpt: visibleText.slice(0, 5000),
+      uiState: classifyUiState(),
+      selectorSuggestions,
+    };
+  });
+}
+
+async function captureStepArtifactPhase(context, phase, task = {}) {
+  if (!devDebugEnabled()) {
+    return [];
+  }
+
+  const targetPage = context.page;
+  const browserWindow = normalizeBrowserWindowName(context.activeBrowserWindow || task.browser_window || task.browserWindow || 'main');
+
+  if (!targetPage || typeof targetPage.evaluate !== 'function' || (targetPage.isClosed && targetPage.isClosed())) {
+    return [];
+  }
+
+  const captured = [];
+  let snapshot = null;
+
+  const baseArtifact = {
+    phase,
+    browser_window: browserWindow,
+    task_card_key: task.key || task.task_key || '',
+  };
+
+  if (phaseCaptureEnabled(phase, 'dom')) {
+    try {
+      snapshot = await devDomSnapshot(targetPage);
+      const paths = debugArtifactPaths(debugArtifactFilename(phase, 'dom', browserWindow));
+
+      if (!paths) {
+        throw new Error('Dev-Debug-Artefaktpfad ist nicht konfiguriert.');
+      }
+
+      fs.mkdirSync(path.dirname(paths.absolutePath), { recursive: true });
+      fs.writeFileSync(paths.absolutePath, `<!-- workflow-debug-metadata: ${JSON.stringify({
+        url: snapshot.url,
+        title: snapshot.title,
+        readyState: snapshot.readyState,
+        uiState: snapshot.uiState,
+        capturedAt: now(),
+      })} -->\n${snapshot.html}`);
+
+      captured.push(appendDebugArtifact({
+        ...baseArtifact,
+        artifact_type: 'dom',
+        current_url: snapshot.url,
+        title: snapshot.title,
+        storage_path: paths.storagePath,
+        status: 'success',
+        metadata: {
+          readyState: snapshot.readyState,
+          visibleTextExcerpt: snapshot.visibleTextExcerpt,
+          uiState: snapshot.uiState,
+          selectorSuggestions: snapshot.selectorSuggestions,
+        },
+      }));
+    } catch (error) {
+      captured.push(appendDebugArtifact({
+        ...baseArtifact,
+        artifact_type: 'dom',
+        status: 'failed',
+        error_message: error.message,
+      }));
+    }
+  }
+
+  if (phaseCaptureEnabled(phase, 'screenshot')) {
+    try {
+      const paths = debugArtifactPaths(debugArtifactFilename(phase, 'screenshot', browserWindow));
+
+      if (!paths) {
+        throw new Error('Dev-Debug-Artefaktpfad ist nicht konfiguriert.');
+      }
+
+      fs.mkdirSync(path.dirname(paths.absolutePath), { recursive: true });
+      await targetPage.screenshot({ path: paths.absolutePath, fullPage: false });
+
+      if (!snapshot) {
+        snapshot = await devDomSnapshot(targetPage).catch(() => ({}));
+      }
+
+      captured.push(appendDebugArtifact({
+        ...baseArtifact,
+        artifact_type: 'screenshot',
+        current_url: snapshot.url || (typeof targetPage.url === 'function' ? String(targetPage.url() || '') : ''),
+        title: snapshot.title || '',
+        storage_path: paths.storagePath,
+        status: 'success',
+        metadata: {
+          readyState: snapshot.readyState || null,
+          uiState: snapshot.uiState || null,
+        },
+      }));
+    } catch (error) {
+      captured.push(appendDebugArtifact({
+        ...baseArtifact,
+        artifact_type: 'screenshot',
+        status: 'failed',
+        error_message: error.message,
+      }));
+    }
+  }
+
+  if (captured.length > 0) {
+    pushEvent(`dev-debug-${phase}-captured`, `Dev-Debug-Artefakte (${phase}) wurden gespeichert.`, {
+      phase,
+      browserWindow,
+      artifactCount: captured.length,
+    });
+  }
+
+  return captured;
 }
 
 async function runDataTask(task, context = {}) {
@@ -1775,6 +2069,8 @@ async function run() {
   const routeAttemptCounts = new Map();
   const appliedEmbeddedInputFrames = new Set();
   const preserveBrowserForFailureRoute = startedFromFailureRoute();
+  let devDebugBeforeCaptured = false;
+  let devDebugAfterCaptured = false;
 
   while (taskIndex < runtimeTasks.length) {
     const task = runtimeTasks[taskIndex];
@@ -1900,6 +2196,13 @@ async function run() {
             browserWindow: targetBrowserWindow,
           }));
         } else {
+          if (!devDebugBeforeCaptured) {
+            await captureStepArtifactPhase(context, 'before', task).catch((error) => {
+              pushEvent('dev-debug-before-failed', error.message, { taskKey: task.key });
+            });
+            devDebugBeforeCaptured = true;
+          }
+
           result = await module.run(context);
         }
 
@@ -2238,6 +2541,16 @@ async function run() {
         events,
         finishedAt: now(),
       };
+
+      if (!devDebugAfterCaptured) {
+        await captureStepArtifactPhase(context, 'after', task).catch((error) => {
+          pushEvent('dev-debug-after-failed', error.message, { taskKey: task.key });
+        });
+        devDebugAfterCaptured = true;
+        failedResult.debugArtifacts = debugArtifacts;
+        failedResult.debug_artifacts = debugArtifacts;
+      }
+
       writeJson(runtime.resultPath, failedResult);
       writeStatus('failed', 'failed', failedResult.statusMessage, { result: failedResult });
 
@@ -2324,6 +2637,13 @@ async function run() {
     lastBrowserWindows = finalPreview.browserWindows;
   }
 
+  if (!devDebugAfterCaptured) {
+    await captureStepArtifactPhase(context, 'after', runtimeTasks[Math.max(0, Math.min(taskIndex, runtimeTasks.length - 1))] || {}).catch((error) => {
+      pushEvent('dev-debug-after-failed', error.message);
+    });
+    devDebugAfterCaptured = true;
+  }
+
   const result = {
     ok: true,
     status: 'success',
@@ -2340,6 +2660,8 @@ async function run() {
     workflow_variables: context.workflow_variables || null,
     workflowVariables: context.workflowVariables || null,
     tasks: taskResults,
+    debugArtifacts,
+    debug_artifacts: debugArtifacts,
     browserWindows: lastBrowserWindows,
     browserWsEndpoint: browserWsEndpoint(),
     events,
@@ -2363,6 +2685,8 @@ run()
       statusMessage: error.message,
       error: error.stack || error.message,
       tasks: taskResults,
+      debugArtifacts,
+      debug_artifacts: debugArtifacts,
       browserWindows: lastBrowserWindows,
       browserWsEndpoint: browserWsEndpoint(),
       events,
