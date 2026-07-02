@@ -153,6 +153,69 @@
 
         return \Illuminate\Support\Str::limit((string) $value, 240);
     };
+    $collectWorkflowVariables = static function (...$sources): array {
+        $variables = [];
+        $extract = function ($source) use (&$extract, &$variables): void {
+            if (! is_array($source)) {
+                return;
+            }
+
+            foreach (['workflow_variables', 'workflowVariables'] as $variablesKey) {
+                $candidateVariables = data_get($source, $variablesKey);
+
+                if (is_array($candidateVariables)) {
+                    $variables = array_replace($variables, $candidateVariables);
+                }
+            }
+
+            foreach ([
+                'verification_code',
+                'verificationCode',
+                'verification_mail_id',
+                'verificationMailId',
+                'verification_mail',
+                'verificationMail',
+                'mail_id',
+                'mailId',
+                'message_id',
+                'messageId',
+                'matched_mail',
+                'matchedMail',
+                'workflow_return',
+                'workflowReturn',
+                'workflow_return_ok',
+                'workflowReturnOk',
+            ] as $directKey) {
+                if (\Illuminate\Support\Arr::has($source, $directKey)) {
+                    $variables[$directKey] = data_get($source, $directKey);
+                }
+            }
+
+            foreach (['result', 'resultTask'] as $nestedKey) {
+                $extract(data_get($source, $nestedKey));
+            }
+
+            foreach (['included_tasks', 'tasks'] as $listKey) {
+                $items = data_get($source, $listKey);
+
+                if (! is_array($items)) {
+                    continue;
+                }
+
+                foreach ($items as $item) {
+                    $extract($item);
+                }
+            }
+        };
+
+        foreach ($sources as $source) {
+            $extract($source);
+        }
+
+        ksort($variables);
+
+        return $variables;
+    };
     $workflowReturnSummary = static function (...$sources) use ($formatWorkflowValue): array {
         $empty = [
             'has' => false,
@@ -477,6 +540,12 @@
         is_array($workflowRun?->result_json) ? $workflowRun->result_json : [],
         is_array($workflowRun?->context_json) ? $workflowRun->context_json : [],
     );
+    $workflowVariables = $collectWorkflowVariables(
+        is_array($workflowRun?->context_json) ? $workflowRun->context_json : [],
+        is_array($workflowRun?->result_json) ? $workflowRun->result_json : [],
+        $latestStatusResult,
+        ...$stepDebugPanels->pluck('debug.result')->all(),
+    );
 @endphp
 
 <div {{ $attributes->merge(['class' => 'space-y-5']) }}>
@@ -571,6 +640,10 @@
                         <div class="mt-1 text-indigo-700">OK: {{ $workflowReturn['okLabel'] }}</div>
                     </div>
                 @endif
+                <div class="mt-3 rounded-md border border-sky-100 bg-sky-50 px-3 py-2 text-xs text-sky-900">
+                    <div class="font-semibold uppercase tracking-wide text-sky-600">Workflow-Variablen</div>
+                    <div class="mt-1 text-sky-700">{{ count($workflowVariables) }} verfuegbar</div>
+                </div>
                 <div class="mt-1 text-xs text-slate-500">
                     Script: {{ data_get($latestStatusResult, 'scriptVersionLabel', data_get($latestStatusResult, 'scriptName', '-')) }}
                 </div>
@@ -597,6 +670,49 @@
             </div>
         </div>
 
+        <details class="group rounded-lg border border-slate-200 bg-white shadow-sm" open>
+            <summary class="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 marker:hidden">
+                <div>
+                    <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Verfuegbare Variablen</div>
+                    <div class="mt-1 text-sm text-slate-600">Aktuelle Werte aus Run-Kontext, Step-Resultaten und Workflow-Rueckgaben.</div>
+                </div>
+                <span class="rounded border border-slate-200 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                    {{ count($workflowVariables) }}
+                </span>
+            </summary>
+
+            <div class="border-t border-slate-100">
+                @if($workflowVariables !== [])
+                    <div class="max-h-80 overflow-auto">
+                        <table class="min-w-full divide-y divide-slate-100 text-left text-xs">
+                            <thead class="sticky top-0 bg-slate-50 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                                <tr>
+                                    <th class="w-56 px-4 py-2">Variable</th>
+                                    <th class="px-4 py-2">Aktueller Wert</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-100 bg-white">
+                                @foreach($workflowVariables as $variableKey => $variableValue)
+                                    <tr>
+                                        <td class="px-4 py-2 align-top font-mono text-[11px] font-semibold text-slate-700">
+                                            {{ $variableKey }}
+                                        </td>
+                                        <td class="px-4 py-2 align-top font-mono text-[11px] text-slate-600">
+                                            <div class="max-w-[54rem] whitespace-pre-wrap break-words">{{ $formatWorkflowValue($variableValue) }}</div>
+                                        </td>
+                                    </tr>
+                                @endforeach
+                            </tbody>
+                        </table>
+                    </div>
+                @else
+                    <div class="px-4 py-5 text-sm text-slate-500">
+                        Noch keine Workflow-Variablen gespeichert.
+                    </div>
+                @endif
+            </div>
+        </details>
+
         <div class="max-h-[32rem] overflow-auto rounded-lg border border-slate-200 bg-white p-4">
             <div class="flex items-center justify-between gap-3">
                 <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Logs & Debug</div>
@@ -607,6 +723,7 @@
                         'status' => $workflowRun?->status,
                         'durationMs' => $workflowDurationMs,
                         'workflowReturn' => $workflowReturn['has'] ? $workflowReturn : null,
+                        'workflowVariables' => $workflowVariables,
                         'steps' => $stepDebugPanels->pluck('debug')->all(),
                     ]) }}"
                     download="workflow-run-{{ $workflowRun?->id ?? 'debug' }}.json"
@@ -654,6 +771,13 @@
                             @if($panel['tasks']->isNotEmpty())
                                 <div class="mt-2 space-y-1">
                                     @foreach($panel['tasks'] as $task)
+                                        @php
+                                            $mailScanDebug = data_get($task, 'debug.resultTask.mailListScanDebug')
+                                                ?: data_get($task, 'debug.resultTask.mail_list_scan_debug');
+                                            $mailScanCandidates = is_array(data_get($mailScanDebug, 'candidates'))
+                                                ? array_slice(data_get($mailScanDebug, 'candidates'), 0, 8)
+                                                : [];
+                                        @endphp
                                         <div class="flex items-center justify-between gap-2 rounded border border-white bg-white px-2 py-1 text-[11px]">
                                             <div class="min-w-0">
                                                 <div class="truncate font-semibold text-slate-700">{{ $task['title'] }}</div>
@@ -672,6 +796,57 @@
                                                     <div class="mt-1 break-words text-indigo-600">
                                                         Rueckgabe: {{ $task['return']['key'] }} = {{ $task['return']['valueLabel'] }}
                                                         · OK: {{ $task['return']['okLabel'] }}
+                                                    </div>
+                                                @endif
+                                                @if(is_array($mailScanDebug))
+                                                    <div class="mt-2 rounded border border-amber-100 bg-amber-50 p-2 text-[11px] text-amber-900">
+                                                        <div class="font-semibold uppercase tracking-wide text-amber-700">Mail-Scan Zeitfilter</div>
+                                                        <div class="mt-1 flex flex-wrap gap-x-3 gap-y-1">
+                                                            <span>Gesucht: {{ data_get($mailScanDebug, 'maxAgeSeconds') ? data_get($mailScanDebug, 'maxAgeSeconds').'s' : 'kein Zeitfilter' }}</span>
+                                                            @if(data_get($mailScanDebug, 'acceptedSince'))
+                                                                <span>Seit: {{ data_get($mailScanDebug, 'acceptedSince') }}</span>
+                                                            @endif
+                                                            <span>Unbekannte Zeit: {{ data_get($mailScanDebug, 'includeUnknownAge') ? 'erlaubt' : 'blockiert' }}</span>
+                                                            <span>Gefunden: {{ data_get($mailScanDebug, 'totalCandidates', 0) }}</span>
+                                                            <span>Akzeptiert: {{ data_get($mailScanDebug, 'acceptedCandidates', 0) }}</span>
+                                                            <span>Poll: {{ data_get($mailScanDebug, 'pollCount', 0) }}</span>
+                                                            <span>GMT Offset: {{ data_get($mailScanDebug, 'mailTimeGmtOffsetHours', 0) }}</span>
+                                                        </div>
+                                                        @if(data_get($mailScanDebug, 'foundDateTexts'))
+                                                            <div class="mt-1 break-words text-amber-800">
+                                                                Zeittexte: {{ collect(data_get($mailScanDebug, 'foundDateTexts'))->take(10)->implode(' | ') }}
+                                                            </div>
+                                                        @endif
+                                                        @if($mailScanCandidates !== [])
+                                                            <div class="mt-2 overflow-x-auto">
+                                                                <table class="min-w-full text-left">
+                                                                    <thead class="text-[10px] uppercase tracking-wide text-amber-700">
+                                                                        <tr>
+                                                                            <th class="pr-3 py-1">OK</th>
+                                                                            <th class="pr-3 py-1">Zeittext</th>
+                                                                            <th class="pr-3 py-1">Empfangen</th>
+                                                                            <th class="pr-3 py-1">Alter</th>
+                                                                            <th class="pr-3 py-1">Art</th>
+                                                                            <th class="pr-3 py-1">Grund</th>
+                                                                            <th class="pr-3 py-1">Text</th>
+                                                                        </tr>
+                                                                    </thead>
+                                                                    <tbody class="align-top text-amber-950">
+                                                                        @foreach($mailScanCandidates as $candidate)
+                                                                            <tr class="border-t border-amber-100">
+                                                                                <td class="pr-3 py-1 font-semibold">{{ data_get($candidate, 'accepted') ? 'ja' : 'nein' }}</td>
+                                                                                <td class="pr-3 py-1">{{ data_get($candidate, 'dateText') ?: '-' }}</td>
+                                                                                <td class="pr-3 py-1">{{ data_get($candidate, 'receivedAtBrowser') ?: data_get($candidate, 'receivedAt') ?: '-' }}</td>
+                                                                                <td class="pr-3 py-1">{{ data_get($candidate, 'ageLabel') ?: '-' }}</td>
+                                                                                <td class="pr-3 py-1">{{ data_get($candidate, 'dateParseKind') ?: '-' }}</td>
+                                                                                <td class="pr-3 py-1">{{ data_get($candidate, 'reason') ?: '-' }}</td>
+                                                                                <td class="pr-3 py-1 max-w-[18rem] truncate">{{ data_get($candidate, 'subject') ?: data_get($candidate, 'title') ?: data_get($candidate, 'text') }}</td>
+                                                                            </tr>
+                                                                        @endforeach
+                                                                    </tbody>
+                                                                </table>
+                                                            </div>
+                                                        @endif
                                                     </div>
                                                 @endif
                                             </div>

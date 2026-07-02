@@ -283,11 +283,40 @@ async function collectMailCandidates(frame, options = {}) {
         score += Math.max(0, 20 - Math.round(rect.top / 80));
 
         const token = `wf-mail-${Date.now()}-${rows.length}`;
+        const attributes = Array.from(element.attributes || [])
+          .filter((attribute) => /^(id|href|data-|aria-|role|title)/i.test(attribute.name))
+          .slice(0, 30)
+          .reduce((carry, attribute) => {
+            carry[attribute.name] = attribute.value;
+
+            return carry;
+          }, {});
+        const closestLink = element.closest('a[href]');
+        const href = element.getAttribute('href') || closestLink?.getAttribute('href') || '';
+        const messageId = element.getAttribute('data-message-id')
+          || element.getAttribute('data-messageid')
+          || element.getAttribute('data-mail-id')
+          || element.getAttribute('data-id')
+          || element.getAttribute('data-uid')
+          || element.getAttribute('message-id')
+          || element.getAttribute('data-testid')
+          || element.id
+          || href
+          || token;
 
         element.setAttribute('data-workflow-mail-candidate', token);
 
         rows.push({
           token,
+          id: messageId,
+          messageId,
+          message_id: messageId,
+          mailId: messageId,
+          mail_id: messageId,
+          elementId: element.id || '',
+          element_id: element.id || '',
+          href,
+          attributes,
           selector,
           index,
           text,
@@ -345,19 +374,90 @@ async function clickMailCandidate(frame, candidate) {
   }, candidate).catch(() => false);
 }
 
-function rememberVerificationCode(context, code) {
+function mailVariable(candidate = {}, match = null) {
+  const id = String(candidate.messageId || candidate.message_id || candidate.mailId || candidate.mail_id || candidate.id || candidate.token || '').trim();
+
+  if (!id && !candidate.text && !candidate.selector) {
+    return null;
+  }
+
+  return {
+    id,
+    messageId: id,
+    message_id: id,
+    mailId: id,
+    mail_id: id,
+    token: candidate.token || '',
+    selector: candidate.selector || '',
+    index: Number.isFinite(Number(candidate.index)) ? Number(candidate.index) : null,
+    frameUrl: candidate.frameUrl || match?.frameUrl || '',
+    frame_url: candidate.frameUrl || match?.frameUrl || '',
+    elementId: candidate.elementId || candidate.element_id || '',
+    element_id: candidate.element_id || candidate.elementId || '',
+    href: candidate.href || '',
+    text: String(candidate.text || '').slice(0, 500),
+    ageSeconds: candidate.ageSeconds ?? null,
+    age_seconds: candidate.ageSeconds ?? null,
+    sourceSnippet: match?.snippet || '',
+    source_snippet: match?.snippet || '',
+  };
+}
+
+function rememberVerificationCode(context, code, candidate = null, match = null) {
+  const mail = candidate ? mailVariable(candidate, match) : null;
+
   context.verificationCode = code;
   context.verification_code = code;
+
+  if (mail) {
+    context.verificationMail = mail;
+    context.verification_mail = mail;
+    context.verificationMailId = mail.id;
+    context.verification_mail_id = mail.id;
+    context.matchedMail = mail;
+    context.matched_mail = mail;
+    context.mailId = mail.id;
+    context.mail_id = mail.id;
+    context.messageId = mail.id;
+    context.message_id = mail.id;
+  }
+
   context.workflowVariables = {
     ...(context.workflowVariables || {}),
     verificationCode: code,
     verification_code: code,
+    ...(mail ? {
+      verificationMail: mail,
+      verification_mail: mail,
+      verificationMailId: mail.id,
+      verification_mail_id: mail.id,
+      matchedMail: mail,
+      matched_mail: mail,
+      mailId: mail.id,
+      mail_id: mail.id,
+      messageId: mail.id,
+      message_id: mail.id,
+    } : {}),
   };
   context.workflow_variables = {
     ...(context.workflow_variables || {}),
     verificationCode: code,
     verification_code: code,
+    ...(mail ? {
+      verificationMail: mail,
+      verification_mail: mail,
+      verificationMailId: mail.id,
+      verification_mail_id: mail.id,
+      matchedMail: mail,
+      matched_mail: mail,
+      mailId: mail.id,
+      mail_id: mail.id,
+      messageId: mail.id,
+      message_id: mail.id,
+    } : {}),
   };
+
+  return mail;
 }
 
 async function run(context = {}) {
@@ -443,6 +543,14 @@ async function run(context = {}) {
 
     openedMails.push({
       clicked,
+      id: candidate.messageId || candidate.message_id || candidate.mailId || candidate.mail_id || candidate.id || candidate.token || '',
+      messageId: candidate.messageId || candidate.message_id || candidate.mailId || candidate.mail_id || candidate.id || candidate.token || '',
+      message_id: candidate.message_id || candidate.messageId || candidate.mail_id || candidate.mailId || candidate.id || candidate.token || '',
+      mailId: candidate.mailId || candidate.mail_id || candidate.messageId || candidate.message_id || candidate.id || candidate.token || '',
+      mail_id: candidate.mail_id || candidate.mailId || candidate.message_id || candidate.messageId || candidate.id || candidate.token || '',
+      token: candidate.token || '',
+      selector: candidate.selector || '',
+      index: Number.isFinite(Number(candidate.index)) ? Number(candidate.index) : null,
       ageSeconds: candidate.ageSeconds,
       frameUrl: candidate.frameUrl,
       text: candidate.text.slice(0, 240),
@@ -457,7 +565,7 @@ async function run(context = {}) {
     match = extractCode(chunks, query);
 
     if (match) {
-      rememberVerificationCode(context, match.code);
+      const verificationMail = rememberVerificationCode(context, match.code, candidate, match);
 
       return captureTaskPreview(context, {
         ok: true,
@@ -465,6 +573,16 @@ async function run(context = {}) {
         statusMessage: 'Verifizierungscode wurde aus einer aktuellen Webmail-Nachricht gelesen.',
         verificationCode: match.code,
         verification_code: match.code,
+        verificationMail,
+        verification_mail: verificationMail,
+        verificationMailId: verificationMail?.id || null,
+        verification_mail_id: verificationMail?.id || null,
+        matchedMail: verificationMail,
+        matched_mail: verificationMail,
+        mailId: verificationMail?.id || null,
+        mail_id: verificationMail?.id || null,
+        messageId: verificationMail?.id || null,
+        message_id: verificationMail?.id || null,
         workflowVariables: context.workflowVariables,
         workflow_variables: context.workflow_variables,
         query,

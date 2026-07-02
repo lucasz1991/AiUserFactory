@@ -221,6 +221,17 @@ async function frameDomSnapshot(frame) {
 
         return element.textContent || '';
       };
+      const safeDebugValue = (value) => {
+        if (value === undefined) {
+          return null;
+        }
+
+        try {
+          return JSON.parse(JSON.stringify(value));
+        } catch {
+          return String(value);
+        }
+      };
       const visible = (element) => {
         const rect = element.getBoundingClientRect();
         const style = window.getComputedStyle(element);
@@ -235,6 +246,8 @@ async function frameDomSnapshot(frame) {
         title: document.title || '',
         text: document.body ? document.body.innerText || '' : '',
         html: document.documentElement ? document.documentElement.outerHTML || '' : '',
+        workflowDebug: safeDebugValue(window.__workflowDebug),
+        workflowMailListScanDebug: safeDebugValue(window.__workflowMailListScanDebug),
         fields: Array.from(document.querySelectorAll(inputSelector)).map((element, index) => ({
           index,
           tag: String(element.tagName || '').toLowerCase(),
