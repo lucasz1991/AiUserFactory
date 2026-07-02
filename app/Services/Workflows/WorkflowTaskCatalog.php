@@ -181,6 +181,18 @@ class WorkflowTaskCatalog
                             'tab' => 'Zeit',
                         ],
                         [
+                            'name' => 'mail_time_gmt_offset_hours',
+                            'label' => 'GMT-Offset der Mailzeit',
+                            'type' => 'number',
+                            'min' => -14,
+                            'max' => 14,
+                            'step' => 0.5,
+                            'placeholder' => '0',
+                            'default' => '0',
+                            'help' => 'Zeitzone der im Mail-Listeneintrag erkannten Uhrzeit. Beispiel: 0 fuer GMT/UTC. Die Ausgabe wird automatisch in die Zeitzone des Browserfensters umgerechnet.',
+                            'tab' => 'Zeit',
+                        ],
+                        [
                             'name' => 'wait_for_new_mail_seconds',
                             'label' => 'Auf neue Mail warten (Sekunden)',
                             'type' => 'number',

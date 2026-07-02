@@ -59,6 +59,12 @@ async function run(context = {}) {
   const includeUnknownAge = optionBoolean(options, input, ['include_unknown_age', 'includeUnknownAge'], maximumAgeSeconds <= 0);
   const maxItems = Math.max(1, Math.min(200, optionNumber(options, input, ['max_items', 'maxItems', 'limit'], 50)));
   const waitForNewMailSeconds = Math.max(0, Math.min(3600, optionNumber(options, input, ['wait_for_new_mail_seconds', 'waitForNewMailSeconds', 'wait_seconds', 'waitSeconds'], 0)));
+  const mailTimeGmtOffsetHours = Math.max(-14, Math.min(14, optionNumber(options, input, [
+    'mail_time_gmt_offset_hours',
+    'mailTimeGmtOffsetHours',
+    'source_gmt_offset_hours',
+    'sourceGmtOffsetHours',
+  ], 0)));
   const subjectFilters = stringListFrom(optionString(options, input, ['subject_filter', 'subjectFilter', 'subject_must_contain', 'subjectMustContain'], ''), []);
   const titleFilters = stringListFrom(optionString(options, input, ['title_filter', 'titleFilter', 'title_must_contain', 'titleMustContain'], ''), []);
 
@@ -72,6 +78,7 @@ async function run(context = {}) {
       list_selector: listSelector,
       list_item_selector: listItemSelector,
       max_items: maxItems,
+      mail_time_gmt_offset_hours: mailTimeGmtOffsetHours,
     });
 
     return candidates.filter((candidate) => {
@@ -138,6 +145,8 @@ async function run(context = {}) {
     title_filters: titleFilters,
     waitForNewMailSeconds,
     wait_for_new_mail_seconds: waitForNewMailSeconds,
+    mailTimeGmtOffsetHours,
+    mail_time_gmt_offset_hours: mailTimeGmtOffsetHours,
     pollCount,
     poll_count: pollCount,
     workflowVariables: context.workflowVariables,

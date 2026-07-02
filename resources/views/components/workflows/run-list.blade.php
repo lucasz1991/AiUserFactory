@@ -212,9 +212,9 @@
                 </div>
                 <div class="flex flex-col items-end gap-2 text-right text-xs text-slate-500">
                     <div>
-                        <div>{{ optional($run->started_at ?? $run->queued_at)->format('d.m.Y H:i') }}</div>
+                        <div>{{ optional($run->started_at ?? $run->queued_at)?->timezone(config('app.timezone', 'Europe/Berlin'))->format('d.m.Y H:i') }}</div>
                         @if($run->finished_at)
-                            <div>{{ $run->finished_at->format('d.m.Y H:i') }}</div>
+                            <div>{{ $run->finished_at->timezone(config('app.timezone', 'Europe/Berlin'))->format('d.m.Y H:i') }}</div>
                         @endif
                         <div class="font-semibold text-slate-600">Dauer: {{ $durationLabel }}</div>
                         @if($workflowReturn['has'])

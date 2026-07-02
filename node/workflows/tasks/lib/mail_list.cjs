@@ -521,6 +521,200 @@ function ageSecondsFromText(value, now = new Date()) {
   return null;
 }
 
+function normalizeGmtOffsetHours(value, fallback = null) {
+  if (value === undefined || value === null || value === '') {
+    return fallback;
+  }
+
+  const text = normalizeText(value).replace(/^gmt\s*/i, '');
+  const colonMatch = text.match(/^([+-]?)(\d{1,2}):([0-5]\d)$/);
+  const hours = colonMatch
+    ? (colonMatch[1] === '-' ? -1 : 1) * (Number(colonMatch[2]) + (Number(colonMatch[3]) / 60))
+    : Number(text.replace(',', '.'));
+
+  return Number.isFinite(hours) && hours >= -14 && hours <= 14 ? hours : fallback;
+}
+
+function dateFromPartsAtOffset(now, day, month, year, hour = 0, minute = 0, sourceOffsetHours = null) {
+  const normalizedYear = Number(year) < 100
+    ? (Number(year) >= 70 ? 1900 + Number(year) : 2000 + Number(year))
+    : Number(year);
+  const normalized = {
+    year: normalizedYear,
+    month: Number(month),
+    day: Number(day),
+    hour: Number(hour || 0),
+    minute: Number(minute || 0),
+  };
+
+  if (
+    normalized.month < 1 || normalized.month > 12
+    || normalized.day < 1 || normalized.day > 31
+    || normalized.hour < 0 || normalized.hour > 23
+    || normalized.minute < 0 || normalized.minute > 59
+  ) {
+    return null;
+  }
+
+  if (sourceOffsetHours === null) {
+    const date = new Date(now);
+    date.setFullYear(normalized.year, normalized.month - 1, normalized.day);
+    date.setHours(normalized.hour, normalized.minute, 0, 0);
+
+    return date;
+  }
+
+  const offsetMs = sourceOffsetHours * 60 * 60 * 1000;
+  const date = new Date(Date.UTC(
+    normalized.year,
+    normalized.month - 1,
+    normalized.day,
+    normalized.hour,
+    normalized.minute,
+  ) - offsetMs);
+  const shifted = new Date(date.getTime() + offsetMs);
+
+  return shifted.getUTCFullYear() === normalized.year
+    && shifted.getUTCMonth() === normalized.month - 1
+    && shifted.getUTCDate() === normalized.day
+    ? date
+    : null;
+}
+
+function timeOnlyDateAtOffset(now, hour, minute, sourceOffsetHours = null) {
+  if (sourceOffsetHours === null) {
+    const date = new Date(now);
+    date.setHours(hour, minute, 0, 0);
+
+    if (date.getTime() - now.getTime() > 3600000) {
+      date.setDate(date.getDate() - 1);
+    }
+
+    return date;
+  }
+
+  const offsetMs = sourceOffsetHours * 60 * 60 * 1000;
+  const sourceNow = new Date(now.getTime() + offsetMs);
+  let timestamp = Date.UTC(
+    sourceNow.getUTCFullYear(),
+    sourceNow.getUTCMonth(),
+    sourceNow.getUTCDate(),
+    hour,
+    minute,
+  ) - offsetMs;
+
+  if (timestamp - now.getTime() > 3600000) {
+    timestamp -= 86400000;
+  }
+
+  return new Date(timestamp);
+}
+
+function mailReceivedTimeFromText(value, now = new Date(), options = {}) {
+  const rawText = normalizeText(value);
+  const text = rawText.toLowerCase();
+  const sourceOffsetHours = normalizeGmtOffsetHours(
+    options.sourceGmtOffsetHours
+      ?? options.source_gmt_offset_hours
+      ?? options.mailTimeGmtOffsetHours
+      ?? options.mail_time_gmt_offset_hours,
+    null,
+  );
+  const result = (date, kind) => {
+    if (!(date instanceof Date) || !Number.isFinite(date.getTime())) {
+      return null;
+    }
+
+    const rawAgeSeconds = Math.round((now.getTime() - date.getTime()) / 1000);
+
+    return {
+      date,
+      receivedAt: date.toISOString(),
+      ageSeconds: rawAgeSeconds >= -300 ? Math.max(0, rawAgeSeconds) : null,
+      kind,
+      sourceGmtOffsetHours: sourceOffsetHours,
+    };
+  };
+
+  if (!text) {
+    return null;
+  }
+
+  const relativeAge = ageSecondsFromText(rawText, now);
+  const relativePattern = /(gerade eben|soeben|jetzt|now|just now|(?:vor\s*)?\d{1,3}\s*(?:sek|sec|second|seconds|sekunden|min|minute|minutes|minuten|h|std|stunde|stunden|hour|hours|d|tag|tage|day|days)\b)/i;
+
+  if (relativeAge !== null && relativePattern.test(text)) {
+    return result(new Date(now.getTime() - (relativeAge * 1000)), 'relative');
+  }
+
+  let match = text.match(/(?:^|[^\d])(\d{1,2})\.(\d{1,2})\.(\d{2,4})(?:\s*(?:,|um|at)?\s*(\d{1,2})[:.](\d{2}))?/);
+
+  if (match) {
+    return result(dateFromPartsAtOffset(now, match[1], match[2], match[3], match[4], match[5], sourceOffsetHours), 'absolute');
+  }
+
+  match = text.match(/(?:^|[^\d])(\d{1,2})\.\s*([a-zäöü]+)\s+(\d{2,4})(?:\s*(?:,|um|at)?\s*(\d{1,2})[:.](\d{2}))?/i);
+
+  if (match) {
+    const month = monthNumber(match[2]);
+
+    if (month) {
+      return result(dateFromPartsAtOffset(now, match[1], month, match[3], match[4], match[5], sourceOffsetHours), 'absolute');
+    }
+  }
+
+  match = text.match(/(?:^|[^\d])(\d{4})-(\d{1,2})-(\d{1,2})(?:[t\s]+(\d{1,2}):(\d{2}))?(?![\d])/i);
+
+  if (match && !/(?:z|[+-]\d{2}:?\d{2}|gmt|utc)\s*$/i.test(text)) {
+    return result(dateFromPartsAtOffset(now, match[3], match[2], match[1], match[4], match[5], sourceOffsetHours), 'absolute');
+  }
+
+  if (/(?:z|[+-]\d{2}:?\d{2}|gmt|utc)\s*$/i.test(text)) {
+    const explicitlyZoned = Date.parse(rawText);
+
+    if (Number.isFinite(explicitlyZoned)) {
+      return result(new Date(explicitlyZoned), 'explicit-zone');
+    }
+  }
+
+  match = text.match(/(?:^|[^\d.])(?:heute|today)?\s*,?\s*(\d{1,2})[:.](\d{2})(?![.\d])/);
+
+  if (match && Number(match[1]) <= 23 && Number(match[2]) <= 59) {
+    return result(timeOnlyDateAtOffset(now, Number(match[1]), Number(match[2]), sourceOffsetHours), 'time-only');
+  }
+
+  const parsed = Date.parse(rawText);
+
+  if (Number.isFinite(parsed)) {
+    return result(new Date(parsed), 'parsed');
+  }
+
+  return relativeAge === null
+    ? null
+    : result(new Date(now.getTime() - (relativeAge * 1000)), 'legacy');
+}
+
+function formatDateInTimezone(date, timezone = '') {
+  if (!(date instanceof Date) || !Number.isFinite(date.getTime())) {
+    return null;
+  }
+
+  try {
+    return new Intl.DateTimeFormat('de-DE', {
+      timeZone: timezone || undefined,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23',
+    }).format(date);
+  } catch {
+    return date.toISOString();
+  }
+}
+
 function framesForPage(page) {
   if (!page) {
     return [];
@@ -554,6 +748,30 @@ async function scanMailList(page, options = {}) {
   const limit = Math.max(1, Math.min(200, Number(options.maxItems || options.max_items || options.limit || 50)));
   const tokenPrefix = normalizeText(options.tokenPrefix || options.token_prefix || `wf-mail-${Date.now()}`);
   const rows = [];
+  const firstFrame = framesForPage(page)[0];
+  let browserClock = null;
+
+  if (firstFrame && typeof firstFrame.evaluate === 'function') {
+    browserClock = await firstFrame.evaluate(() => ({
+      nowMs: Date.now(),
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || '',
+      offsetMinutes: -new Date().getTimezoneOffset(),
+    })).catch(() => null);
+  }
+
+  browserClock ||= {
+    nowMs: Date.now(),
+    timezone: process.env.TZ || 'Europe/Berlin',
+    offsetMinutes: -new Date().getTimezoneOffset(),
+  };
+  const sourceGmtOffsetHours = normalizeGmtOffsetHours(
+    options.mailTimeGmtOffsetHours
+      ?? options.mail_time_gmt_offset_hours
+      ?? options.sourceGmtOffsetHours
+      ?? options.source_gmt_offset_hours,
+    null,
+  );
+  const scanNow = new Date(Number(browserClock.nowMs) || Date.now());
 
   for (const [frameIndex, frame] of framesForPage(page).entries()) {
     if (!frame || typeof frame.evaluate !== 'function') {
@@ -751,13 +969,32 @@ async function scanMailList(page, options = {}) {
     const frameName = typeof frame.name === 'function' ? frame.name() : '';
 
     for (const row of frameRows) {
+      const receivedTime = mailReceivedTimeFromText(row.dateText || row.text, scanNow, {
+        sourceGmtOffsetHours,
+      });
+      const browserReceivedAt = receivedTime
+        ? formatDateInTimezone(receivedTime.date, browserClock.timezone)
+        : null;
+
       rows.push({
         ...row,
         index: rows.length,
         frameIndex,
         frameUrl,
         frameName,
-        ageSeconds: ageSecondsFromText(`${row.dateText} ${row.text}`),
+        ageSeconds: receivedTime?.ageSeconds ?? null,
+        receivedAt: receivedTime?.receivedAt ?? null,
+        received_at: receivedTime?.receivedAt ?? null,
+        receivedAtBrowser: browserReceivedAt,
+        received_at_browser: browserReceivedAt,
+        receivedAtBrowserTimezone: browserClock.timezone || null,
+        received_at_browser_timezone: browserClock.timezone || null,
+        browserGmtOffsetHours: Number(browserClock.offsetMinutes || 0) / 60,
+        browser_gmt_offset_hours: Number(browserClock.offsetMinutes || 0) / 60,
+        sourceGmtOffsetHours,
+        source_gmt_offset_hours: sourceGmtOffsetHours,
+        dateParseKind: receivedTime?.kind ?? null,
+        date_parse_kind: receivedTime?.kind ?? null,
       });
     }
   }
@@ -1169,6 +1406,7 @@ module.exports = {
   DEFAULT_ITEM_SELECTORS,
   DEFAULT_TITLE_SELECTORS,
   ageSecondsFromText,
+  mailReceivedTimeFromText,
   clickMailCandidate,
   extractValueFromText,
   mailMatches,

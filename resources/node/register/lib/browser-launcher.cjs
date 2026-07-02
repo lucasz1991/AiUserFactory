@@ -285,6 +285,7 @@ async function launchCloak(runtimeConfig, launchOptions) {
     args: buildCloakArgs(args),
     headless: headless !== false,
     humanize: runtimeConfig.cloakHumanizeEnabled === true,
+    timezone: String(runtimeConfig.timeZone || runtimeConfig.timezone || process.env.APP_TIMEZONE || process.env.TZ || 'Europe/Berlin'),
     launchOptions: puppeteerLaunchOptions,
   };
 

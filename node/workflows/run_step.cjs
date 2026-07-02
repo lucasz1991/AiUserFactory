@@ -1007,6 +1007,7 @@ async function loadBrowser() {
       browserDriver = 'puppeteer';
       activeBrowserEngine = 'connected';
       connectedToExistingBrowser = true;
+      await configureBrowserTimezone(browser);
       pushEvent('workflow-browser-active', 'Workflow-Browser ist aktiv und wird fuer diese Liste genutzt.');
 
       return browser;
@@ -1065,6 +1066,7 @@ async function loadBrowser() {
   connectedToExistingBrowser = false;
   activeBrowserEngine = launchResult.activeEngine;
   browserFallbackReason = launchResult.fallbackReason;
+  await configureBrowserTimezone(browser);
   pushEvent('browser-started', 'Browser wurde gestartet.', {
     requestedBrowserEngine,
     activeBrowserEngine,
@@ -1072,6 +1074,30 @@ async function loadBrowser() {
   });
 
   return browser;
+}
+
+async function configureBrowserTimezone(currentBrowser) {
+  if (!currentBrowser) {
+    return;
+  }
+
+  const apply = async (targetPage) => {
+    if (targetPage && typeof targetPage.emulateTimezone === 'function') {
+      await targetPage.emulateTimezone(workflowTimezone).catch(() => {});
+    }
+  };
+
+  if (typeof currentBrowser.pages === 'function') {
+    await Promise.all((await currentBrowser.pages()).map(apply));
+  }
+
+  if (typeof currentBrowser.on === 'function' && !currentBrowser.__workflowTimezoneListener) {
+    currentBrowser.__workflowTimezoneListener = true;
+    currentBrowser.on('targetcreated', async (target) => {
+      const targetPage = typeof target?.page === 'function' ? await target.page().catch(() => null) : null;
+      await apply(targetPage);
+    });
+  }
 }
 
 function patchPuppeteerPage(nextPage) {

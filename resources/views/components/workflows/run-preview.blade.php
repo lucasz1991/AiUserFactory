@@ -22,6 +22,21 @@
         return \Illuminate\Support\Facades\Storage::disk('public')->url($relativePath).'?v='.\Illuminate\Support\Facades\File::lastModified($absolutePath);
     };
 
+    $workflowDisplayTimezone = trim((string) config('app.timezone', 'Europe/Berlin')) ?: 'Europe/Berlin';
+    $formatWorkflowTimestamp = static function (mixed $value, string $format = 'd.m.Y H:i:s') use ($workflowDisplayTimezone): string {
+        if ($value === null || $value === '') {
+            return '';
+        }
+
+        try {
+            return \Illuminate\Support\Carbon::parse((string) $value)
+                ->setTimezone($workflowDisplayTimezone)
+                ->format($format).' '.$workflowDisplayTimezone;
+        } catch (\Throwable) {
+            return (string) $value;
+        }
+    };
+
     $windowStatus = static function (array $window, array $result): array {
         $capturedAt = data_get($window, 'capturedAt', data_get($window, 'liveScreenshotAt'));
         $intervalSeconds = max(1, (int) data_get($result, 'livePreviewIntervalSeconds', data_get($result, 'livePreviewPollIntervalSeconds', 3)));
@@ -573,7 +588,7 @@
                         <div class="rounded-md bg-white p-3 text-xs shadow-sm">
                             <div class="font-semibold text-slate-900">{{ data_get($event, 'stage', '-') }}</div>
                             <div class="mt-1 text-slate-600">{{ data_get($event, 'message', '-') }}</div>
-                            <div class="mt-1 text-slate-400">{{ data_get($event, 'at', '') }}</div>
+                            <div class="mt-1 text-slate-400">{{ $formatWorkflowTimestamp(data_get($event, 'at')) }}</div>
                         </div>
                     @empty
                         <div class="text-sm text-slate-500">Noch keine Ablaufdaten.</div>
@@ -678,6 +693,9 @@
                                         <div class="rounded bg-white px-2 py-1 text-[11px] text-slate-500">
                                             <span class="font-semibold text-slate-700">{{ data_get($event, 'stage', data_get($event, 'type', '-')) }}</span>
                                             <span>{{ data_get($event, 'message', data_get($event, 'text', '')) }}</span>
+                                            @if(data_get($event, 'at'))
+                                                <span class="text-slate-400">· {{ $formatWorkflowTimestamp(data_get($event, 'at')) }}</span>
+                                            @endif
                                         </div>
                                     @endforeach
                                 </div>
