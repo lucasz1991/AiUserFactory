@@ -530,7 +530,11 @@
                 return window.CSS.escape(text);
             }
 
-            return text.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\r?\n/g, ' ');
+            return Array.from(text)
+                .map((character) => /[a-zA-Z0-9_-]/.test(character)
+                    ? character
+                    : `\\${character.codePointAt(0).toString(16)} `)
+                .join('');
         },
         highlightElement(action = {}) {
             const selectors = [];
