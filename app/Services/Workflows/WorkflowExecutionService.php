@@ -4,6 +4,9 @@ namespace App\Services\Workflows;
 
 use App\Jobs\MonitorWorkflowStepRunJob;
 use App\Jobs\RunWorkflowJob;
+use App\Models\Device;
+use App\Models\NetworkJob;
+use App\Models\NetworkNode;
 use App\Models\Person;
 use App\Models\Workflow;
 use App\Models\WorkflowRun;
@@ -11,6 +14,7 @@ use App\Models\WorkflowStep;
 use App\Models\WorkflowStepRun;
 use App\Services\Mail\MailAccountRegistrationRunner;
 use App\Services\Mail\WebmailSessionRunner;
+use App\Services\ClientController\NetworkJobDispatcher;
 use App\Services\Workflows\Tasks\PersistMailAccountTask;
 use App\Services\Workflows\Tasks\PersistBrowserSessionTask;
 use App\Services\Workflows\Tasks\PersistWebmailSessionTask;
@@ -26,6 +30,7 @@ class WorkflowExecutionService
         protected MailAccountRegistrationRunner $mailRegistration,
         protected WebmailSessionRunner $webmailSession,
         protected WorkflowTaskRunner $workflowTasks,
+        protected NetworkJobDispatcher $networkJobs,
     ) {}
 
     public function start(Workflow $workflow, array $context = [], string $requestedBy = 'admin-ui'): WorkflowRun
@@ -267,7 +272,7 @@ class WorkflowExecutionService
 
         $result = $this->prepareExternalResult($stepRun, $this->readExternalResult($stepRun, $status));
 
-        if ($stepRun->external_run_type === 'workflow-task') {
+        if (in_array($stepRun->external_run_type, ['workflow-task', 'client-controller-workflow-task'], true)) {
             $this->applyWorkflowVariablesResult($stepRun->workflowRun, $result);
         }
 
@@ -325,6 +330,10 @@ class WorkflowExecutionService
 
         $hasTaskCursor = trim((string) data_get($run->context_json, 'next_task_key', '')) !== '';
 
+        if ($this->usesClientController($run) && $step->task_cards !== []) {
+            return $this->startClientControllerWorkflowTask($run, $step, $stepRun);
+        }
+
         if ($hasTaskCursor && $step->task_cards !== []) {
             return $this->startWorkflowTaskStep($run, $step, $stepRun);
         }
@@ -366,6 +375,59 @@ class WorkflowExecutionService
         ])->save();
 
         $this->scheduleMonitor($stepRun, (int) ($externalRun['livePreviewPollIntervalSeconds'] ?? $externalRun['livePreviewIntervalSeconds'] ?? 3));
+
+        return 'waiting';
+    }
+
+    protected function startClientControllerWorkflowTask(WorkflowRun $run, WorkflowStep $step, WorkflowStepRun $stepRun): string
+    {
+        $nodeId = (int) data_get($run->context_json, 'network_node_id', 0);
+        $deviceId = (int) data_get($run->context_json, 'device_id', 0);
+        $node = NetworkNode::query()->find($nodeId);
+
+        if (! $node || $node->status !== 'active') {
+            throw new \RuntimeException('Der ausgewaehlte ClientController-Node ist nicht verfuegbar.');
+        }
+
+        $device = $deviceId > 0 ? Device::query()->find($deviceId) : null;
+        $runtimeContext = $this->workflowRuntimeContext($run, $step, $stepRun);
+        $runtime = $this->workflowTasks->remoteRuntime($run, $step, $stepRun, $runtimeContext);
+        $timeoutSeconds = max(60, $this->stepTimeoutSeconds($step));
+        $networkJob = $this->networkJobs->dispatch(
+            $node,
+            'workflow_task',
+            [
+                'runtime' => $runtime,
+                'execution' => [
+                    'target' => 'node',
+                    'workflow_run_id' => $run->id,
+                    'workflow_step_run_id' => $stepRun->id,
+                    'device_uuid' => $device?->device_uuid,
+                ],
+            ],
+            $device,
+            null,
+            $run->requested_by,
+            now()->addSeconds($timeoutSeconds),
+        );
+
+        $this->clearRouteCursor($run);
+
+        $stepRun->forceFill([
+            'status' => 'waiting',
+            'started_at' => $stepRun->started_at ?: now(),
+            'external_run_type' => 'client-controller-workflow-task',
+            'external_run_id' => $networkJob->job_uuid,
+            'result_json' => [
+                'state' => 'queued',
+                'message' => 'Workflow-Task wurde an den ClientController-Node '.$node->name.' uebergeben.',
+                'networkJobUuid' => $networkJob->job_uuid,
+                'networkNodeId' => $node->id,
+                'networkNodeName' => $node->name,
+            ],
+        ])->save();
+
+        $this->scheduleMonitor($stepRun, 3);
 
         return 'waiting';
     }
@@ -1061,6 +1123,7 @@ class WorkflowExecutionService
             'mail-registration' => $this->mailRegistration->readRun($externalRunId),
             'webmail-session' => $this->webmailSession->readRun($externalRunId),
             'workflow-task' => $this->workflowTasks->readRun($externalRunId),
+            'client-controller-workflow-task' => $this->clientControllerJobStatus($externalRunId),
             default => null,
         };
     }
@@ -1076,6 +1139,7 @@ class WorkflowExecutionService
                 : $this->webmailSession->readResult($externalRunId),
             'workflow-task' => $this->workflowTasks->readResult($externalRunId)
                 ?: (is_array($status['result'] ?? null) ? $status['result'] : null),
+            'client-controller-workflow-task' => is_array($status['result'] ?? null) ? $status['result'] : null,
             default => null,
         };
 
@@ -1113,7 +1177,7 @@ class WorkflowExecutionService
     protected function prepareExternalResult(WorkflowStepRun $stepRun, array $result): array
     {
         if (
-            $stepRun->external_run_type === 'workflow-task'
+            in_array($stepRun->external_run_type, ['workflow-task', 'client-controller-workflow-task'], true)
             && (
                 trim((string) data_get($result, 'webmailSessionFilePath', '')) !== ''
                 || trim((string) data_get($result, 'encryptedSessionPayload', '')) !== ''
@@ -1123,7 +1187,7 @@ class WorkflowExecutionService
         }
 
         if (
-            $stepRun->external_run_type === 'workflow-task'
+            in_array($stepRun->external_run_type, ['workflow-task', 'client-controller-workflow-task'], true)
             && (
                 trim((string) data_get($result, 'browserSessionFilePath', '')) !== ''
                 || trim((string) data_get($result, 'encryptedBrowserSessionPayload', '')) !== ''
@@ -1137,7 +1201,7 @@ class WorkflowExecutionService
 
     protected function applyExternalResult(WorkflowStepRun $stepRun, array $result): array
     {
-        if ($stepRun->external_run_type === 'workflow-task') {
+        if (in_array($stepRun->external_run_type, ['workflow-task', 'client-controller-workflow-task'], true)) {
             $this->applyWorkflowVariablesResult($stepRun->workflowRun, $result);
             $this->applyWorkflowTaskMailAccountPersistence($stepRun->workflowRun, $result);
         }
@@ -1155,7 +1219,7 @@ class WorkflowExecutionService
         }
 
         if (
-            $stepRun->external_run_type === 'workflow-task'
+            in_array($stepRun->external_run_type, ['workflow-task', 'client-controller-workflow-task'], true)
             && (
                 $stepRun->workflowStep?->type === WorkflowStep::TYPE_MAIL_ACCOUNT_REGISTRATION
                 || (bool) data_get($result, 'account.generated', false)
@@ -1165,7 +1229,7 @@ class WorkflowExecutionService
         }
 
         if (
-            $stepRun->external_run_type === 'workflow-task'
+            in_array($stepRun->external_run_type, ['workflow-task', 'client-controller-workflow-task'], true)
             && (
                 trim((string) data_get($result, 'webmailSessionFilePath', '')) !== ''
                 || trim((string) data_get($result, 'encryptedSessionPayload', '')) !== ''
@@ -1176,7 +1240,7 @@ class WorkflowExecutionService
         }
 
         if (
-            $stepRun->external_run_type === 'workflow-task'
+            in_array($stepRun->external_run_type, ['workflow-task', 'client-controller-workflow-task'], true)
             && (
                 trim((string) data_get($result, 'browserSessionFilePath', '')) !== ''
                 || trim((string) data_get($result, 'encryptedBrowserSessionPayload', '')) !== ''
@@ -1187,7 +1251,7 @@ class WorkflowExecutionService
         }
 
         if (
-            $stepRun->external_run_type === 'workflow-task'
+            in_array($stepRun->external_run_type, ['workflow-task', 'client-controller-workflow-task'], true)
             && (
                 (bool) data_get($result, 'browserSessionDeleted', false)
                 || (bool) data_get($result, 'deletedBrowserSession', false)
@@ -1261,6 +1325,10 @@ class WorkflowExecutionService
             'mail-registration' => $this->mailRegistration->cancelRun($externalRunId, true, $message),
             'webmail-session' => $this->webmailSession->cancelRun($externalRunId, true, $message),
             'workflow-task' => $this->workflowTasks->cancelRun($externalRunId, false, $message),
+            'client-controller-workflow-task' => NetworkJob::query()
+                ->where('job_uuid', $externalRunId)
+                ->whereNotIn('status', ['success', 'failed', 'cancelled'])
+                ->update(['status' => 'cancelled', 'completed_at' => now(), 'error_message' => $message]),
             default => null,
         };
     }
@@ -1854,7 +1922,7 @@ class WorkflowExecutionService
 
     protected function scheduleMonitor(WorkflowStepRun $stepRun, int $delaySeconds = 10): void
     {
-        if (! in_array($stepRun->external_run_type, ['mail-registration', 'webmail-session', 'workflow-task'], true)) {
+        if (! in_array($stepRun->external_run_type, ['mail-registration', 'webmail-session', 'workflow-task', 'client-controller-workflow-task'], true)) {
             return;
         }
 
@@ -1867,6 +1935,41 @@ class WorkflowExecutionService
             ...$context,
             'person_id' => (int) ($context['person_id'] ?? $context['personId'] ?? 0) ?: null,
             'started_from' => (string) ($context['started_from'] ?? 'workflow-manager'),
+            'execution_target' => in_array(($context['execution_target'] ?? 'system'), ['system', 'client_controller'], true)
+                ? (string) ($context['execution_target'] ?? 'system')
+                : 'system',
+            'network_node_id' => (int) ($context['network_node_id'] ?? 0) ?: null,
+            'device_id' => (int) ($context['device_id'] ?? 0) ?: null,
+        ];
+    }
+
+    protected function usesClientController(WorkflowRun $run): bool
+    {
+        return data_get($run->context_json, 'execution_target', 'system') === 'client_controller';
+    }
+
+    protected function clientControllerJobStatus(string $jobUuid): ?array
+    {
+        $job = NetworkJob::query()->where('job_uuid', $jobUuid)->first();
+
+        if (! $job) {
+            return null;
+        }
+
+        $state = match ($job->status) {
+            'pending' => 'queued',
+            'dispatched' => 'running',
+            'success' => 'completed',
+            'failed', 'cancelled' => $job->status,
+            default => (string) $job->status,
+        };
+
+        return [
+            'runId' => $job->job_uuid,
+            'state' => $state,
+            'message' => $job->error_message ?: 'ClientController-Job: '.$job->status,
+            'result' => is_array($job->result_json) ? $job->result_json : [],
+            'networkJobUuid' => $job->job_uuid,
         ];
     }
 

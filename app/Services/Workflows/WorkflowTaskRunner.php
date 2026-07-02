@@ -20,6 +20,43 @@ class WorkflowTaskRunner
         protected MailAccountRegistrationRunner $mailSettings,
     ) {}
 
+    public function remoteRuntime(WorkflowRun $run, WorkflowStep $step, WorkflowStepRun $stepRun, array $runtimeContext = []): array
+    {
+        $settings = $this->mailSettings->settings();
+        $timezone = $this->workflowTimezone($runtimeContext);
+        $runId = (string) Str::uuid();
+
+        return [
+            'runId' => $runId,
+            'processIdentity' => $this->processIdentity($runId, 'main', $run, $step, $stepRun),
+            'workflow' => $runtimeContext,
+            'workflowRunId' => $run->id,
+            'workflowRunUuid' => $run->run_uuid,
+            'workflowStepId' => $step->id,
+            'workflowStepRunId' => $stepRun->id,
+            'workflowStepName' => $step->name,
+            'workflowStepType' => $step->type,
+            'timezone' => $timezone,
+            'timeZone' => $timezone,
+            'tasks' => $this->runtimeTasks(
+                $step,
+                trim((string) ($runtimeContext['nextTaskKey'] ?? $runtimeContext['next_task_key'] ?? '')) ?: null,
+            ),
+            'livePreviewEnabled' => true,
+            'livePreviewIntervalSeconds' => 3,
+            'livePreviewIntervalMs' => 3000,
+            'livePreviewPollIntervalSeconds' => 3,
+            'browserEngine' => $settings['browser_engine'] ?? 'cloak-with-chrome-fallback',
+            'cloakHumanizeEnabled' => (bool) ($settings['cloak_humanize_enabled'] ?? false),
+            'cloakHumanPreset' => $settings['cloak_human_preset'] ?? '',
+            'headlessEnabled' => (bool) ($settings['headless_enabled'] ?? false),
+            'navigationTimeoutMs' => ((int) ($settings['navigation_timeout_seconds'] ?? 120)) * 1000,
+            'observationTimeoutMs' => min(180000, max(30000, ((int) ($settings['observation_timeout_seconds'] ?? 60)) * 1000)),
+            'scriptName' => 'run_step.cjs',
+            'executionTarget' => 'client_controller',
+        ];
+    }
+
     public function start(WorkflowRun $run, WorkflowStep $step, WorkflowStepRun $stepRun, array $runtimeContext = []): array
     {
         $settings = $this->mailSettings->settings();

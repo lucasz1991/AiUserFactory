@@ -9,10 +9,14 @@ use App\Models\NetworkNode;
 use App\Models\NodeHeartbeat;
 use App\Models\NodeRebindLog;
 use App\Models\NodeServerBinding;
+use App\Models\WorkflowStepRun;
+use App\Jobs\MonitorWorkflowStepRunJob;
 use App\Models\Setting;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Crypt;
+use Illuminate\Support\Facades\DB;
 
 class ClientControllerApiController extends Controller
 {
@@ -106,6 +110,7 @@ class ClientControllerApiController extends Controller
         $validated = $request->validate([
             'status' => ['nullable', 'string', 'max:50'],
             'payload' => ['nullable', 'array'],
+            'capabilities' => ['nullable', 'array'],
             'public_ip' => ['nullable', 'string', 'max:64'],
             'version' => ['nullable', 'string', 'max:120'],
             'os' => ['nullable', 'string', 'max:120'],
@@ -128,6 +133,7 @@ class ClientControllerApiController extends Controller
             'os' => $validated['os'] ?? $node->os,
             'current_server_domain' => $validated['current_server_domain'] ?? $node->current_server_domain,
             'last_successful_server_domain' => $validated['last_successful_server_domain'] ?? $node->last_successful_server_domain,
+            'capabilities_json' => $validated['capabilities'] ?? $node->capabilities_json,
         ])->save();
 
         NodeServerBinding::query()
@@ -214,23 +220,29 @@ class ClientControllerApiController extends Controller
             ], 401);
         }
 
-        $jobs = NetworkJob::query()
-            ->where('network_node_id', $node->id)
-            ->where('status', 'pending')
-            ->where(function ($query): void {
-                $query->whereNull('expires_at')
-                    ->orWhere('expires_at', '>', now());
-            })
-            ->orderBy('id')
-            ->limit(20)
-            ->get();
+        $jobs = DB::transaction(function () use ($node) {
+            $jobs = NetworkJob::query()
+                ->with('device')
+                ->where('network_node_id', $node->id)
+                ->where('status', 'pending')
+                ->where(function ($query): void {
+                    $query->whereNull('expires_at')
+                        ->orWhere('expires_at', '>', now());
+                })
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->limit(1)
+                ->get();
 
-        foreach ($jobs as $job) {
-            $job->update([
-                'status' => 'dispatched',
-                'dispatched_at' => now(),
-            ]);
-        }
+            foreach ($jobs as $job) {
+                $job->update([
+                    'status' => 'dispatched',
+                    'dispatched_at' => now(),
+                ]);
+            }
+
+            return $jobs;
+        });
 
         return response()->json([
             'success' => true,
@@ -240,6 +252,8 @@ class ClientControllerApiController extends Controller
                 'payload' => $job->payload_json,
                 'signature' => $job->signature,
                 'expires_at' => optional($job->expires_at)?->toIso8601String(),
+                'device_uuid' => $job->device?->device_uuid,
+                'execution_scope' => $job->device_id ? 'device' : 'node',
             ])->values(),
         ]);
     }
@@ -274,12 +288,44 @@ class ClientControllerApiController extends Controller
             ], 404);
         }
 
+        if ($job->status === 'cancelled') {
+            return response()->json([
+                'success' => true,
+                'ignored' => true,
+                'message' => 'Job was cancelled before the node result arrived.',
+            ]);
+        }
+
+        $result = $validated['result'] ?? [];
+
+        foreach ([
+            'remoteWebmailSessionPayload' => 'encryptedSessionPayload',
+            'remoteBrowserSessionPayload' => 'encryptedBrowserSessionPayload',
+        ] as $plainKey => $encryptedKey) {
+            $plainPayload = $result[$plainKey] ?? null;
+
+            if (is_string($plainPayload) && $plainPayload !== '') {
+                $result[$encryptedKey] = Crypt::encryptString($plainPayload);
+            }
+
+            unset($result[$plainKey]);
+        }
+
         $job->update([
             'status' => $validated['status'],
-            'result_json' => $validated['result'] ?? [],
+            'result_json' => $result,
             'error_message' => $validated['error_message'] ?? null,
             'completed_at' => now(),
         ]);
+
+        $stepRun = WorkflowStepRun::query()
+            ->where('external_run_type', 'client-controller-workflow-task')
+            ->where('external_run_id', $job->job_uuid)
+            ->first();
+
+        if ($stepRun) {
+            MonitorWorkflowStepRunJob::dispatch($stepRun->id);
+        }
 
         return response()->json([
             'success' => true,

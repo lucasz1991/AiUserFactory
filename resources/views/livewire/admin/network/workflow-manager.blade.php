@@ -646,15 +646,52 @@
         <x-dialog-modal wire:model="showRunModal" maxWidth="xl">
             <x-slot name="title">Workflow testen</x-slot>
             <x-slot name="content">
-                <div>
-                    <label for="workflow-run-person" class="block text-sm font-medium text-gray-700">Person</label>
+                <div class="space-y-4">
+                    <div>
+                    <label for="workflow-run-person" class="block text-sm font-medium text-gray-700">Person / Kontext</label>
                     <select id="workflow-run-person" wire:model.defer="runPersonId" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
-                        <option value="">Haupt-Verifikationskonto aus Einstellungen</option>
+                        <option value="">System (bisheriges Haupt-Verifikationskonto)</option>
                         @foreach($persons as $person)
                             <option value="{{ $person->id }}">{{ $person->display_name }} - {{ $person->profile_key }}</option>
                         @endforeach
                     </select>
                     @error('runPersonId') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                    </div>
+
+                    <div>
+                        <label for="workflow-run-target" class="block text-sm font-medium text-gray-700">Ausfuehrung</label>
+                        <select id="workflow-run-target" wire:model.live="runExecutionTarget" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                            <option value="system">Server / System (bisheriger Ablauf)</option>
+                            <option value="client_controller">ClientController-Netzwerk</option>
+                        </select>
+                        @error('runExecutionTarget') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                    </div>
+
+                    @if($runExecutionTarget === 'client_controller')
+                        <div class="rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
+                            Browser-Workflows laufen direkt auf dem Node im lokalen CloakBrowser. Ein angeschlossenes Geraet ist nicht erforderlich.
+                        </div>
+                        <div>
+                            <label for="workflow-run-node" class="block text-sm font-medium text-gray-700">ClientController-Node</label>
+                            <select id="workflow-run-node" wire:model.live="runNetworkNodeId" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm">
+                                <option value="">Node waehlen</option>
+                                @foreach($runNetworkNodes as $node)
+                                    <option value="{{ $node->id }}">{{ $node->name }} · {{ $node->is_online ? 'online' : 'offline' }}</option>
+                                @endforeach
+                            </select>
+                            @error('runNetworkNodeId') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                        </div>
+                        <div>
+                            <label for="workflow-run-device" class="block text-sm font-medium text-gray-700">Geraet (optional)</label>
+                            <select id="workflow-run-device" wire:model.defer="runDeviceId" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm">
+                                <option value="">Direkt auf dem Node (kein Geraet)</option>
+                                @foreach($runDevices->where('network_node_id', (int) $runNetworkNodeId) as $device)
+                                    <option value="{{ $device->id }}">{{ $device->name }} · {{ $device->status }}</option>
+                                @endforeach
+                            </select>
+                            @error('runDeviceId') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                        </div>
+                    @endif
                 </div>
             </x-slot>
             <x-slot name="footer">

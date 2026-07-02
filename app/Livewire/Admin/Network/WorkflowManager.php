@@ -3,6 +3,8 @@
 namespace App\Livewire\Admin\Network;
 
 use App\Models\Person;
+use App\Models\Device;
+use App\Models\NetworkNode;
 use App\Models\Workflow;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowStep;
@@ -79,6 +81,12 @@ class WorkflowManager extends Component
     public ?int $newTaskInsertPosition = null;
 
     public string $runPersonId = '';
+
+    public string $runExecutionTarget = 'system';
+
+    public string $runNetworkNodeId = '';
+
+    public string $runDeviceId = '';
 
     public string $actionPersonFilter = '';
 
@@ -210,6 +218,8 @@ class WorkflowManager extends Component
             'quickPreviewRun' => $quickPreviewRun,
             'previewWorkflowRun' => $this->previewWorkflowRun(),
             'persons' => $persons,
+            'runNetworkNodes' => NetworkNode::query()->where('status', 'active')->orderByDesc('is_online')->orderBy('name')->get(),
+            'runDevices' => Device::query()->with('networkNode')->orderBy('name')->get(),
             'personOptions' => $catalog->personOptions($catalogPersons),
             'actions' => $actions,
             'taskDefinitions' => $taskDefinitions->values()->toArray(),
@@ -1026,12 +1036,35 @@ class WorkflowManager extends Component
 
         $validated = $this->validate([
             'runPersonId' => ['nullable', 'integer', 'exists:persons,id'],
+            'runExecutionTarget' => ['required', 'string', 'in:system,client_controller'],
+            'runNetworkNodeId' => ['nullable', 'required_if:runExecutionTarget,client_controller', 'integer', 'exists:network_nodes,id'],
+            'runDeviceId' => ['nullable', 'integer', 'exists:devices,id'],
         ]);
+
+        $nodeId = $validated['runExecutionTarget'] === 'client_controller'
+            ? (int) ($validated['runNetworkNodeId'] ?? 0)
+            : null;
+        $deviceId = $validated['runExecutionTarget'] === 'client_controller'
+            ? (int) ($validated['runDeviceId'] ?? 0) ?: null
+            : null;
+
+        if ($deviceId) {
+            $device = Device::query()->find($deviceId);
+
+            if (! $device || (int) $device->network_node_id !== $nodeId) {
+                $this->addError('runDeviceId', 'Das Geraet gehoert nicht zum ausgewaehlten Node.');
+
+                return;
+            }
+        }
 
         try {
             $run = $execution->start($workflow, [
                 'person_id' => $validated['runPersonId'] ?: null,
                 'started_from' => 'workflow-manager',
+                'execution_target' => $validated['runExecutionTarget'],
+                'network_node_id' => $nodeId,
+                'device_id' => $deviceId,
             ]);
 
             $this->showRunModal = false;
