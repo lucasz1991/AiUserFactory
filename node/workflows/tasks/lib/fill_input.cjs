@@ -3,6 +3,7 @@
 const { normalizeElementCandidates } = require('../../lib/selector.cjs');
 const {
   findFirstVisibleElement,
+  heldHoverForContext,
   matchingCachedElement,
   removeCachedElement,
 } = require('./find_visible_element.cjs');
@@ -69,8 +70,9 @@ async function elementState(handle) {
   }));
 }
 
-async function fillHandleValue(handle, value, delay = 35) {
+async function fillHandleValue(handle, value, delay = 35, options = {}) {
   const nextValue = String(value ?? '');
+  const preserveMousePosition = options.preserveMousePosition === true;
 
   await handle.evaluate((element) => {
     const dispatchInput = (inputType, data) => {
@@ -98,7 +100,10 @@ async function fillHandleValue(handle, value, delay = 35) {
     element.dispatchEvent(new Event('change', { bubbles: true }));
   }).catch(() => {});
 
-  await handle.click({ clickCount: 3 }).catch(() => {});
+  if (!preserveMousePosition) {
+    await handle.click({ clickCount: 3 }).catch(() => {});
+  }
+
   await handle.type(nextValue, { delay }).catch(async () => {
     await handle.evaluate((element, typedValue) => {
       const dispatchInput = (inputType, data) => {
@@ -168,6 +173,8 @@ async function fillFirstMatchingInput(page, selectors, value, timeoutMs = 12000,
   let matchedElementCount = 0;
   let lastError = '';
   const cachedEntry = matchingCachedElement(options.context, candidates, page);
+  const preserveMousePosition = options.preserveMousePosition === true
+    || heldHoverForContext(options.context, page) !== null;
 
   if (cachedEntry) {
     const cachedCandidate = cachedEntry.candidate || candidates[0];
@@ -182,7 +189,7 @@ async function fillFirstMatchingInput(page, selectors, value, timeoutMs = 12000,
         lastError = 'Gespeichertes Element ist nicht editierbar.';
         if (attempts.length < 30) attempts.push({ selector, frameUrl: currentFrameUrl, state, error: lastError, cachedElement: true });
       } else {
-        const enteredValue = await fillHandleValue(cachedEntry.handle, value, delay);
+        const enteredValue = await fillHandleValue(cachedEntry.handle, value, delay, { preserveMousePosition });
 
         if (String(enteredValue || '') === String(value ?? '')) {
           await removeCachedElement(options.context, cachedEntry);
@@ -190,6 +197,7 @@ async function fillFirstMatchingInput(page, selectors, value, timeoutMs = 12000,
           return {
             ok: true,
             cachedElement: true,
+            hoverPreservedDuringFill: preserveMousePosition,
             selector,
             matchedBy: cachedCandidate?.kind || 'selector',
             matchedCandidate: cachedCandidate?.value || selector,
@@ -247,11 +255,12 @@ async function fillFirstMatchingInput(page, selectors, value, timeoutMs = 12000,
         lastError = 'Gefundenes Element ist nicht editierbar.';
         if (attempts.length < 30) attempts.push({ selector, frameUrl: currentFrameUrl, state, error: lastError });
       } else {
-        const enteredValue = await fillHandleValue(handle, value, delay);
+        const enteredValue = await fillHandleValue(handle, value, delay, { preserveMousePosition });
 
         if (String(enteredValue || '') === String(value ?? '')) {
           return {
             ok: true,
+            hoverPreservedDuringFill: preserveMousePosition,
             selector,
             matchedBy: found.matchedBy,
             matchedCandidate: found.candidate.value,

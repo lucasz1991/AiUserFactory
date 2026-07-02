@@ -39,6 +39,7 @@ async function run(context = {}) {
       statusMessage: 'Input-Feld wurde gefuellt.',
       selector: fillResult.selector,
       cachedElement: fillResult.cachedElement === true,
+      hoverPreservedDuringFill: fillResult.hoverPreservedDuringFill === true,
       frameUrl: fillResult.frameUrl,
     });
   }

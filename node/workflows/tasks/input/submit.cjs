@@ -43,6 +43,9 @@ async function run(context = {}) {
         matchedCandidate: clicked.candidate.value,
         element: clicked.element,
         cachedElement: clicked.cachedElement === true,
+        clickMode: clicked.clickMode || 'mouse',
+        hoverPreservedDuringClick: clicked.hoverPreservedDuringClick === true,
+        hoverReleased: clicked.hoverReleased === true,
       });
     }
   } catch (error) {

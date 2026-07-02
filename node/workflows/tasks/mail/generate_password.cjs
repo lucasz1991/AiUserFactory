@@ -89,6 +89,7 @@ async function run(context = {}) {
     statusMessage: 'Wunschpasswort wurde eingetragen.',
     selector: fillResult.selector,
     cachedElement: fillResult.cachedElement === true,
+    hoverPreservedDuringFill: fillResult.hoverPreservedDuringFill === true,
     frameUrl: fillResult.frameUrl,
     passwordFilled: true,
     new_password: password,

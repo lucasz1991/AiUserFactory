@@ -904,6 +904,7 @@ class WorkflowTaskRunner
     protected function normalizeRuntimeTask(array $task): array
     {
         $script = match ((string) ($task['task_key'] ?? '')) {
+            'browser.hover' => 'node/workflows/tasks/browser/hover.cjs',
             'data.read_account_data' => 'node/workflows/tasks/data/read_account_data.cjs',
             'data.resolve_person' => 'node/workflows/tasks/data/resolve_person.cjs',
             'data.read_login_data' => 'node/workflows/tasks/data/read_login_data.cjs',

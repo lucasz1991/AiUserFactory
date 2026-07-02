@@ -177,6 +177,52 @@ function matchingCachedElement(context = {}, candidates = [], page = null) {
   )) || null;
 }
 
+function heldHoverForContext(context = {}, page = null) {
+  const heldHover = context && typeof context === 'object'
+    ? context.__workflowHeldHover
+    : null;
+
+  if (!heldHover || typeof heldHover !== 'object') {
+    return null;
+  }
+
+  if (
+    heldHover.browserWindow
+    && heldHover.browserWindow !== activeBrowserWindowName(context)
+  ) {
+    return null;
+  }
+
+  if (page && heldHover.page && heldHover.page !== page) {
+    return null;
+  }
+
+  return heldHover;
+}
+
+function shouldPreserveMousePosition(options = {}, page = null) {
+  return options.preserveMousePosition === true
+    || heldHoverForContext(options.context, page) !== null;
+}
+
+async function releaseHeldHover(context = {}, page = null) {
+  const heldHover = heldHoverForContext(context, page);
+
+  if (!heldHover || heldHover.releaseAfterClick === false) {
+    return false;
+  }
+
+  context.__workflowHeldHover = null;
+
+  const targetPage = page || heldHover.page || context.page || null;
+
+  if (targetPage && targetPage.mouse && typeof targetPage.mouse.move === 'function') {
+    await targetPage.mouse.move(1, 1, { steps: 1 }).catch(() => {});
+  }
+
+  return true;
+}
+
 function frameIsDetached(frame) {
   if (!frame) {
     return true;
@@ -391,6 +437,75 @@ async function clickableHandleFor(handle) {
   }
 
   return nextElement;
+}
+
+async function clickHandleWithoutMouseMove(handle) {
+  return handle.evaluate((element) => {
+    if (!element) {
+      return false;
+    }
+
+    let rect = element.getBoundingClientRect();
+
+    if (rect.width <= 0 || rect.height <= 0) {
+      return false;
+    }
+
+    const centerVisible = rect.left + (rect.width / 2) >= 0
+      && rect.top + (rect.height / 2) >= 0
+      && rect.left + (rect.width / 2) <= window.innerWidth
+      && rect.top + (rect.height / 2) <= window.innerHeight;
+
+    if (!centerVisible) {
+      element.scrollIntoView({ block: 'center', inline: 'center' });
+      rect = element.getBoundingClientRect();
+    }
+
+    const clientX = rect.left + (rect.width / 2);
+    const clientY = rect.top + (rect.height / 2);
+
+    if (clientX < 0 || clientY < 0 || clientX > window.innerWidth || clientY > window.innerHeight) {
+      return false;
+    }
+
+    const target = document.elementFromPoint(clientX, clientY) || element;
+    const eventTarget = target instanceof Element ? target : element;
+    const eventOptions = {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      view: window,
+      button: 0,
+      clientX,
+      clientY,
+      detail: 1,
+    };
+    const dispatchPointer = (type, buttons) => {
+      if (typeof PointerEvent !== 'function') {
+        return true;
+      }
+
+      return eventTarget.dispatchEvent(new PointerEvent(type, {
+        ...eventOptions,
+        pointerId: 1,
+        pointerType: 'mouse',
+        isPrimary: true,
+        buttons,
+      }));
+    };
+    const dispatchMouse = (type, buttons) => eventTarget.dispatchEvent(new MouseEvent(type, {
+      ...eventOptions,
+      buttons,
+    }));
+
+    eventTarget.focus?.({ preventScroll: true });
+    dispatchPointer('pointerdown', 1);
+    dispatchMouse('mousedown', 1);
+    dispatchPointer('pointerup', 0);
+    dispatchMouse('mouseup', 0);
+
+    return dispatchMouse('click', 0);
+  });
 }
 
 async function extendedSelectorHandle(frame, selector, cssOverride = '', options = {}) {
@@ -844,6 +959,7 @@ async function clickFirstVisibleElement(page, values, timeout = 15000, options =
   const deadline = Date.now() + normalizedTimeout;
   let lastTransientError = null;
   const cachedEntry = matchingCachedElement(options.context, candidates, page);
+  const preserveMousePosition = shouldPreserveMousePosition(options, page);
 
   if (cachedEntry) {
     let cachedClickableHandle = null;
@@ -857,19 +973,33 @@ async function clickFirstVisibleElement(page, values, timeout = 15000, options =
       cachedClickableHandle = await clickableHandleFor(cachedEntry.handle);
       const cachedSelector = cachedEntry.selector || candidateSelector(cachedCandidate);
       const snapshot = await elementSnapshot(cachedClickableHandle, cachedSelector).catch(() => ({ selector: cachedSelector }));
-      await cachedClickableHandle.click({ timeout: Math.max(1, Math.min(1000, normalizedTimeout)) });
+      if (preserveMousePosition) {
+        const dispatched = await clickHandleWithoutMouseMove(cachedClickableHandle);
+
+        if (dispatched === false) {
+          throw new Error('DOM-Klick ohne Mausbewegung konnte nicht ausgeloest werden.');
+        }
+      } else {
+        await cachedClickableHandle.click({ timeout: Math.max(1, Math.min(1000, normalizedTimeout)) });
+      }
 
       if (cachedClickableHandle !== cachedEntry.handle) {
         await cachedClickableHandle.dispose?.().catch(() => {});
       }
 
       await removeCachedElement(options.context, cachedEntry);
+      const hoverReleased = preserveMousePosition
+        ? await releaseHeldHover(options.context, page)
+        : false;
 
       return {
         cachedElement: true,
         candidate: cachedCandidate,
+        clickMode: preserveMousePosition ? 'dom-dispatch' : 'mouse',
         element: snapshot,
         frame: cachedEntry.frame,
+        hoverPreservedDuringClick: preserveMousePosition,
+        hoverReleased,
         matchedBy: cachedCandidate?.kind || cachedEntry.candidate?.kind || 'selector',
         selector: cachedSelector,
       };
@@ -902,12 +1032,26 @@ async function clickFirstVisibleElement(page, values, timeout = 15000, options =
 
     try {
       const snapshot = await elementSnapshot(clickableHandle, match.selector).catch(() => ({ selector: match.selector }));
-      await clickableHandle.click({ timeout: Math.max(1, remainingTimeout(deadline)) });
+      if (preserveMousePosition) {
+        const dispatched = await clickHandleWithoutMouseMove(clickableHandle);
+
+        if (dispatched === false) {
+          throw new Error('DOM-Klick ohne Mausbewegung konnte nicht ausgeloest werden.');
+        }
+      } else {
+        await clickableHandle.click({ timeout: Math.max(1, remainingTimeout(deadline)) });
+      }
+      const hoverReleased = preserveMousePosition
+        ? await releaseHeldHover(options.context, page)
+        : false;
 
       return {
         candidate: match.candidate,
+        clickMode: preserveMousePosition ? 'dom-dispatch' : 'mouse',
         element: snapshot,
         frame: match.frame,
+        hoverPreservedDuringClick: preserveMousePosition,
+        hoverReleased,
         matchedBy: match.matchedBy,
         selector: match.selector,
       };
@@ -1159,7 +1303,9 @@ module.exports = {
   findVisibleElement,
   findVisibleElementByText,
   framesForPage,
+  heldHoverForContext,
   matchingCachedElement,
   rememberFoundElement,
+  releaseHeldHover,
   removeCachedElement,
 };
