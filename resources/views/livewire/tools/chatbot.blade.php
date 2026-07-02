@@ -51,11 +51,13 @@
             return await component.call(method, ...parameters);
         },
         init() {
-            this.showChat = sessionStorage.getItem('workflow-copilot-open') === '1';
+            sessionStorage.removeItem('workflow-copilot-open');
+            this.showChat = false;
+            this.showImportPanel = false;
+            this.clearVoiceCaptureState();
             this.autoRead = this.readBool('workflow-copilot-auto-read', this.autoRead);
             this.speechRate = this.readNumber('workflow-copilot-speech-rate', this.speechRate);
             this.voiceSupported = Boolean(this.voiceApi());
-            this.clearVoiceCaptureState();
             this.speechSupported = Boolean(this.ttsEndpoint && window.fetch && window.Audio && window.URL);
             this.lastAssistantMessageKey = this.latestAssistantMessageKey(this.chatHistory);
             this.$watch('chatHistory', (history) => {
@@ -89,11 +91,12 @@
         },
         setOpen(open) {
             this.showChat = Boolean(open);
-            sessionStorage.setItem('workflow-copilot-open', this.showChat ? '1' : '0');
             if (this.showChat) {
+                this.clearVoiceCaptureState();
                 this.syncContext();
                 this.scrollMessages(false);
             } else {
+                this.showImportPanel = false;
                 this.stopSpeaking();
                 this.stopListening();
             }
