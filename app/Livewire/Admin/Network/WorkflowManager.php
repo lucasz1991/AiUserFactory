@@ -88,6 +88,8 @@ class WorkflowManager extends Component
 
     public string $runDeviceId = '';
 
+    public string $runWorkflowInputs = '';
+
     public string $actionPersonFilter = '';
 
     public string $actionTypeFilter = 'all';
@@ -1039,7 +1041,18 @@ class WorkflowManager extends Component
             'runExecutionTarget' => ['required', 'string', 'in:system,client_controller'],
             'runNetworkNodeId' => ['nullable', 'required_if:runExecutionTarget,client_controller', 'integer', 'exists:network_nodes,id'],
             'runDeviceId' => ['nullable', 'integer', 'exists:devices,id'],
+            'runWorkflowInputs' => ['nullable', 'json'],
         ]);
+
+        $workflowInputs = trim((string) ($validated['runWorkflowInputs'] ?? '')) === ''
+            ? []
+            : json_decode((string) $validated['runWorkflowInputs'], true);
+
+        if (! is_array($workflowInputs) || ($workflowInputs !== [] && array_is_list($workflowInputs))) {
+            $this->addError('runWorkflowInputs', 'Workflow-Eingaben muessen ein JSON-Objekt mit benannten Werten sein.');
+
+            return;
+        }
 
         $nodeId = $validated['runExecutionTarget'] === 'client_controller'
             ? (int) ($validated['runNetworkNodeId'] ?? 0)
@@ -1065,6 +1078,8 @@ class WorkflowManager extends Component
                 'execution_target' => $validated['runExecutionTarget'],
                 'network_node_id' => $nodeId,
                 'device_id' => $deviceId,
+                'workflow_variables' => $workflowInputs,
+                'workflowVariables' => $workflowInputs,
             ]);
 
             $this->showRunModal = false;
@@ -1582,6 +1597,7 @@ class WorkflowManager extends Component
                 : [])
             ->map(fn (array $field): string => preg_replace('/[^A-Za-z0-9_.-]+/', '', (string) ($field['name'] ?? '')) ?: '')
             ->filter()
+            ->push('workflow_input_variables')
             ->unique()
             ->values()
             ->all();
@@ -1685,14 +1701,27 @@ class WorkflowManager extends Component
             'description' => $workflow->description ?: 'Fuehrt den gesamten referenzierten Workflow aus, wartet auf dessen Ergebnis und nutzt danach die Erfolgs- oder Fehlerweiterleitung.',
             'form' => [
                 'browser_window' => true,
-                'browser_window_create' => true,
-                'browser_window_label' => 'Browserfenster nach Einbettung',
-                'browser_window_placeholder' => 'registrierung, webmail, child-flow',
+                'browser_window_create' => false,
+                'browser_window_label' => 'Offenes Browserfenster uebergeben',
+                'browser_window_placeholder' => 'main, registrierung oder webmail',
                 'mailbox_source' => true,
                 'mailbox_source_label' => 'Script-Bezugsperson',
                 'mailbox_source_options' => [
                     'person' => 'Bezugs-Person',
                     'verification' => 'Haupt-Verifikationskonto',
+                ],
+                'extra_fields' => [
+                    [
+                        'name' => 'workflow_input_variables',
+                        'label' => 'Zu uebergebende Variablen (JSON)',
+                        'type' => 'textarea',
+                        'rows' => 9,
+                        'span' => 'full',
+                        'format' => 'json_object',
+                        'placeholder' => "{\n  \"Mail-Inbox-Liste-Scan.subject_filter\": \"workflow_variables.subject_filter\",\n  \"Mail-Inbox-Liste-Scan.max_age_minutes\": \"workflow_variables.mail_max_age\",\n  \"custom_value\": \"literal:mein-wert\"\n}",
+                        'help' => 'Schluessel = Eingabename im eingebetteten Workflow. Wert = Variablenpfad des Eltern-Workflows; feste Werte mit literal:. browser_window wird automatisch aus dem oben gewaehlten offenen Fenster uebergeben.',
+                        'tab' => 'Eingaben',
+                    ],
                 ],
             ],
         ];
@@ -1771,6 +1800,15 @@ class WorkflowManager extends Component
             if (($field['type'] ?? 'text') === 'number' && $fieldValue !== '' && ! is_numeric($fieldValue)) {
                 $this->addError($extraProperty.'.'.$name, $fieldLabel.' muss eine Zahl sein.');
                 $valid = false;
+            }
+
+            if (($field['format'] ?? null) === 'json_object' && $fieldValue !== '') {
+                $decoded = json_decode($fieldValue, true);
+
+                if (! is_array($decoded) || ($decoded !== [] && array_is_list($decoded))) {
+                    $this->addError($extraProperty.'.'.$name, $fieldLabel.' muss ein JSON-Objekt sein.');
+                    $valid = false;
+                }
             }
         }
 

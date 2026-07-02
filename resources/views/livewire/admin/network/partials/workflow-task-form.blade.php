@@ -78,7 +78,21 @@
         $name = trim((string) ($field['name'] ?? ''));
 
         if (str_starts_with($catalogKey, 'mail.')) {
-            if (in_array($name, ['subject_selector', 'subject_filter', 'title_selector', 'title_filter'], true)) {
+            if ($catalogKey === 'mail.list_action_loop') {
+                if (in_array($name, ['input_array_name', 'open_selector', 'open_wait_ms'], true)) {
+                    return 'Quelle & Oeffnen';
+                }
+
+                if (in_array($name, ['confirm_selector', 'action_steps', 'return_selector'], true)) {
+                    return 'Aktionen';
+                }
+
+                if (in_array($name, ['action_wait_ms', 'action_timeout_ms', 'max_items', 'continue_on_error'], true)) {
+                    return 'Laufzeit';
+                }
+            }
+
+            if (in_array($name, ['subject_selector', 'subject_filter', 'title_selector', 'title_filter', 'mail_ids'], true)) {
                 return 'Filter';
             }
 
@@ -113,9 +127,12 @@
     if (str_starts_with($catalogKey, 'mail.')) {
         $preferredMailTabs = [
             'Quelle & Suche',
+            'Quelle & Oeffnen',
             'Filter',
             'Datum & Warten',
             'Oeffnen',
+            'Aktionen',
+            'Laufzeit',
             'Wert ermitteln',
             'Ergebnis',
         ];
@@ -133,6 +150,7 @@
     $payloadTabLabel = 'Daten';
     $taskSettingsTabIcons = [
         'Quelle & Suche' => 'fad fa-database',
+        'Quelle & Oeffnen' => 'fad fa-envelope-open',
         'Filter' => 'fad fa-filter',
         'Datum & Warten' => 'fad fa-clock',
         'Oeffnen' => 'fad fa-envelope-open',
@@ -145,6 +163,8 @@
         'Daten' => 'fad fa-code',
         'Session' => 'fad fa-cookie',
         'Loeschen' => 'fad fa-trash-can',
+        'Aktionen' => 'fad fa-list-check',
+        'Bedingung' => 'fad fa-code-branch',
     ];
 
     if ($form['selector'] || $form['value'] || $form['url']) {

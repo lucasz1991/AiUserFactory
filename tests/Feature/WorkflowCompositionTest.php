@@ -424,6 +424,34 @@ class WorkflowCompositionTest extends TestCase
         $this->assertSame('child-session', $boundary['embedded_workflow_browser_window']);
     }
 
+    public function test_embedded_workflow_receives_configured_variables_and_open_browser_window(): void
+    {
+        $parent = $this->workflow('parent-inputs');
+        $child = $this->workflow('child-inputs');
+        $this->step($child, 'Validate child inputs', [$this->waitTask('child-input')]);
+
+        $workflowTask = $this->workflowTask($child, 'child-with-inputs');
+        $workflowTask['browser_window'] = 'webmail';
+        $workflowTask['browser_window_name'] = 'webmail';
+        $workflowTask['workflow_input_variables'] = json_encode([
+            'Mail-Inbox-Liste-Scan.subject_filter' => 'workflow_variables.parent_subject_filter',
+            'fixed_value' => 'literal:test-value',
+        ], JSON_THROW_ON_ERROR);
+        $parentStep = $this->step($parent, 'Parent input list', [$workflowTask]);
+
+        $tasks = $this->runtimeTasks($parentStep);
+        $childTask = collect($tasks)->firstWhere('runner', 'node');
+        $boundary = collect($tasks)->firstWhere('runner', 'workflow-boundary');
+
+        $this->assertSame(
+            'workflow_variables.parent_subject_filter',
+            $childTask['embedded_workflow_inputs']['Mail-Inbox-Liste-Scan.subject_filter'],
+        );
+        $this->assertSame('literal:test-value', $childTask['embedded_workflow_inputs']['fixed_value']);
+        $this->assertSame(['literal' => 'webmail'], $childTask['embedded_workflow_inputs']['browser_window']);
+        $this->assertSame($childTask['embedded_workflow_inputs'], $boundary['embedded_workflow_inputs']);
+    }
+
     public function test_embedded_workflow_internal_routes_are_remapped_to_runtime_tasks(): void
     {
         $parent = $this->workflow('parent-internal-routes');

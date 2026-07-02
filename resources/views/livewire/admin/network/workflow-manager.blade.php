@@ -692,6 +692,13 @@
                             @error('runDeviceId') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
                         </div>
                     @endif
+
+                    <div>
+                        <label for="workflow-run-inputs" class="block text-sm font-medium text-gray-700">Workflow-Eingaben (JSON)</label>
+                        <textarea id="workflow-run-inputs" rows="7" wire:model.defer="runWorkflowInputs" placeholder='{"browser_window":"main","Mail-Inbox-Liste-Scan.subject_filter":["Rechnung"],"Mail-Inbox-Liste-Scan.max_age_minutes":30,"Mail-Inbox-Liste-Scan.mail_ids":[]}' class="mt-1 block w-full rounded-md border border-gray-300 p-2 font-mono text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"></textarea>
+                        <p class="mt-1 text-xs text-gray-500">Diese Werte werden vom Task „Workflow-Eingaben pruefen“ gelesen und koennen folgende Tasks ueberschreiben.</p>
+                        @error('runWorkflowInputs') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                    </div>
                 </div>
             </x-slot>
             <x-slot name="footer">

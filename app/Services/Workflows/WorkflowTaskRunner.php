@@ -435,6 +435,7 @@ class WorkflowTaskRunner
         ?string $inheritedMailboxSource = null,
         ?string $embeddedWorkflowFrameKey = null,
         ?string $embeddedBrowserWindowName = null,
+        array $embeddedWorkflowInputs = [],
         array $embeddedRouteMap = [],
         ?string $embeddedBoundaryTaskKey = null,
         ?string $sourceStepActionKey = null,
@@ -461,6 +462,10 @@ class WorkflowTaskRunner
                     $runtimeTask['browser_window'] = $browserWindow;
                     $runtimeTask['browser_window_name'] = $browserWindow;
                     $runtimeTask['embedded_workflow_browser_window'] = $embeddedBrowserWindowName;
+                }
+
+                if ($embeddedWorkflowInputs !== []) {
+                    $runtimeTask['embedded_workflow_inputs'] = $embeddedWorkflowInputs;
                 }
 
                 if ($keyPrefix !== '') {
@@ -520,6 +525,11 @@ class WorkflowTaskRunner
                 $task,
                 $embeddedBrowserWindowName,
                 $workflow,
+            );
+            $workflowInputs = array_replace(
+                $embeddedWorkflowInputs,
+                $this->embeddedWorkflowInputs($task),
+                ['browser_window' => ['literal' => $workflowBrowserWindow]],
             );
 
             $steps = $workflow->steps->where('is_enabled', true)->values();
@@ -605,6 +615,7 @@ class WorkflowTaskRunner
                     $workflowMailboxSource,
                     $workflowFrameKey,
                     $workflowBrowserWindow,
+                    $workflowInputs,
                     $workflowRouteMap,
                     $boundaryTaskKey,
                     $nestedGroup['action_key'],
@@ -630,6 +641,7 @@ class WorkflowTaskRunner
                 'embedded_workflow_name' => $workflow->name,
                 'embedded_workflow_frame_key' => $workflowFrameKey,
                 'embedded_workflow_browser_window' => $workflowBrowserWindow,
+                'embedded_workflow_inputs' => $workflowInputs,
             ];
 
             if ($embeddedWorkflowFrameKey !== null) {
@@ -807,6 +819,57 @@ class WorkflowTaskRunner
         }
 
         return $this->normalizeBrowserWindowName($embeddedBrowserWindowName.'-'.$taskBrowserWindow);
+    }
+
+    protected function embeddedWorkflowInputs(array $task): array
+    {
+        $configured = $task['workflow_input_variables']
+            ?? $task['workflowInputVariables']
+            ?? $task['embedded_workflow_inputs']
+            ?? $task['embeddedWorkflowInputs']
+            ?? [];
+
+        if (is_string($configured)) {
+            $raw = trim($configured);
+
+            if ($raw === '') {
+                return [];
+            }
+
+            $configured = json_decode($raw, true);
+
+            if (! is_array($configured)) {
+                throw new \RuntimeException('Die Variablen-Zuordnung des eingebetteten Workflows ist kein gueltiges JSON-Objekt.');
+            }
+        }
+
+        if (! is_array($configured)) {
+            return [];
+        }
+
+        if ($configured !== [] && array_is_list($configured)) {
+            $mapped = [];
+
+            foreach ($configured as $definition) {
+                if (! is_array($definition)) {
+                    continue;
+                }
+
+                $name = trim((string) ($definition['name'] ?? $definition['key'] ?? ''));
+
+                if ($name === '') {
+                    continue;
+                }
+
+                $mapped[$name] = array_key_exists('source', $definition)
+                    ? ['source' => $definition['source'], 'default' => $definition['default'] ?? null]
+                    : ['literal' => $definition['value'] ?? $definition['literal'] ?? null];
+            }
+
+            return $mapped;
+        }
+
+        return $configured;
     }
 
     protected function embeddedWorkflowBrowserWindowName(array $task, ?string $parentBrowserWindowName, Workflow $workflow): string

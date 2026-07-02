@@ -559,8 +559,117 @@ function normalizedTaskReference(value = '') {
     .replace(/^-+|-+$/g, '');
 }
 
+function embeddedLiteralValue(value) {
+  if (typeof value !== 'string') {
+    return value;
+  }
+
+  const normalized = value.trim();
+
+  if (normalized === '') {
+    return '';
+  }
+
+  try {
+    return JSON.parse(normalized);
+  } catch {
+    return normalized;
+  }
+}
+
+function resolveEmbeddedWorkflowInputs(task = {}, context = {}) {
+  const definitions = task.embedded_workflow_inputs || task.embeddedWorkflowInputs || {};
+
+  if (!definitions || typeof definitions !== 'object' || Array.isArray(definitions)) {
+    return {};
+  }
+
+  const resolved = {};
+
+  for (const [name, definition] of Object.entries(definitions)) {
+    const target = String(name || '').trim();
+
+    if (target === '') {
+      continue;
+    }
+
+    let value;
+
+    if (definition && typeof definition === 'object' && !Array.isArray(definition)) {
+      if (Object.prototype.hasOwnProperty.call(definition, 'literal')) {
+        value = definition.literal;
+      } else if (Object.prototype.hasOwnProperty.call(definition, 'source')) {
+        value = resolveString(definition.source, context);
+
+        if ((value === undefined || value === null || value === '') && Object.prototype.hasOwnProperty.call(definition, 'default')) {
+          value = definition.default;
+        }
+      } else if (Object.prototype.hasOwnProperty.call(definition, 'value')) {
+        value = definition.value;
+      } else {
+        value = definition;
+      }
+    } else if (typeof definition === 'string' && definition.trim().startsWith('literal:')) {
+      value = embeddedLiteralValue(definition.trim().slice('literal:'.length));
+    } else if (typeof definition === 'string') {
+      value = resolveString(definition, context);
+    } else {
+      value = definition;
+    }
+
+    if (value !== undefined) {
+      resolved[target] = value;
+    }
+  }
+
+  return resolved;
+}
+
+function applyEmbeddedWorkflowInputs(task = {}, context = {}) {
+  const inheritedWorkflowVariables = {
+    ...(context.workflow?.workflow_variables && typeof context.workflow.workflow_variables === 'object' ? context.workflow.workflow_variables : {}),
+    ...(context.workflow?.workflowVariables && typeof context.workflow.workflowVariables === 'object' ? context.workflow.workflowVariables : {}),
+    ...(context.workflow_variables || {}),
+    ...(context.workflowVariables || {}),
+  };
+
+  context.workflow_variables = inheritedWorkflowVariables;
+  context.workflowVariables = inheritedWorkflowVariables;
+
+  const values = resolveEmbeddedWorkflowInputs(task, context);
+
+  if (Object.keys(values).length === 0) {
+    return values;
+  }
+
+  const workflowVariables = {
+    ...inheritedWorkflowVariables,
+    ...values,
+  };
+
+  context.workflow_variables = workflowVariables;
+  context.workflowVariables = workflowVariables;
+
+  for (const [name, value] of Object.entries(values)) {
+    if (!name.includes('.')) {
+      context[name] = value;
+    }
+  }
+
+  return values;
+}
+
+function normalizedTaskReferenceAliases(value = '') {
+  const normalized = normalizedTaskReference(value);
+
+  return new Set([
+    normalized,
+    normalized.replace(/-liste-/g, '-list-').replace(/-scannen$/g, '-scan'),
+  ].filter(Boolean));
+}
+
 function taskMatchesOverride(task = {}, override = {}) {
-  const expected = normalizedTaskReference(
+  const expected = normalizedTaskReferenceAliases(
     override.matchNormalized
     || override.match
     || override.task
@@ -569,7 +678,7 @@ function taskMatchesOverride(task = {}, override = {}) {
     || '',
   );
 
-  if (expected === '') {
+  if (expected.size === 0) {
     return false;
   }
 
@@ -578,7 +687,11 @@ function taskMatchesOverride(task = {}, override = {}) {
     task.key,
     task.task_key,
     task.name,
-  ].some((value) => normalizedTaskReference(value) === expected);
+  ].some((value) => {
+    const candidateAliases = normalizedTaskReferenceAliases(value);
+
+    return Array.from(candidateAliases).some((candidate) => expected.has(candidate));
+  });
 }
 
 function cleanOverrideFieldName(value = '') {
@@ -1648,6 +1761,7 @@ async function run() {
   let requestedRouteMessage = null;
   let routeTransitions = 0;
   const routeAttemptCounts = new Map();
+  const appliedEmbeddedInputFrames = new Set();
   const preserveBrowserForFailureRoute = startedFromFailureRoute();
 
   while (taskIndex < runtimeTasks.length) {
@@ -1669,6 +1783,25 @@ async function run() {
     let result;
 
     try {
+      const embeddedInputFrame = String(task.embedded_workflow_frame_key || '').trim();
+
+      if (
+        task.runner !== 'workflow-boundary'
+        && embeddedInputFrame !== ''
+        && !appliedEmbeddedInputFrames.has(embeddedInputFrame)
+      ) {
+        const embeddedInputs = applyEmbeddedWorkflowInputs(task, context);
+
+        appliedEmbeddedInputFrames.add(embeddedInputFrame);
+
+        if (Object.keys(embeddedInputs).length > 0) {
+          pushEvent('embedded-workflow-inputs-applied', 'Eingabewerte wurden an den eingebetteten Workflow uebergeben.', {
+            workflowFrameKey: embeddedInputFrame,
+            inputNames: Object.keys(embeddedInputs),
+          });
+        }
+      }
+
       if (task.runner === 'workflow-boundary') {
         const frameKey = String(task.embedded_workflow_frame_key || '').trim();
         const workflowResult = embeddedWorkflowResults.get(frameKey) || {

@@ -67,6 +67,7 @@ async function run(context = {}) {
   ], 0)));
   const subjectFilters = stringListFrom(optionString(options, input, ['subject_filter', 'subjectFilter', 'subject_must_contain', 'subjectMustContain'], ''), []);
   const titleFilters = stringListFrom(optionString(options, input, ['title_filter', 'titleFilter', 'title_must_contain', 'titleMustContain'], ''), []);
+  const mailIds = stringListFrom(optionString(options, input, ['mail_ids', 'mailIds', 'message_ids', 'messageIds'], ''), []);
 
   if (!page || (typeof page.frames !== 'function' && typeof page.evaluate !== 'function')) {
     return { ok: false, status: 'failed', statusMessage: 'Kein Page-Handle fuer den Mail-Inbox-Scan vorhanden.' };
@@ -82,6 +83,17 @@ async function run(context = {}) {
     });
 
     return candidates.filter((candidate) => {
+      if (mailIds.length > 0) {
+        const candidateIds = [candidate.mailId, candidate.mail_id, candidate.token, candidate.index]
+          .map((value) => normalizeText(value).toLowerCase())
+          .filter(Boolean);
+        const idMatches = mailIds.some((mailId) => candidateIds.includes(normalizeText(mailId).toLowerCase()));
+
+        if (!idMatches) {
+          return false;
+        }
+      }
+
       if (!maximumAgeSeconds) {
         return filterMatches(candidate, subjectFilters, titleFilters);
       }
@@ -143,6 +155,8 @@ async function run(context = {}) {
     subject_filters: subjectFilters,
     titleFilters,
     title_filters: titleFilters,
+    mailIds,
+    mail_ids: mailIds,
     waitForNewMailSeconds,
     wait_for_new_mail_seconds: waitForNewMailSeconds,
     mailTimeGmtOffsetHours,

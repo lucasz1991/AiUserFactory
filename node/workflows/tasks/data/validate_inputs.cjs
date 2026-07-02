@@ -100,7 +100,11 @@ function parseJson(value) {
   try {
     return JSON.parse(raw);
   } catch {
-    return null;
+    try {
+      return JSON.parse(raw.replace(/,\s*([}\]])/g, '$1'));
+    } catch {
+      return null;
+    }
   }
 }
 
@@ -434,7 +438,7 @@ function outputGroupName(input = {}) {
 function targetFromDefinition(definition = {}) {
   if (definition.targetTask && definition.inputId) {
     return {
-      field: outputVariableName(definition.inputId),
+      field: normalizeOverrideField(definition.inputId),
       task: text(definition.targetTask),
     };
   }
@@ -447,9 +451,23 @@ function targetFromDefinition(definition = {}) {
   }
 
   return {
-    field: outputVariableName(name.slice(dotIndex + 1)),
+    field: normalizeOverrideField(name.slice(dotIndex + 1)),
     task: text(name.slice(0, dotIndex)),
   };
+}
+
+function normalizeOverrideField(value = '') {
+  const field = outputVariableName(value);
+  const aliases = {
+    titel_filter: 'title_filter',
+    titelFilter: 'title_filter',
+    mailIds: 'mail_ids',
+    maxAgeMinutes: 'max_age_minutes',
+    subjectFilter: 'subject_filter',
+    titleFilter: 'title_filter',
+  };
+
+  return aliases[field] || field;
 }
 
 function addTaskOverride(overrides, definition, value) {
@@ -459,7 +477,7 @@ function addTaskOverride(overrides, definition, value) {
     return null;
   }
 
-  const key = `${normalizeKey(target.task)}.${target.field}`;
+  const key = normalizeKey(target.task);
   const existing = overrides.find((override) => override.key === key);
 
   if (existing) {

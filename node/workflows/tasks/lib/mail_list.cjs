@@ -907,6 +907,17 @@ async function scanMailList(page, options = {}) {
             const sender = senderMatch.text;
             const dateText = dateMatch.text;
             const preview = previewMatch.text;
+            const identityElement = [
+              element,
+              ...deepQueryAll('[data-message-id],[data-mail-id],[data-id],[message-id],a[href]', element),
+            ].find((candidate) => (
+              candidate.getAttribute?.('data-message-id')
+              || candidate.getAttribute?.('data-mail-id')
+              || candidate.getAttribute?.('data-id')
+              || candidate.getAttribute?.('message-id')
+              || candidate.id
+              || candidate.getAttribute?.('href')
+            )) || element;
             const key = `${Math.round(rect.top)}:${Math.round(rect.left)}:${rawText.slice(0, 160)}`;
 
             if (seen.has(key)) {
@@ -927,6 +938,15 @@ async function scanMailList(page, options = {}) {
               token,
               selector,
               selectorIndex,
+              mailId: normalize(
+                identityElement.getAttribute('data-message-id')
+                || identityElement.getAttribute('data-mail-id')
+                || identityElement.getAttribute('data-id')
+                || identityElement.getAttribute('message-id')
+                || identityElement.id
+                || identityElement.getAttribute('href')
+                || ''
+              ),
               subject,
               title,
               sender,
@@ -978,6 +998,7 @@ async function scanMailList(page, options = {}) {
 
       rows.push({
         ...row,
+        mail_id: row.mailId || '',
         index: rows.length,
         frameIndex,
         frameUrl,
