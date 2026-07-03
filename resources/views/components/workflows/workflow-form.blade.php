@@ -5,6 +5,7 @@
     'descriptionModel',
     'activeModel' => null,
     'lockModel' => null,
+    'developmentModel' => null,
     'disabled' => false,
     'lockDisabled' => false,
     'lockHelp' => null,
@@ -43,6 +44,20 @@
         <label class="flex items-center gap-3 rounded-md border border-gray-200 bg-gray-50 p-3 text-sm font-medium text-gray-700">
             <input type="checkbox" wire:model.defer="{{ $activeModel }}" @disabled($disabled) class="rounded border-gray-300 text-slate-900 shadow-sm focus:ring-slate-900 disabled:cursor-not-allowed">
             Aktiv
+        </label>
+    @endif
+
+    @if($developmentModel)
+        <label class="flex items-center justify-between gap-4 rounded-md border border-cyan-200 bg-cyan-50 p-3 text-sm font-medium text-cyan-950">
+            <span>
+                Development
+                <span class="mt-1 block text-xs font-normal text-cyan-800">Speichert vor und nach jeder Task-Karte DOM-Daten und behaelt alle Debug-Artefakte.</span>
+            </span>
+            <span class="relative inline-flex h-6 w-11 shrink-0 items-center">
+                <input type="checkbox" role="switch" wire:model.defer="{{ $developmentModel }}" @disabled($disabled) class="peer sr-only">
+                <span class="h-6 w-11 rounded-full bg-slate-300 transition peer-checked:bg-cyan-600 peer-disabled:cursor-not-allowed peer-disabled:opacity-50"></span>
+                <span class="absolute left-1 h-4 w-4 rounded-full bg-white shadow transition peer-checked:translate-x-5"></span>
+            </span>
         </label>
     @endif
 

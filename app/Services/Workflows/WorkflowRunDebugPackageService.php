@@ -80,7 +80,9 @@ class WorkflowRunDebugPackageService
                 'database workflow run snapshot',
             );
 
-            foreach ($this->externalPayloads($run) as $entry) {
+            $externalPayloads = $this->externalPayloads($run);
+
+            foreach ($externalPayloads as $entry) {
                 $this->addDebugString(
                     $zip,
                     $manifest,
@@ -91,7 +93,7 @@ class WorkflowRunDebugPackageService
                 );
             }
 
-            foreach ($this->fileCandidates($run, $runPayload) as $candidate) {
+            foreach ($this->fileCandidates($run, $runPayload, $externalPayloads) as $candidate) {
                 $realPath = realpath($candidate['path']) ?: $candidate['path'];
 
                 if (isset($addedFileSources[$realPath])) {
@@ -267,23 +269,33 @@ class WorkflowRunDebugPackageService
         return $payloads;
     }
 
-    protected function fileCandidates(WorkflowRun $run, array $payload): array
+    protected function fileCandidates(WorkflowRun $run, array $payload, array $externalPayloads = []): array
     {
         $candidates = [];
+        $payloads = [$payload];
 
-        foreach ($this->fileReferences($payload) as $reference) {
-            $path = $this->resolveFileReference($reference['value']);
-
-            if ($path === null) {
-                continue;
+        foreach ($externalPayloads as $entry) {
+            if (is_array($entry['payload'] ?? null)) {
+                $payloads[] = $entry['payload'];
             }
+        }
 
-            $basename = basename((string) parse_url($reference['value'], PHP_URL_PATH)) ?: basename($path);
-            $candidates[] = [
-                'path' => $path,
-                'name' => 'dom/referenced/'.$this->safeSegment($reference['path']).'-'.$basename,
-                'source' => 'payload '.$reference['path'],
-            ];
+        foreach ($payloads as $payloadIndex => $candidatePayload) {
+            foreach ($this->fileReferences($candidatePayload) as $reference) {
+                $path = $this->resolveFileReference($reference['value']);
+
+                if ($path === null) {
+                    continue;
+                }
+
+                $basename = basename((string) parse_url($reference['value'], PHP_URL_PATH)) ?: basename($path);
+                $folder = $payloadIndex === 0 ? 'dom/referenced' : 'external-runs/referenced';
+                $candidates[] = [
+                    'path' => $path,
+                    'name' => $folder.'/'.$this->safeSegment($reference['path']).'-'.$basename,
+                    'source' => 'payload '.$reference['path'],
+                ];
+            }
         }
 
         foreach ($run->artifacts as $artifact) {
@@ -302,6 +314,7 @@ class WorkflowRunDebugPackageService
                 'step',
                 $artifact->step_position ?: $artifact->workflow_step_run_id ?: $artifact->workflow_step_id ?: 'run',
                 $artifact->step_action_key ?: 'workflow',
+                $artifact->task_card_key ?: null,
                 $artifact->phase ?: 'artifact',
                 $artifact->artifact_type ?: 'file',
                 $artifact->browser_window ?: 'main',
@@ -333,6 +346,19 @@ class WorkflowRunDebugPackageService
                         'source' => 'public artifacts '.$stepRun->external_run_type.' '.$stepRun->external_run_id,
                     ];
                 }
+            }
+        }
+
+        $privateDebugDirectory = storage_path('app/workflow-runs/'.$run->run_uuid.'/debug-artifacts');
+
+        if (is_dir($privateDebugDirectory)) {
+            foreach (File::allFiles($privateDebugDirectory) as $file) {
+                $relativePath = str_replace('\\', '/', $file->getRelativePathname());
+                $candidates[] = [
+                    'path' => $file->getPathname(),
+                    'name' => 'debug-artifacts/private/'.$relativePath,
+                    'source' => 'private workflow debug artifacts',
+                ];
             }
         }
 
@@ -375,8 +401,10 @@ class WorkflowRunDebugPackageService
 
         return str_contains($normalizedKey, 'debugdom')
             || (str_contains($normalizedKey, 'dom') && (str_contains($normalizedKey, 'path') || str_contains($normalizedKey, 'url')))
+            || ($normalizedKey === 'storagepath' && (str_contains($normalizedValue, 'debug-artifacts') || str_contains($normalizedValue, 'workflow-runs/')))
             || str_contains($normalizedValue, 'debug-dom')
             || str_contains($normalizedValue, 'debug_dom')
+            || str_contains($normalizedValue, 'debug-artifacts')
             || str_contains($normalizedValue, 'dom.json');
     }
 
@@ -398,6 +426,10 @@ class WorkflowRunDebugPackageService
 
         if (str_starts_with($path, storage_path())) {
             return $path;
+        }
+
+        if (str_starts_with(ltrim($path, '/'), 'workflow-runs/')) {
+            return storage_path('app/'.ltrim($path, '/'));
         }
 
         if (str_contains($path, '/storage/')) {
@@ -637,7 +669,7 @@ class WorkflowRunDebugPackageService
             'Contents:',
             '- workflow-export/workflows.csv: importable workflow CSV export.',
             '- run/workflow-run-'.$run->id.'.json: sanitized run, context, step runs and task results.',
-            '- debug-artifacts/*: private Dev-Debug DOM snapshots and screenshots captured by the workflow runtime.',
+            '- debug-artifacts/*: private Dev-Debug DOM snapshots, manifests and screenshots captured by the workflow runtime, including embedded workflow tasks.',
             '- external-runs/*/status.json and result.json: sanitized runner snapshots where available.',
             '- dom/* and external-runs/*/artifacts/*: legacy DOM snapshots and live screenshots found for the test.',
             '',

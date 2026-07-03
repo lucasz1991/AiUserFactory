@@ -48,6 +48,7 @@ class WorkflowDebugArtifactService
                     'phase' => $phase,
                     'artifact_type' => $type,
                     'browser_window' => $browserWindow,
+                    'task_card_key' => $this->stringOrNull($artifact['task_card_key'] ?? $artifact['taskCardKey'] ?? null),
                     'storage_path' => $storagePath !== '' ? $storagePath : null,
                 ],
                 [
@@ -145,6 +146,13 @@ class WorkflowDebugArtifactService
             'ui_state',
             'selectorSuggestions',
             'selector_suggestions',
+            'task_index',
+            'task_type',
+            'task_title',
+            'embedded_workflow_id',
+            'embedded_workflow_name',
+            'embedded_workflow_frame_key',
+            'parent_task_key',
             'storage_path',
             'storagePath',
         ] as $key) {

@@ -637,6 +637,7 @@
                     description-model="workflowDescription"
                     active-model="workflowActive"
                     lock-model="workflowLocked"
+                    development-model="workflowDevelopment"
                     lock-help="Gesperrte Workflows bleiben fuer Admins bearbeitbar. Der Sperrstatus wird weiterhin als Warnung angezeigt."
                 />
             </x-slot>

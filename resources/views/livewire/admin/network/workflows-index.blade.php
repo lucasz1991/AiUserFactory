@@ -221,6 +221,7 @@
                 group-model="newWorkflowGroup"
                 subcategory-model="newWorkflowSubcategory"
                 description-model="newWorkflowDescription"
+                development-model="newWorkflowDevelopment"
             />
         </x-slot>
         <x-slot name="footer">
@@ -239,6 +240,7 @@
                 description-model="editingWorkflowDescription"
                 active-model="editingWorkflowActive"
                 lock-model="editingWorkflowLocked"
+                development-model="editingWorkflowDevelopment"
                 :disabled="$editingWorkflowEffectiveLocked"
                 :lock-disabled="$editingWorkflowIncluded"
                 :lock-help="$editingWorkflowIncluded ? 'Automatisch gesperrt, weil dieser Workflow in einem anderen Workflow enthalten ist.' : ($editingWorkflowEffectiveLocked ? 'Haken entfernen und speichern, um den Workflow zu entsperren.' : 'Gesperrte Workflows bleiben fuer Admins im Manager bearbeitbar und werden dort mit einer Warnung markiert.')"

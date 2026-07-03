@@ -10,7 +10,14 @@ const clickableElementSelector = 'a,button,[role="button"],input[type="button"],
 const elementCacheLimit = 20;
 
 function normalizeText(value) {
-  return String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  return String(value || '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[ßẞ]/g, 'ss')
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
 }
 
 function normalizeSelectorCacheValue(value) {
@@ -516,7 +523,14 @@ async function extendedSelectorHandle(frame, selector, cssOverride = '', options
   }
 
   const handle = await frame.evaluateHandle((css, descendantCss, text, exact, editableOnly) => {
-    const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const normalize = (value) => String(value || '')
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[ßẞ]/g, 'ss')
+      .replace(/[\u200B-\u200D\uFEFF]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
     const expected = normalize(text);
     const deepQueryAll = (root, selector) => {
       const results = [];
@@ -543,13 +557,30 @@ async function extendedSelectorHandle(frame, selector, cssOverride = '', options
       return Array.from(new Set(results));
     };
     const visible = (element) => {
+      if (element.closest?.('[hidden],[aria-hidden="true"],[inert]')) {
+        return false;
+      }
+
+      if (typeof element.checkVisibility === 'function') {
+        try {
+          if (!element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) {
+            return false;
+          }
+        } catch {
+          if (!element.checkVisibility()) {
+            return false;
+          }
+        }
+      }
+
       const rect = element.getBoundingClientRect();
       const style = window.getComputedStyle(element);
 
       return rect.width > 0
         && rect.height > 0
         && style.visibility !== 'hidden'
-        && style.display !== 'none';
+        && style.display !== 'none'
+        && style.opacity !== '0';
     };
     const editable = (element) => {
       const tag = String(element.tagName || '').toLowerCase();
@@ -630,7 +661,14 @@ async function textElementHandle(frame, text, options = {}) {
   const selector = options.selector || 'a,button,[role=button],input[type=button],input[type=submit],label,span,div';
   const exact = options.exact === true;
   const handle = await frame.evaluateHandle((targetSelector, needle, mustMatchExactly, editableOnly) => {
-    const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const normalize = (value) => String(value || '')
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[ßẞ]/g, 'ss')
+      .replace(/[\u200B-\u200D\uFEFF]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
     const deepQueryAll = (root, selector) => {
       const results = [];
       const visit = (node) => {
@@ -656,6 +694,22 @@ async function textElementHandle(frame, text, options = {}) {
       return Array.from(new Set(results));
     };
     const visible = (element) => {
+      if (element.closest?.('[hidden],[aria-hidden="true"],[inert]')) {
+        return false;
+      }
+
+      if (typeof element.checkVisibility === 'function') {
+        try {
+          if (!element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) {
+            return false;
+          }
+        } catch {
+          if (!element.checkVisibility()) {
+            return false;
+          }
+        }
+      }
+
       const rect = element.getBoundingClientRect();
       const style = window.getComputedStyle(element);
 
@@ -740,13 +794,30 @@ async function deepCssSelectorHandle(frame, selector, options = {}) {
       return Array.from(new Set(results));
     };
     const visible = (element) => {
+      if (element.closest?.('[hidden],[aria-hidden="true"],[inert]')) {
+        return false;
+      }
+
+      if (typeof element.checkVisibility === 'function') {
+        try {
+          if (!element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) {
+            return false;
+          }
+        } catch {
+          if (!element.checkVisibility()) {
+            return false;
+          }
+        }
+      }
+
       const rect = element.getBoundingClientRect();
       const style = window.getComputedStyle(element);
 
       return rect.width > 0
         && rect.height > 0
         && style.visibility !== 'hidden'
-        && style.display !== 'none';
+        && style.display !== 'none'
+        && style.opacity !== '0';
     };
     const editable = (element) => {
       const tag = String(element.tagName || '').toLowerCase();
@@ -1116,7 +1187,14 @@ async function collectVisibleElements(page, values, options = {}) {
     }
 
     const frameMatches = await frame.evaluate((payload) => {
-      const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      const normalize = (value) => String(value || '')
+        .normalize('NFKD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[ßẞ]/g, 'ss')
+        .replace(/[\u200B-\u200D\uFEFF]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
       const deepQueryAll = (root, selector) => {
         const results = [];
         const visit = (node) => {
@@ -1138,6 +1216,22 @@ async function collectVisibleElements(page, values, options = {}) {
         return Array.from(new Set(results));
       };
       const visible = (element) => {
+        if (element.closest?.('[hidden],[aria-hidden="true"],[inert]')) {
+          return false;
+        }
+
+        if (typeof element.checkVisibility === 'function') {
+          try {
+            if (!element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) {
+              return false;
+            }
+          } catch {
+            if (!element.checkVisibility()) {
+              return false;
+            }
+          }
+        }
+
         const style = window.getComputedStyle(element);
         const rect = element.getBoundingClientRect();
 

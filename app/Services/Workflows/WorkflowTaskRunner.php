@@ -1053,7 +1053,10 @@ class WorkflowTaskRunner
     protected function devDebugRuntimeConfig(WorkflowRun $run, WorkflowStep $step, WorkflowStepRun $stepRun, bool $localArtifacts = true): array
     {
         $settings = is_array($run->workflow?->settings_json) ? $run->workflow->settings_json : [];
-        $enabled = $localArtifacts && filter_var($settings['dev_mode'] ?? false, FILTER_VALIDATE_BOOL);
+        $enabled = $localArtifacts && (
+            filter_var($settings['dev_mode'] ?? false, FILTER_VALIDATE_BOOL)
+            || filter_var($settings['development'] ?? false, FILTER_VALIDATE_BOOL)
+        );
 
         if (! $localArtifacts) {
             return [

@@ -1042,11 +1042,14 @@ function debugArtifactFilename(phase, type, browserWindow = 'main') {
   const config = devDebugConfig();
   const position = Number(config.stepPosition || config.step_position || runtime.workflowStepPosition || 0);
   const actionKey = cleanFileSegment(config.stepActionKey || config.step_action_key || runtime.workflowStepName || 'step', 'step');
+  const taskKey = cleanFileSegment(config.currentTaskKey || config.current_task_key || 'workflow', 'task');
+  const taskIndex = Number(config.currentTaskIndex || config.current_task_index || 0);
   const windowKey = cleanFileSegment(browserWindow, 'main');
   const extension = type === 'screenshot' ? 'png' : 'html';
   const windowPart = windowKey && windowKey !== 'main' ? `_${windowKey}` : '';
+  const taskPart = taskIndex > 0 ? `_task_${String(taskIndex).padStart(3, '0')}_${taskKey}` : `_${taskKey}`;
 
-  return `step_${position}_${actionKey}${windowPart}_${phase}.${extension}`;
+  return `step_${position}_${actionKey}${taskPart}${windowPart}_${phase}.${extension}`;
 }
 
 function debugArtifactPaths(filename) {
@@ -1073,6 +1076,8 @@ function appendDebugArtifact(artifact) {
     workflow_step_run_id: config.workflowStepRunId || config.workflow_step_run_id || runtime.workflowStepRunId || null,
     step_position: config.stepPosition || config.step_position || null,
     step_action_key: config.stepActionKey || config.step_action_key || '',
+    task_index: config.currentTaskIndex || config.current_task_index || null,
+    task_card_key: config.currentTaskKey || config.current_task_key || artifact.task_card_key || artifact.taskCardKey || '',
     storage_disk: config.storageDisk || config.storage_disk || 'local',
     created_at: now(),
     ...artifact,
@@ -1080,7 +1085,11 @@ function appendDebugArtifact(artifact) {
 
   debugArtifacts.push(cleanArtifact);
 
-  if (debugArtifacts.length > 500) {
+  const maxArtifacts = Number(config.maxArtifacts || config.max_artifacts || 0);
+
+  if (maxArtifacts > 0 && debugArtifacts.length > maxArtifacts) {
+    debugArtifacts.splice(0, debugArtifacts.length - maxArtifacts);
+  } else if (config.keepArtifacts === false && debugArtifacts.length > 500) {
     debugArtifacts.splice(0, debugArtifacts.length - 500);
   }
 
@@ -1181,13 +1190,33 @@ async function captureStepArtifactPhase(context, phase, task = {}) {
 
   const captured = [];
   let snapshot = null;
+  const config = devDebugConfig();
+  const previousTaskKey = config.currentTaskKey;
+  const previousTaskKeySnake = config.current_task_key;
+  const previousTaskIndex = config.currentTaskIndex;
+  const previousTaskIndexSnake = config.current_task_index;
+  const taskKey = task.key || task.task_key || '';
+  const taskIndex = Number(task.__devDebugTaskIndex || task.__dev_debug_task_index || 0);
 
   const baseArtifact = {
     phase,
     browser_window: browserWindow,
-    task_card_key: task.key || task.task_key || '',
+    task_index: taskIndex || null,
+    task_card_key: taskKey,
+    task_type: task.task_key || '',
+    task_title: task.title || '',
+    embedded_workflow_id: task.embedded_workflow_id || null,
+    embedded_workflow_name: task.embedded_workflow_name || '',
+    embedded_workflow_frame_key: task.embedded_workflow_frame_key || '',
+    parent_task_key: task.parent_task_key || '',
   };
 
+  config.currentTaskKey = taskKey;
+  config.current_task_key = taskKey;
+  config.currentTaskIndex = taskIndex;
+  config.current_task_index = taskIndex;
+
+  try {
   if (phaseCaptureEnabled(phase, 'dom')) {
     try {
       snapshot = await devDomSnapshot(targetPage);
@@ -1273,6 +1302,12 @@ async function captureStepArtifactPhase(context, phase, task = {}) {
       browserWindow,
       artifactCount: captured.length,
     });
+  }
+  } finally {
+    config.currentTaskKey = previousTaskKey;
+    config.current_task_key = previousTaskKeySnake;
+    config.currentTaskIndex = previousTaskIndex;
+    config.current_task_index = previousTaskIndexSnake;
   }
 
   return captured;
@@ -2069,11 +2104,15 @@ async function run() {
   const routeAttemptCounts = new Map();
   const appliedEmbeddedInputFrames = new Set();
   const preserveBrowserForFailureRoute = startedFromFailureRoute();
-  let devDebugBeforeCaptured = false;
-  let devDebugAfterCaptured = false;
+  let devDebugTaskExecutionCounter = 0;
 
   while (taskIndex < runtimeTasks.length) {
     const task = runtimeTasks[taskIndex];
+    devDebugTaskExecutionCounter += 1;
+    const debugTask = {
+      ...task,
+      __devDebugTaskIndex: devDebugTaskExecutionCounter,
+    };
     const taskStartedAt = now();
     const taskLabel = task.title || task.task_key || task.key || 'Task';
 
@@ -2196,12 +2235,9 @@ async function run() {
             browserWindow: targetBrowserWindow,
           }));
         } else {
-          if (!devDebugBeforeCaptured) {
-            await captureStepArtifactPhase(context, 'before', task).catch((error) => {
-              pushEvent('dev-debug-before-failed', error.message, { taskKey: task.key });
-            });
-            devDebugBeforeCaptured = true;
-          }
+          await captureStepArtifactPhase(context, 'before', debugTask).catch((error) => {
+            pushEvent('dev-debug-before-failed', error.message, { taskKey: task.key });
+          });
 
           result = await module.run(context);
         }
@@ -2356,6 +2392,10 @@ async function run() {
       : (ok ? 'task-completed' : 'task-failed');
     pushEvent(taskEventStage, result.statusMessage || taskLabel, { taskKey: task.key, status, branchOutcome });
     writeStatus('running', taskEventStage, result.statusMessage || taskLabel);
+
+    await captureStepArtifactPhase(context, 'after', debugTask).catch((error) => {
+      pushEvent('dev-debug-after-failed', error.message, { taskKey: task.key });
+    });
 
     const dynamicRouteTarget = String(result.route_target_key || result.routeTargetKey || '').trim();
 
@@ -2542,14 +2582,8 @@ async function run() {
         finishedAt: now(),
       };
 
-      if (!devDebugAfterCaptured) {
-        await captureStepArtifactPhase(context, 'after', task).catch((error) => {
-          pushEvent('dev-debug-after-failed', error.message, { taskKey: task.key });
-        });
-        devDebugAfterCaptured = true;
-        failedResult.debugArtifacts = debugArtifacts;
-        failedResult.debug_artifacts = debugArtifacts;
-      }
+      failedResult.debugArtifacts = debugArtifacts;
+      failedResult.debug_artifacts = debugArtifacts;
 
       writeJson(runtime.resultPath, failedResult);
       writeStatus('failed', 'failed', failedResult.statusMessage, { result: failedResult });
@@ -2635,13 +2669,6 @@ async function run() {
 
   if (Array.isArray(finalPreview.browserWindows)) {
     lastBrowserWindows = finalPreview.browserWindows;
-  }
-
-  if (!devDebugAfterCaptured) {
-    await captureStepArtifactPhase(context, 'after', runtimeTasks[Math.max(0, Math.min(taskIndex, runtimeTasks.length - 1))] || {}).catch((error) => {
-      pushEvent('dev-debug-after-failed', error.message);
-    });
-    devDebugAfterCaptured = true;
   }
 
   const result = {

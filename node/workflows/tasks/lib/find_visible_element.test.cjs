@@ -194,7 +194,7 @@ test('plain comma-separated values are searched as text alternatives', async () 
     detached: false,
     async evaluateHandle(_callback, _selector, text) {
       attemptedTexts.push(text);
-      const handle = text === 'zurück zum login' ? backHandle : null;
+      const handle = text === 'zuruck zum login' ? backHandle : null;
 
       return {
         asElement: () => handle,
@@ -211,7 +211,7 @@ test('plain comma-separated values are searched as text alternatives', async () 
   assert.equal(found.handle, backHandle);
   assert.equal(found.matchedBy, 'text');
   assert.equal(found.candidate.value, 'Zurück zum Login');
-  assert.deepEqual(attemptedTexts, ['login', 'zurück zum login']);
+  assert.deepEqual(attemptedTexts, ['login', 'zuruck zum login']);
 });
 
 test('detached frames are ignored before searching', () => {

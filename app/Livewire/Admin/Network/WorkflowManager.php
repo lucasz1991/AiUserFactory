@@ -36,6 +36,8 @@ class WorkflowManager extends Component
 
     public bool $workflowLocked = false;
 
+    public bool $workflowDevelopment = false;
+
     public string $newStepType = WorkflowStep::TYPE_PREPARATION;
 
     public string $newStepName = '';
@@ -256,7 +258,12 @@ class WorkflowManager extends Component
             'workflowSubcategory' => ['nullable', 'string', 'max:80'],
             'workflowActive' => ['boolean'],
             'workflowLocked' => ['boolean'],
+            'workflowDevelopment' => ['boolean'],
         ]);
+        $settings = is_array($workflow->settings_json) ? $workflow->settings_json : [];
+        $settings['dev_mode'] = (bool) $validated['workflowDevelopment'];
+        $settings['dev_capture_dom_before_step'] = true;
+        $settings['dev_keep_artifacts'] = true;
 
         $workflow->forceFill([
             'name' => trim($validated['workflowName']),
@@ -265,6 +272,7 @@ class WorkflowManager extends Component
             'subcategory' => $this->normalizeSubcategory($validated['workflowSubcategory'] ?? ''),
             'is_active' => (bool) $validated['workflowActive'],
             'is_locked' => (bool) $validated['workflowLocked'],
+            'settings_json' => $settings,
         ])->save();
 
         $this->showWorkflowModal = false;
@@ -1250,6 +1258,7 @@ class WorkflowManager extends Component
         $this->workflowSubcategory = trim((string) ($workflow?->subcategory ?? ''));
         $this->workflowActive = (bool) ($workflow?->is_active ?? true);
         $this->workflowLocked = (bool) ($workflow?->is_locked ?? false);
+        $this->workflowDevelopment = filter_var(data_get($workflow?->settings_json, 'dev_mode', false), FILTER_VALIDATE_BOOL);
     }
 
     protected function normalizeGroup(string $group): string

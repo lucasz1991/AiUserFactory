@@ -27,6 +27,8 @@ class WorkflowsIndex extends Component
 
     public string $newWorkflowSubcategory = '';
 
+    public bool $newWorkflowDevelopment = false;
+
     public bool $showCreateWorkflowModal = false;
 
     public bool $showEditWorkflowModal = false;
@@ -44,6 +46,8 @@ class WorkflowsIndex extends Component
     public bool $editingWorkflowActive = true;
 
     public bool $editingWorkflowLocked = false;
+
+    public bool $editingWorkflowDevelopment = false;
 
     public bool $editingWorkflowIncluded = false;
 
@@ -208,6 +212,7 @@ class WorkflowsIndex extends Component
             'newWorkflowDescription' => ['nullable', 'string', 'max:1000'],
             'newWorkflowGroup' => ['required', 'string', 'max:80'],
             'newWorkflowSubcategory' => ['nullable', 'string', 'max:80'],
+            'newWorkflowDevelopment' => ['boolean'],
         ]);
 
         $group = $this->normalizeGroup($validated['newWorkflowGroup']);
@@ -223,6 +228,9 @@ class WorkflowsIndex extends Component
             'trigger_type' => 'manual',
             'settings_json' => [
                 'created_from' => 'workflows-index',
+                'dev_mode' => (bool) $validated['newWorkflowDevelopment'],
+                'dev_capture_dom_before_step' => true,
+                'dev_keep_artifacts' => true,
             ],
         ]);
 
@@ -230,6 +238,7 @@ class WorkflowsIndex extends Component
         $this->newWorkflowDescription = '';
         $this->newWorkflowGroup = 'custom';
         $this->newWorkflowSubcategory = '';
+        $this->newWorkflowDevelopment = false;
         $this->showCreateWorkflowModal = false;
         $this->activeGroup = $group;
         $this->activeSubcategory = $subcategory ?: 'all';
@@ -254,6 +263,7 @@ class WorkflowsIndex extends Component
         $this->editingWorkflowSubcategory = trim((string) $workflow->subcategory);
         $this->editingWorkflowActive = (bool) $workflow->is_active;
         $this->editingWorkflowLocked = (bool) $workflow->is_edit_locked;
+        $this->editingWorkflowDevelopment = filter_var(data_get($workflow->settings_json, 'dev_mode', false), FILTER_VALIDATE_BOOL);
         $this->editingWorkflowIncluded = (bool) $workflow->is_included;
         $this->editingWorkflowEffectiveLocked = (bool) $workflow->is_edit_locked;
         $this->showEditWorkflowModal = true;
@@ -276,6 +286,7 @@ class WorkflowsIndex extends Component
             'editingWorkflowSubcategory' => ['nullable', 'string', 'max:80'],
             'editingWorkflowActive' => ['boolean'],
             'editingWorkflowLocked' => ['boolean'],
+            'editingWorkflowDevelopment' => ['boolean'],
         ]);
 
         if ($workflow->is_included) {
@@ -297,6 +308,10 @@ class WorkflowsIndex extends Component
 
         $group = $this->normalizeGroup($validated['editingWorkflowGroup']);
         $subcategory = $this->normalizeSubcategory($validated['editingWorkflowSubcategory'] ?? '');
+        $settings = is_array($workflow->settings_json) ? $workflow->settings_json : [];
+        $settings['dev_mode'] = (bool) $validated['editingWorkflowDevelopment'];
+        $settings['dev_capture_dom_before_step'] = true;
+        $settings['dev_keep_artifacts'] = true;
 
         $workflow->forceFill([
             'name' => trim($validated['editingWorkflowName']),
@@ -305,6 +320,7 @@ class WorkflowsIndex extends Component
             'subcategory' => $subcategory,
             'is_active' => (bool) $validated['editingWorkflowActive'],
             'is_locked' => (bool) $validated['editingWorkflowLocked'],
+            'settings_json' => $settings,
         ])->save();
 
         $this->activeGroup = $group;
