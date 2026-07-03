@@ -200,12 +200,14 @@ class WorkflowRunPreview extends Component
         );
         $debugArtifactGroups = $this->debugArtifactGroups($workflowRun);
         $embeddedCards = $this->embeddedWorkflowCards($workflowRun, $stepDebugPanels);
+        $compactWorkflowMap = $this->compactWorkflowMap($workflowRun, $stepDebugPanels);
         $browserCount = $screenshotPanels->count();
 
         return [
             'polling' => in_array((string) $workflowRun->status, ['queued', 'running', 'waiting'], true),
             'workflowDurationMs' => $workflowDurationMs,
             'workflowDurationLabel' => $this->formatDuration($workflowDurationMs),
+            'compactWorkflowMap' => $compactWorkflowMap,
             'screenshotPanels' => $screenshotPanels,
             'browserPanelBasis' => $this->browserPanelBasis($browserCount),
             'browserPanelMinWidth' => $browserCount <= 1 ? '100%' : ($browserCount === 2 ? '24rem' : '20rem'),
@@ -235,6 +237,7 @@ class WorkflowRunPreview extends Component
             'workflowDurationMs' => null,
             'workflowDurationLabel' => '-',
             'screenshotPanels' => collect(),
+            'compactWorkflowMap' => collect(),
             'browserPanelBasis' => 100,
             'browserPanelMinWidth' => '100%',
             'latestStatusResult' => [],
@@ -514,6 +517,84 @@ class WorkflowRunPreview extends Component
                         'created_at' => $artifact->created_at,
                         'metadata' => is_array($artifact->metadata_json) ? $artifact->metadata_json : [],
                     ])->values(),
+                ];
+            })
+            ->values();
+    }
+
+    protected function compactWorkflowMap(WorkflowRun $workflowRun, Collection $stepDebugPanels): Collection
+    {
+        $steps = collect($workflowRun->workflow?->steps ?? [])->values();
+        $stepRuns = collect($workflowRun->stepRuns ?? [])->values();
+        $runningStepRun = $stepRuns->first(fn (WorkflowStepRun $stepRun): bool => in_array($stepRun->status, ['running', 'waiting'], true));
+        $activeStepId = $this->activeStepId ?: ($workflowRun->current_workflow_step_id ?: $runningStepRun?->workflow_step_id);
+        $activeTaskKey = trim((string) ($this->activeTaskKey ?: data_get($workflowRun->context_json, 'next_task_key', '')));
+        $panelsByStepId = $stepDebugPanels
+            ->filter(fn (array $panel): bool => (int) data_get($panel, 'debug.workflowStepId') > 0)
+            ->keyBy(fn (array $panel): int => (int) data_get($panel, 'debug.workflowStepId'));
+
+        return $steps
+            ->map(function (WorkflowStep $step, int $index) use ($panelsByStepId, $activeStepId, $activeTaskKey): array {
+                $panel = $panelsByStepId->get((int) $step->id, []);
+                $isActiveStep = (int) $activeStepId === (int) $step->id;
+                $stepStatus = trim((string) data_get($panel, 'status', $isActiveStep ? 'running' : 'pending')) ?: 'pending';
+                $panelTasks = collect(data_get($panel, 'tasks', []))
+                    ->filter(fn (mixed $task): bool => is_array($task))
+                    ->values();
+                $panelTasksByKey = $panelTasks->keyBy(fn (array $task): string => (string) ($task['key'] ?? ''));
+                $templateTasks = collect($step->task_cards ?? [])->filter(fn (mixed $task): bool => is_array($task))->values();
+                $usedKeys = [];
+                $tasks = $templateTasks
+                    ->map(function (array $task, int $taskIndex) use ($panelTasksByKey, $activeTaskKey, &$usedKeys): array {
+                        $taskKey = (string) ($task['key'] ?? 'task-'.$taskIndex);
+                        $resultTask = $panelTasksByKey->get($taskKey, []);
+                        $status = trim((string) data_get($resultTask, 'status', data_get($task, 'status', 'pending'))) ?: 'pending';
+                        $isActive = $activeTaskKey !== '' && $activeTaskKey === $taskKey;
+                        $usedKeys[$taskKey] = true;
+
+                        return [
+                            'key' => $taskKey,
+                            'title' => (string) ($task['title'] ?? data_get($resultTask, 'title', $taskKey)),
+                            'status' => $isActive ? 'running' : $status,
+                            'active' => $isActive,
+                        ];
+                    });
+
+                $extraTasks = $panelTasks
+                    ->reject(fn (array $task): bool => isset($usedKeys[(string) ($task['key'] ?? '')]))
+                    ->map(function (array $task) use ($activeTaskKey): array {
+                        $taskKey = (string) ($task['key'] ?? '');
+                        $isActive = $activeTaskKey !== '' && $activeTaskKey === $taskKey;
+
+                        return [
+                            'key' => $taskKey,
+                            'title' => (string) ($task['title'] ?? $taskKey ?: 'Task'),
+                            'status' => $isActive ? 'running' : (trim((string) ($task['status'] ?? 'pending')) ?: 'pending'),
+                            'active' => $isActive,
+                        ];
+                    });
+
+                $tasks = $tasks->concat($extraTasks)->values();
+
+                if ($tasks->isEmpty()) {
+                    $tasks = collect([[
+                        'key' => 'step-'.$step->id,
+                        'title' => $step->name,
+                        'status' => $stepStatus,
+                        'active' => $isActiveStep,
+                    ]]);
+                }
+
+                $visibleTasks = $tasks->take(16)->values();
+
+                return [
+                    'id' => (int) $step->id,
+                    'position' => $index + 1,
+                    'title' => $step->name,
+                    'status' => $isActiveStep ? 'running' : $stepStatus,
+                    'active' => $isActiveStep || $visibleTasks->contains(fn (array $task): bool => (bool) ($task['active'] ?? false)),
+                    'tasks' => $visibleTasks,
+                    'overflow' => max(0, $tasks->count() - $visibleTasks->count()),
                 ];
             })
             ->values();

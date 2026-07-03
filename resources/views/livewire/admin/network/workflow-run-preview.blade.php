@@ -27,7 +27,7 @@
                                     {{ $workflowRun->workflow?->name ?? 'Workflow' }}
                                 </h3>
                                 <p class="mt-1 max-w-4xl truncate text-xs text-slate-300">
-                                    {{ data_get($latestStatusResult, 'statusMessage', data_get($latestStatusResult, 'message', $workflowRun->status)) ?: $workflowRun->status }}
+                                    Run #{{ $workflowRun->id }} · {{ $workflowDurationLabel }} · {{ data_get($latestStatusResult, 'statusMessage', data_get($latestStatusResult, 'message', $workflowRun->status)) ?: $workflowRun->status }}
                                 </p>
                             </div>
                             <div class="flex shrink-0 items-center gap-2">
@@ -43,25 +43,52 @@
                             </div>
                         </div>
 
-                        <div class="grid grid-cols-4 gap-2 text-xs text-slate-300">
-                            <div class="min-w-0 rounded-md border border-white/10 bg-white/5 px-3 py-2">
-                                <div class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Run</div>
-                                <div class="mt-1 truncate font-semibold text-white">#{{ $workflowRun->id }}</div>
-                            </div>
-                            <div class="min-w-0 rounded-md border border-white/10 bg-white/5 px-3 py-2">
-                                <div class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Dauer</div>
-                                <div class="mt-1 truncate font-semibold text-white">{{ $workflowDurationLabel }}</div>
-                            </div>
-                            <div class="min-w-0 rounded-md border border-white/10 bg-white/5 px-3 py-2">
-                                <div class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Browser</div>
-                                <div class="mt-1 truncate font-semibold text-white">{{ $screenshotPanels->count() }}</div>
-                            </div>
-                            <div class="min-w-0 rounded-md border border-white/10 bg-white/5 px-3 py-2">
-                                <div class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Rueckgabe</div>
-                                <div class="mt-1 truncate font-semibold {{ $workflowReturn['has'] ? 'text-emerald-200' : 'text-white' }}">
-                                    {{ $workflowReturn['has'] ? $workflowReturn['key'].' = '.$workflowReturn['valueLabel'] : '-' }}
+                        <div class="min-h-0 rounded-md border border-white/10 bg-white/5 px-2.5 py-2">
+                            @if($compactWorkflowMap->isNotEmpty())
+                                <div class="flex min-w-0 items-center gap-1 overflow-x-auto pb-0.5">
+                                    @foreach($compactWorkflowMap as $miniStep)
+                                        @if(! $loop->first)
+                                            <span class="shrink-0 px-0.5 text-sm font-semibold leading-none text-slate-500">&rarr;</span>
+                                        @endif
+                                        <div
+                                            title="{{ $miniStep['position'] }}. {{ $miniStep['title'] }}"
+                                            @class([
+                                                'flex h-11 w-[4.75rem] shrink-0 items-center justify-center rounded-md border px-1.5 py-1 shadow-sm',
+                                                'border-amber-300 bg-amber-50/95 ring-2 ring-amber-300/70' => $miniStep['active'] || in_array($miniStep['status'], ['running', 'waiting'], true),
+                                                'border-emerald-300 bg-emerald-50/95' => ! $miniStep['active'] && in_array($miniStep['status'], ['completed', 'success'], true),
+                                                'border-red-300 bg-red-50/95' => ! $miniStep['active'] && in_array($miniStep['status'], ['failed', 'timeout'], true),
+                                                'border-slate-300 bg-slate-100/95' => ! $miniStep['active'] && in_array($miniStep['status'], ['skipped', 'not_executed'], true),
+                                                'border-white/15 bg-white/10' => ! $miniStep['active'] && ! in_array($miniStep['status'], ['running', 'waiting', 'completed', 'success', 'failed', 'timeout', 'skipped', 'not_executed'], true),
+                                            ])
+                                        >
+                                            <div class="grid max-w-full grid-cols-4 gap-0.5">
+                                                @foreach($miniStep['tasks'] as $miniTask)
+                                                    <span
+                                                        title="{{ $miniTask['title'] }}"
+                                                        @class([
+                                                            'block h-2.5 w-3 rounded-sm border',
+                                                            'border-amber-500 bg-amber-400 shadow-sm shadow-amber-300/50' => $miniTask['active'] || in_array($miniTask['status'], ['running', 'waiting'], true),
+                                                            'border-emerald-500 bg-emerald-400' => ! $miniTask['active'] && in_array($miniTask['status'], ['completed', 'success'], true),
+                                                            'border-red-500 bg-red-400' => ! $miniTask['active'] && in_array($miniTask['status'], ['failed', 'timeout'], true),
+                                                            'border-slate-300 bg-slate-300' => ! $miniTask['active'] && in_array($miniTask['status'], ['skipped', 'not_executed'], true),
+                                                            'border-slate-500 bg-slate-600' => ! $miniTask['active'] && ! in_array($miniTask['status'], ['running', 'waiting', 'completed', 'success', 'failed', 'timeout', 'skipped', 'not_executed'], true),
+                                                        ])
+                                                    ></span>
+                                                @endforeach
+                                                @if($miniStep['overflow'] > 0)
+                                                    <span class="flex h-2.5 min-w-3 items-center justify-center rounded-sm border border-white/20 bg-slate-900/80 px-0.5 text-[8px] font-semibold leading-none text-white">
+                                                        +{{ $miniStep['overflow'] }}
+                                                    </span>
+                                                @endif
+                                            </div>
+                                        </div>
+                                    @endforeach
                                 </div>
-                            </div>
+                            @else
+                                <div class="flex h-11 items-center justify-center text-xs font-semibold text-slate-400">
+                                    Workflow-Karte wird geladen.
+                                </div>
+                            @endif
                         </div>
                     </div>
                 </div>
