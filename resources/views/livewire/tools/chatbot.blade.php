@@ -299,11 +299,11 @@
             }
 
             this.ttsPlaying = true;
-            this.speaking = true;
-            this.speakingIndex = item.index;
+            this.speaking = false;
+            this.speakingIndex = null;
 
             try {
-                await this.playTtsViaBlob(item.text);
+                await this.playTtsViaBlob(item.text, item.index);
             } catch (error) {
                 if (error?.name !== 'AbortError') {
                     this.ttsError = this.ttsErrorMessage(error);
@@ -339,7 +339,7 @@
                 }),
             };
         },
-        async playTtsViaBlob(text) {
+        async playTtsViaBlob(text, index = null) {
             const response = await fetch(this.ttsEndpoint, this.ttsFetchOptions(text));
 
             if (!response.ok) {
@@ -350,16 +350,36 @@
             const url = URL.createObjectURL(blob);
             this.ttsObjectUrls.push(url);
 
-            await this.playAudioUrl(url);
+            await this.playAudioUrl(url, index);
         },
-        playAudioUrl(url) {
+        playAudioUrl(url, index = null) {
             return new Promise((resolve, reject) => {
                 const audio = new Audio(url);
                 this.ttsAudio = audio;
 
-                audio.onended = () => resolve();
-                audio.onerror = () => reject(new Error('Audio konnte nicht abgespielt werden.'));
-                audio.play().catch(reject);
+                const markNotSpeaking = () => {
+                    this.speaking = false;
+                    this.speakingIndex = null;
+                };
+
+                audio.onplaying = () => {
+                    this.speaking = true;
+                    this.speakingIndex = index;
+                };
+                audio.onwaiting = markNotSpeaking;
+                audio.onpause = markNotSpeaking;
+                audio.onended = () => {
+                    markNotSpeaking();
+                    resolve();
+                };
+                audio.onerror = () => {
+                    markNotSpeaking();
+                    reject(new Error('Audio konnte nicht abgespielt werden.'));
+                };
+                audio.play().catch((error) => {
+                    markNotSpeaking();
+                    reject(error);
+                });
             });
         },
         async ttsResponseError(response) {

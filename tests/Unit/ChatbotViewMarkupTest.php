@@ -25,6 +25,8 @@ class ChatbotViewMarkupTest extends TestCase
 
         $this->assertStringContainsString('highlightElement(action = {})', $definition);
         $this->assertStringContainsString('refreshWorkflowPage()', $definition);
+        $this->assertStringContainsString('audio.onplaying = () => {', $definition);
+        $this->assertStringNotContainsString("this.ttsPlaying = true;\n            this.speaking = true;", $definition);
         $this->assertStringEndsWith('}', trim($definition));
     }
 }
