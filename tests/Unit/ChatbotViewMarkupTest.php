@@ -30,10 +30,11 @@ class ChatbotViewMarkupTest extends TestCase
         $this->assertStringEndsWith('}', trim($definition));
 
         $activeSpeechLabels = (new DOMXPath($document))->query(
-            '//*[@x-show="speaking" and contains(normalize-space(.), "Wird gerade vorgelesen.")]',
+            '//template[@x-if="speaking"]/*[contains(normalize-space(.), "Wird gerade vorgelesen.")]',
         );
 
         $this->assertCount(1, $activeSpeechLabels);
         $this->assertStringNotContainsString('Automatisch vorlesen', $source);
+        $this->assertStringNotContainsString('x-show="speaking"', $source);
     }
 }

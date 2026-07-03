@@ -749,25 +749,25 @@
                                         >
                                             Audio testen
                                         </button>
-                                        <button
-                                            type="button"
-                                            x-show="speaking"
-                                            x-cloak
-                                            x-on:click="stopSpeaking()"
-                                            class="inline-flex items-center justify-center rounded-lg bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700"
-                                        >
-                                            Stop
-                                        </button>
+                                        <template x-if="speaking">
+                                            <button
+                                                type="button"
+                                                x-on:click="stopSpeaking()"
+                                                class="inline-flex items-center justify-center rounded-lg bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700"
+                                            >
+                                                Stop
+                                            </button>
+                                        </template>
                                     </div>
 
-                                    <div
-                                        x-show="speaking"
-                                        x-cloak
-                                        class="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-800"
-                                        role="status"
-                                    >
-                                        Wird gerade vorgelesen.
-                                    </div>
+                                    <template x-if="speaking">
+                                        <div
+                                            class="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-800"
+                                            role="status"
+                                        >
+                                            Wird gerade vorgelesen.
+                                        </div>
+                                    </template>
 
                                     <div
                                         x-show="ttsError"
@@ -1112,18 +1112,18 @@
                                         <path d="M12 14a3 3 0 0 0 3-3V8M9.4 5.4A3 3 0 0 1 15 7v4M5 11a7 7 0 0 0 11.7 5.2M12 18v3M8 21h8M3 3l18 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
                                     </svg>
                                 </button>
-                                <button
-                                    type="button"
-                                    x-show="speaking"
-                                    x-cloak
-                                    x-on:click="stopSpeaking()"
-                                    class="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-rose-50 text-rose-700 transition hover:bg-rose-100"
-                                    title="Vorlesen stoppen"
-                                >
-                                    <svg class="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                                        <rect x="6" y="6" width="12" height="12" rx="2"/>
-                                    </svg>
-                                </button>
+                                <template x-if="speaking">
+                                    <button
+                                        type="button"
+                                        x-on:click="stopSpeaking()"
+                                        class="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-rose-50 text-rose-700 transition hover:bg-rose-100"
+                                        title="Vorlesen stoppen"
+                                    >
+                                        <svg class="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                            <rect x="6" y="6" width="12" height="12" rx="2"/>
+                                        </svg>
+                                    </button>
+                                </template>
                             </div>
 
                             <span class="min-w-0 flex-1"></span>
