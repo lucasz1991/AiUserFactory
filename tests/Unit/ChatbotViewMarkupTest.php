@@ -28,5 +28,12 @@ class ChatbotViewMarkupTest extends TestCase
         $this->assertStringContainsString('audio.onplaying = () => {', $definition);
         $this->assertStringNotContainsString("this.ttsPlaying = true;\n            this.speaking = true;", $definition);
         $this->assertStringEndsWith('}', trim($definition));
+
+        $activeSpeechLabels = (new DOMXPath($document))->query(
+            '//*[@x-show="speaking" and contains(normalize-space(.), "Wird gerade vorgelesen.")]',
+        );
+
+        $this->assertCount(1, $activeSpeechLabels);
+        $this->assertStringNotContainsString('Automatisch vorlesen', $source);
     }
 }

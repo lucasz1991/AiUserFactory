@@ -717,8 +717,11 @@
 
                                     <div class="flex items-center justify-between gap-4">
                                         <div>
-                                            <p class="text-sm font-bold text-slate-800">Automatisch vorlesen</p>
-                                            <p class="text-[11px] text-slate-500">Neue Antworten direkt abspielen</p>
+                                            <p class="text-sm font-bold text-slate-800">Audio f&uuml;r neue Antworten</p>
+                                            <p
+                                                class="text-[11px] text-slate-500"
+                                                x-text="autoRead ? 'F&uuml;r kommende Antworten aktiviert' : 'Deaktiviert'"
+                                            ></p>
                                         </div>
                                         <x-ui.forms.toggle-button id="workflow-assistant-auto-read" alpine-model="autoRead" />
                                     </div>
@@ -755,6 +758,15 @@
                                         >
                                             Stop
                                         </button>
+                                    </div>
+
+                                    <div
+                                        x-show="speaking"
+                                        x-cloak
+                                        class="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-800"
+                                        role="status"
+                                    >
+                                        Wird gerade vorgelesen.
                                     </div>
 
                                     <div
