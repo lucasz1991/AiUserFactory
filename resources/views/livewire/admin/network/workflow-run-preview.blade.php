@@ -17,9 +17,9 @@
                 </div>
             @endif
 
-            <section class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-                <div class="bg-slate-950 text-white" style="aspect-ratio: 21 / 5; min-height: 8rem; max-height: 12rem;">
-                    <div class="flex h-full flex-col justify-between gap-4 p-4 sm:p-5">
+            <section class="w-full overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+                <div class="w-full bg-slate-950 text-white" style="aspect-ratio: 21 / 5; min-height: 8rem; max-height: 12rem;">
+                    <div class="flex h-full w-full flex-col justify-between gap-4 p-4 sm:p-5">
                         <div class="flex min-w-0 items-start justify-between gap-4">
                             <div class="min-w-0">
                                 <p class="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Workflow-Vorschau</p>
@@ -43,9 +43,9 @@
                             </div>
                         </div>
 
-                        <div class="min-h-0 rounded-md border border-white/10 bg-white/5 px-2.5 py-2">
+                        <div class="min-h-0 w-full rounded-md border border-white/10 bg-white/5 px-2.5 py-2">
                             @if($compactWorkflowMap->isNotEmpty())
-                                <div class="flex min-w-0 items-center gap-1 overflow-x-auto pb-0.5">
+                                <div class="flex w-full min-w-0 items-center gap-1 overflow-x-auto pb-0.5">
                                     @foreach($compactWorkflowMap as $miniStep)
                                         @if(! $loop->first)
                                             <span class="shrink-0 px-0.5 text-sm font-semibold leading-none text-slate-500">&rarr;</span>
@@ -53,7 +53,7 @@
                                         <div
                                             title="{{ $miniStep['position'] }}. {{ $miniStep['title'] }}"
                                             @class([
-                                                'flex h-11 w-[4.75rem] shrink-0 items-center justify-center rounded-md border px-1.5 py-1 shadow-sm',
+                                                'flex h-11 min-w-[4.75rem] flex-1 items-center justify-center rounded-md border px-1.5 py-1 shadow-sm',
                                                 'border-amber-300 bg-amber-50/95 ring-2 ring-amber-300/70' => $miniStep['active'] || in_array($miniStep['status'], ['running', 'waiting'], true),
                                                 'border-emerald-300 bg-emerald-50/95' => ! $miniStep['active'] && in_array($miniStep['status'], ['completed', 'success'], true),
                                                 'border-red-300 bg-red-50/95' => ! $miniStep['active'] && in_array($miniStep['status'], ['failed', 'timeout'], true),
@@ -61,7 +61,7 @@
                                                 'border-white/15 bg-white/10' => ! $miniStep['active'] && ! in_array($miniStep['status'], ['running', 'waiting', 'completed', 'success', 'failed', 'timeout', 'skipped', 'not_executed'], true),
                                             ])
                                         >
-                                            <div class="grid max-w-full grid-cols-4 gap-0.5">
+                                            <div class="flex w-full flex-wrap justify-center gap-0.5">
                                                 @foreach($miniStep['tasks'] as $miniTask)
                                                     <span
                                                         title="{{ $miniTask['title'] }}"
