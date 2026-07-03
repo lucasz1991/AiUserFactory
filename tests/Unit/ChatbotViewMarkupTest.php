@@ -36,5 +36,8 @@ class ChatbotViewMarkupTest extends TestCase
         $this->assertCount(1, $activeSpeechLabels);
         $this->assertStringNotContainsString('Automatisch vorlesen', $source);
         $this->assertStringNotContainsString('x-show="speaking"', $source);
+        $this->assertStringNotContainsString('workflow-assistant-speech-rate', $source);
+        $this->assertStringContainsString('speechRate: @js($assistantSpeechRate)', $source);
+        $this->assertStringContainsString('speed: Number(this.speechRate || 1)', $definition);
     }
 }

@@ -726,20 +726,6 @@
                                         <x-ui.forms.toggle-button id="workflow-assistant-auto-read" alpine-model="autoRead" />
                                     </div>
 
-                                    <div>
-                                        <label for="workflow-assistant-speech-rate" class="mb-1 block text-xs font-bold text-slate-600">Sprechgeschwindigkeit</label>
-                                        <select
-                                            id="workflow-assistant-speech-rate"
-                                            x-model.number="speechRate"
-                                            class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 focus:border-cyan-500 focus:ring-cyan-500"
-                                        >
-                                            <option value="0.8">Ruhig</option>
-                                            <option value="1">Normal</option>
-                                            <option value="1.2">Schnell</option>
-                                            <option value="1.4">Sehr schnell</option>
-                                        </select>
-                                    </div>
-
                                     <div class="flex gap-2">
                                         <button
                                             type="button"
