@@ -1,5 +1,5 @@
 <div
-    class="space-y-4"
+    class="space-y-4 rounded-xl border border-slate-200 bg-slate-50 p-3"
     data-assistant-highlight="run_preview:{{ $workflowRun?->id ?? 'empty' }}"
     data-assistant-highlight-key="{{ $workflowRun?->id ?? 'empty' }}"
     @if($polling) wire:poll.3s="refresh" @endif
@@ -17,16 +17,16 @@
                 </div>
             @endif
 
-            <section class="w-full overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-                <div class="w-full bg-slate-950 text-white" style="aspect-ratio: 21 / 5; min-height: 8rem; max-height: 12rem;">
+            <section class="w-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+                <div class="w-full border-l-4 border-sky-400 bg-white text-slate-900" style="aspect-ratio: 21 / 5; min-height: 8rem; max-height: 12rem;">
                     <div class="flex h-full w-full flex-col justify-between gap-4 p-4 sm:p-5">
                         <div class="flex min-w-0 items-start justify-between gap-4">
                             <div class="min-w-0">
-                                <p class="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Workflow-Vorschau</p>
-                                <h3 class="mt-1 truncate text-xl font-semibold text-white sm:text-2xl">
+                                <p class="text-[10px] font-semibold uppercase tracking-wide text-sky-600">Workflow-Vorschau</p>
+                                <h3 class="mt-1 truncate text-xl font-semibold text-slate-950 sm:text-2xl">
                                     {{ $workflowRun->workflow?->name ?? 'Workflow' }}
                                 </h3>
-                                <p class="mt-1 max-w-4xl truncate text-xs text-slate-300">
+                                <p class="mt-1 max-w-4xl truncate text-xs text-slate-500">
                                     Run #{{ $workflowRun->id }} · {{ $workflowDurationLabel }} · {{ data_get($latestStatusResult, 'statusMessage', data_get($latestStatusResult, 'message', $workflowRun->status)) ?: $workflowRun->status }}
                                 </p>
                             </div>
@@ -35,7 +35,7 @@
                                 <button
                                     type="button"
                                     x-on:click="overviewOpen = !overviewOpen"
-                                    class="rounded-md border border-white/15 bg-white/10 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-white/15"
+                                    class="rounded-md border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-800 transition hover:bg-sky-100"
                                 >
                                     <span x-show="!overviewOpen">Maximieren</span>
                                     <span x-cloak x-show="overviewOpen">Minimieren</span>
@@ -43,12 +43,12 @@
                             </div>
                         </div>
 
-                        <div class="min-h-0 w-full rounded-md border border-white/10 bg-white/5 px-2.5 py-2">
+                        <div class="min-h-0 w-full rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2">
                             @if($compactWorkflowMap->isNotEmpty())
                                 <div class="flex w-full min-w-0 items-center gap-1 overflow-x-auto pb-0.5">
                                     @foreach($compactWorkflowMap as $miniStep)
                                         @if(! $loop->first)
-                                            <span class="shrink-0 px-0.5 text-sm font-semibold leading-none text-slate-500">&rarr;</span>
+                                            <span class="shrink-0 px-0.5 text-sm font-semibold leading-none text-slate-400">&rarr;</span>
                                         @endif
                                         <div
                                             title="{{ $miniStep['position'] }}. {{ $miniStep['title'] }}"
@@ -58,7 +58,7 @@
                                                 'border-emerald-300 bg-emerald-50/95' => ! $miniStep['active'] && in_array($miniStep['status'], ['completed', 'success'], true),
                                                 'border-red-300 bg-red-50/95' => ! $miniStep['active'] && in_array($miniStep['status'], ['failed', 'timeout'], true),
                                                 'border-slate-300 bg-slate-100/95' => ! $miniStep['active'] && in_array($miniStep['status'], ['skipped', 'not_executed'], true),
-                                                'border-white/15 bg-white/10' => ! $miniStep['active'] && ! in_array($miniStep['status'], ['running', 'waiting', 'completed', 'success', 'failed', 'timeout', 'skipped', 'not_executed'], true),
+                                                'border-slate-200 bg-white' => ! $miniStep['active'] && ! in_array($miniStep['status'], ['running', 'waiting', 'completed', 'success', 'failed', 'timeout', 'skipped', 'not_executed'], true),
                                             ])
                                         >
                                             <div class="flex w-full flex-wrap justify-center gap-0.5">
@@ -71,12 +71,12 @@
                                                             'border-emerald-500 bg-emerald-400' => ! $miniTask['active'] && in_array($miniTask['status'], ['completed', 'success'], true),
                                                             'border-red-500 bg-red-400' => ! $miniTask['active'] && in_array($miniTask['status'], ['failed', 'timeout'], true),
                                                             'border-slate-300 bg-slate-300' => ! $miniTask['active'] && in_array($miniTask['status'], ['skipped', 'not_executed'], true),
-                                                            'border-slate-500 bg-slate-600' => ! $miniTask['active'] && ! in_array($miniTask['status'], ['running', 'waiting', 'completed', 'success', 'failed', 'timeout', 'skipped', 'not_executed'], true),
+                                                            'border-slate-300 bg-white' => ! $miniTask['active'] && ! in_array($miniTask['status'], ['running', 'waiting', 'completed', 'success', 'failed', 'timeout', 'skipped', 'not_executed'], true),
                                                         ])
                                                     ></span>
                                                 @endforeach
                                                 @if($miniStep['overflow'] > 0)
-                                                    <span class="flex h-2.5 min-w-3 items-center justify-center rounded-sm border border-white/20 bg-slate-900/80 px-0.5 text-[8px] font-semibold leading-none text-white">
+                                                    <span class="flex h-2.5 min-w-3 items-center justify-center rounded-sm border border-slate-200 bg-white px-0.5 text-[8px] font-semibold leading-none text-slate-600">
                                                         +{{ $miniStep['overflow'] }}
                                                     </span>
                                                 @endif
@@ -85,7 +85,7 @@
                                     @endforeach
                                 </div>
                             @else
-                                <div class="flex h-11 items-center justify-center text-xs font-semibold text-slate-400">
+                                <div class="flex h-11 items-center justify-center text-xs font-semibold text-slate-500">
                                     Workflow-Karte wird geladen.
                                 </div>
                             @endif
@@ -105,7 +105,7 @@
             @if($embeddedCards->isNotEmpty())
                 <section class="space-y-2">
                     @foreach($embeddedCards as $card)
-                        <article x-data="{ expanded: false }" class="overflow-hidden rounded-lg border border-sky-200 bg-sky-50 shadow-sm">
+                        <article x-data="{ expanded: false }" class="overflow-hidden rounded-xl border border-sky-200 bg-white shadow-sm">
                             <button type="button" x-on:click="expanded = !expanded" class="flex w-full items-center justify-between gap-3 px-4 py-3 text-left">
                                 <div class="min-w-0">
                                     <div class="flex flex-wrap items-center gap-2">
@@ -126,7 +126,7 @@
                                         @endif
                                     </div>
                                 </div>
-                                <span class="shrink-0 rounded-md border border-sky-200 bg-white px-3 py-1.5 text-xs font-semibold text-sky-800">
+                                <span class="shrink-0 rounded-md border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-800">
                                     <span x-show="!expanded">Maximieren</span>
                                     <span x-cloak x-show="expanded">Minimieren</span>
                                 </span>
@@ -187,7 +187,7 @@
                 </section>
             @endif
 
-            <section class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+            <section class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
                 <div class="flex items-center justify-between gap-3 px-4 py-3">
                     <div>
                         <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Browserfenster</div>
@@ -198,17 +198,17 @@
                     </span>
                 </div>
 
-                <div class="border-t border-slate-100 bg-slate-100 p-3">
+                <div class="border-t border-slate-100 bg-slate-50 p-3">
                     @if($screenshotPanels->isNotEmpty())
                         <div class="flex flex-nowrap gap-3 overflow-x-auto pb-1">
                             @foreach($screenshotPanels as $panel)
                                 <article
-                                    class="min-w-0 shrink-0 overflow-hidden rounded-lg border border-slate-800 bg-slate-950 shadow-sm"
+                                    class="min-w-0 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm"
                                     style="flex: 0 0 {{ $browserPanelBasis }}%; max-width: {{ $browserPanelBasis }}%; min-width: {{ $browserPanelMinWidth }};"
                                 >
-                                    <div class="flex items-start justify-between gap-3 border-b border-slate-800 px-3 py-2">
+                                    <div class="flex items-start justify-between gap-3 border-b border-slate-100 bg-white px-3 py-2">
                                         <div class="min-w-0">
-                                            <div class="truncate text-xs font-semibold uppercase tracking-wide text-slate-200">
+                                            <div class="truncate text-xs font-semibold uppercase tracking-wide text-slate-700">
                                                 {{ $panel['title'] }} · {{ $panel['step'] }}
                                             </div>
                                             @include('livewire.admin.config.partials.browser-window-status', [
@@ -219,7 +219,7 @@
                                             <a
                                                 href="{{ $panel['dom'] }}"
                                                 download="{{ $downloadName(($panel['step'] ?? 'workflow').' '.($panel['title'] ?? 'browser')).'-dom.json' }}"
-                                                class="shrink-0 rounded border border-slate-700 px-2 py-1 text-[10px] font-semibold text-slate-200 hover:bg-slate-800"
+                                                class="shrink-0 rounded border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-semibold text-slate-600 hover:bg-slate-100"
                                             >
                                                 DOM
                                             </a>
@@ -227,14 +227,14 @@
                                     </div>
 
                                     @if($panel['image'])
-                                        <a href="{{ $panel['image'] }}" target="_blank" rel="noopener" class="relative block bg-slate-950">
+                                        <a href="{{ $panel['image'] }}" target="_blank" rel="noopener" class="relative block bg-slate-100">
                                             <img src="{{ $panel['image'] }}" alt="{{ $panel['title'] }} Screenshot" class="aspect-video w-full object-contain">
-                                            <span class="absolute right-2 top-2 max-w-[70%] truncate rounded border border-white/20 bg-slate-950/85 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-white shadow-sm">
+                                            <span class="absolute right-2 top-2 max-w-[70%] truncate rounded border border-slate-200 bg-white/90 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-700 shadow-sm">
                                                 {{ $panel['windowKey'] ?? $panel['title'] }}
                                             </span>
                                         </a>
                                     @else
-                                        <div class="flex aspect-video items-center justify-center px-4 text-center text-sm font-semibold text-slate-300">
+                                        <div class="flex aspect-video items-center justify-center bg-slate-50 px-4 text-center text-sm font-semibold text-slate-500">
                                             Noch kein Screenshot verfuegbar.
                                         </div>
                                     @endif
@@ -249,7 +249,7 @@
                 </div>
             </section>
 
-            <section class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+            <section class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
                 <div class="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
                     <div>
                         <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Logs & Debug</div>
@@ -593,11 +593,11 @@
                                                     </div>
 
                                                     @if($artifact['status'] === 'success' && $artifact['type'] === 'screenshot' && $artifact['url'])
-                                                        <a href="{{ $artifact['url'] }}" target="_blank" rel="noopener" class="block bg-slate-950">
+                                                        <a href="{{ $artifact['url'] }}" target="_blank" rel="noopener" class="block bg-slate-100">
                                                             <img src="{{ $artifact['url'] }}" alt="Debug Screenshot" class="aspect-video w-full object-contain">
                                                         </a>
                                                     @elseif($artifact['status'] === 'success' && $artifact['type'] === 'dom')
-                                                        <div class="flex aspect-video items-center justify-center bg-slate-900 px-3 text-center text-xs font-semibold text-slate-200">
+                                                        <div class="flex aspect-video items-center justify-center bg-slate-100 px-3 text-center text-xs font-semibold text-slate-600">
                                                             DOM Snapshot
                                                         </div>
                                                     @else
