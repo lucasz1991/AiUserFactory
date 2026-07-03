@@ -373,7 +373,7 @@
                 x-on:keydown.escape.window="workflowPreviewOpen = false"
             >
                 <div class="fixed inset-0 bg-gray-500 opacity-75" x-on:click="workflowPreviewOpen = false"></div>
-                <div class="relative z-10 mx-auto flex min-h-full max-w-6xl items-center justify-center">
+                <div class="relative z-10 mx-auto flex min-h-full max-w-7xl items-center justify-center">
                     <div class="flex max-h-[calc(100vh-4rem)] w-full flex-col overflow-hidden rounded-lg bg-white shadow-xl" x-trap.inert.noscroll="workflowPreviewOpen">
                         <div class="flex items-start justify-between gap-4 border-b border-gray-200 px-6 py-4">
                             <div>

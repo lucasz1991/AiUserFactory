@@ -711,7 +711,7 @@
             </x-slot>
         </x-dialog-modal>
 
-        <x-dialog-modal wire:model="showRunPreviewModal" maxWidth="6xl">
+        <x-dialog-modal wire:model="showRunPreviewModal" maxWidth="7xl">
             <x-slot name="title">Workflow-Vorschau</x-slot>
             <x-slot name="content">
                 <div @if($showRunPreviewModal) wire:poll.3s="refreshRunPreview" @endif>

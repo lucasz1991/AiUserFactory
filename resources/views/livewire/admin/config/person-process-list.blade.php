@@ -295,7 +295,7 @@
         </x-slot>
     </x-dialog-modal>
 
-    <x-dialog-modal wire:model="showWorkflowPreviewModal" maxWidth="6xl">
+    <x-dialog-modal wire:model="showWorkflowPreviewModal" maxWidth="7xl">
         <x-slot name="title">
             Workflow-Vorschau
         </x-slot>
