@@ -1,5 +1,5 @@
 <div
-    class="space-y-4 rounded-xl border border-slate-200 bg-slate-50 p-3"
+    class="space-y-4"
     data-assistant-highlight="run_preview:{{ $workflowRun?->id ?? 'empty' }}"
     data-assistant-highlight-key="{{ $workflowRun?->id ?? 'empty' }}"
     @if($polling) wire:poll.3s="refresh" @endif
