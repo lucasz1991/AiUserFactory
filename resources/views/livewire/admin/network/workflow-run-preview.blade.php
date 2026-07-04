@@ -18,7 +18,12 @@
             @endif
 
             <section class="w-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-                <div class="w-full border-l-4 border-sky-400 bg-white text-slate-900" style="aspect-ratio: 21 / 5; min-height: 8rem; max-height: 12rem;">
+                <div
+                    x-show="!overviewOpen"
+                    x-collapse.duration.180ms
+                    class="w-full border-l-4 border-sky-400 bg-white text-slate-900"
+                    style="aspect-ratio: 21 / 5; min-height: 8rem; max-height: 12rem;"
+                >
                     <div class="flex h-full w-full flex-col justify-between gap-4 p-4 sm:p-5">
                         <div class="flex min-w-0 items-start justify-between gap-4">
                             <div class="min-w-0">
@@ -53,7 +58,7 @@
                                         <div
                                             title="{{ $miniStep['position'] }}. {{ $miniStep['title'] }}"
                                             @class([
-                                                'flex h-11 min-w-[4.75rem] flex-1 items-center justify-center rounded-md border px-1.5 py-1 shadow-sm',
+                                                'flex h-14 min-w-[5.75rem] flex-1 flex-col justify-between rounded-md border px-1.5 py-1 shadow-sm',
                                                 'border-amber-300 bg-amber-50/95 ring-2 ring-amber-300/70' => $miniStep['active'] || in_array($miniStep['status'], ['running', 'waiting'], true),
                                                 'border-emerald-300 bg-emerald-50/95' => ! $miniStep['active'] && in_array($miniStep['status'], ['completed', 'success'], true),
                                                 'border-red-300 bg-red-50/95' => ! $miniStep['active'] && in_array($miniStep['status'], ['failed', 'timeout'], true),
@@ -61,6 +66,9 @@
                                                 'border-slate-200 bg-white' => ! $miniStep['active'] && ! in_array($miniStep['status'], ['running', 'waiting', 'completed', 'success', 'failed', 'timeout', 'skipped', 'not_executed'], true),
                                             ])
                                         >
+                                            <div class="w-full truncate text-center text-[9px] font-semibold leading-3 text-slate-600">
+                                                {{ $miniStep['title'] }}
+                                            </div>
                                             <div class="flex w-full flex-wrap justify-center gap-0.5">
                                                 @foreach($miniStep['tasks'] as $miniTask)
                                                     <span
@@ -81,6 +89,9 @@
                                                     </span>
                                                 @endif
                                             </div>
+                                            <div class="h-3 w-full truncate text-center text-[9px] font-semibold leading-3 {{ $miniStep['activeTaskTitle'] !== '' ? 'text-slate-800' : 'text-transparent' }}">
+                                                {{ $miniStep['activeTaskTitle'] !== '' ? $miniStep['activeTaskTitle'] : '-' }}
+                                            </div>
                                         </div>
                                     @endforeach
                                 </div>
@@ -93,12 +104,27 @@
                     </div>
                 </div>
 
-                <div x-cloak x-show="overviewOpen" x-collapse.duration.180ms class="border-t border-slate-100 bg-white px-4 py-3">
+                <div x-cloak x-show="overviewOpen" x-collapse.duration.180ms class="bg-white">
+                    <div class="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
+                        <div class="min-w-0">
+                            <div class="truncate text-sm font-semibold text-slate-950">{{ $workflowRun->workflow?->name ?? 'Workflow' }}</div>
+                            <div class="mt-0.5 truncate text-xs text-slate-500">Run #{{ $workflowRun->id }} · {{ $workflowDurationLabel }}</div>
+                        </div>
+                        <button
+                            type="button"
+                            x-on:click="overviewOpen = false"
+                            class="shrink-0 rounded-md border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-800 transition hover:bg-sky-100"
+                        >
+                            Minimieren
+                        </button>
+                    </div>
+                    <div class="px-4 py-3">
                     <x-workflows.minimap
                         :workflow-run="$workflowRun"
                         :active-step-id="$activeStepId"
                         :active-task-key="$activeTaskKey"
                     />
+                    </div>
                 </div>
             </section>
 

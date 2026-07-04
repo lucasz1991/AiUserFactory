@@ -586,7 +586,24 @@ class WorkflowRunPreview extends Component
                     ]]);
                 }
 
+                if ($isActiveStep && ! $tasks->contains(fn (array $task): bool => (bool) ($task['active'] ?? false))) {
+                    $tasks = $tasks
+                        ->values()
+                        ->map(function (array $task, int $taskIndex): array {
+                            if ($taskIndex === 0) {
+                                $task['active'] = true;
+                                $task['status'] = in_array((string) ($task['status'] ?? ''), ['completed', 'success', 'failed', 'timeout'], true)
+                                    ? (string) $task['status']
+                                    : 'running';
+                            }
+
+                            return $task;
+                        });
+                }
+
                 $visibleTasks = $tasks->take(16)->values();
+                $activeTask = $visibleTasks->first(fn (array $task): bool => (bool) ($task['active'] ?? false))
+                    ?: $visibleTasks->first(fn (array $task): bool => in_array((string) ($task['status'] ?? ''), ['running', 'waiting'], true));
 
                 return [
                     'id' => (int) $step->id,
@@ -594,6 +611,7 @@ class WorkflowRunPreview extends Component
                     'title' => $step->name,
                     'status' => $isActiveStep ? 'running' : $stepStatus,
                     'active' => $isActiveStep || $visibleTasks->contains(fn (array $task): bool => (bool) ($task['active'] ?? false)),
+                    'activeTaskTitle' => is_array($activeTask) ? (string) ($activeTask['title'] ?? '') : '',
                     'tasks' => $visibleTasks,
                     'overflow' => max(0, $tasks->count() - $visibleTasks->count()),
                 ];
