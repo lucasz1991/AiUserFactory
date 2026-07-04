@@ -290,6 +290,57 @@
                 </div>
 
                 <div class="rounded-lg border border-gray-200 bg-white p-5">
+                    <h3 class="text-sm font-semibold text-gray-900">Sprachverarbeitung</h3>
+                    <p class="mt-1 text-sm text-gray-500">
+                        Die bestehende AI/OpenRouter-Sprachausgabe bleibt der Standard. Vosk und eSpeak NG koennen alternativ als HTTP-Services angebunden werden.
+                    </p>
+
+                    <div class="mt-5 grid gap-6 md:grid-cols-2">
+                        <div>
+                            <label for="assistant-speech-input-provider" class="block text-sm font-medium text-gray-700">Spracheingabe</label>
+                            <select id="assistant-speech-input-provider" wire:model.live="assistantSpeechInputProvider" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                                <option value="browser">Browser Spracheingabe</option>
+                                <option value="vosk">Vosk Service</option>
+                            </select>
+                            @error('assistantSpeechInputProvider') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                        </div>
+
+                        <div>
+                            <label for="assistant-speech-output-provider" class="block text-sm font-medium text-gray-700">Sprachausgabe</label>
+                            <select id="assistant-speech-output-provider" wire:model.live="assistantSpeechOutputProvider" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                                <option value="ai">AI/OpenRouter Audio</option>
+                                <option value="espeak_ng">eSpeak NG Service</option>
+                            </select>
+                            @error('assistantSpeechOutputProvider') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                        </div>
+
+                        @if($assistantSpeechInputProvider === 'vosk')
+                            <div class="md:col-span-2">
+                                <label for="assistant-vosk-transcription-url" class="block text-sm font-medium text-gray-700">Vosk Transcription URL</label>
+                                <input id="assistant-vosk-transcription-url" type="url" wire:model.defer="assistantVoskTranscriptionUrl" placeholder="http://127.0.0.1:2700/transcribe" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500" />
+                                <p class="mt-1 text-xs text-gray-500">Laravel sendet die Mikrofonaufnahme als multipart <code>audio</code> mit <code>language=de-DE</code>.</p>
+                                @error('assistantVoskTranscriptionUrl') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                            </div>
+                        @endif
+
+                        @if($assistantSpeechOutputProvider === 'espeak_ng')
+                            <div>
+                                <label for="assistant-espeak-ng-speech-url" class="block text-sm font-medium text-gray-700">eSpeak NG Speech URL</label>
+                                <input id="assistant-espeak-ng-speech-url" type="url" wire:model.defer="assistantEspeakNgSpeechUrl" placeholder="http://127.0.0.1:2701/speech" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500" />
+                                @error('assistantEspeakNgSpeechUrl') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                            </div>
+
+                            <div>
+                                <label for="assistant-espeak-ng-voice" class="block text-sm font-medium text-gray-700">eSpeak NG Stimme</label>
+                                <input id="assistant-espeak-ng-voice" type="text" wire:model.defer="assistantEspeakNgVoice" placeholder="de" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500" />
+                                <p class="mt-1 text-xs text-gray-500">Default: <code>de</code>.</p>
+                                @error('assistantEspeakNgVoice') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                            </div>
+                        @endif
+                    </div>
+                </div>
+
+                <div class="rounded-lg border border-gray-200 bg-white p-5">
                     <h3 class="text-sm font-semibold text-gray-900">Zusatzinstruktionen</h3>
                     <p class="mt-1 text-sm text-gray-500">
                         Diese Hinweise werden zusaetzlich zum festen Workflow-Copilot-Systemprompt an die AI gegeben.

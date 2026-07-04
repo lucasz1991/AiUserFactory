@@ -15,8 +15,15 @@
         voiceCaptureActive: false,
         voiceCaptureTimer: null,
         recognition: null,
+        mediaRecorder: null,
+        mediaStream: null,
+        voiceChunks: [],
+        voiceUploading: false,
         ttsEndpoint: @js(\Illuminate\Support\Facades\Route::has('assistant.audio-output.stream') ? route('assistant.audio-output.stream', [], false) : null),
+        sttEndpoint: @js(\Illuminate\Support\Facades\Route::has('assistant.audio-input.transcribe') ? route('assistant.audio-input.transcribe', [], false) : null),
         csrfToken: @js(csrf_token()),
+        speechInputProvider: @js($assistantSpeechInputProvider),
+        speechOutputProvider: @js($assistantSpeechOutputProvider),
         speechSupported: false,
         autoRead: @js($assistantAutoReadDefault),
         speechRate: @js($assistantSpeechRate),
@@ -57,7 +64,7 @@
             this.clearVoiceCaptureState();
             this.autoRead = this.readBool('workflow-copilot-auto-read', this.autoRead);
             this.speechRate = this.readNumber('workflow-copilot-speech-rate', this.speechRate);
-            this.voiceSupported = Boolean(this.voiceApi());
+            this.voiceSupported = this.voiceProviderSupported();
             this.speechSupported = Boolean(this.ttsEndpoint && window.fetch && window.Audio && window.URL);
             this.lastAssistantMessageKey = this.latestAssistantMessageKey(this.chatHistory);
             this.$watch('chatHistory', (history) => {
@@ -109,7 +116,7 @@
             this.stopListening();
         },
         busy() {
-            return this.submitting || this.isLoading;
+            return this.submitting || this.isLoading || this.voiceUploading;
         },
         collectContext(extra = {}) {
             const path = window.location.pathname;
@@ -437,11 +444,30 @@
         voiceApi() {
             return window.SpeechRecognition || window.webkitSpeechRecognition || null;
         },
+        voiceProviderSupported() {
+            if (this.speechInputProvider === 'vosk') {
+                return Boolean(
+                    this.sttEndpoint
+                    && window.fetch
+                    && window.FormData
+                    && window.MediaRecorder
+                    && navigator.mediaDevices
+                    && typeof navigator.mediaDevices.getUserMedia === 'function'
+                );
+            }
+
+            return Boolean(this.voiceApi());
+        },
         toggleVoice() {
             if (this.busy()) return;
 
+            if (this.speechInputProvider === 'vosk') {
+                this.toggleVoskVoice();
+                return;
+            }
+
             const SpeechRecognition = this.voiceApi();
-            this.voiceSupported = Boolean(SpeechRecognition);
+            this.voiceSupported = this.voiceProviderSupported();
 
             if (!SpeechRecognition) {
                 this.clearVoiceCaptureState();
@@ -505,6 +531,148 @@
                 this.ttsError = `Spracheingabe: ${error?.message || 'Start fehlgeschlagen.'}`;
             }
         },
+        async toggleVoskVoice() {
+            this.voiceSupported = this.voiceProviderSupported();
+
+            if (!this.voiceSupported) {
+                this.clearVoiceCaptureState();
+                this.releaseVoskMediaStream();
+                this.ttsError = this.sttEndpoint
+                    ? 'Vosk-Spracheingabe benoetigt Mikrofonzugriff und MediaRecorder-Unterstuetzung.'
+                    : 'Der Vosk Audio-Endpunkt assistant.audio-input.transcribe ist nicht erreichbar.';
+                return;
+            }
+
+            if (this.voiceCaptureActive && this.mediaRecorder) {
+                this.stopListening();
+                return;
+            }
+
+            this.ttsError = '';
+            this.voiceChunks = [];
+
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                const mimeType = this.supportedVoskMimeType();
+                const options = mimeType ? { mimeType } : {};
+
+                this.mediaStream = stream;
+                this.mediaRecorder = new MediaRecorder(stream, options);
+
+                this.mediaRecorder.ondataavailable = (event) => {
+                    if (event?.data && event.data.size > 0) {
+                        this.voiceChunks.push(event.data);
+                    }
+                };
+                this.mediaRecorder.onstop = () => {
+                    this.finishVoskCapture();
+                };
+                this.mediaRecorder.onerror = (event) => {
+                    this.ttsError = `Spracheingabe: ${event?.error?.message || 'Aufnahme fehlgeschlagen.'}`;
+                    this.clearVoiceCaptureState();
+                    this.releaseVoskMediaStream();
+                };
+
+                this.mediaRecorder.start();
+                this.listening = true;
+                this.voiceCaptureActive = true;
+                this.clearVoiceCaptureTimer();
+                this.voiceCaptureTimer = window.setTimeout(() => this.stopListening(), 45000);
+            } catch (error) {
+                this.clearVoiceCaptureState();
+                this.releaseVoskMediaStream();
+                this.ttsError = `Spracheingabe: ${error?.message || 'Mikrofonstart fehlgeschlagen.'}`;
+            }
+        },
+        supportedVoskMimeType() {
+            const candidates = [
+                'audio/webm;codecs=opus',
+                'audio/webm',
+                'audio/ogg;codecs=opus',
+                'audio/ogg',
+                'audio/wav',
+            ];
+
+            return candidates.find((type) => window.MediaRecorder && MediaRecorder.isTypeSupported(type)) || '';
+        },
+        voskAudioExtension(mimeType) {
+            const type = String(mimeType || '').toLowerCase();
+
+            if (type.includes('ogg')) return 'ogg';
+            if (type.includes('wav')) return 'wav';
+            if (type.includes('mp4')) return 'mp4';
+
+            return 'webm';
+        },
+        async finishVoskCapture() {
+            const recorder = this.mediaRecorder;
+            const chunks = this.voiceChunks;
+            const mimeType = recorder?.mimeType || 'audio/webm';
+
+            this.mediaRecorder = null;
+            this.voiceChunks = [];
+            this.clearVoiceCaptureState();
+            this.releaseVoskMediaStream();
+
+            if (!chunks.length) {
+                return;
+            }
+
+            const blob = new Blob(chunks, { type: mimeType });
+            await this.transcribeVoskBlob(blob);
+        },
+        async transcribeVoskBlob(blob) {
+            if (!this.sttEndpoint) {
+                this.ttsError = 'Der Vosk Audio-Endpunkt assistant.audio-input.transcribe ist nicht erreichbar.';
+                return;
+            }
+
+            this.voiceUploading = true;
+            this.ttsError = '';
+
+            try {
+                const formData = new FormData();
+                const extension = this.voskAudioExtension(blob.type);
+
+                formData.append('audio', blob, `workflow-copilot-audio.${extension}`);
+
+                const response = await fetch(this.sttEndpoint, {
+                    method: 'POST',
+                    headers: {
+                        'Accept': 'application/json',
+                        'X-CSRF-TOKEN': this.csrfToken,
+                        'X-Requested-With': 'XMLHttpRequest',
+                    },
+                    credentials: 'same-origin',
+                    body: formData,
+                });
+
+                if (!response.ok) {
+                    throw new Error(await this.ttsResponseError(response));
+                }
+
+                const payload = await response.json();
+                const transcript = String(payload?.text || '').trim();
+
+                if (!transcript) {
+                    throw new Error('Vosk hat keinen Text erkannt.');
+                }
+
+                const baseDraft = String(this.draft || '').trim();
+                this.draft = [baseDraft, transcript].filter(Boolean).join(' ');
+                this.resizeComposer();
+            } catch (error) {
+                this.ttsError = `Spracheingabe: ${this.ttsErrorMessage(error)}`;
+            } finally {
+                this.voiceUploading = false;
+            }
+        },
+        releaseVoskMediaStream() {
+            if (!this.mediaStream) return;
+
+            this.mediaStream.getTracks().forEach((track) => track.stop());
+            this.mediaStream = null;
+        },
         clearVoiceCaptureTimer() {
             if (!this.voiceCaptureTimer) return;
 
@@ -518,6 +686,28 @@
             this.resizeComposer();
         },
         stopListening() {
+            if (this.speechInputProvider === 'vosk') {
+                const recorder = this.mediaRecorder;
+
+                this.clearVoiceCaptureState();
+
+                if (recorder && recorder.state !== 'inactive') {
+                    try {
+                        recorder.stop();
+                    } catch (error) {
+                        this.releaseVoskMediaStream();
+                        this.mediaRecorder = null;
+                        this.ttsError = `Spracheingabe: ${error?.message || 'Stop fehlgeschlagen.'}`;
+                    }
+
+                    return;
+                }
+
+                this.releaseVoskMediaStream();
+                this.mediaRecorder = null;
+                return;
+            }
+
             const shouldStop = this.recognition && (this.listening || this.voiceCaptureActive);
 
             this.clearVoiceCaptureState();
@@ -712,7 +902,12 @@
                                 <div class="space-y-4 p-4 text-left">
                                     <div>
                                         <p class="text-xs font-black uppercase tracking-[.14em] text-slate-500">Sprachausgabe</p>
-                                        <p class="mt-1 text-xs leading-5 text-slate-500">AI-TTS-Audiostream mit gespeicherten OpenRouter-Audioeinstellungen.</p>
+                                        <p
+                                            class="mt-1 text-xs leading-5 text-slate-500"
+                                            x-text="speechOutputProvider === 'espeak_ng'
+                                                ? 'eSpeak NG-Audiostream mit gespeicherter Service-URL.'
+                                                : 'AI-TTS-Audiostream mit gespeicherten OpenRouter-Audioeinstellungen.'"
+                                        ></p>
                                     </div>
 
                                     <div class="flex items-center justify-between gap-4">
@@ -729,7 +924,7 @@
                                     <div class="flex gap-2">
                                         <button
                                             type="button"
-                                            x-on:click="speak('Die AI Audioausgabe ist einsatzbereit.')"
+                                            x-on:click="speak(speechOutputProvider === 'espeak_ng' ? 'Die eSpeak NG Audioausgabe ist einsatzbereit.' : 'Die AI Audioausgabe ist einsatzbereit.')"
                                             x-bind:disabled="!speechSupported"
                                             class="inline-flex flex-1 items-center justify-center rounded-lg border border-slate-300 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
                                         >
@@ -1029,7 +1224,7 @@
                 </div>
 
                 <footer class="shrink-0 border-t border-slate-200 bg-white p-3">
-                    <form x-on:submit.prevent="send()" class="overflow-hidden rounded-2xl border bg-white shadow-sm transition focus-within:border-cyan-400 focus-within:ring-4 focus-within:ring-cyan-100" :class="voiceSupported && voiceCaptureActive ? 'border-rose-300 ring-4 ring-rose-100' : 'border-slate-300'">
+                    <form x-on:submit.prevent="send()" class="overflow-hidden rounded-2xl border bg-white shadow-sm transition focus-within:border-cyan-400 focus-within:ring-4 focus-within:ring-cyan-100" :class="voiceSupported && (voiceCaptureActive || voiceUploading) ? 'border-rose-300 ring-4 ring-rose-100' : 'border-slate-300'">
                         <div
                             x-show="showImportPanel"
                             x-cloak
@@ -1044,13 +1239,13 @@
                             </div>
                             @error('workflowImportFile') <div class="mt-1 text-xs text-rose-600">{{ $message }}</div> @enderror
                         </div>
-                        <template x-if="voiceSupported && voiceCaptureActive">
+                        <template x-if="voiceSupported && (voiceCaptureActive || voiceUploading)">
                             <div class="flex items-center gap-2 border-b border-rose-100 bg-rose-50 px-3 py-1.5 text-[11px] font-bold text-rose-700">
                                 <span class="relative flex h-2 w-2">
                                     <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-400 opacity-75"></span>
                                     <span class="relative inline-flex h-2 w-2 rounded-full bg-rose-500"></span>
                                 </span>
-                                Hoere zu
+                                <span x-text="voiceUploading ? 'Sprache wird erkannt' : 'Hoere zu'"></span>
                             </div>
                         </template>
 
@@ -1087,8 +1282,8 @@
                                     x-on:click="toggleVoice()"
                                     x-bind:disabled="busy() || !voiceSupported"
                                     class="inline-flex h-8 w-8 items-center justify-center rounded-xl transition disabled:cursor-not-allowed disabled:opacity-30"
-                                    :class="voiceSupported && voiceCaptureActive ? 'bg-rose-100 text-rose-700' : (voiceSupported ? 'text-slate-400 hover:bg-slate-100 hover:text-cyan-700' : 'text-slate-300')"
-                                    :title="voiceSupported ? 'Spracheingabe' : 'Spracheingabe wird von diesem Browser nicht unterstuetzt'"
+                                    :class="voiceSupported && (voiceCaptureActive || voiceUploading) ? 'bg-rose-100 text-rose-700' : (voiceSupported ? 'text-slate-400 hover:bg-slate-100 hover:text-cyan-700' : 'text-slate-300')"
+                                    :title="voiceSupported ? (speechInputProvider === 'vosk' ? 'Vosk Spracheingabe' : 'Spracheingabe') : (speechInputProvider === 'vosk' ? 'Vosk Spracheingabe ist nicht verfuegbar' : 'Spracheingabe wird von diesem Browser nicht unterstuetzt')"
                                 >
                                     <svg x-show="voiceSupported" class="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                                         <path d="M12 14a3 3 0 0 0 3-3V7a3 3 0 0 0-6 0v4a3 3 0 0 0 3 3Z" stroke="currentColor" stroke-width="2"/>

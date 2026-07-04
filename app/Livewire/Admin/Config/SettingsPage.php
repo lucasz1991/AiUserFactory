@@ -39,6 +39,11 @@ class SettingsPage extends Component
     public int $assistantMaxToolRounds = 5;
     public bool $assistantAutoReadDefault = false;
     public float $assistantSpeechRate = 1.0;
+    public string $assistantSpeechInputProvider = 'browser';
+    public string $assistantSpeechOutputProvider = 'ai';
+    public string $assistantVoskTranscriptionUrl = '';
+    public string $assistantEspeakNgSpeechUrl = '';
+    public string $assistantEspeakNgVoice = 'de';
 
     // ClientController settings tab
     public string $ccServerDomain = '';
@@ -144,6 +149,11 @@ class SettingsPage extends Component
             'assistantMaxToolRounds' => ['required', 'integer', 'min:1', 'max:8'],
             'assistantAutoReadDefault' => ['boolean'],
             'assistantSpeechRate' => ['required', 'numeric', 'min:0.5', 'max:2'],
+            'assistantSpeechInputProvider' => ['required', 'string', 'in:browser,vosk'],
+            'assistantSpeechOutputProvider' => ['required', 'string', 'in:ai,espeak_ng'],
+            'assistantVoskTranscriptionUrl' => ['nullable', 'required_if:assistantSpeechInputProvider,vosk', 'url', 'max:2048'],
+            'assistantEspeakNgSpeechUrl' => ['nullable', 'required_if:assistantSpeechOutputProvider,espeak_ng', 'url', 'max:2048'],
+            'assistantEspeakNgVoice' => ['nullable', 'string', 'max:80'],
         ]);
 
         Setting::setValue('ai_assistant', 'workflow_copilot', [
@@ -153,6 +163,11 @@ class SettingsPage extends Component
             'max_tool_rounds' => (int) $validated['assistantMaxToolRounds'],
             'auto_read_default' => (bool) $validated['assistantAutoReadDefault'],
             'speech_rate' => (float) $validated['assistantSpeechRate'],
+            'speech_input_provider' => trim($validated['assistantSpeechInputProvider']),
+            'speech_output_provider' => trim($validated['assistantSpeechOutputProvider']),
+            'vosk_transcription_url' => trim((string) ($validated['assistantVoskTranscriptionUrl'] ?? '')),
+            'espeak_ng_speech_url' => trim((string) ($validated['assistantEspeakNgSpeechUrl'] ?? '')),
+            'espeak_ng_voice' => trim((string) ($validated['assistantEspeakNgVoice'] ?? '')) ?: 'de',
         ]);
 
         session()->flash('success', 'AI Chatbot-Einstellungen wurden gespeichert.');
@@ -250,6 +265,11 @@ class SettingsPage extends Component
         $this->assistantMaxToolRounds = max(1, min(8, (int) ($settings['max_tool_rounds'] ?? 5)));
         $this->assistantAutoReadDefault = (bool) ($settings['auto_read_default'] ?? false);
         $this->assistantSpeechRate = max(0.5, min(2.0, (float) ($settings['speech_rate'] ?? 1.0)));
+        $this->assistantSpeechInputProvider = $this->normalizeAssistantSpeechInputProvider($settings['speech_input_provider'] ?? 'browser');
+        $this->assistantSpeechOutputProvider = $this->normalizeAssistantSpeechOutputProvider($settings['speech_output_provider'] ?? 'ai');
+        $this->assistantVoskTranscriptionUrl = trim((string) ($settings['vosk_transcription_url'] ?? ''));
+        $this->assistantEspeakNgSpeechUrl = trim((string) ($settings['espeak_ng_speech_url'] ?? ''));
+        $this->assistantEspeakNgVoice = trim((string) ($settings['espeak_ng_voice'] ?? 'de')) ?: 'de';
     }
 
     protected function loadClientControllerSettings(): void
@@ -274,5 +294,19 @@ class SettingsPage extends Component
         return in_array($tab, ['scraper-transfer', 'openrouter', 'assistant', 'client-controller', 'activity-planning', 'processes', 'mail-registration'], true)
             ? $tab
             : 'scraper-transfer';
+    }
+
+    protected function normalizeAssistantSpeechInputProvider(mixed $provider): string
+    {
+        $provider = trim((string) $provider);
+
+        return in_array($provider, ['browser', 'vosk'], true) ? $provider : 'browser';
+    }
+
+    protected function normalizeAssistantSpeechOutputProvider(mixed $provider): string
+    {
+        $provider = trim((string) $provider);
+
+        return in_array($provider, ['ai', 'espeak_ng'], true) ? $provider : 'ai';
     }
 }

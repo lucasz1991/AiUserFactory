@@ -39,6 +39,10 @@ class Chatbot extends Component
 
     public float $assistantSpeechRate = 1.0;
 
+    public string $assistantSpeechInputProvider = 'browser';
+
+    public string $assistantSpeechOutputProvider = 'ai';
+
     public mixed $workflowImportFile = null;
 
     protected $listeners = [
@@ -54,6 +58,8 @@ class Chatbot extends Component
         $this->assistantName = trim((string) ($settings['name'] ?? 'Workflow Copilot')) ?: 'Workflow Copilot';
         $this->assistantAutoReadDefault = (bool) ($settings['auto_read_default'] ?? false);
         $this->assistantSpeechRate = max(0.5, min(2.0, (float) ($settings['speech_rate'] ?? 1.0)));
+        $this->assistantSpeechInputProvider = $this->normalizeSpeechInputProvider($settings['speech_input_provider'] ?? 'browser');
+        $this->assistantSpeechOutputProvider = $this->normalizeSpeechOutputProvider($settings['speech_output_provider'] ?? 'ai');
         $this->chatHistory = Session::get(self::DISPLAY_HISTORY_KEY, []);
         $this->toolEvents = [];
         $this->pageContext = $this->initialPageContext();
@@ -530,5 +536,19 @@ class Chatbot extends Component
     private function encodeJson(mixed $value): string
     {
         return json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?: '{}';
+    }
+
+    private function normalizeSpeechInputProvider(mixed $provider): string
+    {
+        $provider = trim((string) $provider);
+
+        return in_array($provider, ['browser', 'vosk'], true) ? $provider : 'browser';
+    }
+
+    private function normalizeSpeechOutputProvider(mixed $provider): string
+    {
+        $provider = trim((string) $provider);
+
+        return in_array($provider, ['ai', 'espeak_ng'], true) ? $provider : 'ai';
     }
 }

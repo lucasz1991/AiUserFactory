@@ -25,6 +25,10 @@ class AssistantAudioOutputStreamController extends Controller
             'speed' => ['nullable', 'numeric', 'min:0.5', 'max:2'],
         ]);
 
+        if ($this->assistantSetting('speech_output_provider', 'ai') === 'espeak_ng') {
+            return $this->streamEspeakNgAudio($validated, $connectionId, $startedAt);
+        }
+
         $apiKey = $this->setting('api_key', (string) config('services.openrouter.api_key'));
         $apiUrl = $this->openRouterAudioOutputApiUrl();
         $model = $this->providerModel($this->setting('audio_output_model')
@@ -169,6 +173,109 @@ class AssistantAudioOutputStreamController extends Controller
         ]);
     }
 
+    private function streamEspeakNgAudio(array $validated, string $connectionId, float $startedAt)
+    {
+        $serviceUrl = $this->assistantSetting('espeak_ng_speech_url');
+        $voice = trim((string) ($validated['voice'] ?? $this->assistantSetting('espeak_ng_voice', 'de'))) ?: 'de';
+        $speed = (float) ($validated['speed'] ?? 1);
+
+        if ($serviceUrl === '') {
+            return response()->json([
+                'message' => 'eSpeak NG-Sprachausgabe ist nicht konfiguriert. Bitte die eSpeak NG Speech URL in den AI Chatbot-Einstellungen setzen.',
+                'connection_id' => $connectionId,
+            ], 422, [
+                'X-AI-Connection-ID' => $connectionId,
+            ]);
+        }
+
+        try {
+            $providerResponse = Http::withHeaders([
+                'Accept' => 'audio/wav, audio/*, application/json',
+            ])
+                ->asJson()
+                ->withoutRedirecting()
+                ->connectTimeout(10)
+                ->timeout(60)
+                ->withOptions([
+                    'stream' => true,
+                    'http_errors' => false,
+                ])
+                ->post($serviceUrl, [
+                    'text' => trim((string) $validated['text']),
+                    'voice' => $voice,
+                    'speed' => $speed,
+                    'format' => 'wav',
+                ]);
+        } catch (\Throwable $exception) {
+            Log::warning('Assistant eSpeak NG TTS transport failed.', [
+                'connection_id' => $connectionId,
+                'error' => $exception->getMessage(),
+                'service_url' => $serviceUrl,
+            ]);
+
+            return response()->json([
+                'message' => 'Die eSpeak NG-Sprachausgabe konnte nicht gestartet werden: '.$exception->getMessage(),
+                'connection_id' => $connectionId,
+            ], 503, [
+                'X-AI-Connection-ID' => $connectionId,
+            ]);
+        }
+
+        if ($providerResponse->redirect()) {
+            return response()->json([
+                'message' => 'Der eSpeak NG-Audio-Endpoint leitet weiter. Bitte die finale Speech-URL direkt konfigurieren.',
+                'location' => (string) $providerResponse->header('Location'),
+                'connection_id' => $connectionId,
+            ], 422, [
+                'X-AI-Connection-ID' => $connectionId,
+            ]);
+        }
+
+        if (! $providerResponse->successful()) {
+            $errorBody = (string) $providerResponse->toPsrResponse()->getBody();
+            $providerError = $this->providerServiceErrorMessage($errorBody, $providerResponse->status());
+
+            Log::warning('Assistant eSpeak NG TTS request rejected.', [
+                'connection_id' => $connectionId,
+                'status' => $providerResponse->status(),
+                'duration_ms' => (int) round((microtime(true) - $startedAt) * 1000),
+                'error' => Str::limit($providerError, 500, ''),
+                'voice' => $voice,
+            ]);
+
+            return response()->json([
+                'message' => 'eSpeak NG Audio/TTS antwortet mit HTTP '.$providerResponse->status().'.',
+                'detail' => $providerError,
+                'provider_status' => $providerResponse->status(),
+                'connection_id' => $connectionId,
+            ], 424, [
+                'X-AI-Connection-ID' => $connectionId,
+            ]);
+        }
+
+        $body = $providerResponse->toPsrResponse()->getBody();
+        $contentType = trim((string) $providerResponse->header('Content-Type')) ?: 'audio/wav';
+
+        return response()->stream(function () use ($body): void {
+            while (! $body->eof()) {
+                echo $body->read(8192);
+
+                if (function_exists('ob_flush')) {
+                    @ob_flush();
+                }
+
+                flush();
+            }
+        }, 200, [
+            'Content-Type' => $contentType,
+            'Cache-Control' => 'no-store, no-cache, must-revalidate, max-age=0',
+            'Pragma' => 'no-cache',
+            'X-Accel-Buffering' => 'no',
+            'X-Content-Type-Options' => 'nosniff',
+            'X-AI-Connection-ID' => $connectionId,
+        ]);
+    }
+
     private function openRouterAudioOutputApiUrl(): string
     {
         $explicit = $this->setting('audio_output_api_url', (string) config('services.openrouter.audio_output_api_url', ''));
@@ -204,6 +311,20 @@ class AssistantAudioOutputStreamController extends Controller
         }
 
         return Str::limit($body, 1000, '');
+    }
+
+    private function providerServiceErrorMessage(string $body, int $status = 0): string
+    {
+        $payload = json_decode($body, true);
+        $message = is_array($payload)
+            ? (data_get($payload, 'error.message') ?? data_get($payload, 'detail') ?? data_get($payload, 'message'))
+            : null;
+
+        if (is_string($message) && $message !== '') {
+            return Str::limit($message, 1000, '');
+        }
+
+        return Str::limit($body !== '' ? $body : 'HTTP '.$status, 1000, '');
     }
 
     private function providerVoice(string $model, string $voice): string
@@ -291,6 +412,21 @@ class AssistantAudioOutputStreamController extends Controller
         $settings = Setting::getValue('services', 'openrouter');
         $settings = is_array($settings) ? $settings : [];
         $value = $settings[$key] ?? config("services.openrouter.{$key}", $default);
+
+        if (is_array($value)) {
+            $value = collect($value)->flatten()->first();
+        }
+
+        $value = trim((string) ($value ?? ''));
+
+        return $value !== '' ? $value : $default;
+    }
+
+    private function assistantSetting(string $key, string $default = ''): string
+    {
+        $settings = Setting::getValue('ai_assistant', 'workflow_copilot');
+        $settings = is_array($settings) ? $settings : [];
+        $value = $settings[$key] ?? $default;
 
         if (is_array($value)) {
             $value = collect($value)->flatten()->first();

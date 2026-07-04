@@ -26,6 +26,9 @@ class ChatbotViewMarkupTest extends TestCase
         $this->assertStringContainsString('highlightElement(action = {})', $definition);
         $this->assertStringContainsString('refreshWorkflowPage()', $definition);
         $this->assertStringContainsString('audio.onplaying = () => {', $definition);
+        $this->assertStringContainsString('voiceProviderSupported()', $definition);
+        $this->assertStringContainsString('toggleVoskVoice()', $definition);
+        $this->assertStringContainsString('transcribeVoskBlob(blob)', $definition);
         $this->assertStringNotContainsString("this.ttsPlaying = true;\n            this.speaking = true;", $definition);
         $this->assertStringEndsWith('}', trim($definition));
 
@@ -37,6 +40,10 @@ class ChatbotViewMarkupTest extends TestCase
         $this->assertStringNotContainsString('Automatisch vorlesen', $source);
         $this->assertStringNotContainsString('x-show="speaking"', $source);
         $this->assertStringNotContainsString('workflow-assistant-speech-rate', $source);
+        $this->assertStringContainsString("route('assistant.audio-input.transcribe'", $source);
+        $this->assertStringContainsString('speechInputProvider: @js($assistantSpeechInputProvider)', $source);
+        $this->assertStringContainsString('speechOutputProvider: @js($assistantSpeechOutputProvider)', $source);
+        $this->assertStringContainsString('window.MediaRecorder', $source);
         $this->assertStringContainsString('speechRate: @js($assistantSpeechRate)', $source);
         $this->assertStringContainsString('speed: Number(this.speechRate || 1)', $definition);
     }
