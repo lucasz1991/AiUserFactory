@@ -853,6 +853,15 @@ function workflowHasBrowserWindows() {
   return windows && typeof windows === 'object' && Object.keys(windows).length > 0;
 }
 
+function chromiumNoSandboxEnabled() {
+  const configured = runtime.chromiumNoSandbox
+    ?? runtime.chromium_no_sandbox
+    ?? runtime.disableChromiumSandbox
+    ?? runtime.disable_chromium_sandbox;
+
+  return configured === true || configured === 1 || configured === 'true' || configured === '1';
+}
+
 function initialBrowserWindowsFromWorkflow() {
   const workflow = runtime.workflow || {};
   const windows = workflow.browserWindows || workflow.browser_windows || {};
@@ -914,6 +923,10 @@ async function existingPageForWindow(currentBrowser, windowName = 'main') {
     if (exactPage) {
       return exactPage;
     }
+
+    // A persisted target id is the authoritative identity. Falling back to a
+    // similarly looking URL can attach a workflow to the wrong browser tab.
+    return null;
   }
 
   if (/^https?:\/\//i.test(url)) {
@@ -1459,6 +1472,10 @@ async function loadBrowser() {
         browserConnectError: connectError.slice(0, 1200),
       });
 
+      if (workflowHasBrowserWindows()) {
+        throw new Error(`Workflow-Browser ist nicht erreichbar (${connectError.slice(0, 300)}). Es wird kein Ersatzfenster geoeffnet, damit die gespeicherte Workflow-Fensteridentitaet erhalten bleibt.`);
+      }
+
       if (!/(ECONNREFUSED|ECONNRESET|socket hang up|connect|closed|refused)/i.test(connectError)) {
         throw new Error('Workflow-Browser ist nicht erreichbar. Das Browserfenster wird nicht automatisch neu geoeffnet, weil es workflow-weit aktiv bleiben muss.');
       }
@@ -1477,7 +1494,7 @@ async function loadBrowser() {
     '--window-size=1366,900',
   ];
 
-  if (process.platform === 'linux') {
+  if (process.platform === 'linux' && chromiumNoSandboxEnabled()) {
     launchArgs.unshift('--no-sandbox', '--disable-setuid-sandbox');
   }
 
@@ -1758,6 +1775,13 @@ async function ensurePage(context, windowName = 'main', label = '') {
     return registerBrowserWindow(context, existingPage, normalizedName, label);
   }
 
+  const persistedWindow = workflowBrowserWindowState(normalizedName);
+  const persistedTargetId = String(persistedWindow?.targetId || persistedWindow?.target_id || '').trim();
+
+  if (persistedTargetId !== '') {
+    throw new Error(`Workflow-Browserfenster "${normalizedName}" mit targetId ${persistedTargetId} wurde im aktiven Browser nicht gefunden. Es wird kein Ersatzfenster geoeffnet.`);
+  }
+
   const nextPage = await currentBrowser.newPage();
   const registeredPage = registerBrowserWindow(context, nextPage, normalizedName, label);
   await restoreBrowserWindowState(context, registeredPage, normalizedName);
@@ -1785,6 +1809,41 @@ function selectExistingPage(context, windowName = 'main') {
   context.activeBrowserWindow = normalizedName;
 
   return null;
+}
+
+async function selectWorkflowPageForClose(context, windowName = 'main') {
+  const normalizedName = normalizeBrowserWindowName(windowName);
+  const selected = selectExistingPage(context, normalizedName);
+
+  if (selected) {
+    return selected;
+  }
+
+  if (!workflowBrowserRuntime().wsEndpoint && !workflowHasBrowserWindows()) {
+    return null;
+  }
+
+  const currentBrowser = await loadBrowser();
+  const existingPage = await existingPageForWindow(currentBrowser, normalizedName);
+
+  if (!existingPage) {
+    const persistedWindow = workflowBrowserWindowState(normalizedName);
+    const persistedTargetId = String(persistedWindow?.targetId || persistedWindow?.target_id || '').trim();
+
+    if (persistedTargetId !== '') {
+      throw new Error(`Workflow-Browserfenster "${normalizedName}" mit targetId ${persistedTargetId} konnte zum Schliessen nicht eindeutig gefunden werden.`);
+    }
+
+    return null;
+  }
+
+  return registerBrowserWindow(context, existingPage, normalizedName, persistedWindowLabel(normalizedName));
+}
+
+function persistedWindowLabel(windowName = 'main') {
+  const state = workflowBrowserWindowState(windowName);
+
+  return String(state?.label || browserWindowLabel(windowName));
 }
 
 function startPreviewLoop(context) {
@@ -2231,7 +2290,7 @@ async function run() {
         const targetBrowserWindow = browserWindowNameForTask(task, input);
 
         if (task.task_key === 'browser.close') {
-          selectExistingPage(context, targetBrowserWindow);
+          await selectWorkflowPageForClose(context, targetBrowserWindow);
         } else if (task.kind !== 'data' || ['data.persist_webmail_session', 'data.persist_browser_session', 'data.delete_browser_session'].includes(String(task.task_key || ''))) {
           await ensurePage(context, targetBrowserWindow, targetBrowserWindow === 'main' ? 'Main' : taskLabel);
           startPreviewLoop(context);
@@ -2288,19 +2347,37 @@ async function run() {
           context.page = context.pages[0] || null;
           page = context.page;
 
-          if (Array.isArray(result?.browserWindows)) {
-            result.browserWindows = result.browserWindows.filter((windowEntry) => {
+          const knownBrowserWindows = [
+            ...(Array.isArray(lastBrowserWindows) ? lastBrowserWindows : []),
+            ...initialBrowserWindowsFromWorkflow(),
+          ];
+          result.browserWindows = Array.from(new Map(knownBrowserWindows
+            .filter((windowEntry) => {
               const key = normalizeBrowserWindowName(windowEntry?.key || windowEntry?.name || '');
 
               return key !== targetBrowserWindow;
-            });
-          }
+            })
+            .map((windowEntry) => [
+              normalizeBrowserWindowName(windowEntry?.key || windowEntry?.name || 'main'),
+              windowEntry,
+            ])).values());
+          lastBrowserWindows = result.browserWindows;
 
           result.closedBrowserWindow = targetBrowserWindow;
 
-          if (browserWindowsByName.size === 0 && browser && typeof browser.close === 'function') {
+          const closeEntireWorkflowBrowser = runtime.closeWorkflowBrowserAtEnd === true
+            || runtime.close_workflow_browser_at_end === true;
+          const openWindows = await openBrowserWindowCount();
+
+          if (
+            browser
+            && typeof browser.close === 'function'
+            && (closeEntireWorkflowBrowser || (browserWindowsByName.size === 0 && openWindows <= 0))
+          ) {
             await browser.close().catch(() => {});
             browser = null;
+            result.browserWindows = [];
+            lastBrowserWindows = [];
             result.closedBrowser = true;
           }
         }
@@ -2618,7 +2695,7 @@ async function run() {
         runnerDiagnostics: {
           keepWorkflowBrowserAlive: shouldKeepWorkflowBrowserProcessAlive(),
           workflowBundleStep: runtime.workflowBundleStep === true || runtime.workflow_bundle_step === true,
-          chromiumNoSandboxFlag: process.platform === 'linux',
+          chromiumNoSandboxFlag: process.platform === 'linux' && chromiumNoSandboxEnabled(),
           platform: process.platform,
         },
         events,
@@ -2737,7 +2814,7 @@ async function run() {
     runnerDiagnostics: {
       keepWorkflowBrowserAlive: shouldKeepWorkflowBrowserProcessAlive(),
       workflowBundleStep: runtime.workflowBundleStep === true || runtime.workflow_bundle_step === true,
-      chromiumNoSandboxFlag: process.platform === 'linux',
+      chromiumNoSandboxFlag: process.platform === 'linux' && chromiumNoSandboxEnabled(),
       platform: process.platform,
     },
     events,
@@ -2768,7 +2845,7 @@ run()
       runnerDiagnostics: {
         keepWorkflowBrowserAlive: shouldKeepWorkflowBrowserProcessAlive(),
         workflowBundleStep: runtime.workflowBundleStep === true || runtime.workflow_bundle_step === true,
-        chromiumNoSandboxFlag: process.platform === 'linux',
+        chromiumNoSandboxFlag: process.platform === 'linux' && chromiumNoSandboxEnabled(),
         platform: process.platform,
       },
       events,

@@ -19,6 +19,17 @@ function normalizeText(value) {
   return String(value || '').trim();
 }
 
+function chromiumSandboxArgs(runtimeConfig = {}) {
+  const configured = runtimeConfig.chromiumNoSandbox
+    ?? runtimeConfig.chromium_no_sandbox
+    ?? runtimeConfig.disableChromiumSandbox
+    ?? runtimeConfig.disable_chromium_sandbox;
+
+  return configured === true || configured === 1 || configured === 'true' || configured === '1'
+    ? ['--no-sandbox', '--disable-setuid-sandbox']
+    : [];
+}
+
 function readJsonFile(filePath, fallback = {}) {
   try {
     return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -219,8 +230,7 @@ async function main() {
       headless: runtimeConfig.headlessEnabled === true ? 'new' : false,
       defaultViewport: DEFAULT_VIEWPORT,
       args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
+        ...chromiumSandboxArgs(runtimeConfig),
         `--window-size=${DEFAULT_VIEWPORT.width},${DEFAULT_VIEWPORT.height}`,
       ],
     });

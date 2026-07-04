@@ -130,6 +130,15 @@ class ManagedProcessSupervisor
                 && $this->statusAgeSeconds($process, $status) >= self::OBSOLETE_FINAL_GRACE_SECONDS;
         }
 
+        $status = $this->readJsonFile((string) $process->status_path);
+
+        // A browser-owning process belongs to the complete workflow run. It
+        // must not be treated as an orphan merely because its originating
+        // step/list has already completed or an embedded workflow is active.
+        if ($this->isKeepingBrowserForActiveWorkflow($process, $status)) {
+            return false;
+        }
+
         $activeStepRun = WorkflowStepRun::query()
             ->with('workflowRun')
             ->where('external_run_type', 'workflow-task')
@@ -138,12 +147,7 @@ class ManagedProcessSupervisor
             ->first();
 
         if (! $activeStepRun) {
-            $status = $this->readJsonFile((string) $process->status_path);
             $state = trim((string) ($status['state'] ?? $status['status'] ?? ''));
-
-            if ($this->isKeepingBrowserForActiveWorkflow($process, $status)) {
-                return false;
-            }
 
             if (in_array($state, ['completed', 'failed', 'cancelled'], true)) {
                 return $this->statusAgeSeconds($process, $status) >= self::OBSOLETE_FINAL_GRACE_SECONDS;
@@ -159,7 +163,7 @@ class ManagedProcessSupervisor
             return false;
         }
 
-        return $this->statusAgeSeconds($process, $this->readJsonFile((string) $process->status_path)) >= self::OBSOLETE_FINAL_GRACE_SECONDS;
+        return $this->statusAgeSeconds($process, $status) >= self::OBSOLETE_FINAL_GRACE_SECONDS;
     }
 
     protected function isKeepingBrowserForActiveWorkflow(ManagedProcess $process, array $status): bool
@@ -189,8 +193,18 @@ class ManagedProcessSupervisor
             return false;
         }
 
-        return is_array(data_get($run->context_json, 'browser_windows'))
-            && data_get($run->context_json, 'browser_windows') !== [];
+        foreach ([
+            data_get($run->context_json, 'browser_windows'),
+            data_get($run->context_json, 'browserWindows'),
+            data_get($status, 'browserWindows'),
+            data_get($status, 'result.browserWindows'),
+        ] as $windows) {
+            if (is_array($windows) && $windows !== []) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     protected function statusAgeSeconds(ManagedProcess $process, array $status): int

@@ -11,6 +11,7 @@ const basePath = path.resolve(__dirname, '..', '..');
 const runnerPath = path.join(__dirname, 'run_step.cjs');
 const returnScript = 'node/workflows/tasks/data/workflow_return.cjs';
 const waitScript = 'node/workflows/tasks/wait/seconds.cjs';
+const closeBrowserScript = 'node/workflows/tasks/browser/close.cjs';
 const branchScript = 'tests/Fixtures/Workflows/branch_result.cjs';
 
 function returnTask(key, value, frameKey = null) {
@@ -117,6 +118,28 @@ test('embedded workflow true return follows the workflow task success route', ()
     'embedded-boundary',
     'success-target',
   ]);
+});
+
+test('workflow runner keeps Chromium sandbox enabled by default', () => {
+  const result = executeTasks([returnTask('sandbox-default', true)]);
+
+  assert.equal(result.runnerDiagnostics.chromiumNoSandboxFlag, false);
+});
+
+test('browser close without a persisted browser does not launch a replacement', () => {
+  const result = executeTasks([{
+    key: 'close-missing-browser',
+    task_key: 'browser.close',
+    title: 'Close missing browser',
+    kind: 'browser',
+    runner: 'node',
+    node_script: closeBrowserScript,
+    browser_window: 'main',
+  }]);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.tasks[0].statusMessage, 'Kein Browser-Handle zum Schliessen vorhanden.');
+  assert.equal(result.browserWsEndpoint, '');
 });
 
 test('embedded workflow boundary preserves browser windows for parent workflow', () => {

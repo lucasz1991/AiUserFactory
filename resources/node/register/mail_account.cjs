@@ -6,6 +6,7 @@ const {
 } = require('./lib/account-values.cjs');
 const {
   BROWSER_LAUNCHER_SCRIPT_VERSION,
+  chromiumSandboxArgs,
   launchConfiguredBrowserWithProfileRetry,
   resolveBrowserEngine,
 } = require('./lib/browser-launcher.cjs');
@@ -4123,8 +4124,7 @@ async function main() {
     headless: runtimeConfig.headlessEnabled === true ? 'new' : false,
     defaultViewport: DEFAULT_VIEWPORT,
     args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
+      ...chromiumSandboxArgs(runtimeConfig),
       '--disable-dev-shm-usage',
       `--window-size=${DEFAULT_VIEWPORT.width},${DEFAULT_VIEWPORT.height}`,
     ],

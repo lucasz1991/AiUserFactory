@@ -40,6 +40,17 @@ function isBrowserProfileLockError(error) {
   );
 }
 
+function chromiumSandboxArgs(runtimeConfig = {}) {
+  const configured = runtimeConfig.chromiumNoSandbox
+    ?? runtimeConfig.chromium_no_sandbox
+    ?? runtimeConfig.disableChromiumSandbox
+    ?? runtimeConfig.disable_chromium_sandbox;
+
+  return configured === true || configured === 1 || configured === 'true' || configured === '1'
+    ? ['--no-sandbox', '--disable-setuid-sandbox']
+    : [];
+}
+
 function retryBrowserProfilePath(browserProfilePath = '') {
   const profilePath = normalizeText(browserProfilePath);
 
@@ -348,6 +359,7 @@ module.exports = {
   BROWSER_ENGINE_CLOAK,
   BROWSER_ENGINE_CLOAK_WITH_FALLBACK,
   BROWSER_LAUNCHER_SCRIPT_VERSION,
+  chromiumSandboxArgs,
   isBrowserProfileLockError,
   launchConfiguredBrowser,
   launchConfiguredBrowserWithProfileRetry,

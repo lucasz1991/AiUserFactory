@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const {
   BROWSER_LAUNCHER_SCRIPT_VERSION,
+  chromiumSandboxArgs,
   launchConfiguredBrowser,
   resolveBrowserEngine,
 } = require('./lib/browser-launcher.cjs');
@@ -567,8 +568,7 @@ async function main() {
     headless: runtimeConfig.headlessEnabled === true ? 'new' : false,
     defaultViewport: DEFAULT_VIEWPORT,
     args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
+      ...chromiumSandboxArgs(runtimeConfig),
       '--disable-dev-shm-usage',
       `--window-size=${DEFAULT_VIEWPORT.width},${DEFAULT_VIEWPORT.height}`,
     ],
