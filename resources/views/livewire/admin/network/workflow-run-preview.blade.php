@@ -162,8 +162,8 @@
                 <div
                     x-show="!overviewOpen"
                     x-collapse.duration.180ms
-                    class="w-full border-l-4 border-sky-400 bg-white text-slate-900"
-                    style="aspect-ratio: 21 / 5; min-height: 8rem; max-height: 12rem;"
+                    class="w-full bg-white text-slate-900"
+                    style="aspect-ratio: 21 / 5;"
                 >
                     <div class="flex h-full w-full flex-col justify-center p-4 sm:p-5">
                         <div class="min-h-0 w-full rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2">
