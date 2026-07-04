@@ -1,39 +1,39 @@
-@once
-    <style>
-        [data-workflow-preview-scrollbar] {
-            scrollbar-color: #94a3b8 #f8fafc;
-            scrollbar-width: thin;
-            scroll-behavior: smooth;
-        }
-
-        [data-workflow-preview-scrollbar]::-webkit-scrollbar {
-            height: 8px;
-            width: 8px;
-        }
-
-        [data-workflow-preview-scrollbar]::-webkit-scrollbar-track {
-            background: #f8fafc;
-            border-radius: 999px;
-        }
-
-        [data-workflow-preview-scrollbar]::-webkit-scrollbar-thumb {
-            background: linear-gradient(180deg, #cbd5e1, #94a3b8);
-            border: 2px solid #f8fafc;
-            border-radius: 999px;
-        }
-
-        [data-workflow-preview-scrollbar]::-webkit-scrollbar-thumb:hover {
-            background: linear-gradient(180deg, #94a3b8, #64748b);
-        }
-    </style>
-@endonce
-
 <div
     class="space-y-4 rounded-xl border border-slate-200 bg-slate-50 p-3"
     data-assistant-highlight="run_preview:{{ $workflowRun?->id ?? 'empty' }}"
     data-assistant-highlight-key="{{ $workflowRun?->id ?? 'empty' }}"
     @if($polling) wire:poll.3s="refresh" @endif
 >
+    @once
+        <style>
+            [data-workflow-preview-scrollbar] {
+                scrollbar-color: #94a3b8 #f8fafc;
+                scrollbar-width: thin;
+                scroll-behavior: smooth;
+            }
+
+            [data-workflow-preview-scrollbar]::-webkit-scrollbar {
+                height: 8px;
+                width: 8px;
+            }
+
+            [data-workflow-preview-scrollbar]::-webkit-scrollbar-track {
+                background: #f8fafc;
+                border-radius: 999px;
+            }
+
+            [data-workflow-preview-scrollbar]::-webkit-scrollbar-thumb {
+                background: linear-gradient(180deg, #cbd5e1, #94a3b8);
+                border: 2px solid #f8fafc;
+                border-radius: 999px;
+            }
+
+            [data-workflow-preview-scrollbar]::-webkit-scrollbar-thumb:hover {
+                background: linear-gradient(180deg, #94a3b8, #64748b);
+            }
+        </style>
+    @endonce
+
     @if(! $workflowRun)
         <div class="rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
             Dieser Workflow-Lauf wurde noch nicht geladen.
