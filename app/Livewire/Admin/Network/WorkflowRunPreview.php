@@ -2,6 +2,7 @@
 
 namespace App\Livewire\Admin\Network;
 
+use App\Models\NetworkJob;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowRunArtifact;
 use App\Models\WorkflowStep;
@@ -817,11 +818,44 @@ class WorkflowRunPreview extends Component
                 'mail-registration' => app(MailAccountRegistrationRunner::class)->readRun($externalRunId) ?: [],
                 'webmail-session' => app(WebmailSessionRunner::class)->readRun($externalRunId) ?: [],
                 'workflow-task' => app(WorkflowTaskRunner::class)->readRun($externalRunId) ?: [],
+                'client-controller-workflow-task', 'client-controller-workflow-run' => $this->clientControllerLiveStatus($externalRunId),
                 default => [],
             };
         } catch (\Throwable) {
             return $this->liveStatusCache[$cacheKey] = [];
         }
+    }
+
+    protected function clientControllerLiveStatus(string $jobUuid): array
+    {
+        $job = NetworkJob::query()->where('job_uuid', $jobUuid)->first();
+
+        if (! $job) {
+            return [];
+        }
+
+        $result = is_array($job->result_json) ? $job->result_json : [];
+
+        if ($job->status === 'dispatched') {
+            return array_replace($result, [
+                'runId' => $job->job_uuid,
+                'state' => 'running',
+                'isRunning' => true,
+            ]);
+        }
+
+        return [
+            'runId' => $job->job_uuid,
+            'state' => match ($job->status) {
+                'success' => 'completed',
+                'pending' => 'queued',
+                default => $job->status,
+            },
+            'isRunning' => false,
+            'message' => $job->error_message ?: data_get($result, 'statusMessage', 'ClientController-Job: '.$job->status),
+            'result' => $result,
+            ...$result,
+        ];
     }
 
     protected function mergeLiveStatus(array $storedResult, array $liveStatus): array

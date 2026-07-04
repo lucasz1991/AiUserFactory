@@ -33,6 +33,7 @@ class WorkflowExecutionService
         protected NetworkJobDispatcher $networkJobs,
         protected WorkflowResultNormalizer $resultNormalizer,
         protected WorkflowDebugArtifactService $debugArtifacts,
+        protected ClientWorkflowBundleCompiler $clientBundles,
     ) {}
 
     public function start(Workflow $workflow, array $context = [], string $requestedBy = 'admin-ui'): WorkflowRun
@@ -81,6 +82,10 @@ class WorkflowExecutionService
             ])->save();
         } elseif ($run->status === 'waiting') {
             $run->forceFill(['status' => 'running'])->save();
+        }
+
+        if ($this->shouldStartClientWorkflowBundle($run) && $this->startClientControllerWorkflowRun($run)) {
+            return;
         }
 
         $activeStepRun = $run->stepRuns()
@@ -350,6 +355,174 @@ class WorkflowExecutionService
             WorkflowStep::TYPE_WAIT => $this->completeWaitStep($run, $step, $stepRun),
             default => $step->task_cards !== [] ? $this->startWorkflowTaskStep($run, $step, $stepRun) : $this->completePlannedActionStep($run, $step, $stepRun),
         };
+    }
+
+    protected function shouldStartClientWorkflowBundle(WorkflowRun $run): bool
+    {
+        if (
+            ! $this->usesClientController($run)
+            || $run->stepRuns()->exists()
+            || data_get($run->context_json, 'client_bundle_fallback_reasons')
+        ) {
+            return false;
+        }
+
+        $nodeId = (int) data_get($run->context_json, 'network_node_id', 0);
+        $node = NetworkNode::query()->find($nodeId);
+
+        return (bool) data_get($node?->capabilities_json, 'workflow_bundle_v1', false);
+    }
+
+    protected function startClientControllerWorkflowRun(WorkflowRun $run): bool
+    {
+        $run->loadMissing(['workflow.steps']);
+        $node = NetworkNode::query()->find((int) data_get($run->context_json, 'network_node_id', 0));
+
+        if (! $node || ! $node->isAvailable()) {
+            throw new \RuntimeException('Der ausgewaehlte ClientController-Node ist nicht verfuegbar.');
+        }
+
+        $deviceId = (int) data_get($run->context_json, 'device_id', 0);
+        $device = $deviceId > 0 ? Device::query()->find($deviceId) : null;
+        $steps = $run->workflow->steps->filter(fn (WorkflowStep $step): bool => $step->is_enabled)->values();
+
+        foreach ($steps as $index => $step) {
+            WorkflowStepRun::query()->create([
+                'workflow_run_id' => $run->id,
+                'workflow_step_id' => $step->id,
+                'status' => $index === 0 ? 'waiting' : 'queued',
+                'started_at' => $index === 0 ? now() : null,
+                'result_json' => [],
+            ]);
+        }
+
+        $run->load('stepRuns');
+        $compiled = $this->clientBundles->compile($run);
+
+        if (! $compiled['portable']) {
+            $run->stepRuns()->delete();
+            $context = is_array($run->context_json) ? $run->context_json : [];
+            $context['client_bundle_fallback_reasons'] = $compiled['reasons'];
+            $run->forceFill(['context_json' => $context])->save();
+
+            return false;
+        }
+
+        $timeoutSeconds = max(300, $steps->sum(fn (WorkflowStep $step): int => $this->stepTimeoutSeconds($step)));
+        $networkJob = $this->networkJobs->dispatch(
+            $node,
+            'workflow_run',
+            ['workflow_bundle' => $compiled['bundle']],
+            $device,
+            null,
+            $run->requested_by,
+            now()->addSeconds($timeoutSeconds),
+            $run,
+            2,
+        );
+        $firstStepRun = $run->stepRuns->sortBy('id')->first();
+
+        $firstStepRun?->forceFill([
+            'external_run_type' => 'client-controller-workflow-run',
+            'external_run_id' => $networkJob->job_uuid,
+            'result_json' => [
+                'state' => 'queued',
+                'message' => 'Vollstaendiger Workflow wurde an den ClientController uebergeben.',
+                'networkJobUuid' => $networkJob->job_uuid,
+            ],
+        ])->save();
+
+        $run->forceFill([
+            'status' => 'waiting',
+            'current_workflow_step_id' => $steps->first()?->id,
+        ])->save();
+
+        return true;
+    }
+
+    public function applyClientWorkflowProgress(NetworkJob $job, array $snapshot): void
+    {
+        $run = $job->workflowRun()->with(['workflow.steps', 'stepRuns.workflowStep'])->first();
+
+        if (! $run || $this->isFinalStatus($run->status)) {
+            return;
+        }
+
+        $currentStepId = (int) ($snapshot['currentStepId'] ?? $snapshot['workflowStepId'] ?? 0);
+        $stepSnapshots = collect(is_array($snapshot['steps'] ?? null) ? $snapshot['steps'] : [])
+            ->filter(fn (mixed $step): bool => is_array($step))
+            ->keyBy(fn (array $step): int => (int) ($step['workflowStepId'] ?? 0));
+
+        foreach ($run->stepRuns as $stepRun) {
+            $stepSnapshot = $stepSnapshots->get((int) $stepRun->workflow_step_id);
+
+            if (! is_array($stepSnapshot) && (int) $stepRun->workflow_step_id !== $currentStepId) {
+                continue;
+            }
+
+            $stepSnapshot = is_array($stepSnapshot) ? $stepSnapshot : $snapshot;
+            $state = (string) ($stepSnapshot['state'] ?? $stepSnapshot['status'] ?? 'running');
+            $isCurrentStep = (int) $stepRun->workflow_step_id === $currentStepId;
+            $stepRun->forceFill([
+                'status' => in_array($state, ['completed', 'success'], true) ? 'completed' : 'waiting',
+                'started_at' => $stepRun->started_at ?: now(),
+                'finished_at' => in_array($state, ['completed', 'success'], true) ? ($stepRun->finished_at ?: now()) : null,
+                'external_run_type' => $isCurrentStep ? 'client-controller-workflow-run' : $stepRun->external_run_type,
+                'external_run_id' => $isCurrentStep ? $job->job_uuid : $stepRun->external_run_id,
+                'result_json' => $this->publicRunSnapshot($stepSnapshot),
+                'logs_json' => $this->logsFromExternalStatus($stepSnapshot),
+            ])->save();
+        }
+
+        $run->forceFill([
+            'status' => 'waiting',
+            'current_workflow_step_id' => $currentStepId ?: $run->current_workflow_step_id,
+        ])->save();
+    }
+
+    public function completeClientWorkflowRun(NetworkJob $job, array $result, string $status, ?string $errorMessage = null): void
+    {
+        $run = $job->workflowRun()->with(['workflow.steps', 'stepRuns.workflowStep'])->first();
+
+        if (! $run || $this->isFinalStatus($run->status)) {
+            return;
+        }
+
+        $steps = collect(is_array($result['steps'] ?? null) ? $result['steps'] : [])
+            ->filter(fn (mixed $step): bool => is_array($step))
+            ->keyBy(fn (array $step): int => (int) ($step['workflowStepId'] ?? 0));
+
+        foreach ($run->stepRuns as $stepRun) {
+            $stepResult = $steps->get((int) $stepRun->workflow_step_id);
+
+            if (! is_array($stepResult)) {
+                if ($stepRun->status === 'queued') {
+                    $stepRun->forceFill(['status' => 'skipped'])->save();
+                }
+                continue;
+            }
+
+            if ((bool) ($stepResult['ok'] ?? false)) {
+                $this->completeStepRun($stepRun, $stepResult);
+            } else {
+                $this->failStepRun($stepRun, (string) ($stepResult['statusMessage'] ?? 'Client-Workflow-Schritt fehlgeschlagen.'), $stepResult);
+            }
+        }
+
+        $this->applyWorkflowVariablesResult($run, $result);
+        $lastStepRun = $run->stepRuns->last();
+
+        if ($lastStepRun instanceof WorkflowStepRun) {
+            $result = $this->applyExternalResult($lastStepRun, $result);
+        }
+
+        if ($status === 'success' && (bool) ($result['ok'] ?? false)) {
+            $this->completeRun($run);
+            $run->refresh();
+            $run->forceFill(['result_json' => array_replace(is_array($run->result_json) ? $run->result_json : [], $this->publicRunSnapshot($result))])->save();
+        } else {
+            $this->failRun($run, $errorMessage ?: (string) ($result['statusMessage'] ?? 'Client-Workflow fehlgeschlagen.'));
+        }
     }
 
     protected function startWorkflowTaskStep(WorkflowRun $run, WorkflowStep $step, WorkflowStepRun $stepRun): string
@@ -1015,6 +1188,12 @@ class WorkflowExecutionService
 
     protected function stepRunTimedOut(WorkflowStepRun $stepRun): bool
     {
+        if ($stepRun->external_run_type === 'client-controller-workflow-run') {
+            $job = NetworkJob::query()->where('job_uuid', $stepRun->external_run_id)->first();
+
+            return $job?->expires_at?->lte(now()) ?? false;
+        }
+
         if (! ($stepRun->started_at instanceof Carbon)) {
             return false;
         }
@@ -1259,7 +1438,7 @@ class WorkflowExecutionService
             'mail-registration' => $this->mailRegistration->readRun($externalRunId),
             'webmail-session' => $this->webmailSession->readRun($externalRunId),
             'workflow-task' => $this->workflowTasks->readRun($externalRunId),
-            'client-controller-workflow-task' => $this->clientControllerJobStatus($externalRunId),
+            'client-controller-workflow-task', 'client-controller-workflow-run' => $this->clientControllerJobStatus($externalRunId),
             default => null,
         };
     }
@@ -1275,7 +1454,7 @@ class WorkflowExecutionService
                 : $this->webmailSession->readResult($externalRunId),
             'workflow-task' => $this->workflowTasks->readResult($externalRunId)
                 ?: (is_array($status['result'] ?? null) ? $status['result'] : null),
-            'client-controller-workflow-task' => is_array($status['result'] ?? null) ? $status['result'] : null,
+            'client-controller-workflow-task', 'client-controller-workflow-run' => is_array($status['result'] ?? null) ? $status['result'] : null,
             default => null,
         };
 
@@ -1510,7 +1689,7 @@ class WorkflowExecutionService
             'mail-registration' => $this->mailRegistration->cancelRun($externalRunId, true, $message),
             'webmail-session' => $this->webmailSession->cancelRun($externalRunId, true, $message),
             'workflow-task' => $this->workflowTasks->cancelRun($externalRunId, false, $message),
-            'client-controller-workflow-task' => NetworkJob::query()
+            'client-controller-workflow-task', 'client-controller-workflow-run' => NetworkJob::query()
                 ->where('job_uuid', $externalRunId)
                 ->whereNotIn('status', ['success', 'failed', 'cancelled'])
                 ->update(['status' => 'cancelled', 'completed_at' => now(), 'error_message' => $message]),
@@ -2107,7 +2286,7 @@ class WorkflowExecutionService
 
     protected function scheduleMonitor(WorkflowStepRun $stepRun, int $delaySeconds = 10): void
     {
-        if (! in_array($stepRun->external_run_type, ['mail-registration', 'webmail-session', 'workflow-task', 'client-controller-workflow-task'], true)) {
+        if (! in_array($stepRun->external_run_type, ['mail-registration', 'webmail-session', 'workflow-task', 'client-controller-workflow-task', 'client-controller-workflow-run'], true)) {
             return;
         }
 

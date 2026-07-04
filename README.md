@@ -72,6 +72,24 @@ Queues verarbeiten:
 
 php artisan queue:work
 
+Production deployment for ClientController workflows:
+
+```bash
+php artisan migrate --force
+php artisan storage:link
+php artisan optimize:clear
+php artisan config:cache
+supervisorctl reread
+supervisorctl update
+supervisorctl restart followflow-queue:*
+```
+
+Production must use `APP_ENV=production`, `APP_DEBUG=false` and
+`QUEUE_CONNECTION=database`. An example Supervisor configuration is available
+at `deployment/supervisor-followflow-queue.conf.example`. The full client-side
+workflow protocol does not depend on the queue worker for live progress or
+step routing, while legacy and non-portable fallback workflows still do.
+
 Geplante Aufgaben ausführen:
 
 php artisan schedule:run

@@ -1,0 +1,13 @@
+[program:followflow-queue]
+process_name=%(program_name)s_%(process_num)02d
+command=php /var/www/vhosts/follow-flow.de/factory.follow-flow.de/artisan queue:work database --sleep=1 --tries=3 --timeout=180
+directory=/var/www/vhosts/follow-flow.de/factory.follow-flow.de
+autostart=true
+autorestart=true
+stopasgroup=true
+killasgroup=true
+user=followflow
+numprocs=1
+redirect_stderr=true
+stdout_logfile=/var/www/vhosts/follow-flow.de/factory.follow-flow.de/storage/logs/queue-worker.log
+stopwaitsecs=360

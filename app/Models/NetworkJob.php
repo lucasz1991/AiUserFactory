@@ -11,20 +11,31 @@ class NetworkJob extends Model
 {
     use HasFactory;
 
+    protected $hidden = [
+        'lease_token_hash',
+    ];
+
     protected $fillable = [
         'job_uuid',
         'network_node_id',
         'device_id',
         'person_action_id',
         'network_target_id',
+        'workflow_run_id',
         'type',
+        'payload_version',
         'payload_json',
         'signature',
+        'lease_token_hash',
         'expires_at',
+        'lease_expires_at',
         'status',
         'requested_by',
         'queued_at',
         'dispatched_at',
+        'last_progress_at',
+        'last_sequence',
+        'attempt_count',
         'completed_at',
         'error_message',
         'result_json',
@@ -33,9 +44,14 @@ class NetworkJob extends Model
     protected $casts = [
         'payload_json' => 'array',
         'result_json' => 'array',
+        'payload_version' => 'integer',
+        'last_sequence' => 'integer',
+        'attempt_count' => 'integer',
         'expires_at' => 'datetime',
+        'lease_expires_at' => 'datetime',
         'queued_at' => 'datetime',
         'dispatched_at' => 'datetime',
+        'last_progress_at' => 'datetime',
         'completed_at' => 'datetime',
     ];
 
@@ -59,8 +75,18 @@ class NetworkJob extends Model
         return $this->belongsTo(NetworkTarget::class);
     }
 
+    public function workflowRun(): BelongsTo
+    {
+        return $this->belongsTo(WorkflowRun::class);
+    }
+
     public function executions(): HasMany
     {
         return $this->hasMany(ActionExecution::class);
+    }
+
+    public function progressEvents(): HasMany
+    {
+        return $this->hasMany(NetworkJobProgressEvent::class)->orderBy('sequence');
     }
 }

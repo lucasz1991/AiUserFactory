@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Jobs\MonitorWorkflowStepRunJob;
 use App\Models\Device;
 use App\Models\NetworkJob;
+use App\Models\NetworkJobProgressEvent;
 use App\Models\NetworkNode;
 use App\Models\NodeHeartbeat;
 use App\Models\NodeRebindLog;
@@ -13,6 +14,7 @@ use App\Models\NodeServerBinding;
 use App\Models\Setting;
 use App\Models\WorkflowStepRun;
 use App\Services\ClientController\ClientControllerReleaseService;
+use App\Services\Workflows\WorkflowExecutionService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Crypt;
@@ -224,25 +226,67 @@ class ClientControllerApiController extends Controller
             ], 401);
         }
 
-        $jobs = DB::transaction(function () use ($node) {
-            $jobs = NetworkJob::query()
-                ->with('device')
+        $validated = $request->validate([
+            'protocol_version' => ['nullable', 'integer', 'min:1', 'max:2'],
+            'resume_job_uuids' => ['nullable', 'array', 'max:10'],
+            'resume_job_uuids.*' => ['string', 'max:120'],
+        ]);
+        $protocolVersion = (int) ($validated['protocol_version'] ?? 1);
+        $resumeJobUuids = $validated['resume_job_uuids'] ?? [];
+
+        $jobs = DB::transaction(function () use ($node, $protocolVersion, $resumeJobUuids) {
+            $jobs = collect();
+
+            if ($protocolVersion >= 2 && $resumeJobUuids !== []) {
+                $resumeJob = NetworkJob::query()
+                    ->with('device')
+                    ->where('network_node_id', $node->id)
+                    ->whereIn('job_uuid', $resumeJobUuids)
+                    ->where('status', 'dispatched')
+                    ->orderBy('id')
+                    ->lockForUpdate()
+                    ->first();
+
+                if ($resumeJob) {
+                    $jobs = collect([$resumeJob]);
+                }
+            }
+
+            if ($protocolVersion >= 2 && NetworkJob::query()
                 ->where('network_node_id', $node->id)
-                ->where('status', 'pending')
-                ->where(function ($query): void {
-                    $query->whereNull('expires_at')
-                        ->orWhere('expires_at', '>', now());
-                })
-                ->orderBy('id')
-                ->lockForUpdate()
-                ->limit(1)
-                ->get();
+                ->whereIn('type', ['workflow_task', 'workflow_run'])
+                ->where('status', 'dispatched')
+                ->where('lease_expires_at', '>', now())
+                ->when($jobs->isNotEmpty(), fn ($query) => $query->whereKeyNot($jobs->first()->id))
+                ->exists()) {
+                return collect();
+            }
+
+            if ($jobs->isEmpty()) {
+                $jobs = NetworkJob::query()
+                    ->with('device')
+                    ->where('network_node_id', $node->id)
+                    ->where('status', 'pending')
+                    ->where(function ($query): void {
+                        $query->whereNull('expires_at')
+                            ->orWhere('expires_at', '>', now());
+                    })
+                    ->orderBy('id')
+                    ->lockForUpdate()
+                    ->limit(1)
+                    ->get();
+            }
 
             foreach ($jobs as $job) {
-                $job->update([
+                $leaseToken = $protocolVersion >= 2 ? Str::random(64) : null;
+                $job->forceFill([
                     'status' => 'dispatched',
                     'dispatched_at' => now(),
-                ]);
+                    'lease_token_hash' => $leaseToken ? hash('sha256', $leaseToken) : null,
+                    'lease_expires_at' => $leaseToken ? now()->addSeconds(120) : null,
+                    'attempt_count' => ((int) $job->attempt_count) + 1,
+                ])->save();
+                $job->setAttribute('issued_lease_token', $leaseToken);
 
                 if ($job->type === 'node_update') {
                     $node->update([
@@ -261,7 +305,10 @@ class ClientControllerApiController extends Controller
                 'job_uuid' => $job->job_uuid,
                 'type' => $job->type,
                 'payload' => $job->payload_json,
+                'payload_version' => max(1, (int) $job->payload_version),
                 'signature' => $job->signature,
+                'lease_token' => $job->getAttribute('issued_lease_token'),
+                'lease_expires_at' => optional($job->lease_expires_at)?->toIso8601String(),
                 'expires_at' => optional($job->expires_at)?->toIso8601String(),
                 'device_uuid' => $job->device?->device_uuid,
                 'execution_scope' => $job->device_id ? 'device' : 'node',
@@ -285,6 +332,8 @@ class ClientControllerApiController extends Controller
             'status' => ['required', 'string', 'in:success,failed,cancelled'],
             'result' => ['nullable', 'array'],
             'error_message' => ['nullable', 'string'],
+            'lease_token' => ['nullable', 'string', 'max:255'],
+            'sequence' => ['nullable', 'integer', 'min:1'],
         ]);
 
         $job = NetworkJob::query()
@@ -299,13 +348,29 @@ class ClientControllerApiController extends Controller
             ], 404);
         }
 
-        if ($job->status === 'cancelled') {
+        if (! $this->validLease($request, $job)) {
+            return response()->json(['success' => false, 'message' => 'Invalid or missing job lease.'], 409);
+        }
+
+        if (in_array($job->status, ['success', 'failed', 'cancelled'], true)) {
             return response()->json([
                 'success' => true,
                 'ignored' => true,
-                'message' => 'Job was cancelled before the node result arrived.',
+                'acknowledged_sequence' => (int) $job->last_sequence,
             ]);
         }
+
+        $requestedSequence = (int) ($validated['sequence'] ?? 0);
+
+        if ($requestedSequence > 0 && $requestedSequence <= (int) $job->last_sequence) {
+            return response()->json([
+                'success' => true,
+                'duplicate' => true,
+                'acknowledged_sequence' => (int) $job->last_sequence,
+            ]);
+        }
+
+        $sequence = $requestedSequence > 0 ? $requestedSequence : ((int) $job->last_sequence) + 1;
 
         $result = $this->attachStoredLivePreview($job, $validated['result'] ?? []);
 
@@ -322,12 +387,20 @@ class ClientControllerApiController extends Controller
             unset($result[$plainKey]);
         }
 
-        $job->update([
+        $job->forceFill([
             'status' => $validated['status'],
             'result_json' => $result,
             'error_message' => $validated['error_message'] ?? null,
             'completed_at' => now(),
-        ]);
+            'last_progress_at' => now(),
+            'last_sequence' => $sequence,
+            'lease_expires_at' => null,
+        ])->save();
+
+        NetworkJobProgressEvent::query()->firstOrCreate(
+            ['network_job_id' => $job->id, 'sequence' => $sequence],
+            ['kind' => 'result', 'payload_json' => $result, 'received_at' => now()],
+        );
 
         if ($job->type === 'node_update') {
             if ($validated['status'] === 'success') {
@@ -350,11 +423,22 @@ class ClientControllerApiController extends Controller
             ->first();
 
         if ($stepRun) {
+            $this->syncWorkflowStepSnapshot($stepRun, $result);
             MonitorWorkflowStepRunJob::dispatch($stepRun->id);
+        }
+
+        if ($job->type === 'workflow_run') {
+            app(WorkflowExecutionService::class)->completeClientWorkflowRun(
+                $job,
+                $result,
+                $validated['status'],
+                $validated['error_message'] ?? null,
+            );
         }
 
         return response()->json([
             'success' => true,
+            'acknowledged_sequence' => $sequence,
         ]);
     }
 
@@ -373,6 +457,8 @@ class ClientControllerApiController extends Controller
             'job_uuid' => ['required', 'string', 'max:120'],
             'progress' => ['required', 'string', 'max:5242880'],
             'screenshot' => ['nullable', 'file', 'mimes:png', 'max:10240'],
+            'lease_token' => ['nullable', 'string', 'max:255'],
+            'sequence' => ['nullable', 'integer', 'min:1'],
         ]);
 
         $progress = json_decode($validated['progress'], true);
@@ -396,12 +482,37 @@ class ClientControllerApiController extends Controller
             ], 404);
         }
 
+        if (! $this->validLease($request, $job)) {
+            return response()->json(['success' => false, 'message' => 'Invalid or missing job lease.'], 409);
+        }
+
         if ($job->status !== 'dispatched') {
             return response()->json([
                 'success' => true,
                 'ignored' => true,
                 'message' => 'Job is no longer running.',
+                'acknowledged_sequence' => (int) $job->last_sequence,
             ]);
+        }
+
+        $requestedSequence = (int) ($validated['sequence'] ?? 0);
+
+        if ($requestedSequence > 0 && $requestedSequence <= (int) $job->last_sequence) {
+            return response()->json([
+                'success' => true,
+                'duplicate' => true,
+                'acknowledged_sequence' => (int) $job->last_sequence,
+            ]);
+        }
+
+        $sequence = $requestedSequence > 0 ? $requestedSequence : ((int) $job->last_sequence) + 1;
+        $existingEvent = NetworkJobProgressEvent::query()
+            ->where('network_job_id', $job->id)
+            ->where('sequence', $sequence)
+            ->first();
+
+        if ($existingEvent) {
+            return response()->json(['success' => true, 'duplicate' => true, 'acknowledged_sequence' => $sequence]);
         }
 
         if ($request->hasFile('screenshot')) {
@@ -418,7 +529,32 @@ class ClientControllerApiController extends Controller
 
         $job->forceFill([
             'result_json' => $progress,
+            'last_progress_at' => now(),
+            'last_sequence' => $sequence,
+            'lease_expires_at' => $job->lease_token_hash ? now()->addSeconds(120) : null,
         ])->save();
+
+        NetworkJobProgressEvent::query()->create([
+            'network_job_id' => $job->id,
+            'sequence' => $sequence,
+            'kind' => 'progress',
+            'payload_json' => $this->compactProgressEvent($progress),
+            'screenshot_relative_path' => data_get($progress, 'livePreviewRelativePath'),
+            'received_at' => now(),
+        ]);
+
+        $stepRun = WorkflowStepRun::query()
+            ->where('external_run_type', 'client-controller-workflow-task')
+            ->where('external_run_id', $job->job_uuid)
+            ->first();
+
+        if ($stepRun) {
+            $this->syncWorkflowStepSnapshot($stepRun, $progress);
+        }
+
+        if ($job->type === 'workflow_run') {
+            app(WorkflowExecutionService::class)->applyClientWorkflowProgress($job, $progress);
+        }
 
         $node->forceFill([
             'is_online' => true,
@@ -427,6 +563,7 @@ class ClientControllerApiController extends Controller
 
         return response()->json([
             'success' => true,
+            'acknowledged_sequence' => $sequence,
         ]);
     }
 
@@ -515,6 +652,54 @@ class ClientControllerApiController extends Controller
         return NetworkNode::query()
             ->where('api_key', $apiKey)
             ->first();
+    }
+
+    protected function validLease(Request $request, NetworkJob $job): bool
+    {
+        $expectedHash = trim((string) $job->lease_token_hash);
+
+        if ($expectedHash === '') {
+            return true;
+        }
+
+        $leaseToken = trim((string) $request->input('lease_token', $request->header('X-JOB-LEASE-TOKEN', '')));
+
+        return $leaseToken !== '' && hash_equals($expectedHash, hash('sha256', $leaseToken));
+    }
+
+    protected function syncWorkflowStepSnapshot(WorkflowStepRun $stepRun, array $snapshot): void
+    {
+        if (! in_array($stepRun->status, ['running', 'waiting'], true)) {
+            return;
+        }
+
+        $events = collect(data_get($snapshot, 'events', []))
+            ->filter(fn (mixed $event): bool => is_array($event))
+            ->values()
+            ->all();
+
+        $stepRun->forceFill([
+            'status' => 'waiting',
+            'result_json' => $snapshot,
+            'logs_json' => $events,
+        ])->save();
+    }
+
+    protected function compactProgressEvent(array $progress): array
+    {
+        $events = is_array($progress['events'] ?? null) ? $progress['events'] : [];
+        $latestEvent = $events !== [] ? end($events) : null;
+
+        return array_filter([
+            'state' => $progress['state'] ?? null,
+            'stage' => $progress['stage'] ?? null,
+            'message' => $progress['message'] ?? $progress['statusMessage'] ?? null,
+            'currentStepId' => $progress['currentStepId'] ?? $progress['workflowStepId'] ?? null,
+            'currentStepRunId' => $progress['currentStepRunId'] ?? $progress['workflowStepRunId'] ?? null,
+            'currentTaskKey' => $progress['currentTaskKey'] ?? data_get($latestEvent, 'taskKey'),
+            'latestEvent' => is_array($latestEvent) ? $latestEvent : null,
+            'reportedAt' => $progress['clientControllerReportedAt'] ?? $progress['at'] ?? null,
+        ], fn (mixed $value): bool => $value !== null && $value !== '');
     }
 
     protected function attachStoredLivePreview(NetworkJob $job, array $payload): array

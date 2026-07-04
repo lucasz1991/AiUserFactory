@@ -3,7 +3,7 @@
     "type": "module",
     "scripts": {
         "dev": "vite",
-        "build": "vite build && mv public/build/.vite/manifest.json public/build/manifest.json && rm -rf public/build/.vite"
+        "build": "vite build && node scripts/finalize-vite-build.mjs"
     },
     "devDependencies": {
         "@alpinejs/focus": "^3.10.5",

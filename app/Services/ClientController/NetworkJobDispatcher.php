@@ -6,6 +6,7 @@ use App\Models\Device;
 use App\Models\NetworkJob;
 use App\Models\NetworkNode;
 use App\Models\NetworkTarget;
+use App\Models\WorkflowRun;
 use Illuminate\Support\Str;
 
 class NetworkJobDispatcher
@@ -18,6 +19,8 @@ class NetworkJobDispatcher
         ?NetworkTarget $target = null,
         ?string $requestedBy = null,
         mixed $expiresAt = null,
+        ?WorkflowRun $workflowRun = null,
+        int $payloadVersion = 1,
     ): NetworkJob {
         if ($device && (int) $device->network_node_id !== (int) $node->id) {
             throw new \InvalidArgumentException('Das gewaehlte Geraet gehoert nicht zum ausgewaehlten ClientController-Node.');
@@ -30,7 +33,9 @@ class NetworkJobDispatcher
             'network_node_id' => $node->id,
             'device_id' => $device?->id,
             'network_target_id' => $target?->id,
+            'workflow_run_id' => $workflowRun?->id,
             'type' => $type,
+            'payload_version' => max(1, $payloadVersion),
             'payload_json' => $payload,
             'signature' => hash_hmac('sha256', $canonicalPayload ?: '[]', (string) $node->api_key),
             'status' => 'pending',
