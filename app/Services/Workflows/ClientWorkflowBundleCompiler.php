@@ -26,6 +26,7 @@ class ClientWorkflowBundleCompiler
 
             if (! $stepRun) {
                 $reasons[] = 'Step-Run fehlt: '.$step->name;
+
                 continue;
             }
 
@@ -39,9 +40,7 @@ class ClientWorkflowBundleCompiler
             foreach ($tasks as $task) {
                 $runner = strtolower(trim((string) ($task['runner'] ?? '')));
                 $nodeScript = trim((string) ($task['node_script'] ?? ''));
-                $phpHandler = trim((string) ($task['php_handler'] ?? ''));
-
-                if ($runner === 'php' || $phpHandler !== '' || ($runner !== 'node' && $nodeScript === '')) {
+                if ($runner === 'php' || ($runner !== 'node' && $nodeScript === '')) {
                     $reasons[] = 'Nicht portable Task: '.$step->name.' / '.($task['title'] ?? $task['key'] ?? 'Task');
                 }
             }

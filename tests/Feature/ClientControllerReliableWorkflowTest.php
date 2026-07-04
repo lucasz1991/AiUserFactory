@@ -131,6 +131,7 @@ class ClientControllerReliableWorkflowTest extends TestCase
                 'title' => 'Open',
                 'runner' => 'node',
                 'node_script' => 'node/workflows/tasks/browser/open.cjs',
+                'php_handler' => 'App\\Services\\Workflows\\Tasks\\PersistBrowserSessionTask@handle',
                 'task_key' => 'browser.open',
             ]]],
         ]);
@@ -386,5 +387,9 @@ class ClientControllerReliableWorkflowTest extends TestCase
         $this->assertSame($freeNode->id, $job->network_node_id);
         $this->assertSame($run->id, $freeNode->fresh()->workflow_reservation_run_id);
         $this->assertNull($busyNode->fresh()->workflow_reservation_run_id);
+
+        $run->forceFill(['status' => 'stop_requested'])->save();
+        app(WorkflowExecutionService::class)->advance($run);
+        $this->assertSame(1, NetworkJob::query()->where('workflow_run_id', $run->id)->count());
     }
 }

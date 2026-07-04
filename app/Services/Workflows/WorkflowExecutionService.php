@@ -75,6 +75,10 @@ class WorkflowExecutionService
             return;
         }
 
+        if (in_array($run->status, ['stop_requested', 'unreachable'], true)) {
+            return;
+        }
+
         if ($this->usesClientController($run) && ! $this->assignClientExecutionTarget($run)) {
             return;
         }
@@ -305,7 +309,9 @@ class WorkflowExecutionService
             return;
         }
 
-        if ($this->stepRunTimedOut($stepRun)) {
+        $isClientControllerStep = in_array($stepRun->external_run_type, ['client-controller-workflow-task', 'client-controller-workflow-run'], true);
+
+        if (! $isClientControllerStep && $this->stepRunTimedOut($stepRun)) {
             $this->expireStepRun($stepRun);
 
             return;
@@ -324,7 +330,7 @@ class WorkflowExecutionService
         $this->ingestDebugArtifacts($stepRun, $status);
 
         if ($this->externalStillRunning($status)) {
-            if ($this->stepRunTimedOut($stepRun)) {
+            if (! $isClientControllerStep && $this->stepRunTimedOut($stepRun)) {
                 $this->expireStepRun($stepRun);
 
                 return;
@@ -345,6 +351,31 @@ class WorkflowExecutionService
         $result = $this->normalizeStepResult($stepRun, $result, $status);
         $this->ingestDebugArtifacts($stepRun, $status, $result);
 
+        $clientReportedStatus = strtolower(trim((string) ($result['status'] ?? $result['state'] ?? '')));
+        if ($stepRun->external_run_type === 'client-controller-workflow-task'
+            && $stepRun->workflowRun->status === 'stop_requested'
+            && in_array($clientReportedStatus, ['cancelled', 'canceled', 'stopped'], true)) {
+            $finishedAt = $this->clientReportedAt($result, ['finishedAt', 'finished_at', 'cancelledAt', 'cancelled_at']) ?: now();
+            $message = (string) ($result['statusMessage'] ?? $result['message'] ?? 'ClientController-Workflow wurde abgebrochen.');
+            $stepRun->forceFill([
+                'status' => 'cancelled',
+                'finished_at' => $finishedAt,
+                'result_json' => $this->publicRunSnapshot($result),
+                'logs_json' => $this->logsFromExternalStatus($result),
+                'error_message' => $message,
+            ])->save();
+            $stepRun->workflowRun->forceFill([
+                'status' => 'cancelled',
+                'current_workflow_step_id' => null,
+                'finished_at' => $finishedAt,
+                'result_json' => array_replace($this->publicRunSnapshot($result), ['source' => 'client-controller']),
+                'error_message' => $message,
+            ])->save();
+            $this->releaseClientReservation($stepRun->workflowRun);
+
+            return;
+        }
+
         if (in_array($stepRun->external_run_type, ['workflow-task', 'client-controller-workflow-task'], true)) {
             $this->applyWorkflowVariablesResult($stepRun->workflowRun, $result);
         }
@@ -357,11 +388,14 @@ class WorkflowExecutionService
                 ?: 'Node-Schritt wurde nicht erfolgreich abgeschlossen.'
             );
 
-            if ($this->routeForResult($stepRun->workflowStep, 'failed', $result)) {
-                $result['routedOutcome'] = 'failed';
+            $failureOutcome = $this->resultOutcome($result);
+            $failureOutcome = in_array($failureOutcome, ['failed', 'timeout'], true) ? $failureOutcome : 'failed';
+
+            if ($this->routeForResult($stepRun->workflowStep, $failureOutcome, $result)) {
+                $result['routedOutcome'] = $failureOutcome;
                 $result['statusMessage'] = $message;
-                $this->completeStepRun($stepRun, $result, 'failed');
-                $this->continueAfterStep($stepRun->workflowRun, $stepRun, $result, 'failed');
+                $this->completeStepRun($stepRun, $result, $failureOutcome);
+                $this->continueAfterStep($stepRun->workflowRun, $stepRun, $result, $failureOutcome);
 
                 return;
             }
@@ -705,6 +739,8 @@ class WorkflowExecutionService
             $state = strtolower((string) ($stepResult['state'] ?? $stepResult['status'] ?? ((bool) ($stepResult['ok'] ?? false) ? 'completed' : 'failed')));
             $stepRun->forceFill([
                 'status' => $this->clientStepStatus($state),
+                'external_run_type' => 'client-controller-workflow-run',
+                'external_run_id' => $job->job_uuid,
                 'started_at' => $this->clientReportedAt($stepResult, ['startedAt', 'started_at']) ?: $stepRun->started_at,
                 'finished_at' => $this->clientReportedAt($stepResult, ['finishedAt', 'finished_at', 'completedAt', 'completed_at'])
                     ?: $job->completed_at,
@@ -1501,7 +1537,7 @@ class WorkflowExecutionService
                 }
 
                 if ($job->status === 'unreachable' && $job->unreachable_at?->copy()->addSeconds(180)->lte(now())) {
-                    $this->loseAndPossiblyReassignClientJob($job);
+                    $this->loseClientJob($job);
                 }
             });
     }
@@ -1519,7 +1555,7 @@ class WorkflowExecutionService
         ])->save();
     }
 
-    protected function loseAndPossiblyReassignClientJob(NetworkJob $job): void
+    protected function loseClientJob(NetworkJob $job): void
     {
         $run = $job->workflowRun;
         $job->forceFill([
@@ -1534,62 +1570,19 @@ class WorkflowExecutionService
             return;
         }
 
-        $context = is_array($run->context_json) ? $run->context_json : [];
-        $reassignments = (int) ($context['client_reassignment_count'] ?? 0);
-        $maximum = (int) ($context['max_client_reassignments'] ?? 2);
         $this->releaseClientReservation($run);
-
-        $manualStopWithoutAcknowledgement = $job->control_command === 'stop'
-            && data_get($job->control_payload_json, 'result_status') === 'cancelled';
-
-        if ($manualStopWithoutAcknowledgement || ! (bool) ($context['allow_client_reassignment'] ?? true) || $reassignments >= $maximum) {
-            $run->stepRuns()->whereIn('status', ['running', 'waiting', 'queued'])->update(['status' => 'lost']);
-            $run->forceFill([
-                'status' => 'lost',
-                'finished_at' => now(),
-                'error_message' => $job->error_message,
-                'result_json' => [
-                    'state' => 'lost',
-                    'statusMessage' => $job->error_message,
-                    'source' => 'ai-user-factory-liveness',
-                ],
-            ])->save();
-
-            return;
-        }
-
-        $context['client_reassignment_count'] = $reassignments + 1;
-        $context['network_node_id'] = null;
-        $context['device_id'] = null;
-        $context['requested_network_node_id'] = null;
-        $context['requested_device_id'] = null;
-        $context['assignment_source'] = 'reassignment';
-        $run->stepRuns()->update([
-            'status' => 'queued',
-            'external_run_type' => null,
-            'external_run_id' => null,
-            'started_at' => null,
-            'finished_at' => null,
-            'duration_ms' => null,
-            'result_json' => json_encode([]),
-            'logs_json' => json_encode([]),
-            'error_message' => null,
-        ]);
+        $run->stepRuns()->whereIn('status', ['running', 'waiting', 'queued'])->update(['status' => 'lost']);
         $run->forceFill([
-            'status' => 'queued',
-            'started_at' => null,
-            'finished_at' => null,
+            'status' => 'lost',
+            'finished_at' => now(),
             'current_workflow_step_id' => null,
-            'context_json' => $context,
+            'error_message' => $job->error_message,
             'result_json' => [
-                'state' => 'queued',
-                'statusMessage' => 'Der nicht erreichbare Client-Versuch wurde isoliert; eine neue Zuweisung wird gesucht.',
-                'source' => 'ai-user-factory-scheduler',
+                'state' => 'lost',
+                'statusMessage' => $job->error_message,
+                'source' => 'ai-user-factory-liveness',
             ],
-            'error_message' => null,
         ])->save();
-
-        RunWorkflowJob::dispatch($run->id)->delay(now()->addSeconds(5));
     }
 
     protected function clientStepStatus(string $state): string
@@ -1957,7 +1950,7 @@ class WorkflowExecutionService
     protected function prepareExternalResult(WorkflowStepRun $stepRun, array $result): array
     {
         if (
-            in_array($stepRun->external_run_type, ['workflow-task', 'client-controller-workflow-task'], true)
+            in_array($stepRun->external_run_type, ['workflow-task', 'client-controller-workflow-task', 'client-controller-workflow-run'], true)
             && (
                 trim((string) data_get($result, 'webmailSessionFilePath', '')) !== ''
                 || trim((string) data_get($result, 'encryptedSessionPayload', '')) !== ''
@@ -1967,7 +1960,7 @@ class WorkflowExecutionService
         }
 
         if (
-            in_array($stepRun->external_run_type, ['workflow-task', 'client-controller-workflow-task'], true)
+            in_array($stepRun->external_run_type, ['workflow-task', 'client-controller-workflow-task', 'client-controller-workflow-run'], true)
             && (
                 trim((string) data_get($result, 'browserSessionFilePath', '')) !== ''
                 || trim((string) data_get($result, 'encryptedBrowserSessionPayload', '')) !== ''
@@ -1981,7 +1974,7 @@ class WorkflowExecutionService
 
     protected function applyExternalResult(WorkflowStepRun $stepRun, array $result): array
     {
-        if (in_array($stepRun->external_run_type, ['workflow-task', 'client-controller-workflow-task'], true)) {
+        if (in_array($stepRun->external_run_type, ['workflow-task', 'client-controller-workflow-task', 'client-controller-workflow-run'], true)) {
             $this->applyWorkflowVariablesResult($stepRun->workflowRun, $result);
             $this->applyWorkflowTaskMailAccountPersistence($stepRun->workflowRun, $result);
         }
@@ -1999,7 +1992,7 @@ class WorkflowExecutionService
         }
 
         if (
-            in_array($stepRun->external_run_type, ['workflow-task', 'client-controller-workflow-task'], true)
+            in_array($stepRun->external_run_type, ['workflow-task', 'client-controller-workflow-task', 'client-controller-workflow-run'], true)
             && (
                 $stepRun->workflowStep?->type === WorkflowStep::TYPE_MAIL_ACCOUNT_REGISTRATION
                 || (bool) data_get($result, 'account.generated', false)
@@ -2009,7 +2002,7 @@ class WorkflowExecutionService
         }
 
         if (
-            in_array($stepRun->external_run_type, ['workflow-task', 'client-controller-workflow-task'], true)
+            in_array($stepRun->external_run_type, ['workflow-task', 'client-controller-workflow-task', 'client-controller-workflow-run'], true)
             && (
                 trim((string) data_get($result, 'webmailSessionFilePath', '')) !== ''
                 || trim((string) data_get($result, 'encryptedSessionPayload', '')) !== ''
@@ -2020,7 +2013,7 @@ class WorkflowExecutionService
         }
 
         if (
-            in_array($stepRun->external_run_type, ['workflow-task', 'client-controller-workflow-task'], true)
+            in_array($stepRun->external_run_type, ['workflow-task', 'client-controller-workflow-task', 'client-controller-workflow-run'], true)
             && (
                 trim((string) data_get($result, 'browserSessionFilePath', '')) !== ''
                 || trim((string) data_get($result, 'encryptedBrowserSessionPayload', '')) !== ''
@@ -2031,7 +2024,7 @@ class WorkflowExecutionService
         }
 
         if (
-            in_array($stepRun->external_run_type, ['workflow-task', 'client-controller-workflow-task'], true)
+            in_array($stepRun->external_run_type, ['workflow-task', 'client-controller-workflow-task', 'client-controller-workflow-run'], true)
             && (
                 (bool) data_get($result, 'browserSessionDeleted', false)
                 || (bool) data_get($result, 'deletedBrowserSession', false)
@@ -2722,8 +2715,8 @@ class WorkflowExecutionService
             'device_id' => (int) ($context['device_id'] ?? 0) ?: null,
             'requested_network_node_id' => (int) ($context['network_node_id'] ?? 0) ?: null,
             'requested_device_id' => (int) ($context['device_id'] ?? 0) ?: null,
-            'allow_client_reassignment' => (bool) ($context['allow_client_reassignment'] ?? true),
-            'max_client_reassignments' => max(0, min(10, (int) ($context['max_client_reassignments'] ?? 2))),
+            'allow_client_reassignment' => false,
+            'max_client_reassignments' => 0,
         ];
     }
 
