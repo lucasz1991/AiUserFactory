@@ -23,7 +23,7 @@ $maxWidth = [
     x-on:keydown.escape.window="show = false"
     x-show="show"
     id="{{ $id }}"
-    class="jetstream-modal fixed inset-0 z-[80] overflow-y-auto px-4 py-4 sm:px-6 sm:py-8"
+    class="jetstream-modal fixed inset-0 z-[80] overflow-y-auto px-4 py-4 sm:px-6 sm:py-8 max-h-screen"
     style="display: none;"
 >
     <div x-show="show" class="fixed inset-0 transform transition-all"  x-transition:enter="ease-out duration-300"
@@ -63,7 +63,7 @@ $maxWidth = [
                 </button>
             </div>
 
-            <div class="min-h-0 flex-1 overflow-y-auto">
+            <div class="min-h-0 flex-1 overflow-y-auto scroll-container">
                 {{ $slot }}
             </div>
 
