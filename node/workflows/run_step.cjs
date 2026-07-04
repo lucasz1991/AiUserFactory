@@ -282,6 +282,7 @@ function statusPayload(state, stage, message, extra = {}) {
     browserFallbackReason,
     browserProfilePath: runtime.browserProfilePath || null,
     browserWsEndpoint: browserWsEndpoint(),
+    browserIdentity: browserIdentityPayload(),
     tasks: runtime.tasks.map((task) => {
       const result = taskResults.find((candidate) => candidate.key === task.key);
 
@@ -331,6 +332,43 @@ function browserWsEndpoint() {
   } catch {
     return '';
   }
+}
+
+function browserProcessId() {
+  try {
+    return browser && typeof browser.process === 'function'
+      ? browser.process()?.pid || null
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function browserIdentityPayload() {
+  const wsEndpoint = browserWsEndpoint();
+  const processId = browserProcessId();
+  const windows = Array.isArray(lastBrowserWindows) ? lastBrowserWindows : [];
+
+  return {
+    wsEndpoint,
+    ws_endpoint: wsEndpoint,
+    processId,
+    process_id: processId,
+    connectedToExistingBrowser,
+    connected_to_existing_browser: connectedToExistingBrowser,
+    browserDisconnected,
+    browser_disconnected: browserDisconnected,
+    requestedBrowserEngine,
+    activeBrowserEngine,
+    browserFallbackReason,
+    windows: windows.map((windowEntry) => ({
+      key: windowEntry?.key || windowEntry?.name || '',
+      targetId: windowEntry?.targetId || windowEntry?.target_id || '',
+      url: windowEntry?.url || '',
+      title: windowEntry?.title || '',
+      capturedAt: windowEntry?.capturedAt || null,
+    })),
+  };
 }
 
 function valueFromPath(source, keyPath) {
@@ -1486,6 +1524,9 @@ async function loadBrowser() {
     userDataDir: runtime.browserProfilePath,
     defaultViewport: { width: 1366, height: 900 },
     args: launchArgs,
+    handleSIGINT: false,
+    handleSIGTERM: false,
+    handleSIGHUP: false,
   };
 
   pushEvent('browser-launch-options', 'Browser-Startparameter wurden vorbereitet.', {
@@ -1524,6 +1565,8 @@ async function loadBrowser() {
     requestedBrowserEngine,
     activeBrowserEngine,
     browserFallbackReason,
+    browserProcessId: browserProcessId(),
+    browserWsEndpointAvailable: browserWsEndpoint() !== '',
   });
 
   return browser;
@@ -1986,6 +2029,7 @@ async function handleShutdownSignal(signal) {
     tasks: taskResults,
     browserWindows: lastBrowserWindows,
     browserWsEndpoint: browserWsEndpoint(),
+    browserIdentity: browserIdentityPayload(),
     events,
     finishedAt: now(),
   };
@@ -2209,6 +2253,7 @@ async function run() {
           embeddedWorkflowBrowserWindow: task.embedded_workflow_browser_window || null,
           browserWindows: lastBrowserWindows,
           browserWsEndpoint: browserWsEndpoint(),
+          browserIdentity: browserIdentityPayload(),
         };
       } else if (task.runner === 'php') {
         result = await runDataTask(task, context);
@@ -2615,6 +2660,7 @@ async function run() {
         tasks: taskResults,
         browserWindows: lastBrowserWindows,
         browserWsEndpoint: browserWsEndpoint(),
+        browserIdentity: browserIdentityPayload(),
         runnerDiagnostics: {
           keepWorkflowBrowserAlive: shouldKeepWorkflowBrowserProcessAlive(),
           workflowBundleStep: runtime.workflowBundleStep === true || runtime.workflow_bundle_step === true,
@@ -2734,6 +2780,7 @@ async function run() {
     debug_artifacts: debugArtifacts,
     browserWindows: lastBrowserWindows,
     browserWsEndpoint: browserWsEndpoint(),
+    browserIdentity: browserIdentityPayload(),
     runnerDiagnostics: {
       keepWorkflowBrowserAlive: shouldKeepWorkflowBrowserProcessAlive(),
       workflowBundleStep: runtime.workflowBundleStep === true || runtime.workflow_bundle_step === true,
@@ -2765,6 +2812,7 @@ run()
       debug_artifacts: debugArtifacts,
       browserWindows: lastBrowserWindows,
       browserWsEndpoint: browserWsEndpoint(),
+      browserIdentity: browserIdentityPayload(),
       runnerDiagnostics: {
         keepWorkflowBrowserAlive: shouldKeepWorkflowBrowserProcessAlive(),
         workflowBundleStep: runtime.workflowBundleStep === true || runtime.workflow_bundle_step === true,
