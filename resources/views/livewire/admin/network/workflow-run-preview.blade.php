@@ -42,6 +42,7 @@
         <div
             x-data="{
                 overviewOpen: false,
+                browserOpen: false,
                 logsOpen: 'timeline',
                 workflowScrollObserver: null,
                 workflowScrollTimer: null,
@@ -228,6 +229,7 @@
                             :workflow-run="$workflowRun"
                             :active-step-id="$activeStepId"
                             :active-task-key="$activeTaskKey"
+                            :show-header="false"
                         />
                     </div>
                 </div>
@@ -318,67 +320,110 @@
                 </section>
             @endif
 
-            <section class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-                <div class="flex items-center justify-between gap-3 px-4 py-3">
-                    <div>
-                        <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Browserfenster</div>
-                        <div class="mt-1 text-sm text-slate-600">Live-Screenshots je offenem Fenster</div>
-                    </div>
-                    <span class="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700">
-                        {{ $screenshotPanels->count() }}
-                    </span>
-                </div>
-
-                <div class="border-t border-slate-100 bg-slate-50 p-3">
-                    @if($screenshotPanels->isNotEmpty())
-                        <div class="flex flex-nowrap gap-3 overflow-x-auto pb-1" data-workflow-preview-scrollbar>
-                            @foreach($screenshotPanels as $panel)
-                                <article
-                                    class="min-w-0 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm"
-                                    style="flex: 0 0 {{ $browserPanelBasis }}%; max-width: {{ $browserPanelBasis }}%; min-width: {{ $browserPanelMinWidth }};"
-                                >
-                                    <div class="flex items-start justify-between gap-3 border-b border-slate-100 bg-white px-3 py-2">
-                                        <div class="min-w-0">
-                                            <div class="truncate text-xs font-semibold uppercase tracking-wide text-slate-700">
-                                                {{ $panel['title'] }} · {{ $panel['step'] }}
+            @if($screenshotPanels->isNotEmpty())
+                <section class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+                    <button
+                        type="button"
+                        x-show="!browserOpen"
+                        x-collapse.duration.180ms
+                        x-on:click="browserOpen = true"
+                        class="flex min-h-20 w-full items-center justify-between gap-4 bg-white px-4 py-3 text-left transition hover:bg-slate-50"
+                    >
+                        <div class="min-w-0">
+                            <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Browserfenster</div>
+                            <div class="mt-1 truncate text-sm font-semibold text-slate-900">
+                                {{ $screenshotPanels->count() }} offene {{ $screenshotPanels->count() === 1 ? 'Vorschau' : 'Vorschauen' }}
+                            </div>
+                            <div class="mt-0.5 truncate text-xs text-slate-500">
+                                {{ $screenshotPanels->pluck('title')->filter()->take(3)->implode(' · ') }}
+                            </div>
+                        </div>
+                        <div class="flex shrink-0 items-center justify-end gap-2">
+                            <div class="hidden max-w-sm items-center justify-end gap-1 sm:flex">
+                                @foreach($screenshotPanels->take(4) as $panel)
+                                    <div class="relative h-12 w-20 overflow-hidden rounded-md border border-slate-200 bg-slate-100 shadow-sm">
+                                        @if($panel['image'])
+                                            <img src="{{ $panel['image'] }}" alt="{{ $panel['title'] }} Screenshot" class="h-full w-full object-cover">
+                                        @else
+                                            <div class="flex h-full w-full items-center justify-center text-[9px] font-semibold text-slate-400">
+                                                Leer
                                             </div>
-                                            @include('livewire.admin.config.partials.browser-window-status', [
-                                                'windowStatus' => is_array($panel['window'] ?? null) ? $panel['window'] : [],
-                                            ])
-                                        </div>
-                                        @if($panel['dom'])
-                                            <a
-                                                href="{{ $panel['dom'] }}"
-                                                download="{{ $downloadName(($panel['step'] ?? 'workflow').' '.($panel['title'] ?? 'browser')).'-dom.json' }}"
-                                                class="shrink-0 rounded border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-semibold text-slate-600 hover:bg-slate-100"
-                                            >
-                                                DOM
-                                            </a>
                                         @endif
                                     </div>
+                                @endforeach
+                                @if($screenshotPanels->count() > 4)
+                                    <span class="flex h-12 min-w-12 items-center justify-center rounded-md border border-slate-200 bg-slate-50 px-2 text-xs font-semibold text-slate-600">
+                                        +{{ $screenshotPanels->count() - 4 }}
+                                    </span>
+                                @endif
+                            </div>
+                            <span class="rounded-md border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-800">
+                                Maximieren
+                            </span>
+                        </div>
+                    </button>
 
-                                    @if($panel['image'])
-                                        <a href="{{ $panel['image'] }}" target="_blank" rel="noopener" class="relative block bg-slate-100">
-                                            <img src="{{ $panel['image'] }}" alt="{{ $panel['title'] }} Screenshot" class="aspect-video w-full object-contain">
-                                            <span class="absolute right-2 top-2 max-w-[70%] truncate rounded border border-slate-200 bg-white/90 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-700 shadow-sm">
-                                                {{ $panel['windowKey'] ?? $panel['title'] }}
-                                            </span>
-                                        </a>
-                                    @else
-                                        <div class="flex aspect-video items-center justify-center bg-slate-50 px-4 text-center text-sm font-semibold text-slate-500">
-                                            Noch kein Screenshot verfuegbar.
+                    <div x-cloak x-show="browserOpen" x-collapse.duration.180ms>
+                        <div class="flex items-center justify-between gap-3 px-4 py-3">
+                            <div>
+                                <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Browserfenster</div>
+                                <div class="mt-1 text-sm text-slate-600">Live-Screenshots je offenem Fenster</div>
+                            </div>
+                            <button
+                                type="button"
+                                x-on:click="browserOpen = false"
+                                class="rounded-md border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-800 transition hover:bg-sky-100"
+                            >
+                                Minimieren
+                            </button>
+                        </div>
+
+                        <div class="border-t border-slate-100 bg-slate-50 p-3">
+                            <div class="flex flex-nowrap gap-3 overflow-x-auto pb-1" data-workflow-preview-scrollbar>
+                                @foreach($screenshotPanels as $panel)
+                                    <article
+                                        class="min-w-0 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm"
+                                        style="flex: 0 0 {{ $browserPanelBasis }}%; max-width: {{ $browserPanelBasis }}%; min-width: {{ $browserPanelMinWidth }};"
+                                    >
+                                        <div class="flex items-start justify-between gap-3 border-b border-slate-100 bg-white px-3 py-2">
+                                            <div class="min-w-0">
+                                                <div class="truncate text-xs font-semibold uppercase tracking-wide text-slate-700">
+                                                    {{ $panel['title'] }} · {{ $panel['step'] }}
+                                                </div>
+                                                @include('livewire.admin.config.partials.browser-window-status', [
+                                                    'windowStatus' => is_array($panel['window'] ?? null) ? $panel['window'] : [],
+                                                ])
+                                            </div>
+                                            @if($panel['dom'])
+                                                <a
+                                                    href="{{ $panel['dom'] }}"
+                                                    download="{{ $downloadName(($panel['step'] ?? 'workflow').' '.($panel['title'] ?? 'browser')).'-dom.json' }}"
+                                                    class="shrink-0 rounded border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-semibold text-slate-600 hover:bg-slate-100"
+                                                >
+                                                    DOM
+                                                </a>
+                                            @endif
                                         </div>
-                                    @endif
-                                </article>
-                            @endforeach
+
+                                        @if($panel['image'])
+                                            <a href="{{ $panel['image'] }}" target="_blank" rel="noopener" class="relative block bg-slate-100">
+                                                <img src="{{ $panel['image'] }}" alt="{{ $panel['title'] }} Screenshot" class="aspect-video w-full object-contain">
+                                                <span class="absolute right-2 top-2 max-w-[70%] truncate rounded border border-slate-200 bg-white/90 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-700 shadow-sm">
+                                                    {{ $panel['windowKey'] ?? $panel['title'] }}
+                                                </span>
+                                            </a>
+                                        @else
+                                            <div class="flex aspect-video items-center justify-center bg-slate-50 px-4 text-center text-sm font-semibold text-slate-500">
+                                                Noch kein Screenshot verfuegbar.
+                                            </div>
+                                        @endif
+                                    </article>
+                                @endforeach
+                            </div>
                         </div>
-                    @else
-                        <div class="rounded-md border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-500">
-                            Fuer diesen Workflow-Lauf wurden noch keine Browser-Screenshots gespeichert.
-                        </div>
-                    @endif
-                </div>
-            </section>
+                    </div>
+                </section>
+            @endif
 
             <section class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
                 <div class="flex flex-wrap items-center justify-between gap-3 px-4 py-3">

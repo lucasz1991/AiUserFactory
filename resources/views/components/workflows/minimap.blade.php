@@ -3,6 +3,7 @@
     'activeStepId' => null,
     'activeTaskKey' => null,
     'compact' => false,
+    'showHeader' => true,
 ])
 
 @php
@@ -280,13 +281,15 @@
             Keine Workflow-Daten fuer diesen Prozess gefunden.
         </div>
     @else
-        <div class="flex flex-wrap items-center justify-between gap-3">
-            <div class="min-w-0">
-                <div class="truncate text-sm font-semibold text-slate-900">{{ $workflow->name }}</div>
-                <div class="mt-1 truncate text-xs text-slate-500">Run #{{ $workflowRun->id }} - {{ $workflowRun->status }}</div>
+        @if($showHeader)
+            <div class="flex flex-wrap items-center justify-between gap-3">
+                <div class="min-w-0">
+                    <div class="truncate text-sm font-semibold text-slate-900">{{ $workflow->name }}</div>
+                    <div class="mt-1 truncate text-xs text-slate-500">Run #{{ $workflowRun->id }} - {{ $workflowRun->status }}</div>
+                </div>
+                <x-workflows.status-badge :status="$workflowRun->status" />
             </div>
-            <x-workflows.status-badge :status="$workflowRun->status" />
-        </div>
+        @endif
 
         <div
             x-data="{
