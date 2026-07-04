@@ -1472,17 +1472,28 @@ async function loadBrowser() {
     throw new Error('Workflow-Kontext enthaelt aktive Browserfenster, aber keinen erreichbaren Workflow-Browser. Bitte das Browserfenster per Task schliessen oder den Workflow neu starten.');
   }
 
+  const launchArgs = [
+    '--disable-dev-shm-usage',
+    '--window-size=1366,900',
+  ];
+
+  if (process.platform === 'linux') {
+    launchArgs.unshift('--no-sandbox', '--disable-setuid-sandbox');
+  }
+
   const launchOptions = {
     headless: runtime.headlessEnabled === true ? 'new' : false,
     userDataDir: runtime.browserProfilePath,
     defaultViewport: { width: 1366, height: 900 },
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--window-size=1366,900',
-    ],
+    args: launchArgs,
   };
+
+  pushEvent('browser-launch-options', 'Browser-Startparameter wurden vorbereitet.', {
+    platform: process.platform,
+    headless: launchOptions.headless,
+    args: launchArgs,
+    noSandboxEnabled: launchArgs.includes('--no-sandbox'),
+  });
 
   if (runtime.browserProfilePath) {
     fs.mkdirSync(runtime.browserProfilePath, { recursive: true });
@@ -2604,6 +2615,12 @@ async function run() {
         tasks: taskResults,
         browserWindows: lastBrowserWindows,
         browserWsEndpoint: browserWsEndpoint(),
+        runnerDiagnostics: {
+          keepWorkflowBrowserAlive: shouldKeepWorkflowBrowserProcessAlive(),
+          workflowBundleStep: runtime.workflowBundleStep === true || runtime.workflow_bundle_step === true,
+          chromiumNoSandboxFlag: process.platform === 'linux',
+          platform: process.platform,
+        },
         events,
         finishedAt: now(),
       };
@@ -2717,6 +2734,12 @@ async function run() {
     debug_artifacts: debugArtifacts,
     browserWindows: lastBrowserWindows,
     browserWsEndpoint: browserWsEndpoint(),
+    runnerDiagnostics: {
+      keepWorkflowBrowserAlive: shouldKeepWorkflowBrowserProcessAlive(),
+      workflowBundleStep: runtime.workflowBundleStep === true || runtime.workflow_bundle_step === true,
+      chromiumNoSandboxFlag: process.platform === 'linux',
+      platform: process.platform,
+    },
     events,
     finishedAt: now(),
     ...((requestedFailureRouteTask || requestedSuccessRouteTask) ? {
@@ -2742,6 +2765,12 @@ run()
       debug_artifacts: debugArtifacts,
       browserWindows: lastBrowserWindows,
       browserWsEndpoint: browserWsEndpoint(),
+      runnerDiagnostics: {
+        keepWorkflowBrowserAlive: shouldKeepWorkflowBrowserProcessAlive(),
+        workflowBundleStep: runtime.workflowBundleStep === true || runtime.workflow_bundle_step === true,
+        chromiumNoSandboxFlag: process.platform === 'linux',
+        platform: process.platform,
+      },
       events,
       finishedAt: now(),
     };
