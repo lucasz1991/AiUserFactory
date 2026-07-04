@@ -1823,7 +1823,31 @@ async function openBrowserWindowCount() {
   )).length;
 }
 
+function shouldKeepWorkflowBrowserProcessAlive() {
+  const configured = runtime.keepWorkflowBrowserAlive ?? runtime.keep_workflow_browser_alive;
+
+  if (configured === false || configured === 0 || configured === 'false' || configured === '0') {
+    return false;
+  }
+
+  return true;
+}
+
 async function keepWorkflowBrowserAlive(state = 'completed', stage = 'workflow-browser-kept-active', message = 'Workflow-Browser bleibt aktiv.') {
+  if (!shouldKeepWorkflowBrowserProcessAlive()) {
+    if (
+      !connectedToExistingBrowser
+      && browser
+      && !browserDisconnected
+      && browserWindowsByName.size > 0
+    ) {
+      pushEvent('workflow-browser-released', 'Workflow-Browser bleibt aktiv; Runner gibt den naechsten Workflow-Schritt frei.');
+      writeStatus(state, 'workflow-browser-released', message);
+    }
+
+    return;
+  }
+
   if (
     connectedToExistingBrowser
     || !browser
@@ -1911,6 +1935,8 @@ async function finalizeBrowserLifecycle(state = 'completed') {
   );
 
   if (browser && connectedToExistingBrowser && typeof browser.disconnect === 'function') {
+    browser.disconnect();
+  } else if (browser && !shouldKeepWorkflowBrowserProcessAlive() && typeof browser.disconnect === 'function') {
     browser.disconnect();
   } else if (browser && browserWindowsByName.size === 0 && typeof browser.close === 'function') {
     await browser.close().catch(() => {});

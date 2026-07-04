@@ -347,6 +347,115 @@ class ClientControllerReliableWorkflowTest extends TestCase
         $this->assertSame('client-controller', $run->fresh()->result_json['source']);
     }
 
+    public function test_single_step_result_for_full_client_workflow_is_treated_as_progress(): void
+    {
+        $node = NetworkNode::query()->create([
+            'name' => 'Partial bundle node',
+            'node_uuid' => 'partial-bundle-node',
+            'api_key' => 'partial-bundle-key',
+            'status' => 'active',
+            'is_online' => true,
+            'last_seen_at' => now(),
+            'capabilities_json' => ['workflow_bundle_v1' => true],
+        ]);
+        $workflow = Workflow::query()->create([
+            'name' => 'Partial bundle workflow',
+            'slug' => 'partial-bundle-workflow',
+            'is_active' => true,
+        ]);
+        $first = WorkflowStep::query()->create([
+            'workflow_id' => $workflow->id,
+            'name' => 'First list',
+            'type' => WorkflowStep::TYPE_BROWSER_CONTROL,
+            'action_key' => 'first-list',
+            'position' => 10,
+            'is_enabled' => true,
+            'config_json' => ['tasks' => [['key' => 'open', 'runner' => 'node', 'node_script' => 'node/workflows/tasks/browser/open.cjs']]],
+        ]);
+        $second = WorkflowStep::query()->create([
+            'workflow_id' => $workflow->id,
+            'name' => 'Second list',
+            'type' => WorkflowStep::TYPE_BROWSER_CONTROL,
+            'action_key' => 'second-list',
+            'position' => 20,
+            'is_enabled' => true,
+            'config_json' => ['tasks' => [['key' => 'check', 'runner' => 'node', 'node_script' => 'node/workflows/tasks/decision/element_exists.cjs']]],
+        ]);
+        $run = WorkflowRun::query()->create([
+            'run_uuid' => (string) Str::uuid(),
+            'workflow_id' => $workflow->id,
+            'current_workflow_step_id' => $first->id,
+            'status' => 'running',
+            'queued_at' => now(),
+            'started_at' => now(),
+            'context_json' => [
+                'execution_target' => 'client_controller',
+                'network_node_id' => $node->id,
+            ],
+            'result_json' => [],
+        ]);
+        $firstRun = WorkflowStepRun::query()->create([
+            'workflow_run_id' => $run->id,
+            'workflow_step_id' => $first->id,
+            'status' => 'waiting',
+            'external_run_type' => 'client-controller-workflow-run',
+            'external_run_id' => 'partial-job',
+            'started_at' => now(),
+            'result_json' => [],
+        ]);
+        WorkflowStepRun::query()->create([
+            'workflow_run_id' => $run->id,
+            'workflow_step_id' => $second->id,
+            'status' => 'queued',
+            'result_json' => [],
+        ]);
+        $leaseToken = Str::random(64);
+        $job = NetworkJob::query()->create([
+            'job_uuid' => 'partial-job',
+            'network_node_id' => $node->id,
+            'workflow_run_id' => $run->id,
+            'type' => 'workflow_run',
+            'payload_version' => 2,
+            'payload_json' => ['workflow_bundle' => ['steps' => []]],
+            'status' => 'dispatched',
+            'queued_at' => now(),
+            'dispatched_at' => now(),
+            'lease_token_hash' => hash('sha256', $leaseToken),
+            'lease_expires_at' => now()->addMinute(),
+        ]);
+
+        $this->withHeader('X-NODE-API-KEY', $node->api_key)
+            ->postJson('/api/client-controller/job-result', [
+                'job_uuid' => $job->job_uuid,
+                'lease_token' => $leaseToken,
+                'sequence' => 1,
+                'status' => 'success',
+                'result' => [
+                    'ok' => true,
+                    'status' => 'success',
+                    'state' => 'completed',
+                    'scriptName' => 'run_step.cjs',
+                    'workflowStepId' => $first->id,
+                    'workflowStepRunId' => $firstRun->id,
+                    'statusMessage' => 'First list completed',
+                    'tasks' => [['key' => 'open', 'status' => 'success']],
+                    'browserWsEndpoint' => 'ws://127.0.0.1/devtools/browser/test',
+                ],
+            ])
+            ->assertOk()
+            ->assertJsonPath('partial', true);
+
+        $this->assertSame('dispatched', $job->fresh()->status);
+        $this->assertNull($job->fresh()->completed_at);
+        $this->assertSame('running', $run->fresh()->status);
+        $this->assertSame('completed', $firstRun->fresh()->status);
+
+        app(WorkflowExecutionService::class)->advance($run->fresh());
+
+        $this->assertSame(1, NetworkJob::query()->where('workflow_run_id', $run->id)->count());
+        $this->assertSame(0, NetworkJob::query()->where('workflow_run_id', $run->id)->where('type', 'workflow_task')->count());
+    }
+
     public function test_unassigned_client_run_uses_a_free_node_instead_of_a_busy_node(): void
     {
         $busyNode = NetworkNode::query()->create([

@@ -5,6 +5,8 @@ namespace App\Livewire\Admin\Processes;
 use App\Jobs\SyncManagedProcessesJob;
 use App\Jobs\TerminateManagedProcessJob;
 use App\Models\ManagedProcess;
+use App\Models\NetworkJob;
+use App\Models\NetworkNode;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowStepRun;
 use App\Services\Workflows\WorkflowExecutionService;
@@ -245,9 +247,25 @@ class ProcessMonitor extends Component
             ->latest('id')
             ->limit($this->limit)
             ->get();
+        $clientJobsByRunId = $runs->isEmpty()
+            ? collect()
+            : NetworkJob::query()
+                ->with('networkNode')
+                ->whereIn('workflow_run_id', $runs->pluck('id')->values())
+                ->whereIn('type', ['workflow_task', 'workflow_run'])
+                ->latest('id')
+                ->get()
+                ->groupBy('workflow_run_id');
 
-        $virtualProcesses = $runs->map(function (WorkflowRun $run): ManagedProcess {
+        $virtualProcesses = $runs->map(function (WorkflowRun $run) use ($clientJobsByRunId): ManagedProcess {
             $status = in_array($run->status, ['queued', 'running', 'waiting', 'stop_requested', 'unreachable'], true) ? 'running' : 'exited';
+            $clientJobs = $clientJobsByRunId->get($run->id, collect());
+            $clientJob = $clientJobs->first(fn (NetworkJob $job): bool => $job->type === 'workflow_run')
+                ?: $clientJobs->first();
+            $clientNode = $clientJob?->networkNode;
+            $isClientControllerRun = (string) data_get($run->context_json, 'execution_target') === 'client_controller'
+                || $clientJob instanceof NetworkJob;
+            $clientCpuPercent = $this->clientNodeCpuPercent($clientNode);
             $process = new ManagedProcess;
             $process->exists = false;
             $process->forceFill([
@@ -261,23 +279,31 @@ class ProcessMonitor extends Component
                 'process_role' => 'workflow-run',
                 'process_type' => 'workflow-run',
                 'script_name' => $run->workflow?->name,
-                'short_command' => $run->workflow?->description ?: $run->workflow?->slug,
+                'short_command' => $isClientControllerRun
+                    ? 'ClientController verarbeitet den Workflow; AiUserFactory empfaengt Status und Daten.'
+                    : ($run->workflow?->description ?: $run->workflow?->slug),
                 'status' => $status,
                 'is_managed' => false,
                 'is_root' => true,
                 'is_idle_suspect' => false,
-                'cpu_percent' => null,
+                'cpu_percent' => $clientCpuPercent,
                 'memory_mb' => null,
                 'elapsed_seconds' => $this->workflowElapsedSeconds($run),
                 'started_at' => $run->started_at ?? $run->queued_at,
                 'detected_at' => $run->queued_at,
-                'last_seen_at' => $run->updated_at,
-                'heartbeat_at' => $run->updated_at,
+                'last_seen_at' => $isClientControllerRun ? ($clientNode?->last_seen_at ?? $run->updated_at) : $run->updated_at,
+                'heartbeat_at' => $isClientControllerRun ? ($clientNode?->last_seen_at ?? $run->updated_at) : $run->updated_at,
                 'last_stage' => $run->currentStep?->name,
-                'last_message' => $run->error_message,
+                'last_message' => $run->error_message ?: (string) data_get($run->result_json, 'statusMessage', data_get($run->result_json, 'message', '')),
                 'metadata' => [
                     'workflow_run_db_id' => $run->id,
                     'subject_person_id' => data_get($run->context_json, 'person_id'),
+                    'client_controller' => $isClientControllerRun,
+                    'client_node_id' => $clientNode?->id,
+                    'client_node_name' => $clientNode?->name,
+                    'client_job_uuid' => $clientJob?->job_uuid,
+                    'client_job_status' => $clientJob?->status,
+                    'client_cpu_percent' => $clientCpuPercent,
                 ],
             ]);
             $process->setRelation('workflowRunPreview', $run);
@@ -318,6 +344,19 @@ class ProcessMonitor extends Component
         }
 
         return max(0, $startedAt->diffInSeconds($run->finished_at ?? now()));
+    }
+
+    protected function clientNodeCpuPercent(?NetworkNode $node): ?float
+    {
+        if (! $node) {
+            return null;
+        }
+
+        $cpuPercent = data_get($node->capabilities_json, 'runtime_metrics.cpu_load_percent')
+            ?? data_get($node->capabilities_json, 'metrics.cpuLoadPercent')
+            ?? data_get($node->capabilities_json, 'metrics.cpu_load_percent');
+
+        return is_numeric($cpuPercent) ? round((float) $cpuPercent, 2) : null;
     }
 
     protected function buildProcessTree(Collection $processes): Collection

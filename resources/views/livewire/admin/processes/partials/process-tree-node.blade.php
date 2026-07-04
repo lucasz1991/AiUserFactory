@@ -6,6 +6,10 @@
     $workflowRunPreview = $process->relationLoaded('workflowRunPreview') ? $process->getRelation('workflowRunPreview') : null;
     $workflowStepRunPreview = $process->relationLoaded('workflowStepRunPreview') ? $process->getRelation('workflowStepRunPreview') : null;
     $isWorkflowProcess = $process->process_type === 'workflow-run';
+    $isClientControllerRun = (bool) data_get($process->metadata, 'client_controller');
+    $clientNodeName = (string) data_get($process->metadata, 'client_node_name', '');
+    $clientJobStatus = (string) data_get($process->metadata, 'client_job_status', '');
+    $clientJobUuid = (string) data_get($process->metadata, 'client_job_uuid', '');
 @endphp
 
 <div x-data="{ workflowPreviewOpen: false }" class="border-t border-slate-200 first:border-t-0">
@@ -39,6 +43,9 @@
                 @if($process->is_idle_suspect)
                     <div class="mt-1 text-xs font-semibold text-amber-700">Leerlauf-Verdacht</div>
                 @endif
+                @if($isClientControllerRun)
+                    <div class="mt-1 text-xs font-semibold text-cyan-700">ClientController</div>
+                @endif
                 @if($process->heartbeat_at)
                     <div class="mt-1 text-xs text-slate-500">Heartbeat {{ $process->heartbeat_at->diffInSeconds(now()) }}s</div>
                 @endif
@@ -58,6 +65,11 @@
                         <span class="rounded-full bg-blue-50 px-2 py-1 text-[11px] font-semibold text-blue-700 ring-1 ring-blue-200">
                             Workflow #{{ $workflowRunPreview->id }}
                         </span>
+                        @if($isClientControllerRun)
+                            <span class="rounded-full bg-cyan-50 px-2 py-1 text-[11px] font-semibold text-cyan-700 ring-1 ring-cyan-200">
+                                Client {{ $clientNodeName !== '' ? $clientNodeName : '#' . data_get($process->metadata, 'client_node_id') }}
+                            </span>
+                        @endif
                         @if($workflowStepRunPreview?->workflowStep)
                             <span class="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">
                                 {{ $workflowStepRunPreview->workflowStep->name }}
@@ -69,7 +81,10 @@
 
             <div class="flex flex-wrap justify-end gap-2">
                 <div class="w-full text-right text-xs text-slate-500">
-                    CPU {{ $process->cpu_percent !== null ? $process->cpu_percent.'%' : '-' }} - {{ floor($process->elapsed_seconds / 60) }} Min.
+                    {{ $isClientControllerRun ? 'Client-CPU' : 'CPU' }} {{ $process->cpu_percent !== null ? $process->cpu_percent.'%' : '-' }} - {{ floor($process->elapsed_seconds / 60) }} Min.
+                    @if($isClientControllerRun && $clientJobStatus !== '')
+                        <div class="mt-1 truncate">Job {{ $clientJobStatus }} {{ $clientJobUuid !== '' ? \Illuminate\Support\Str::limit($clientJobUuid, 8, '') : '' }}</div>
+                    @endif
                 </div>
                 @if($workflowRunPreview)
                     <button type="button" x-on:click.stop="workflowPreviewOpen = true" class="rounded border border-blue-300 px-2 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-50">

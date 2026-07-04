@@ -5,6 +5,8 @@
     $isWorkflowProcess = $process->process_type === 'workflow-run';
     $workflowRunPreview = $process->relationLoaded('workflowRunPreview') ? $process->getRelation('workflowRunPreview') : null;
     $workflowRunStatus = (string) data_get($workflowRunPreview, 'status', '');
+    $isClientControllerRun = (bool) data_get($process->metadata, 'client_controller');
+    $clientNodeName = (string) data_get($process->metadata, 'client_node_name', '');
 @endphp
 
 <tr wire:key="managed-process-{{ $process->id }}" class="{{ $process->is_idle_suspect ? 'bg-amber-50/60' : '' }}">
@@ -38,9 +40,12 @@
         @if($process->is_root)
             <div class="mt-1 text-xs font-semibold text-blue-700">Hauptprozess</div>
         @endif
+        @if($isClientControllerRun)
+            <div class="mt-1 text-xs font-semibold text-cyan-700">ClientController {{ $clientNodeName !== '' ? $clientNodeName : '' }}</div>
+        @endif
     </td>
     <td class="whitespace-nowrap px-4 py-3 text-xs text-gray-600">
-        <div>CPU: {{ $process->cpu_percent !== null ? $process->cpu_percent.'%' : '-' }}</div>
+        <div>{{ $isClientControllerRun ? 'Client-CPU' : 'CPU' }}: {{ $process->cpu_percent !== null ? $process->cpu_percent.'%' : '-' }}</div>
         <div>RAM: {{ $process->memory_mb !== null ? $process->memory_mb.' MB' : '-' }}</div>
         <div>Alter: {{ floor($process->elapsed_seconds / 60) }} Min.</div>
     </td>

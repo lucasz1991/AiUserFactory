@@ -130,6 +130,22 @@ class ClientControllerApiController extends Controller
             'received_at' => now(),
         ]);
 
+        $capabilities = is_array($validated['capabilities'] ?? null)
+            ? $validated['capabilities']
+            : (is_array($node->capabilities_json) ? $node->capabilities_json : []);
+        $metrics = data_get($validated, 'payload.metrics');
+
+        if (is_array($metrics) && $metrics !== []) {
+            $cpuLoadPercent = data_get($metrics, 'cpuLoadPercent', data_get($metrics, 'cpu_load_percent'));
+            $capabilities['runtime_metrics'] = array_replace(
+                is_array($capabilities['runtime_metrics'] ?? null) ? $capabilities['runtime_metrics'] : [],
+                [
+                    'cpu_load_percent' => is_numeric($cpuLoadPercent) ? round((float) $cpuLoadPercent, 2) : null,
+                    'reported_at' => data_get($metrics, 'reportedAt', data_get($metrics, 'reported_at', now()->toIso8601String())),
+                ],
+            );
+        }
+
         $node->forceFill([
             'is_online' => true,
             'last_seen_at' => now(),
@@ -138,7 +154,7 @@ class ClientControllerApiController extends Controller
             'os' => $validated['os'] ?? $node->os,
             'current_server_domain' => $validated['current_server_domain'] ?? $node->current_server_domain,
             'last_successful_server_domain' => $validated['last_successful_server_domain'] ?? $node->last_successful_server_domain,
-            'capabilities_json' => $validated['capabilities'] ?? $node->capabilities_json,
+            'capabilities_json' => $capabilities,
         ])->save();
         $this->reconcileNodeUpdate($node);
 
@@ -376,6 +392,7 @@ class ClientControllerApiController extends Controller
         $sequence = $requestedSequence > 0 ? $requestedSequence : ((int) $job->last_sequence) + 1;
 
         $result = $this->attachStoredLivePreview($job, $validated['result'] ?? []);
+        $workflowService = app(WorkflowExecutionService::class);
 
         foreach ([
             'remoteWebmailSessionPayload' => 'encryptedSessionPayload',
@@ -388,6 +405,43 @@ class ClientControllerApiController extends Controller
             }
 
             unset($result[$plainKey]);
+        }
+
+        if ($job->type === 'workflow_run'
+            && ! $workflowService->isAuthoritativeClientWorkflowResult($result, $validated['status'])) {
+            $job->forceFill([
+                'status' => $job->status === 'unreachable' ? 'dispatched' : $job->status,
+                'result_json' => $result,
+                'last_progress_at' => now(),
+                'last_sequence' => $sequence,
+                'lease_expires_at' => $job->lease_token_hash ? now()->addSeconds(120) : null,
+                'unreachable_at' => null,
+                'control_acknowledged_at' => $job->control_command ? now() : $job->control_acknowledged_at,
+            ])->save();
+
+            NetworkJobProgressEvent::query()->firstOrCreate(
+                ['network_job_id' => $job->id, 'sequence' => $sequence],
+                [
+                    'kind' => 'progress',
+                    'payload_json' => $this->compactProgressEvent($result),
+                    'screenshot_relative_path' => data_get($result, 'livePreviewRelativePath'),
+                    'received_at' => now(),
+                ],
+            );
+
+            $workflowService->applyClientWorkflowProgress($job, $result);
+
+            $node->forceFill([
+                'is_online' => true,
+                'last_seen_at' => now(),
+            ])->save();
+
+            return response()->json([
+                'success' => true,
+                'partial' => true,
+                'acknowledged_sequence' => $sequence,
+                'control' => $this->jobControlResponse($job),
+            ]);
         }
 
         $job->forceFill([
@@ -432,7 +486,7 @@ class ClientControllerApiController extends Controller
         }
 
         if ($job->type === 'workflow_run') {
-            app(WorkflowExecutionService::class)->completeClientWorkflowRun(
+            $workflowService->completeClientWorkflowRun(
                 $job,
                 $result,
                 $validated['status'],

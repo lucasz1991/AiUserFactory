@@ -98,6 +98,10 @@ class WorkflowExecutionService
             return;
         }
 
+        if ($this->hasActiveClientWorkflowBundleJob($run)) {
+            return;
+        }
+
         $activeStepRun = $run->stepRuns()
             ->whereIn('status', ['running', 'waiting'])
             ->first();
@@ -482,6 +486,15 @@ class WorkflowExecutionService
         return (bool) data_get($node?->capabilities_json, 'workflow_bundle_v1', false);
     }
 
+    protected function hasActiveClientWorkflowBundleJob(WorkflowRun $run): bool
+    {
+        return NetworkJob::query()
+            ->where('workflow_run_id', $run->id)
+            ->where('type', 'workflow_run')
+            ->whereIn('status', ['pending', 'dispatched', 'stop_requested', 'unreachable'])
+            ->exists();
+    }
+
     protected function startClientControllerWorkflowRun(WorkflowRun $run): bool
     {
         $run->loadMissing(['workflow.steps']);
@@ -718,6 +731,12 @@ class WorkflowExecutionService
 
     public function completeClientWorkflowRun(NetworkJob $job, array $result, string $status, ?string $errorMessage = null): void
     {
+        if (! $this->isAuthoritativeClientWorkflowResult($result, $status)) {
+            $this->applyClientWorkflowProgress($job, $result);
+
+            return;
+        }
+
         $run = $job->workflowRun()->with(['workflow.steps', 'stepRuns.workflowStep'])->first();
 
         if (! $run || $this->isFinalStatus($run->status)) {
@@ -779,6 +798,38 @@ class WorkflowExecutionService
             'error_message' => $runStatus === 'completed' ? null : ($errorMessage ?: (string) ($result['statusMessage'] ?? '')),
         ])->save();
         $this->releaseClientReservation($run);
+    }
+
+    public function isAuthoritativeClientWorkflowResult(array $result, string $status = 'success'): bool
+    {
+        if ((bool) ($result['clientWorkflowComplete'] ?? $result['workflowComplete'] ?? false)) {
+            return true;
+        }
+
+        $steps = collect(is_array($result['steps'] ?? null) ? $result['steps'] : [])
+            ->filter(fn (mixed $step): bool => is_array($step));
+
+        if ($steps->isNotEmpty()) {
+            return true;
+        }
+
+        if (in_array($status, ['failed', 'cancelled', 'timed_out'], true)
+            && ! $this->looksLikeClientWorkflowStepSnapshot($result)) {
+            return true;
+        }
+
+        return false;
+    }
+
+    protected function looksLikeClientWorkflowStepSnapshot(array $result): bool
+    {
+        if (isset($result['workflowStepId'], $result['workflowStepRunId']) || is_array($result['tasks'] ?? null)) {
+            return true;
+        }
+
+        $scriptName = trim((string) ($result['scriptName'] ?? ''));
+
+        return $scriptName !== '' && str_ends_with($scriptName, 'run_step.cjs');
     }
 
     protected function startWorkflowTaskStep(WorkflowRun $run, WorkflowStep $step, WorkflowStepRun $stepRun): string
