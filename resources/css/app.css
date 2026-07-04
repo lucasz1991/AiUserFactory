@@ -17,12 +17,12 @@
 
 :root {
   /* Eigene Farben */
-  --primary-color: #65765f; 
-  --secondary-color: #e5d4bc; 
+  --primary-color: #1374ca; 
+  --secondary-color: #12b73e; 
   --primary-font-color: #414141;
   --scrollbar-size: 6px;
-  --scrollbar-thumb: #1d4ed8;
-  --scrollbar-thumb-hover: #1e40af;
+  --scrollbar-thumb: #99b4ff;
+  --scrollbar-thumb-hover: #5a7beb;
   --scrollbar-track: transparent;
 }
 
