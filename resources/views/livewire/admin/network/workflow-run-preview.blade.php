@@ -1,3 +1,33 @@
+@once
+    <style>
+        [data-workflow-preview-scrollbar] {
+            scrollbar-color: #94a3b8 #f8fafc;
+            scrollbar-width: thin;
+            scroll-behavior: smooth;
+        }
+
+        [data-workflow-preview-scrollbar]::-webkit-scrollbar {
+            height: 8px;
+            width: 8px;
+        }
+
+        [data-workflow-preview-scrollbar]::-webkit-scrollbar-track {
+            background: #f8fafc;
+            border-radius: 999px;
+        }
+
+        [data-workflow-preview-scrollbar]::-webkit-scrollbar-thumb {
+            background: linear-gradient(180deg, #cbd5e1, #94a3b8);
+            border: 2px solid #f8fafc;
+            border-radius: 999px;
+        }
+
+        [data-workflow-preview-scrollbar]::-webkit-scrollbar-thumb:hover {
+            background: linear-gradient(180deg, #94a3b8, #64748b);
+        }
+    </style>
+@endonce
+
 <div
     class="space-y-4 rounded-xl border border-slate-200 bg-slate-50 p-3"
     data-assistant-highlight="run_preview:{{ $workflowRun?->id ?? 'empty' }}"
@@ -9,7 +39,82 @@
             Dieser Workflow-Lauf wurde noch nicht geladen.
         </div>
     @else
-        <div x-data="{ overviewOpen: false, logsOpen: 'timeline' }" class="space-y-4">
+        <div
+            x-data="{
+                overviewOpen: false,
+                logsOpen: 'timeline',
+                workflowScrollObserver: null,
+                workflowScrollTimer: null,
+                init() {
+                    this.$watch('overviewOpen', (open) => {
+                        if (open) {
+                            this.queueActiveWorkflowScroll(true);
+                        }
+                    });
+
+                    this.$nextTick(() => this.startWorkflowScrollObserver());
+                },
+                startWorkflowScrollObserver() {
+                    const wrapper = this.$refs.maximizedWorkflowMap;
+
+                    if (!wrapper || !window.MutationObserver) {
+                        return;
+                    }
+
+                    if (this.workflowScrollObserver) {
+                        this.workflowScrollObserver.disconnect();
+                    }
+
+                    this.workflowScrollObserver = new MutationObserver((mutations) => {
+                        const changedActiveTarget = mutations.some((mutation) => {
+                            if (mutation.type === 'attributes') {
+                                return true;
+                            }
+
+                            return Array.from(mutation.addedNodes || []).some((node) => {
+                                return node.nodeType === 1
+                                    && (node.matches?.('[data-workflow-minimap-active-target], [data-workflow-minimap-active-step]')
+                                        || node.querySelector?.('[data-workflow-minimap-active-target], [data-workflow-minimap-active-step]'));
+                            });
+                        });
+
+                        if (this.overviewOpen && changedActiveTarget) {
+                            this.queueActiveWorkflowScroll();
+                        }
+                    });
+                    this.workflowScrollObserver.observe(wrapper, {
+                        attributes: true,
+                        attributeFilter: ['data-workflow-minimap-active-step', 'data-workflow-minimap-active-target'],
+                        childList: true,
+                        subtree: true,
+                    });
+                },
+                queueActiveWorkflowScroll(opening = false) {
+                    clearTimeout(this.workflowScrollTimer);
+                    this.workflowScrollTimer = setTimeout(() => this.scrollActiveWorkflowTarget(), opening ? 260 : 90);
+                },
+                scrollActiveWorkflowTarget() {
+                    if (!this.overviewOpen) {
+                        return;
+                    }
+
+                    const wrapper = this.$refs.maximizedWorkflowMap;
+                    const target = wrapper?.querySelector('[data-workflow-minimap-active-target=&quot;true&quot;]')
+                        || wrapper?.querySelector('[data-workflow-minimap-active-step=&quot;true&quot;]');
+
+                    if (!target) {
+                        return;
+                    }
+
+                    target.scrollIntoView({
+                        behavior: 'smooth',
+                        block: 'center',
+                        inline: 'center',
+                    });
+                },
+            }"
+            class="space-y-4"
+        >
             @if($processSummary)
                 <div class="rounded-md border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
                     <span class="font-semibold text-slate-900">Prozess:</span>
@@ -50,7 +155,7 @@
 
                         <div class="min-h-0 w-full rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2">
                             @if($compactWorkflowMap->isNotEmpty())
-                                <div class="flex w-full min-w-0 items-center gap-1 overflow-x-auto pb-0.5">
+                                <div class="flex w-full min-w-0 items-center gap-1 overflow-x-auto pb-0.5" data-workflow-preview-scrollbar>
                                     @foreach($compactWorkflowMap as $miniStep)
                                         @if(! $loop->first)
                                             <span class="shrink-0 px-0.5 text-sm font-semibold leading-none text-slate-400">&rarr;</span>
@@ -118,12 +223,12 @@
                             Minimieren
                         </button>
                     </div>
-                    <div class="px-4 py-3">
-                    <x-workflows.minimap
-                        :workflow-run="$workflowRun"
-                        :active-step-id="$activeStepId"
-                        :active-task-key="$activeTaskKey"
-                    />
+                    <div class="px-4 py-3" x-ref="maximizedWorkflowMap">
+                        <x-workflows.minimap
+                            :workflow-run="$workflowRun"
+                            :active-step-id="$activeStepId"
+                            :active-task-key="$activeTaskKey"
+                        />
                     </div>
                 </div>
             </section>
@@ -226,7 +331,7 @@
 
                 <div class="border-t border-slate-100 bg-slate-50 p-3">
                     @if($screenshotPanels->isNotEmpty())
-                        <div class="flex flex-nowrap gap-3 overflow-x-auto pb-1">
+                        <div class="flex flex-nowrap gap-3 overflow-x-auto pb-1" data-workflow-preview-scrollbar>
                             @foreach($screenshotPanels as $panel)
                                 <article
                                     class="min-w-0 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm"
@@ -300,7 +405,7 @@
                             <span class="rounded border border-slate-200 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500" x-text="logsOpen === 'timeline' ? 'Offen' : 'Oeffnen'"></span>
                         </button>
                         <div x-cloak x-show="logsOpen === 'timeline'" x-collapse.duration.180ms class="border-t border-slate-100 bg-slate-50 p-4">
-                            <div class="max-h-80 space-y-2 overflow-auto pr-1">
+                            <div class="max-h-80 space-y-2 overflow-auto pr-1" data-workflow-preview-scrollbar>
                                 @forelse($timelineEvents->reverse()->values() as $event)
                                     <div class="rounded-md border border-slate-100 bg-white p-3 text-xs shadow-sm">
                                         <div class="font-semibold text-slate-900">{{ data_get($event, 'stage', data_get($event, 'type', '-')) }}</div>
@@ -485,7 +590,7 @@
                                                                         </div>
                                                                     @endif
                                                                     @if($task['mailScan']['candidates'] !== [])
-                                                                        <div class="mt-2 overflow-x-auto">
+                                                                        <div class="mt-2 overflow-x-auto" data-workflow-preview-scrollbar>
                                                                             <table class="min-w-full text-left">
                                                                                 <thead class="text-[10px] uppercase tracking-wide text-amber-700">
                                                                                     <tr>

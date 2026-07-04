@@ -448,6 +448,8 @@
             }"
             x-ref="minimapSurface"
             x-on:scroll.debounce.100ms="refreshRouteLines()"
+            data-workflow-minimap-scroll-container
+            data-workflow-preview-scrollbar
             class="relative overflow-x-auto pb-2"
         >
             <svg
@@ -490,7 +492,11 @@
 
                     <div class="flex items-start">
                         <div class="w-56 shrink-0">
-                            <div data-minimap-node="{{ $stepNode }}" class="mb-2 flex items-center justify-between gap-2 rounded px-1 py-1">
+                            <div
+                                data-minimap-node="{{ $stepNode }}"
+                                data-workflow-minimap-active-step="{{ $isActiveStep ? 'true' : 'false' }}"
+                                class="mb-2 flex items-center justify-between gap-2 rounded px-1 py-1"
+                            >
                                 <div class="truncate text-xs font-semibold text-slate-800">{{ $step->name }}</div>
                                 @if($stepRun?->status)
                                     <span class="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold {{ $stepTone }}">
@@ -522,7 +528,11 @@
                                         <div class="ml-4 h-4 w-px {{ $lineTone }}"></div>
                                     @endif
 
-                                    <div data-minimap-node="{{ $taskNode }}" class="relative rounded-md border px-2 py-1.5 text-[11px] shadow-sm {{ $tone }}">
+                                    <div
+                                        data-minimap-node="{{ $taskNode }}"
+                                        data-workflow-minimap-active-target="{{ $isTaskActive ? 'true' : 'false' }}"
+                                        class="relative rounded-md border px-2 py-1.5 text-[11px] shadow-sm {{ $tone }}"
+                                    >
                                         @if($taskRouteBadge)
                                             <span class="absolute right-1 top-1 rounded-full px-1.5 py-0.5 text-[9px] font-semibold ring-1 {{ $routeBadgeClass($taskRouteBadge) }}">
                                                 {{ $taskRouteBadge['label'] }}
@@ -532,7 +542,10 @@
                                         <div class="mt-0.5 truncate opacity-70">{{ $taskStatus }}</div>
                                     </div>
                                 @empty
-                                    <div class="rounded-md border px-2 py-1.5 text-[11px] shadow-sm {{ $stepTone }}">
+                                    <div
+                                        data-workflow-minimap-active-target="{{ $isActiveStep ? 'true' : 'false' }}"
+                                        class="rounded-md border px-2 py-1.5 text-[11px] shadow-sm {{ $stepTone }}"
+                                    >
                                         <div class="truncate font-semibold">{{ $step->type_label }}</div>
                                         <div class="mt-0.5 truncate opacity-70">{{ $stepStatus }}</div>
                                     </div>
