@@ -205,7 +205,7 @@ class WorkflowRunPreview extends Component
         $browserCount = $screenshotPanels->count();
 
         return [
-            'polling' => in_array((string) $workflowRun->status, ['queued', 'running', 'waiting'], true),
+            'polling' => in_array((string) $workflowRun->status, ['queued', 'running', 'waiting', 'stop_requested', 'unreachable'], true),
             'workflowDurationMs' => $workflowDurationMs,
             'workflowDurationLabel' => $this->formatDuration($workflowDurationMs),
             'compactWorkflowMap' => $compactWorkflowMap,
@@ -621,7 +621,7 @@ class WorkflowRunPreview extends Component
 
     protected function embeddedWorkflowCards(WorkflowRun $workflowRun, Collection $stepDebugPanels): Collection
     {
-        if (! in_array((string) $workflowRun->status, ['queued', 'running', 'waiting'], true)) {
+        if (! in_array((string) $workflowRun->status, ['queued', 'running', 'waiting', 'stop_requested', 'unreachable'], true)) {
             return collect();
         }
 
@@ -854,10 +854,10 @@ class WorkflowRunPreview extends Component
 
         $result = is_array($job->result_json) ? $job->result_json : [];
 
-        if ($job->status === 'dispatched') {
+        if (in_array($job->status, ['dispatched', 'stop_requested', 'unreachable'], true)) {
             return array_replace($result, [
                 'runId' => $job->job_uuid,
-                'state' => 'running',
+                'state' => $job->status === 'dispatched' ? 'running' : $job->status,
                 'isRunning' => true,
             ]);
         }
@@ -1127,6 +1127,10 @@ class WorkflowRunPreview extends Component
             'success' => 'Fertig',
             'failed' => 'Fehler',
             'timeout' => 'Timeout',
+            'timed_out' => 'Timeout',
+            'stop_requested' => 'Stop angefordert',
+            'unreachable' => 'Nicht erreichbar',
+            'lost' => 'Verbindung verloren',
             'partial' => 'Teilstatus',
             'cancelled' => 'Abgebrochen',
             'skipped' => 'Uebersprungen',

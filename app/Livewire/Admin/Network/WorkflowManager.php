@@ -2,9 +2,9 @@
 
 namespace App\Livewire\Admin\Network;
 
-use App\Models\Person;
 use App\Models\Device;
 use App\Models\NetworkNode;
+use App\Models\Person;
 use App\Models\Workflow;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowStep;
@@ -1047,7 +1047,7 @@ class WorkflowManager extends Component
         $validated = $this->validate([
             'runPersonId' => ['nullable', 'integer', 'exists:persons,id'],
             'runExecutionTarget' => ['required', 'string', 'in:system,client_controller'],
-            'runNetworkNodeId' => ['nullable', 'required_if:runExecutionTarget,client_controller', 'integer', 'exists:network_nodes,id'],
+            'runNetworkNodeId' => ['nullable', 'integer', 'exists:network_nodes,id'],
             'runDeviceId' => ['nullable', 'integer', 'exists:devices,id'],
             'runWorkflowInputs' => ['nullable', 'json'],
         ]);
@@ -1072,11 +1072,13 @@ class WorkflowManager extends Component
         if ($deviceId) {
             $device = Device::query()->find($deviceId);
 
-            if (! $device || (int) $device->network_node_id !== $nodeId) {
+            if (! $device || ($nodeId && (int) $device->network_node_id !== $nodeId)) {
                 $this->addError('runDeviceId', 'Das Geraet gehoert nicht zum ausgewaehlten Node.');
 
                 return;
             }
+
+            $nodeId = $nodeId ?: (int) $device->network_node_id;
         }
 
         try {
@@ -1112,7 +1114,7 @@ class WorkflowManager extends Component
 
         $run = WorkflowRun::query()->find($this->previewWorkflowRunId);
 
-        if (! $run || in_array($run->status, ['completed', 'failed', 'cancelled'], true)) {
+        if (! $run || in_array($run->status, ['completed', 'failed', 'cancelled', 'timed_out', 'lost'], true)) {
             return;
         }
 
@@ -1228,7 +1230,7 @@ class WorkflowManager extends Component
     protected function quickPreviewRun(Workflow $workflow): ?WorkflowRun
     {
         $activeRun = $workflow->runs()
-            ->whereIn('status', ['queued', 'running', 'waiting'])
+            ->whereIn('status', ['queued', 'running', 'waiting', 'stop_requested', 'unreachable'])
             ->latest('updated_at')
             ->latest('id')
             ->first();

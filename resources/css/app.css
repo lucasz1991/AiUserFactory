@@ -20,6 +20,10 @@
   --primary-color: #65765f; 
   --secondary-color: #e5d4bc; 
   --primary-font-color: #414141;
+  --scrollbar-size: 6px;
+  --scrollbar-thumb: #1d4ed8;
+  --scrollbar-thumb-hover: #1e40af;
+  --scrollbar-track: transparent;
 }
 
 [x-cloak] {
@@ -61,56 +65,117 @@ body{
 html, body{
   scrollbar-width: none;
 }
-/* Webkit (Chrome, Safari) - Scrollbar sichtbar machen, wenn gescrollt wird */
-/* Firefox - Scrollbar sichtbar machen, wenn gescrollt wird */
-.scroll-container{
+/* =========================================================
+   Globale Scrollbar-Variablen
+   ========================================================= */
+
+
+/* =========================================================
+   HTML / Body Scrollbar
+   Verhindert Layout-Sprung beim Erscheinen der Scrollbar
+   ========================================================= */
+
+html {
+  overflow-y: auto;
+  scrollbar-gutter: stable;
   scrollbar-width: thin;
-}
-.scroll-container::-webkit-scrollbar-thumb {
-  border-radius: 4px;
-  border: 10px solid #1d4ed8;
-}
-.scroll-container::-webkit-scrollbar {
-  position: absolute;
-  width: 6px; /* oder eine andere Größe */
-  border-radius: 20%;
-  opacity: 1;
-  transition: opacity 1s ease;
-}
-html::-webkit-scrollbar {
-  position: absolute;
-  width: 6px; /* oder eine andere Größe */
-  border-radius: 25px;
-  opacity: 0;
-  transition: opacity 1s ease;
-}
-html:hover::-webkit-scrollbar {
-  opacity: 1;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
 }
 
-html:hover::-webkit-scrollbar-thumb {
-  border-radius: 4px;
-  border: 10px solid #1d4ed8;
+html::-webkit-scrollbar {
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
+}
+
+html::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+html::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+  border-radius: 999px;
 }
 
 html::-webkit-scrollbar-thumb:hover {
-  background-color: #ffffff00;
+  background-color: var(--scrollbar-thumb-hover);
 }
 
-/* Wenn gescrollt wird, wird die Scrollbar sichtbar */
-body::-webkit-scrollbar {
-  opacity: 1;
+/* =========================================================
+   Scrollbare Container
+   ========================================================= */
+
+.scroll-container {
+  overflow-y: auto;
+  overflow-x: hidden;
+
+  /*
+    Wichtig:
+    Reserviert den Scrollbar-Platz dauerhaft.
+    Dadurch schrumpft der Inhalt nicht plötzlich.
+  */
+  scrollbar-gutter: stable;
+
+  /* Firefox */
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+
+  /* Besseres Scroll-Verhalten auf Touch-Geräten */
+  -webkit-overflow-scrolling: touch;
 }
 
-body:focus::-webkit-scrollbar,
-body:hover::-webkit-scrollbar {
-  opacity: 1;
+/* Chrome, Safari, Edge */
+.scroll-container::-webkit-scrollbar {
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
 }
 
-/* (Optional) Wenn der Benutzer scrollt, erhöhe die Sichtbarkeit der Scrollbar */
-body:focus::-webkit-scrollbar,
-body:hover::-webkit-scrollbar {
-  opacity: 1;
+.scroll-container::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+.scroll-container::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+  border-radius: 999px;
+}
+
+.scroll-container::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-thumb-hover);
+}
+
+/* =========================================================
+   Variante: Scrollbar-Platz immer erzwingen
+   Nutzen, wenn auch Container ohne Overflow stabil bleiben sollen
+   ========================================================= */
+
+.scroll-container-always {
+  overflow-y: scroll;
+}
+
+/* =========================================================
+   Optionale Variante: Scrollbar erst bei Hover sichtbar
+   Layout bleibt trotzdem stabil, weil scrollbar-gutter aktiv ist
+   ========================================================= */
+
+.scroll-container-hover {
+  scrollbar-color: transparent transparent;
+}
+
+.scroll-container-hover:hover,
+.scroll-container-hover:focus-within {
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+.scroll-container-hover::-webkit-scrollbar-thumb {
+  background-color: transparent;
+}
+
+.scroll-container-hover:hover::-webkit-scrollbar-thumb,
+.scroll-container-hover:focus-within::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+}
+
+.scroll-container-hover::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-thumb-hover);
 }
 
 .admin-side-navigation{

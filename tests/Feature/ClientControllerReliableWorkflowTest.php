@@ -8,6 +8,7 @@ use App\Models\NetworkNode;
 use App\Models\Workflow;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowStep;
+use App\Models\WorkflowStepRun;
 use App\Services\Workflows\WorkflowExecutionService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
@@ -221,5 +222,169 @@ class ClientControllerReliableWorkflowTest extends TestCase
 
         $this->assertSame('completed', $run->fresh()->status);
         $this->assertSame(2, $run->stepRuns()->where('status', 'completed')->count());
+        $this->assertNull($node->fresh()->workflow_reservation_run_id);
+    }
+
+    public function test_factory_requests_stop_and_waits_for_authoritative_client_timeout_result(): void
+    {
+        $node = NetworkNode::query()->create([
+            'name' => 'Timeout node',
+            'node_uuid' => 'timeout-node',
+            'api_key' => 'timeout-key',
+            'status' => 'active',
+            'is_online' => true,
+            'last_seen_at' => now(),
+        ]);
+        $workflow = Workflow::query()->create([
+            'name' => 'Timeout workflow',
+            'slug' => 'timeout-workflow',
+            'is_active' => true,
+        ]);
+        $step = WorkflowStep::query()->create([
+            'workflow_id' => $workflow->id,
+            'name' => 'Remote step',
+            'type' => WorkflowStep::TYPE_BROWSER_CONTROL,
+            'action_key' => 'remote-step',
+            'position' => 10,
+            'is_enabled' => true,
+            'config_json' => [],
+        ]);
+        $run = WorkflowRun::query()->create([
+            'run_uuid' => (string) Str::uuid(),
+            'workflow_id' => $workflow->id,
+            'current_workflow_step_id' => $step->id,
+            'status' => 'running',
+            'queued_at' => now()->subMinutes(10),
+            'started_at' => now()->subMinutes(10),
+            'context_json' => ['execution_target' => 'client_controller'],
+            'result_json' => [],
+        ]);
+        $leaseToken = Str::random(64);
+        $job = NetworkJob::query()->create([
+            'job_uuid' => (string) Str::uuid(),
+            'network_node_id' => $node->id,
+            'workflow_run_id' => $run->id,
+            'type' => 'workflow_run',
+            'payload_version' => 2,
+            'payload_json' => ['workflow_bundle' => []],
+            'status' => 'dispatched',
+            'queued_at' => now()->subMinutes(10),
+            'dispatched_at' => now()->subMinutes(10),
+            'expires_at' => now()->subSecond(),
+            'lease_expires_at' => now()->addMinute(),
+            'lease_token_hash' => hash('sha256', $leaseToken),
+        ]);
+        WorkflowStepRun::query()->create([
+            'workflow_run_id' => $run->id,
+            'workflow_step_id' => $step->id,
+            'status' => 'waiting',
+            'external_run_type' => 'client-controller-workflow-run',
+            'external_run_id' => $job->job_uuid,
+            'started_at' => now()->subMinutes(10),
+            'result_json' => [],
+        ]);
+
+        app(WorkflowExecutionService::class)->expireTimedOutRuns();
+
+        $this->assertSame('stop_requested', $job->fresh()->status);
+        $this->assertSame('stop_requested', $run->fresh()->status);
+        $this->assertNull($run->fresh()->finished_at);
+
+        $this->withHeader('X-NODE-API-KEY', $node->api_key)
+            ->post('/api/client-controller/job-progress', [
+                'job_uuid' => $job->job_uuid,
+                'lease_token' => $leaseToken,
+                'sequence' => 1,
+                'progress' => json_encode(['state' => 'running', 'message' => 'still running']),
+            ])
+            ->assertOk()
+            ->assertJsonPath('control.command', 'stop')
+            ->assertJsonPath('control.payload.result_status', 'timed_out');
+
+        $this->withHeader('X-NODE-API-KEY', $node->api_key)
+            ->postJson('/api/client-controller/job-result', [
+                'job_uuid' => $job->job_uuid,
+                'lease_token' => $leaseToken,
+                'sequence' => 2,
+                'status' => 'timed_out',
+                'result' => [
+                    'ok' => false,
+                    'status' => 'timed_out',
+                    'state' => 'timed_out',
+                    'statusMessage' => 'Client stopped after timeout',
+                    'finishedAt' => now()->toIso8601String(),
+                ],
+            ])
+            ->assertOk();
+
+        $this->assertSame('timed_out', $run->fresh()->status);
+        $this->assertSame('client-controller', $run->fresh()->result_json['source']);
+    }
+
+    public function test_unassigned_client_run_uses_a_free_node_instead_of_a_busy_node(): void
+    {
+        $busyNode = NetworkNode::query()->create([
+            'name' => 'Busy node',
+            'node_uuid' => 'busy-node',
+            'api_key' => 'busy-key',
+            'status' => 'active',
+            'is_online' => true,
+            'last_seen_at' => now(),
+            'capabilities_json' => ['workflow_bundle_v1' => true],
+        ]);
+        $freeNode = NetworkNode::query()->create([
+            'name' => 'Free node',
+            'node_uuid' => 'free-node',
+            'api_key' => 'free-key',
+            'status' => 'active',
+            'is_online' => true,
+            'last_seen_at' => now()->subSecond(),
+            'capabilities_json' => ['workflow_bundle_v1' => true],
+        ]);
+        NetworkJob::query()->create([
+            'job_uuid' => (string) Str::uuid(),
+            'network_node_id' => $busyNode->id,
+            'type' => 'workflow_run',
+            'payload_version' => 2,
+            'payload_json' => ['workflow_bundle' => []],
+            'status' => 'dispatched',
+            'queued_at' => now(),
+            'dispatched_at' => now(),
+            'lease_expires_at' => now()->addMinute(),
+        ]);
+        $workflow = Workflow::query()->create([
+            'name' => 'Auto assigned workflow',
+            'slug' => 'auto-assigned-workflow',
+            'is_active' => true,
+        ]);
+        WorkflowStep::query()->create([
+            'workflow_id' => $workflow->id,
+            'name' => 'Portable task',
+            'type' => WorkflowStep::TYPE_BROWSER_CONTROL,
+            'action_key' => 'portable-task',
+            'position' => 10,
+            'is_enabled' => true,
+            'config_json' => ['tasks' => [[
+                'key' => 'portable',
+                'title' => 'Portable',
+                'runner' => 'node',
+                'node_script' => 'node/workflows/tasks/browser/open.cjs',
+            ]]],
+        ]);
+        $run = WorkflowRun::query()->create([
+            'run_uuid' => (string) Str::uuid(),
+            'workflow_id' => $workflow->id,
+            'status' => 'queued',
+            'queued_at' => now(),
+            'context_json' => ['execution_target' => 'client_controller'],
+            'result_json' => [],
+        ]);
+
+        app(WorkflowExecutionService::class)->advance($run);
+
+        $job = NetworkJob::query()->where('workflow_run_id', $run->id)->firstOrFail();
+        $this->assertSame($freeNode->id, $job->network_node_id);
+        $this->assertSame($run->id, $freeNode->fresh()->workflow_reservation_run_id);
+        $this->assertNull($busyNode->fresh()->workflow_reservation_run_id);
     }
 }

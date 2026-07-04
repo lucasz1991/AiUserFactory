@@ -242,7 +242,7 @@ class ClientControllerApiController extends Controller
                     ->with('device')
                     ->where('network_node_id', $node->id)
                     ->whereIn('job_uuid', $resumeJobUuids)
-                    ->where('status', 'dispatched')
+                    ->whereIn('status', ['dispatched', 'stop_requested', 'unreachable'])
                     ->orderBy('id')
                     ->lockForUpdate()
                     ->first();
@@ -255,7 +255,7 @@ class ClientControllerApiController extends Controller
             if ($protocolVersion >= 2 && NetworkJob::query()
                 ->where('network_node_id', $node->id)
                 ->whereIn('type', ['workflow_task', 'workflow_run'])
-                ->where('status', 'dispatched')
+                ->whereIn('status', ['dispatched', 'stop_requested'])
                 ->where('lease_expires_at', '>', now())
                 ->when($jobs->isNotEmpty(), fn ($query) => $query->whereKeyNot($jobs->first()->id))
                 ->exists()) {
@@ -280,7 +280,7 @@ class ClientControllerApiController extends Controller
             foreach ($jobs as $job) {
                 $leaseToken = $protocolVersion >= 2 ? Str::random(64) : null;
                 $job->forceFill([
-                    'status' => 'dispatched',
+                    'status' => $job->status === 'stop_requested' ? 'stop_requested' : 'dispatched',
                     'dispatched_at' => now(),
                     'lease_token_hash' => $leaseToken ? hash('sha256', $leaseToken) : null,
                     'lease_expires_at' => $leaseToken ? now()->addSeconds(120) : null,
@@ -312,6 +312,7 @@ class ClientControllerApiController extends Controller
                 'expires_at' => optional($job->expires_at)?->toIso8601String(),
                 'device_uuid' => $job->device?->device_uuid,
                 'execution_scope' => $job->device_id ? 'device' : 'node',
+                'control' => $this->jobControlResponse($job),
             ])->values(),
         ]);
     }
@@ -329,7 +330,7 @@ class ClientControllerApiController extends Controller
 
         $validated = $request->validate([
             'job_uuid' => ['required', 'string', 'max:120'],
-            'status' => ['required', 'string', 'in:success,failed,cancelled'],
+            'status' => ['required', 'string', 'in:success,failed,cancelled,timed_out'],
             'result' => ['nullable', 'array'],
             'error_message' => ['nullable', 'string'],
             'lease_token' => ['nullable', 'string', 'max:255'],
@@ -352,7 +353,7 @@ class ClientControllerApiController extends Controller
             return response()->json(['success' => false, 'message' => 'Invalid or missing job lease.'], 409);
         }
 
-        if (in_array($job->status, ['success', 'failed', 'cancelled'], true)) {
+        if (in_array($job->status, ['success', 'failed', 'cancelled', 'timed_out', 'lost'], true)) {
             return response()->json([
                 'success' => true,
                 'ignored' => true,
@@ -367,6 +368,7 @@ class ClientControllerApiController extends Controller
                 'success' => true,
                 'duplicate' => true,
                 'acknowledged_sequence' => (int) $job->last_sequence,
+                'control' => $this->jobControlResponse($job),
             ]);
         }
 
@@ -395,6 +397,7 @@ class ClientControllerApiController extends Controller
             'last_progress_at' => now(),
             'last_sequence' => $sequence,
             'lease_expires_at' => null,
+            'control_acknowledged_at' => $job->control_command ? now() : $job->control_acknowledged_at,
         ])->save();
 
         NetworkJobProgressEvent::query()->firstOrCreate(
@@ -486,12 +489,13 @@ class ClientControllerApiController extends Controller
             return response()->json(['success' => false, 'message' => 'Invalid or missing job lease.'], 409);
         }
 
-        if ($job->status !== 'dispatched') {
+        if (! in_array($job->status, ['dispatched', 'stop_requested', 'unreachable'], true)) {
             return response()->json([
                 'success' => true,
                 'ignored' => true,
                 'message' => 'Job is no longer running.',
                 'acknowledged_sequence' => (int) $job->last_sequence,
+                'control' => $this->jobControlResponse($job),
             ]);
         }
 
@@ -512,7 +516,12 @@ class ClientControllerApiController extends Controller
             ->first();
 
         if ($existingEvent) {
-            return response()->json(['success' => true, 'duplicate' => true, 'acknowledged_sequence' => $sequence]);
+            return response()->json([
+                'success' => true,
+                'duplicate' => true,
+                'acknowledged_sequence' => $sequence,
+                'control' => $this->jobControlResponse($job),
+            ]);
         }
 
         if ($request->hasFile('screenshot')) {
@@ -527,11 +536,19 @@ class ClientControllerApiController extends Controller
         $progress = $this->attachStoredLivePreview($job, $progress);
         $progress['clientControllerReportedAt'] = now()->toIso8601String();
 
+        $controlAcknowledged = $job->control_command !== null && (
+            (string) ($progress['controlAcknowledged'] ?? '') === (string) $job->control_command
+            || in_array((string) ($progress['state'] ?? ''), ['stopping', 'cancelled', 'timed_out'], true)
+        );
+
         $job->forceFill([
+            'status' => $job->status === 'unreachable' ? 'dispatched' : $job->status,
             'result_json' => $progress,
             'last_progress_at' => now(),
             'last_sequence' => $sequence,
             'lease_expires_at' => $job->lease_token_hash ? now()->addSeconds(120) : null,
+            'unreachable_at' => null,
+            'control_acknowledged_at' => $controlAcknowledged ? now() : $job->control_acknowledged_at,
         ])->save();
 
         NetworkJobProgressEvent::query()->create([
@@ -564,6 +581,7 @@ class ClientControllerApiController extends Controller
         return response()->json([
             'success' => true,
             'acknowledged_sequence' => $sequence,
+            'control' => $this->jobControlResponse($job),
         ]);
     }
 
@@ -665,6 +683,21 @@ class ClientControllerApiController extends Controller
         $leaseToken = trim((string) $request->input('lease_token', $request->header('X-JOB-LEASE-TOKEN', '')));
 
         return $leaseToken !== '' && hash_equals($expectedHash, hash('sha256', $leaseToken));
+    }
+
+    protected function jobControlResponse(NetworkJob $job): ?array
+    {
+        if ($job->control_command === null || $job->control_acknowledged_at !== null) {
+            return null;
+        }
+
+        return [
+            'command' => $job->control_command,
+            'sequence' => (int) $job->control_sequence,
+            'payload' => is_array($job->control_payload_json) ? $job->control_payload_json : [],
+            'requested_at' => optional($job->control_requested_at)?->toIso8601String(),
+            'deadline_at' => optional($job->control_deadline_at)?->toIso8601String(),
+        ];
     }
 
     protected function syncWorkflowStepSnapshot(WorkflowStepRun $stepRun, array $snapshot): void

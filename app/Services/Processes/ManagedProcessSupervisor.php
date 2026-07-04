@@ -154,7 +154,7 @@ class ManagedProcessSupervisor
 
         if (
             $activeStepRun->workflowRun
-            && in_array((string) $activeStepRun->workflowRun->status, ['queued', 'running', 'waiting'], true)
+            && in_array((string) $activeStepRun->workflowRun->status, ['queued', 'running', 'waiting', 'stop_requested', 'unreachable'], true)
         ) {
             return false;
         }
@@ -185,7 +185,7 @@ class ManagedProcessSupervisor
 
         $run = WorkflowRun::query()->find($workflowRunId);
 
-        if (! $run || in_array((string) $run->status, ['completed', 'failed', 'cancelled'], true)) {
+        if (! $run || in_array((string) $run->status, ['completed', 'failed', 'cancelled', 'timed_out', 'lost'], true)) {
             return false;
         }
 

@@ -18,6 +18,7 @@ class Device extends Model
         'adb_serial',
         'appium_endpoint',
         'status',
+        'workflow_reservation_run_id',
         'last_seen_at',
         'settings_json',
     ];

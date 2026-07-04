@@ -75,6 +75,12 @@ class WorkflowExecutionService
             return;
         }
 
+        if ($this->usesClientController($run) && ! $this->assignClientExecutionTarget($run)) {
+            return;
+        }
+
+        $run = $this->loadRun($run->id);
+
         if (! $run->started_at) {
             $run->forceFill([
                 'status' => 'running',
@@ -163,6 +169,56 @@ class WorkflowExecutionService
             return ['ok' => true, 'message' => 'Workflow-Lauf ist bereits beendet.'];
         }
 
+        $clientJob = NetworkJob::query()
+            ->where('workflow_run_id', $run->id)
+            ->whereIn('type', ['workflow_task', 'workflow_run'])
+            ->whereIn('status', ['pending', 'dispatched', 'unreachable', 'stop_requested'])
+            ->latest('id')
+            ->first();
+
+        if ($clientJob) {
+            if ($clientJob->status === 'pending') {
+                $cancelledAt = now();
+                $clientJob->forceFill([
+                    'status' => 'cancelled',
+                    'completed_at' => $cancelledAt,
+                    'error_message' => $message,
+                ])->save();
+                $run->stepRuns()->whereIn('status', ['queued', 'waiting'])->update([
+                    'status' => 'cancelled',
+                    'finished_at' => $cancelledAt,
+                    'error_message' => $message,
+                ]);
+                $run->forceFill([
+                    'status' => 'cancelled',
+                    'current_workflow_step_id' => null,
+                    'finished_at' => $cancelledAt,
+                    'result_json' => [
+                        'state' => 'cancelled',
+                        'statusMessage' => $message,
+                        'source' => 'ai-user-factory-before-dispatch',
+                    ],
+                    'error_message' => $message,
+                ])->save();
+                $this->releaseClientReservation($run);
+
+                return ['ok' => true, 'message' => 'Der noch nicht gestartete Client-Job wurde abgebrochen.'];
+            }
+
+            $this->requestClientJobStop($clientJob, $message, 'cancelled');
+            $run->forceFill([
+                'status' => 'stop_requested',
+                'result_json' => array_replace(is_array($run->result_json) ? $run->result_json : [], [
+                    'state' => 'stop_requested',
+                    'statusMessage' => $message,
+                    'source' => 'ai-user-factory-control',
+                    'stopRequestedAt' => now()->toIso8601String(),
+                ]),
+            ])->save();
+
+            return ['ok' => true, 'message' => 'Stop-Befehl wurde an den ClientController uebermittelt.', 'pendingClientConfirmation' => true];
+        }
+
         $cancelledAt = now();
         $stepRuns = $run->stepRuns()
             ->whereIn('status', ['running', 'waiting'])
@@ -208,6 +264,7 @@ class WorkflowExecutionService
             'error_message' => $message,
         ])->save();
 
+        $this->releaseClientReservation($run);
         $this->closeWorkflowTaskProcesses($run, $message);
 
         return ['ok' => true, 'message' => $message, 'cancelledStepRuns' => $stepRuns->count()];
@@ -240,6 +297,11 @@ class WorkflowExecutionService
             ->find($workflowStepRunId);
 
         if (! $stepRun || ! in_array($stepRun->status, ['running', 'waiting'], true)) {
+            return;
+        }
+
+        if ($stepRun->external_run_type === 'client-controller-workflow-run') {
+            // Full client workflows are advanced exclusively by client progress/result callbacks.
             return;
         }
 
@@ -318,6 +380,8 @@ class WorkflowExecutionService
 
     public function expireTimedOutRuns(): void
     {
+        $this->reconcileClientWorkflowJobs();
+
         WorkflowStepRun::query()
             ->with(['workflowRun.workflow.steps', 'workflowStep'])
             ->whereIn('status', ['running', 'waiting'])
@@ -326,6 +390,10 @@ class WorkflowExecutionService
             ->limit(100)
             ->get()
             ->each(function (WorkflowStepRun $stepRun): void {
+                if (in_array($stepRun->external_run_type, ['client-controller-workflow-task', 'client-controller-workflow-run'], true)) {
+                    return;
+                }
+
                 if ($this->stepRunTimedOut($stepRun)) {
                     $this->expireStepRun($stepRun);
                 }
@@ -361,9 +429,16 @@ class WorkflowExecutionService
     {
         if (
             ! $this->usesClientController($run)
-            || $run->stepRuns()->exists()
             || data_get($run->context_json, 'client_bundle_fallback_reasons')
         ) {
+            return false;
+        }
+
+        if (NetworkJob::query()
+            ->where('workflow_run_id', $run->id)
+            ->where('type', 'workflow_run')
+            ->whereNotIn('status', ['lost'])
+            ->exists()) {
             return false;
         }
 
@@ -387,12 +462,19 @@ class WorkflowExecutionService
         $steps = $run->workflow->steps->filter(fn (WorkflowStep $step): bool => $step->is_enabled)->values();
 
         foreach ($steps as $index => $step) {
-            WorkflowStepRun::query()->create([
+            WorkflowStepRun::query()->updateOrCreate([
                 'workflow_run_id' => $run->id,
                 'workflow_step_id' => $step->id,
+            ], [
                 'status' => $index === 0 ? 'waiting' : 'queued',
+                'external_run_type' => null,
+                'external_run_id' => null,
                 'started_at' => $index === 0 ? now() : null,
+                'finished_at' => null,
+                'duration_ms' => null,
                 'result_json' => [],
+                'logs_json' => [],
+                'error_message' => null,
             ]);
         }
 
@@ -440,6 +522,119 @@ class WorkflowExecutionService
         return true;
     }
 
+    protected function assignClientExecutionTarget(WorkflowRun $run): bool
+    {
+        return DB::transaction(function () use ($run): bool {
+            $run = WorkflowRun::query()->lockForUpdate()->findOrFail($run->id);
+            $context = is_array($run->context_json) ? $run->context_json : [];
+            $nodeId = (int) ($context['network_node_id'] ?? 0);
+            $deviceId = (int) ($context['device_id'] ?? 0);
+            $requestedNodeId = (int) (array_key_exists('requested_network_node_id', $context) ? $context['requested_network_node_id'] : $nodeId);
+            $requestedDeviceId = (int) (array_key_exists('requested_device_id', $context) ? $context['requested_device_id'] : $deviceId);
+
+            if ($requestedDeviceId > 0) {
+                $device = Device::query()->lockForUpdate()->find($requestedDeviceId);
+                $node = $device ? NetworkNode::query()->lockForUpdate()->find($device->network_node_id) : null;
+
+                if ($device && $node && $node->isAvailable()
+                    && $device->status === 'online'
+                    && $device->last_seen_at?->gte(now()->subSeconds(NetworkNode::heartbeatTimeoutSeconds()))
+                    && in_array($node->workflow_reservation_run_id, [null, $run->id], true)
+                        && in_array($device->workflow_reservation_run_id, [null, $run->id], true)
+                        && $this->clientTargetIsIdle($node->id, $device->id, $run->id)) {
+                    $context['network_node_id'] = $node->id;
+                    $context['device_id'] = $device->id;
+                    $context['requested_device_id'] = $requestedDeviceId;
+                    $context['requested_network_node_id'] = $node->id;
+                    $node->forceFill(['workflow_reservation_run_id' => $run->id])->save();
+                    $device->forceFill(['workflow_reservation_run_id' => $run->id])->save();
+                    $run->forceFill(['context_json' => $context])->save();
+
+                    return true;
+                }
+
+                return $this->queueForClientCapacity($run, 'Das ausgewaehlte Geraet ist derzeit nicht verfuegbar.');
+            }
+
+            if ($requestedNodeId > 0) {
+                $node = NetworkNode::query()->lockForUpdate()->find($requestedNodeId);
+
+                if ($node && $node->isAvailable()
+                    && in_array($node->workflow_reservation_run_id, [null, $run->id], true)
+                    && $this->clientTargetIsIdle($node->id, null, $run->id)) {
+                    $context['network_node_id'] = $node->id;
+                    $context['device_id'] = null;
+                    $context['requested_network_node_id'] = $requestedNodeId;
+                    $node->forceFill(['workflow_reservation_run_id' => $run->id])->save();
+                    $run->forceFill(['context_json' => $context])->save();
+
+                    return true;
+                }
+
+                return $this->queueForClientCapacity($run, 'Der ausgewaehlte Node ist derzeit ausgelastet oder nicht erreichbar.');
+            }
+
+            $node = NetworkNode::query()
+                ->available()
+                ->where(function ($query) use ($run): void {
+                    $query->whereNull('workflow_reservation_run_id')->orWhere('workflow_reservation_run_id', $run->id);
+                })
+                ->whereDoesntHave('jobs', function ($query) use ($run): void {
+                    $query->whereIn('type', ['workflow_task', 'workflow_run'])
+                        ->whereIn('status', ['pending', 'dispatched', 'stop_requested', 'unreachable'])
+                        ->where(function ($query) use ($run): void {
+                            $query->whereNull('workflow_run_id')->orWhere('workflow_run_id', '!=', $run->id);
+                        });
+                })
+                ->orderByDesc('last_seen_at')
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->first();
+
+            if (! $node) {
+                return $this->queueForClientCapacity($run, 'Kein freier ClientController-Node verfuegbar; der Workflow bleibt eingereiht.');
+            }
+
+            $context['network_node_id'] = $node->id;
+            $context['device_id'] = null;
+            $context['assignment_source'] = 'automatic';
+            $context['assigned_at'] = now()->toIso8601String();
+            $node->forceFill(['workflow_reservation_run_id' => $run->id])->save();
+            $run->forceFill(['context_json' => $context])->save();
+
+            return true;
+        });
+    }
+
+    protected function clientTargetIsIdle(int $nodeId, ?int $deviceId, int $workflowRunId): bool
+    {
+        return ! NetworkJob::query()
+            ->where('network_node_id', $nodeId)
+            ->when($deviceId, fn ($query) => $query->where('device_id', $deviceId))
+            ->whereIn('type', ['workflow_task', 'workflow_run'])
+            ->whereIn('status', ['pending', 'dispatched', 'stop_requested', 'unreachable'])
+            ->where(function ($query) use ($workflowRunId): void {
+                $query->whereNull('workflow_run_id')->orWhere('workflow_run_id', '!=', $workflowRunId);
+            })
+            ->exists();
+    }
+
+    protected function queueForClientCapacity(WorkflowRun $run, string $message): bool
+    {
+        $run->forceFill([
+            'status' => 'queued',
+            'result_json' => array_replace(is_array($run->result_json) ? $run->result_json : [], [
+                'state' => 'queued',
+                'statusMessage' => $message,
+                'source' => 'ai-user-factory-scheduler',
+            ]),
+        ])->save();
+
+        RunWorkflowJob::dispatch($run->id)->delay(now()->addSeconds(10));
+
+        return false;
+    }
+
     public function applyClientWorkflowProgress(NetworkJob $job, array $snapshot): void
     {
         $run = $job->workflowRun()->with(['workflow.steps', 'stepRuns.workflowStep'])->first();
@@ -461,22 +656,30 @@ class WorkflowExecutionService
             }
 
             $stepSnapshot = is_array($stepSnapshot) ? $stepSnapshot : $snapshot;
-            $state = (string) ($stepSnapshot['state'] ?? $stepSnapshot['status'] ?? 'running');
+            $state = strtolower((string) ($stepSnapshot['state'] ?? $stepSnapshot['status'] ?? 'running'));
             $isCurrentStep = (int) $stepRun->workflow_step_id === $currentStepId;
-            $stepRun->forceFill([
-                'status' => in_array($state, ['completed', 'success'], true) ? 'completed' : 'waiting',
-                'started_at' => $stepRun->started_at ?: now(),
-                'finished_at' => in_array($state, ['completed', 'success'], true) ? ($stepRun->finished_at ?: now()) : null,
+            $stepRun->forceFill(array_filter([
+                'status' => $this->clientStepStatus($state),
+                'started_at' => $this->clientReportedAt($stepSnapshot, ['startedAt', 'started_at']) ?: $stepRun->started_at,
+                'finished_at' => $this->clientReportedAt($stepSnapshot, ['finishedAt', 'finished_at', 'completedAt', 'completed_at']) ?: $stepRun->finished_at,
+                'duration_ms' => $stepSnapshot['durationMs'] ?? $stepSnapshot['duration_ms'] ?? $stepRun->duration_ms,
                 'external_run_type' => $isCurrentStep ? 'client-controller-workflow-run' : $stepRun->external_run_type,
                 'external_run_id' => $isCurrentStep ? $job->job_uuid : $stepRun->external_run_id,
                 'result_json' => $this->publicRunSnapshot($stepSnapshot),
                 'logs_json' => $this->logsFromExternalStatus($stepSnapshot),
-            ])->save();
+                'error_message' => in_array($state, ['failed', 'cancelled', 'timed_out', 'timeout'], true)
+                    ? (string) ($stepSnapshot['statusMessage'] ?? $stepSnapshot['message'] ?? '')
+                    : null,
+            ], static fn (mixed $value): bool => $value !== null))->save();
         }
 
         $run->forceFill([
-            'status' => 'waiting',
+            'status' => $job->status === 'stop_requested' ? 'stop_requested' : 'running',
             'current_workflow_step_id' => $currentStepId ?: $run->current_workflow_step_id,
+            'result_json' => array_replace($this->publicRunSnapshot($snapshot), [
+                'source' => 'client-controller',
+                'networkJobUuid' => $job->job_uuid,
+            ]),
         ])->save();
     }
 
@@ -496,17 +699,22 @@ class WorkflowExecutionService
             $stepResult = $steps->get((int) $stepRun->workflow_step_id);
 
             if (! is_array($stepResult)) {
-                if ($stepRun->status === 'queued') {
-                    $stepRun->forceFill(['status' => 'skipped'])->save();
-                }
                 continue;
             }
 
-            if ((bool) ($stepResult['ok'] ?? false)) {
-                $this->completeStepRun($stepRun, $stepResult);
-            } else {
-                $this->failStepRun($stepRun, (string) ($stepResult['statusMessage'] ?? 'Client-Workflow-Schritt fehlgeschlagen.'), $stepResult);
-            }
+            $state = strtolower((string) ($stepResult['state'] ?? $stepResult['status'] ?? ((bool) ($stepResult['ok'] ?? false) ? 'completed' : 'failed')));
+            $stepRun->forceFill([
+                'status' => $this->clientStepStatus($state),
+                'started_at' => $this->clientReportedAt($stepResult, ['startedAt', 'started_at']) ?: $stepRun->started_at,
+                'finished_at' => $this->clientReportedAt($stepResult, ['finishedAt', 'finished_at', 'completedAt', 'completed_at'])
+                    ?: $job->completed_at,
+                'duration_ms' => $stepResult['durationMs'] ?? $stepResult['duration_ms'] ?? $stepRun->duration_ms,
+                'result_json' => $this->publicRunSnapshot($stepResult),
+                'logs_json' => $this->logsFromExternalStatus($stepResult),
+                'error_message' => in_array($state, ['failed', 'cancelled', 'timed_out', 'timeout'], true)
+                    ? (string) ($stepResult['statusMessage'] ?? $stepResult['message'] ?? $errorMessage ?? '')
+                    : null,
+            ])->save();
         }
 
         $this->applyWorkflowVariablesResult($run, $result);
@@ -516,13 +724,26 @@ class WorkflowExecutionService
             $result = $this->applyExternalResult($lastStepRun, $result);
         }
 
-        if ($status === 'success' && (bool) ($result['ok'] ?? false)) {
-            $this->completeRun($run);
-            $run->refresh();
-            $run->forceFill(['result_json' => array_replace(is_array($run->result_json) ? $run->result_json : [], $this->publicRunSnapshot($result))])->save();
-        } else {
-            $this->failRun($run, $errorMessage ?: (string) ($result['statusMessage'] ?? 'Client-Workflow fehlgeschlagen.'));
-        }
+        $runStatus = match ($status) {
+            'success' => 'completed',
+            'cancelled' => 'cancelled',
+            'timed_out' => 'timed_out',
+            default => 'failed',
+        };
+        $finishedAt = $this->clientReportedAt($result, ['finishedAt', 'finished_at', 'completedAt', 'completed_at']) ?: $job->completed_at;
+        $run->forceFill([
+            'status' => $runStatus,
+            'current_workflow_step_id' => null,
+            'finished_at' => $finishedAt,
+            'duration_ms' => $result['durationMs'] ?? $result['duration_ms'] ?? ($finishedAt ? $this->workflowRunDurationMs($run, $finishedAt) : null),
+            'result_json' => array_replace($this->publicRunSnapshot($result), [
+                'source' => 'client-controller',
+                'clientStatus' => $status,
+                'networkJobUuid' => $job->job_uuid,
+            ]),
+            'error_message' => $runStatus === 'completed' ? null : ($errorMessage ?: (string) ($result['statusMessage'] ?? '')),
+        ])->save();
+        $this->releaseClientReservation($run);
     }
 
     protected function startWorkflowTaskStep(WorkflowRun $run, WorkflowStep $step, WorkflowStepRun $stepRun): string
@@ -588,6 +809,8 @@ class WorkflowExecutionService
             null,
             $run->requested_by,
             now()->addSeconds($timeoutSeconds),
+            $run,
+            2,
         );
 
         $this->clearRouteCursor($run);
@@ -797,6 +1020,7 @@ class WorkflowExecutionService
             'error_message' => null,
         ])->save();
 
+        $this->releaseClientReservation($run);
         $this->closeWorkflowTaskProcesses($run, 'Workflow-Lauf wurde abgeschlossen; zugehoerige Browser-Prozesse wurden geschlossen.');
     }
 
@@ -829,6 +1053,8 @@ class WorkflowExecutionService
             ], $this->workflowReturnPayload($run)),
             'error_message' => $message,
         ])->save();
+
+        $this->releaseClientReservation($run);
 
         $this->closeWorkflowTaskProcesses($run, 'Workflow-Lauf wurde beendet; zugehoerige Browser-Prozesse wurden geschlossen.');
     }
@@ -1188,12 +1414,6 @@ class WorkflowExecutionService
 
     protected function stepRunTimedOut(WorkflowStepRun $stepRun): bool
     {
-        if ($stepRun->external_run_type === 'client-controller-workflow-run') {
-            $job = NetworkJob::query()->where('job_uuid', $stepRun->external_run_id)->first();
-
-            return $job?->expires_at?->lte(now()) ?? false;
-        }
-
         if (! ($stepRun->started_at instanceof Carbon)) {
             return false;
         }
@@ -1205,6 +1425,202 @@ class WorkflowExecutionService
         }
 
         return $stepRun->started_at->copy()->addSeconds($timeoutSeconds)->lte(now());
+    }
+
+    protected function requestClientJobStop(NetworkJob $job, string $message, string $resultStatus = 'cancelled'): void
+    {
+        if (in_array($job->status, ['success', 'failed', 'cancelled', 'timed_out', 'lost'], true)) {
+            return;
+        }
+
+        $job->forceFill([
+            'status' => 'stop_requested',
+            'control_command' => 'stop',
+            'control_sequence' => ((int) $job->control_sequence) + 1,
+            'control_payload_json' => [
+                'reason' => $message,
+                'result_status' => $resultStatus,
+            ],
+            'control_requested_at' => now(),
+            'control_acknowledged_at' => null,
+            'control_deadline_at' => now()->addSeconds(45),
+            'error_message' => $message,
+        ])->save();
+    }
+
+    protected function reconcileClientWorkflowJobs(): void
+    {
+        NetworkJob::query()
+            ->with(['workflowRun.stepRuns'])
+            ->whereIn('type', ['workflow_task', 'workflow_run'])
+            ->whereNotNull('workflow_run_id')
+            ->whereIn('status', ['pending', 'dispatched', 'stop_requested', 'unreachable'])
+            ->orderBy('id')
+            ->limit(100)
+            ->get()
+            ->each(function (NetworkJob $job): void {
+                if ($job->status === 'dispatched' && $job->expires_at?->lte(now())) {
+                    $this->requestClientJobStop(
+                        $job,
+                        'Die maximale Ausfuehrungszeit wurde erreicht. Der ClientController soll den Workflow kontrolliert beenden.',
+                        'timed_out',
+                    );
+
+                    $job->workflowRun?->forceFill([
+                        'status' => 'stop_requested',
+                        'result_json' => [
+                            'state' => 'stop_requested',
+                            'statusMessage' => 'Timeout erreicht; Stop-Bestaetigung des ClientControllers wird erwartet.',
+                            'source' => 'ai-user-factory-control',
+                        ],
+                    ])->save();
+
+                    return;
+                }
+
+                if ($job->status === 'dispatched' && $job->lease_expires_at?->lte(now())) {
+                    $this->markClientJobUnreachable($job);
+
+                    return;
+                }
+
+                if ($job->status === 'stop_requested'
+                    && $job->control_acknowledged_at === null
+                    && $job->control_deadline_at?->lte(now())) {
+                    $this->markClientJobUnreachable($job);
+
+                    return;
+                }
+
+                if ($job->status === 'stop_requested'
+                    && $job->control_acknowledged_at !== null
+                    && $job->lease_expires_at?->lte(now())) {
+                    $this->markClientJobUnreachable($job);
+
+                    return;
+                }
+
+                if ($job->status === 'unreachable' && $job->unreachable_at?->copy()->addSeconds(180)->lte(now())) {
+                    $this->loseAndPossiblyReassignClientJob($job);
+                }
+            });
+    }
+
+    protected function markClientJobUnreachable(NetworkJob $job): void
+    {
+        $job->forceFill(['status' => 'unreachable', 'unreachable_at' => now()])->save();
+        $job->workflowRun?->forceFill([
+            'status' => 'unreachable',
+            'result_json' => [
+                'state' => 'unreachable',
+                'statusMessage' => 'Der ClientController meldet sich derzeit nicht. Der Lauf wird noch nicht als fehlgeschlagen gewertet.',
+                'source' => 'ai-user-factory-liveness',
+            ],
+        ])->save();
+    }
+
+    protected function loseAndPossiblyReassignClientJob(NetworkJob $job): void
+    {
+        $run = $job->workflowRun;
+        $job->forceFill([
+            'status' => 'lost',
+            'completed_at' => now(),
+            'lease_token_hash' => null,
+            'lease_expires_at' => null,
+            'error_message' => 'ClientController blieb nach dem Erreichbarkeits-Timeout ohne Antwort.',
+        ])->save();
+
+        if (! $run || $this->isFinalStatus($run->status)) {
+            return;
+        }
+
+        $context = is_array($run->context_json) ? $run->context_json : [];
+        $reassignments = (int) ($context['client_reassignment_count'] ?? 0);
+        $maximum = (int) ($context['max_client_reassignments'] ?? 2);
+        $this->releaseClientReservation($run);
+
+        $manualStopWithoutAcknowledgement = $job->control_command === 'stop'
+            && data_get($job->control_payload_json, 'result_status') === 'cancelled';
+
+        if ($manualStopWithoutAcknowledgement || ! (bool) ($context['allow_client_reassignment'] ?? true) || $reassignments >= $maximum) {
+            $run->stepRuns()->whereIn('status', ['running', 'waiting', 'queued'])->update(['status' => 'lost']);
+            $run->forceFill([
+                'status' => 'lost',
+                'finished_at' => now(),
+                'error_message' => $job->error_message,
+                'result_json' => [
+                    'state' => 'lost',
+                    'statusMessage' => $job->error_message,
+                    'source' => 'ai-user-factory-liveness',
+                ],
+            ])->save();
+
+            return;
+        }
+
+        $context['client_reassignment_count'] = $reassignments + 1;
+        $context['network_node_id'] = null;
+        $context['device_id'] = null;
+        $context['requested_network_node_id'] = null;
+        $context['requested_device_id'] = null;
+        $context['assignment_source'] = 'reassignment';
+        $run->stepRuns()->update([
+            'status' => 'queued',
+            'external_run_type' => null,
+            'external_run_id' => null,
+            'started_at' => null,
+            'finished_at' => null,
+            'duration_ms' => null,
+            'result_json' => json_encode([]),
+            'logs_json' => json_encode([]),
+            'error_message' => null,
+        ]);
+        $run->forceFill([
+            'status' => 'queued',
+            'started_at' => null,
+            'finished_at' => null,
+            'current_workflow_step_id' => null,
+            'context_json' => $context,
+            'result_json' => [
+                'state' => 'queued',
+                'statusMessage' => 'Der nicht erreichbare Client-Versuch wurde isoliert; eine neue Zuweisung wird gesucht.',
+                'source' => 'ai-user-factory-scheduler',
+            ],
+            'error_message' => null,
+        ])->save();
+
+        RunWorkflowJob::dispatch($run->id)->delay(now()->addSeconds(5));
+    }
+
+    protected function clientStepStatus(string $state): string
+    {
+        return match (strtolower($state)) {
+            'success', 'completed' => 'completed',
+            'failed', 'error' => 'failed',
+            'cancelled', 'canceled', 'stopped' => 'cancelled',
+            'timed_out', 'timeout' => 'timed_out',
+            'queued', 'pending' => 'queued',
+            default => 'waiting',
+        };
+    }
+
+    protected function clientReportedAt(array $payload, array $keys): ?Carbon
+    {
+        foreach ($keys as $key) {
+            $value = trim((string) ($payload[$key] ?? ''));
+
+            if ($value === '') {
+                continue;
+            }
+
+            try {
+                return Carbon::parse($value);
+            } catch (\Throwable) {
+                // Invalid client timestamps remain part of the raw payload but do not alter server columns.
+            }
+        }
+
+        return null;
     }
 
     protected function stepTimeoutSeconds(WorkflowStep $step): int
@@ -2304,7 +2720,21 @@ class WorkflowExecutionService
                 : 'system',
             'network_node_id' => (int) ($context['network_node_id'] ?? 0) ?: null,
             'device_id' => (int) ($context['device_id'] ?? 0) ?: null,
+            'requested_network_node_id' => (int) ($context['network_node_id'] ?? 0) ?: null,
+            'requested_device_id' => (int) ($context['device_id'] ?? 0) ?: null,
+            'allow_client_reassignment' => (bool) ($context['allow_client_reassignment'] ?? true),
+            'max_client_reassignments' => max(0, min(10, (int) ($context['max_client_reassignments'] ?? 2))),
         ];
+    }
+
+    protected function releaseClientReservation(WorkflowRun $run): void
+    {
+        NetworkNode::query()
+            ->where('workflow_reservation_run_id', $run->id)
+            ->update(['workflow_reservation_run_id' => null]);
+        Device::query()
+            ->where('workflow_reservation_run_id', $run->id)
+            ->update(['workflow_reservation_run_id' => null]);
     }
 
     protected function usesClientController(WorkflowRun $run): bool
@@ -2324,7 +2754,7 @@ class WorkflowExecutionService
             'pending' => 'queued',
             'dispatched' => 'running',
             'success' => 'completed',
-            'failed', 'cancelled' => $job->status,
+            'failed', 'cancelled', 'timed_out', 'stop_requested', 'unreachable', 'lost' => $job->status,
             default => (string) $job->status,
         };
 
@@ -2676,7 +3106,7 @@ class WorkflowExecutionService
 
     protected function isFinalStatus(string $status): bool
     {
-        return in_array($status, ['completed', 'failed', 'cancelled'], true);
+        return in_array($status, ['completed', 'failed', 'cancelled', 'timed_out', 'lost'], true);
     }
 
     protected function normalizeProvider(mixed $provider): string

@@ -134,7 +134,7 @@ class PersonProcessList extends Component
 
         $run = WorkflowRun::query()->find($this->previewWorkflowRunId);
 
-        if (! $run || in_array($run->status, ['completed', 'failed', 'cancelled'], true)) {
+        if (! $run || in_array($run->status, ['completed', 'failed', 'cancelled', 'timed_out', 'lost'], true)) {
             return;
         }
 
@@ -239,10 +239,10 @@ class PersonProcessList extends Component
             'stats' => [
                 'total' => $rootProcesses->count() + $this->personWorkflowRuns()->count(),
                 'running' => $rootProcesses->whereIn('status', ['running', 'terminate_requested', 'kill_requested'])->count()
-                    + $this->personWorkflowRuns()->whereIn('status', ['queued', 'running', 'waiting'])->count(),
+                    + $this->personWorkflowRuns()->whereIn('status', ['queued', 'running', 'waiting', 'stop_requested', 'unreachable'])->count(),
                 'stale' => $rootProcesses->filter(fn (ManagedProcess $process): bool => $this->isStale($process))->count(),
                 'exited' => $rootProcesses->whereIn('status', ['exited', 'terminated', 'killed', 'restarted'])->count()
-                    + $this->personWorkflowRuns()->whereIn('status', ['completed', 'failed', 'cancelled'])->count(),
+                    + $this->personWorkflowRuns()->whereIn('status', ['completed', 'failed', 'cancelled', 'timed_out', 'lost'])->count(),
                 'children' => $allPersonProcesses->where('is_root', false)->count(),
             ],
         ]);
@@ -358,11 +358,11 @@ class PersonProcessList extends Component
     protected function withWorkflowRunProcesses(Collection $processes): Collection
     {
         $virtualProcesses = $this->personWorkflowRuns()
-            ->when($this->filter === 'running', fn (Collection $runs): Collection => $runs->whereIn('status', ['queued', 'running', 'waiting'])->values())
-            ->when($this->filter === 'exited', fn (Collection $runs): Collection => $runs->whereIn('status', ['completed', 'failed', 'cancelled'])->values())
+            ->when($this->filter === 'running', fn (Collection $runs): Collection => $runs->whereIn('status', ['queued', 'running', 'waiting', 'stop_requested', 'unreachable'])->values())
+            ->when($this->filter === 'exited', fn (Collection $runs): Collection => $runs->whereIn('status', ['completed', 'failed', 'cancelled', 'timed_out', 'lost'])->values())
             ->map(function (WorkflowRun $run): ManagedProcess {
-                $status = in_array($run->status, ['queued', 'running', 'waiting'], true) ? 'running' : 'exited';
-                $process = new ManagedProcess();
+                $status = in_array($run->status, ['queued', 'running', 'waiting', 'stop_requested', 'unreachable'], true) ? 'running' : 'exited';
+                $process = new ManagedProcess;
                 $process->exists = false;
                 $process->forceFill([
                     'id' => -$run->id,

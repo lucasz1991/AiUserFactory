@@ -34,6 +34,7 @@ class NetworkNode extends Model
         'settings_json',
         'allow_server_rebind',
         'status',
+        'workflow_reservation_run_id',
     ];
 
     protected $casts = [

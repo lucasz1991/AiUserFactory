@@ -239,16 +239,16 @@ class ProcessMonitor extends Component
                 'stepRuns.workflowStep',
             ])
             ->when($this->runId || $this->rootPid, fn ($query) => $query->whereIn('id', $workflowRunIds->values()))
-            ->when($this->filter === 'running', fn ($query) => $query->whereIn('status', ['queued', 'running', 'waiting']))
-            ->when($this->filter === 'exited', fn ($query) => $query->whereIn('status', ['completed', 'failed', 'cancelled']))
+            ->when($this->filter === 'running', fn ($query) => $query->whereIn('status', ['queued', 'running', 'waiting', 'stop_requested', 'unreachable']))
+            ->when($this->filter === 'exited', fn ($query) => $query->whereIn('status', ['completed', 'failed', 'cancelled', 'timed_out', 'lost']))
             ->when($this->filter === 'idle', fn ($query) => $query->whereRaw('1 = 0'))
             ->latest('id')
             ->limit($this->limit)
             ->get();
 
         $virtualProcesses = $runs->map(function (WorkflowRun $run): ManagedProcess {
-            $status = in_array($run->status, ['queued', 'running', 'waiting'], true) ? 'running' : 'exited';
-            $process = new ManagedProcess();
+            $status = in_array($run->status, ['queued', 'running', 'waiting', 'stop_requested', 'unreachable'], true) ? 'running' : 'exited';
+            $process = new ManagedProcess;
             $process->exists = false;
             $process->forceFill([
                 'id' => -$run->id,
@@ -400,8 +400,8 @@ class ProcessMonitor extends Component
 
         return [
             'total' => WorkflowRun::query()->count(),
-            'running' => WorkflowRun::query()->whereIn('status', ['queued', 'running', 'waiting'])->count(),
-            'exited' => WorkflowRun::query()->whereIn('status', ['completed', 'failed', 'cancelled'])->count(),
+            'running' => WorkflowRun::query()->whereIn('status', ['queued', 'running', 'waiting', 'stop_requested', 'unreachable'])->count(),
+            'exited' => WorkflowRun::query()->whereIn('status', ['completed', 'failed', 'cancelled', 'timed_out', 'lost'])->count(),
         ];
     }
 

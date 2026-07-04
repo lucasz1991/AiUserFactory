@@ -63,7 +63,7 @@ $maxWidth = [
                 </button>
             </div>
 
-            <div class="min-h-0 flex-1 overflow-y-auto scroll-container">
+            <div class="min-h-0 flex-1 overflow-y-auto scroll-container scroll-container-hover">
                 {{ $slot }}
             </div>
 

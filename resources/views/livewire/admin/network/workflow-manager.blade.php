@@ -676,9 +676,9 @@
                             Browser-Workflows laufen direkt auf dem Node im lokalen CloakBrowser. Ein angeschlossenes Geraet ist nicht erforderlich.
                         </div>
                         <div>
-                            <label for="workflow-run-node" class="block text-sm font-medium text-gray-700">ClientController-Node</label>
+                            <label for="workflow-run-node" class="block text-sm font-medium text-gray-700">ClientController-Node (optional)</label>
                             <select id="workflow-run-node" wire:model.live="runNetworkNodeId" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm">
-                                <option value="">Node waehlen</option>
+                                <option value="">Automatisch freien Node waehlen / einreihen</option>
                                 @foreach($runNetworkNodes as $node)
                                     <option value="{{ $node->id }}">{{ $node->name }} · {{ $node->is_online ? 'online' : 'offline' }}</option>
                                 @endforeach
@@ -688,8 +688,8 @@
                         <div>
                             <label for="workflow-run-device" class="block text-sm font-medium text-gray-700">Geraet (optional)</label>
                             <select id="workflow-run-device" wire:model.defer="runDeviceId" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm">
-                                <option value="">Direkt auf dem Node (kein Geraet)</option>
-                                @foreach($runDevices->where('network_node_id', (int) $runNetworkNodeId) as $device)
+                                <option value="">Kein festes Geraet</option>
+                                @foreach($runNetworkNodeId ? $runDevices->where('network_node_id', (int) $runNetworkNodeId) : $runDevices as $device)
                                     <option value="{{ $device->id }}">{{ $device->name }} · {{ $device->status }}</option>
                                 @endforeach
                             </select>
