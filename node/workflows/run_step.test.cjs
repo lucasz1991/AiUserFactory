@@ -124,6 +124,8 @@ test('workflow runner keeps Chromium sandbox enabled by default', () => {
   const result = executeTasks([returnTask('sandbox-default', true)]);
 
   assert.equal(result.runnerDiagnostics.chromiumNoSandboxFlag, false);
+  assert.equal(typeof result.browserIdentity.runnerProcessId, 'number');
+  assert.equal(result.browserIdentity.connectedToExistingBrowser, false);
 });
 
 test('browser close without a persisted browser does not launch a replacement', () => {
