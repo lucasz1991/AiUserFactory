@@ -161,6 +161,7 @@ class ClientControllerReliableWorkflowTest extends TestCase
         $job = NetworkJob::query()->where('workflow_run_id', $run->id)->firstOrFail();
         $this->assertSame('workflow_run', $job->type);
         $this->assertSame(2, $job->payload_version);
+        $this->assertNull($job->expires_at);
         $this->assertCount(2, data_get($job->payload_json, 'workflow_bundle.steps'));
         $this->assertSame('wait', data_get($job->payload_json, 'workflow_bundle.steps.0.defaultNext'));
         $this->assertSame(2, $run->stepRuns()->count());
@@ -226,7 +227,32 @@ class ClientControllerReliableWorkflowTest extends TestCase
         $this->assertNull($node->fresh()->workflow_reservation_run_id);
     }
 
-    public function test_factory_requests_stop_and_waits_for_authoritative_client_timeout_result(): void
+    public function test_pending_workflow_jobs_are_pullable_even_with_legacy_expiry(): void
+    {
+        $node = NetworkNode::query()->create([
+            'name' => 'Legacy expiry node',
+            'node_uuid' => 'legacy-expiry-node',
+            'api_key' => 'legacy-expiry-key',
+            'status' => 'active',
+        ]);
+        $job = NetworkJob::query()->create([
+            'job_uuid' => (string) Str::uuid(),
+            'network_node_id' => $node->id,
+            'type' => 'workflow_run',
+            'payload_version' => 2,
+            'payload_json' => ['workflow_bundle' => ['steps' => []]],
+            'status' => 'pending',
+            'queued_at' => now()->subMinutes(10),
+            'expires_at' => now()->subMinute(),
+        ]);
+
+        $this->withHeader('X-NODE-API-KEY', $node->api_key)
+            ->postJson('/api/client-controller/pull-jobs', ['protocol_version' => 2])
+            ->assertOk()
+            ->assertJsonPath('jobs.0.job_uuid', $job->job_uuid);
+    }
+
+    public function test_factory_does_not_stop_workflow_jobs_on_expires_and_waits_for_authoritative_client_result(): void
     {
         $node = NetworkNode::query()->create([
             'name' => 'Timeout node',
@@ -287,8 +313,8 @@ class ClientControllerReliableWorkflowTest extends TestCase
 
         app(WorkflowExecutionService::class)->expireTimedOutRuns();
 
-        $this->assertSame('stop_requested', $job->fresh()->status);
-        $this->assertSame('stop_requested', $run->fresh()->status);
+        $this->assertSame('dispatched', $job->fresh()->status);
+        $this->assertSame('running', $run->fresh()->status);
         $this->assertNull($run->fresh()->finished_at);
 
         $this->withHeader('X-NODE-API-KEY', $node->api_key)
@@ -299,8 +325,7 @@ class ClientControllerReliableWorkflowTest extends TestCase
                 'progress' => json_encode(['state' => 'running', 'message' => 'still running']),
             ])
             ->assertOk()
-            ->assertJsonPath('control.command', 'stop')
-            ->assertJsonPath('control.payload.result_status', 'timed_out');
+            ->assertJsonMissingPath('control.command');
 
         $this->withHeader('X-NODE-API-KEY', $node->api_key)
             ->postJson('/api/client-controller/job-result', [

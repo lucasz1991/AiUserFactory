@@ -524,7 +524,6 @@ class WorkflowExecutionService
             return false;
         }
 
-        $timeoutSeconds = max(300, $steps->sum(fn (WorkflowStep $step): int => $this->stepTimeoutSeconds($step)));
         $networkJob = $this->networkJobs->dispatch(
             $node,
             'workflow_run',
@@ -532,7 +531,7 @@ class WorkflowExecutionService
             $device,
             null,
             $run->requested_by,
-            now()->addSeconds($timeoutSeconds),
+            null,
             $run,
             2,
         );
@@ -828,7 +827,6 @@ class WorkflowExecutionService
         $device = $deviceId > 0 ? Device::query()->find($deviceId) : null;
         $runtimeContext = $this->workflowRuntimeContext($run, $step, $stepRun);
         $runtime = $this->workflowTasks->remoteRuntime($run, $step, $stepRun, $runtimeContext);
-        $timeoutSeconds = max(60, $this->stepTimeoutSeconds($step));
         $networkJob = $this->networkJobs->dispatch(
             $node,
             'workflow_task',
@@ -844,7 +842,7 @@ class WorkflowExecutionService
             $device,
             null,
             $run->requested_by,
-            now()->addSeconds($timeoutSeconds),
+            null,
             $run,
             2,
         );
@@ -1495,25 +1493,6 @@ class WorkflowExecutionService
             ->limit(100)
             ->get()
             ->each(function (NetworkJob $job): void {
-                if ($job->status === 'dispatched' && $job->expires_at?->lte(now())) {
-                    $this->requestClientJobStop(
-                        $job,
-                        'Die maximale Ausfuehrungszeit wurde erreicht. Der ClientController soll den Workflow kontrolliert beenden.',
-                        'timed_out',
-                    );
-
-                    $job->workflowRun?->forceFill([
-                        'status' => 'stop_requested',
-                        'result_json' => [
-                            'state' => 'stop_requested',
-                            'statusMessage' => 'Timeout erreicht; Stop-Bestaetigung des ClientControllers wird erwartet.',
-                            'source' => 'ai-user-factory-control',
-                        ],
-                    ])->save();
-
-                    return;
-                }
-
                 if ($job->status === 'dispatched' && $job->lease_expires_at?->lte(now())) {
                     $this->markClientJobUnreachable($job);
 

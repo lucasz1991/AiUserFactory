@@ -269,7 +269,8 @@ class ClientControllerApiController extends Controller
                     ->where('status', 'pending')
                     ->where(function ($query): void {
                         $query->whereNull('expires_at')
-                            ->orWhere('expires_at', '>', now());
+                            ->orWhere('expires_at', '>', now())
+                            ->orWhereIn('type', ['workflow_task', 'workflow_run']);
                     })
                     ->orderBy('id')
                     ->lockForUpdate()
