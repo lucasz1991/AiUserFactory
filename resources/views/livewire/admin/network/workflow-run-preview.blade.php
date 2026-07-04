@@ -124,36 +124,48 @@
             @endif
 
             <section class="w-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+                <div class="flex min-w-0 items-center justify-between gap-4 border-b border-slate-100 px-4 py-3">
+                    <div class="min-w-0">
+                        <p class="text-[10px] font-semibold uppercase tracking-wide text-sky-600">Workflow-Vorschau</p>
+                        <h3 class="mt-1 truncate text-base font-semibold text-slate-950">
+                            {{ $workflowRun->workflow?->name ?? 'Workflow' }}
+                        </h3>
+                        <p class="mt-0.5 max-w-4xl truncate text-xs text-slate-500">
+                            Run #{{ $workflowRun->id }} · {{ $workflowDurationLabel }} · {{ data_get($latestStatusResult, 'statusMessage', data_get($latestStatusResult, 'message', $workflowRun->status)) ?: $workflowRun->status }}
+                        </p>
+                    </div>
+                    <div class="flex shrink-0 items-center gap-2">
+                        <x-workflows.status-badge :status="$workflowRun->status" />
+                        <button
+                            type="button"
+                            x-on:click="overviewOpen = !overviewOpen"
+                            x-bind:title="overviewOpen ? 'Minimieren' : 'Maximieren'"
+                            class="inline-flex h-9 w-9 items-center justify-center rounded-md border border-sky-200 bg-sky-50 text-sky-800 transition hover:bg-sky-100"
+                        >
+                            <svg x-show="!overviewOpen" xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M15 3h6v6"></path>
+                                <path d="m21 3-7 7"></path>
+                                <path d="M9 21H3v-6"></path>
+                                <path d="m3 21 7-7"></path>
+                            </svg>
+                            <svg x-cloak x-show="overviewOpen" xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M8 3v5H3"></path>
+                                <path d="m3 8 5-5"></path>
+                                <path d="M16 21v-5h5"></path>
+                                <path d="m21 16-5 5"></path>
+                            </svg>
+                            <span class="sr-only" x-text="overviewOpen ? 'Minimieren' : 'Maximieren'"></span>
+                        </button>
+                    </div>
+                </div>
+
                 <div
                     x-show="!overviewOpen"
                     x-collapse.duration.180ms
                     class="w-full border-l-4 border-sky-400 bg-white text-slate-900"
                     style="aspect-ratio: 21 / 5; min-height: 8rem; max-height: 12rem;"
                 >
-                    <div class="flex h-full w-full flex-col justify-between gap-4 p-4 sm:p-5">
-                        <div class="flex min-w-0 items-start justify-between gap-4">
-                            <div class="min-w-0">
-                                <p class="text-[10px] font-semibold uppercase tracking-wide text-sky-600">Workflow-Vorschau</p>
-                                <h3 class="mt-1 truncate text-xl font-semibold text-slate-950 sm:text-2xl">
-                                    {{ $workflowRun->workflow?->name ?? 'Workflow' }}
-                                </h3>
-                                <p class="mt-1 max-w-4xl truncate text-xs text-slate-500">
-                                    Run #{{ $workflowRun->id }} · {{ $workflowDurationLabel }} · {{ data_get($latestStatusResult, 'statusMessage', data_get($latestStatusResult, 'message', $workflowRun->status)) ?: $workflowRun->status }}
-                                </p>
-                            </div>
-                            <div class="flex shrink-0 items-center gap-2">
-                                <x-workflows.status-badge :status="$workflowRun->status" />
-                                <button
-                                    type="button"
-                                    x-on:click="overviewOpen = !overviewOpen"
-                                    class="rounded-md border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-800 transition hover:bg-sky-100"
-                                >
-                                    <span x-show="!overviewOpen">Maximieren</span>
-                                    <span x-cloak x-show="overviewOpen">Minimieren</span>
-                                </button>
-                            </div>
-                        </div>
-
+                    <div class="flex h-full w-full flex-col justify-center p-4 sm:p-5">
                         <div class="min-h-0 w-full rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2">
                             @if($compactWorkflowMap->isNotEmpty())
                                 <div class="flex w-full min-w-0 items-center gap-1 overflow-x-auto pb-0.5" data-workflow-preview-scrollbar>
@@ -211,19 +223,6 @@
                 </div>
 
                 <div x-cloak x-show="overviewOpen" x-collapse.duration.180ms class="bg-white">
-                    <div class="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
-                        <div class="min-w-0">
-                            <div class="truncate text-sm font-semibold text-slate-950">{{ $workflowRun->workflow?->name ?? 'Workflow' }}</div>
-                            <div class="mt-0.5 truncate text-xs text-slate-500">Run #{{ $workflowRun->id }} · {{ $workflowDurationLabel }}</div>
-                        </div>
-                        <button
-                            type="button"
-                            x-on:click="overviewOpen = false"
-                            class="shrink-0 rounded-md border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-800 transition hover:bg-sky-100"
-                        >
-                            Minimieren
-                        </button>
-                    </div>
                     <div class="px-4 py-3" x-ref="maximizedWorkflowMap">
                         <x-workflows.minimap
                             :workflow-run="$workflowRun"
@@ -322,13 +321,7 @@
 
             @if($screenshotPanels->isNotEmpty())
                 <section class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-                    <button
-                        type="button"
-                        x-show="!browserOpen"
-                        x-collapse.duration.180ms
-                        x-on:click="browserOpen = true"
-                        class="flex min-h-20 w-full items-center justify-between gap-4 bg-white px-4 py-3 text-left transition hover:bg-slate-50"
-                    >
+                    <div class="flex min-h-20 w-full items-center justify-between gap-4 bg-white px-4 py-3">
                         <div class="min-w-0">
                             <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Browserfenster</div>
                             <div class="mt-1 truncate text-sm font-semibold text-slate-900">
@@ -339,7 +332,7 @@
                             </div>
                         </div>
                         <div class="flex shrink-0 items-center justify-end gap-2">
-                            <div class="hidden max-w-sm items-center justify-end gap-1 sm:flex">
+                            <div class="hidden max-w-sm items-center justify-end gap-1 sm:flex" x-show="!browserOpen">
                                 @foreach($screenshotPanels->take(4) as $panel)
                                     <div class="relative h-12 w-20 overflow-hidden rounded-md border border-slate-200 bg-slate-100 shadow-sm">
                                         @if($panel['image'])
@@ -357,27 +350,30 @@
                                     </span>
                                 @endif
                             </div>
-                            <span class="rounded-md border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-800">
-                                Maximieren
-                            </span>
-                        </div>
-                    </button>
-
-                    <div x-cloak x-show="browserOpen" x-collapse.duration.180ms>
-                        <div class="flex items-center justify-between gap-3 px-4 py-3">
-                            <div>
-                                <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Browserfenster</div>
-                                <div class="mt-1 text-sm text-slate-600">Live-Screenshots je offenem Fenster</div>
-                            </div>
                             <button
                                 type="button"
-                                x-on:click="browserOpen = false"
-                                class="rounded-md border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-800 transition hover:bg-sky-100"
+                                x-on:click="browserOpen = !browserOpen"
+                                x-bind:title="browserOpen ? 'Minimieren' : 'Maximieren'"
+                                class="inline-flex h-9 w-9 items-center justify-center rounded-md border border-sky-200 bg-sky-50 text-sky-800 transition hover:bg-sky-100"
                             >
-                                Minimieren
+                                <svg x-show="!browserOpen" xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                    <path d="M15 3h6v6"></path>
+                                    <path d="m21 3-7 7"></path>
+                                    <path d="M9 21H3v-6"></path>
+                                    <path d="m3 21 7-7"></path>
+                                </svg>
+                                <svg x-cloak x-show="browserOpen" xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                    <path d="M8 3v5H3"></path>
+                                    <path d="m3 8 5-5"></path>
+                                    <path d="M16 21v-5h5"></path>
+                                    <path d="m21 16-5 5"></path>
+                                </svg>
+                                <span class="sr-only" x-text="browserOpen ? 'Minimieren' : 'Maximieren'"></span>
                             </button>
                         </div>
+                    </div>
 
+                    <div x-cloak x-show="browserOpen" x-collapse.duration.180ms>
                         <div class="border-t border-slate-100 bg-slate-50 p-3">
                             <div class="flex flex-nowrap gap-3 overflow-x-auto pb-1" data-workflow-preview-scrollbar>
                                 @foreach($screenshotPanels as $panel)
