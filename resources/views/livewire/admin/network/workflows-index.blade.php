@@ -60,7 +60,9 @@
     @endif
 
     <x-admin.panel title="Workflow-Gruppen">
-        <div class="border-b border-slate-200">
+        <div x-data="{
+            activeGroup: $persist('activeGroup'),
+        }" class="border-b border-slate-200">
             <nav class="-mb-px flex gap-4 overflow-x-auto" aria-label="Workflow Gruppen">
                 <button type="button" wire:click="selectWorkflowGroup('all')" class="whitespace-nowrap border-b-2 px-1 py-3 text-sm font-semibold {{ $activeGroup === 'all' ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700' }}">
                     Alle
