@@ -143,7 +143,7 @@ export default {
                 },
             },
             spacing: {
-                'box': '1.125rem', // Padding for p-box
+                'box': '0.8rem 1.2rem', // Padding for p-box
             },
             borderRadius: {
                 'box': '0.5rem', // Border radius for rounded-box
@@ -155,7 +155,7 @@ export default {
                 'box': '#ffffff', // Background color for bg-box
             },
             borderColor: {
-                'box': '#ffffff', // Border color for border-box
+                'box': '#dddddd', // Border color for border-box
             },
         },
     },
