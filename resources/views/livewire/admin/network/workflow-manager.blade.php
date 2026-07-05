@@ -576,7 +576,6 @@
                     <rect x="3" y="14" width="7" height="7" rx="1.5"></rect>
                     <path d="M17.5 14v7M14 17.5h7"></path>
                 </svg>
-                <span>Task-Bibliothek</span>
             </button>
         @endif
 
