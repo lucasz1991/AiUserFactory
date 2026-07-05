@@ -143,13 +143,19 @@ export default {
                 },
             },
             spacing: {
-                'box': '1.125rem',
+                'box': '1.125rem', // Padding for p-box
             },
             borderRadius: {
-                'box': '0.5rem',
+                'box': '0.5rem', // Border radius for rounded-box
             },
             boxShadow: {
-                'box': '0 4px 6px rgba(0, 0, 0, 0.1)',
+                'box': '0 4px 6px rgba(0, 0, 0, 0.1)', // Shadow for shadow-box
+            },
+            backgroundColor: {
+                'box': '#ffffff', // Background color for bg-box
+            },
+            borderColor: {
+                'box': '#ffffff', // Border color for border-box
             },
         },
     },
