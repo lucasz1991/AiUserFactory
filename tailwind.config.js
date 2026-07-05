@@ -41,6 +41,21 @@ export default {
                 '22': '1.375rem',
             },
             colors: {
+                primary: {
+                    base:  '#2f5c9e',
+                    light: '#2f5c9e',
+                    dark:  '#2f5c9e',
+                },
+                secondary: {
+                    base:  '#33a043',
+                    light: '#33a043',
+                    dark:  '#33a043',
+                },
+                mainbg: {  
+                    base:  '#2f5c9e',
+                    light: '#2f5c9e',
+                    dark:  '#2f5c9e',
+                },
                 violet: {
                     50: '#D0D1ED',
                     100: '#f8f9fa',
