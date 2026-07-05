@@ -514,7 +514,7 @@
                     x-ref="routeSurface"
                     x-on:scroll.debounce.100ms="refreshRouteLines()"
                     x-bind:class="isFullscreen ? 'min-h-0 flex-1 max-h-none' : ' min-h-70vh'"
-                    class="relative isolate overflow-x-auto overflow-y-hidden bg-slate-100/80 scroll-container"
+                    class="relative isolate overflow-x-auto overflow-y-hidden bg-white scroll-container"
                 >
                     <svg
                         x-cloak
