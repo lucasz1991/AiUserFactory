@@ -22,7 +22,7 @@ export default {
             '2xl': '1320px',
         },
         container: {
-            padding: '0.625rem',
+            padding: '0.6em 1.2em',
             width: '100%',
         },
         fontFamily: {
