@@ -22,7 +22,7 @@
         </div>
     @endif
 
-    <div class="p-5">
+    <div class="">
         {{ $slot }}
     </div>
 </section>
