@@ -56,6 +56,11 @@ export default {
                     light: '#2f5c9e',
                     dark:  '#2f5c9e',
                 },
+                box: {
+                    base:  '#ffffff',
+                    light: '#ffffff',
+                    dark:  '#ffffff',
+                },
                 violet: {
                     50: '#D0D1ED',
                     100: '#f8f9fa',
@@ -145,12 +150,6 @@ export default {
             },
             boxShadow: {
                 'box': '0 4px 6px rgba(0, 0, 0, 0.1)',
-            },
-            backgroundColor: {
-                'box': '#ffffff',
-            },
-            borderColor: {
-                'box': '#e5e7eb',
             },
         },
     },
