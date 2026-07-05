@@ -16,14 +16,14 @@ export default {
         screens: {
             xs: "100%",
             sm: '540px',
-            md: '720px	',
+            md: '720px',
             lg: '960px',
             xl: '1140px',
             '2xl': '1320px',
         },
         container: {
-            padding: '0.6em 1.2em',
-            width: '100%',
+            center: true,
+            padding: '1rem !important',
         },
         fontFamily: {
             primary: ['Quicksand', 'sans-serif'],
