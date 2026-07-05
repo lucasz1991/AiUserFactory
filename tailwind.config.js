@@ -23,6 +23,7 @@ export default {
         },
         container: {
             padding: '0.625rem',
+            width: '100%',
         },
         fontFamily: {
             primary: ['Quicksand', 'sans-serif'],
