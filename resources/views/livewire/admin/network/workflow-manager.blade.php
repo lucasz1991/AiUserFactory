@@ -78,7 +78,7 @@
     $quickPreviewReturnLabel = $quickPreviewRun ? $workflowReturnLabel($quickPreviewRun) : null;
 @endphp
 <div class="space-y-5" wire:loading.class="opacity-60 pointer-events-none">
-    <div class="rounded-2xl border border-slate-200 bg-white container shadow-sm">
+    <div class="box">
         <div class="flex flex-wrap items-start justify-between gap-2">
             <div class="min-w-0">
                 <div class="flex flex-wrap items-center gap-2">
@@ -176,13 +176,13 @@
     </div>
 
     @if (session()->has('success'))
-        <div class="rounded-lg border border-emerald-200 bg-emerald-50 container text-sm text-emerald-900">
+        <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-2 text-sm text-emerald-900">
             {{ session('success') }}
         </div>
     @endif
 
     @if (session()->has('error'))
-        <div class="rounded-lg border border-red-200 bg-red-50 container text-sm text-red-900">{{ session('error') }}</div>
+        <div class="rounded-lg border border-red-200 bg-red-50 p-2 text-sm text-red-900">{{ session('error') }}</div>
     @endif
 
     @if(! $selectedWorkflow)
@@ -191,7 +191,7 @@
         </x-admin.panel>
     @else
         @if($workflowLocked)
-            <div class="rounded-lg border border-amber-200 bg-amber-50 container text-sm text-amber-900">
+            <div class="rounded-lg border border-amber-200 bg-amber-50 p-2 text-sm text-amber-900">
                 <span class="font-semibold">Achtung: Dieser Workflow ist gesperrt.</span> {{ $selectedWorkflow->lock_reason }} Als Admin kannst du ihn trotzdem bearbeiten. Aenderungen koennen laufende oder eingebundene Workflows beeinflussen.
             </div>
         @endif
@@ -475,7 +475,7 @@
                 x-bind:class="isFullscreen ? 'fixed inset-0 z-[60] flex flex-col rounded-none border-0' : 'rounded-xl border border-slate-200'"
                 class="overflow-hidden "
             >
-                <div class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white container">
+                <div class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white p-box">
                     <div class="min-w-0">
                         <p class="text-sm font-semibold text-slate-900">{{ $selectedWorkflow->name }}</p>
                         <p class="mt-0.5 text-xs text-slate-500">
@@ -484,7 +484,7 @@
                         </p>
                     </div>
                     <div class="flex flex-wrap items-center gap-3">
-                        <div x-show="showRoutes" class="flex items-center gacontainer text-[11px] font-semibold text-slate-500">
+                        <div x-show="showRoutes" class="flex items-center gap-2  text-[11px] font-semibold text-slate-500">
                             <span class="inline-flex items-center gap-1.5"><span class="h-0.5 w-5 rounded-full bg-emerald-500"></span>Erfolg</span>
                             <span class="inline-flex items-center gap-1.5"><span class="h-0.5 w-5 border-t-2 border-dashed border-rose-400"></span>Fehlschlag</span>
                         </div>

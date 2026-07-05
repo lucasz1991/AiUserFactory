@@ -137,6 +137,9 @@ export default {
                     900: '#242726',
                 },
             },
+            spacing: {
+                'box': '1.125rem',
+            },
         },
     },
 };
