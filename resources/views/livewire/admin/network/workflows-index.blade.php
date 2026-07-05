@@ -60,22 +60,22 @@
     @endif
 
     <x-admin.panel title="Workflow-Gruppen">
-        <div x-data="{
-            activeGroup: $persist('activeGroup').as('workflow-active-group'),
-        }" class="border-b border-slate-200">
-            <nav class="-mb-px flex gap-4 overflow-x-auto" aria-label="Workflow Gruppen">
-                <button type="button" wire:click="selectWorkflowGroup('all')" class="whitespace-nowrap border-b-2 px-1 py-3 text-sm font-semibold {{ $activeGroup === 'all' ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700' }}">
-                    Alle
-                    <span class="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{{ $workflows->count() }}</span>
-                </button>
-                @foreach($groups as $group)
-                    <button type="button" wire:click="selectWorkflowGroup(@js($group))" class="whitespace-nowrap border-b-2 px-1 py-3 text-sm font-semibold {{ $activeGroup === $group ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700' }}">
-                        {{ $groupLabels[$group] ?? $group }}
-                        <span class="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{{ $workflows->where('category', $group)->count() }}</span>
-                    </button>
-                @endforeach
-            </nav>
-        </div>
+    <div x-data="{
+        activeGroup: $persist('activeGroup').as('workflow-active-group'),
+    }" class="border-b border-slate-200">
+    <nav class="-mb-px flex gap-4 overflow-x-auto" aria-label="Workflow Gruppen">
+        <button type="button" x-on:click="activeGroup = 'all'" wire:click="selectWorkflowGroup('all')" class="whitespace-nowrap border-b-2 px-1 py-3 text-sm font-semibold" :class="activeGroup === 'all' ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700'">
+            Alle
+            <span class="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{{ $workflows->count() }}</span>
+        </button>
+        @foreach($groups as $group)
+            <button type="button" x-on:click="activeGroup = '{{ $group }}'" wire:click="selectWorkflowGroup('{{ $group }}')" class="whitespace-nowrap border-b-2 px-1 py-3 text-sm font-semibold" :class="activeGroup === '{{ $group }}' ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700'">
+                {{ $groupLabels[$group] ?? $group }}
+                <span class="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{{ $workflows->where('category', $group)->count() }}</span>
+            </button>
+        @endforeach
+    </nav>
+</div>
 
         @if($subcategories->isNotEmpty())
             <div class="flex flex-wrap gap-2 border-b border-slate-100 py-3">
