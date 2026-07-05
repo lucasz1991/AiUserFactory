@@ -1,8 +1,8 @@
 <div class="space-y-6" wire:loading.class="opacity-60 pointer-events-none">
     <div class="flex flex-wrap items-start justify-between gap-4">
         <div>
-            <h1 class="text-2xl font-semibold text-gray-900">Workflows</h1>
-            <p class="mt-1 text-sm text-gray-500">
+            <h1 class="text-2xl font-semibold text-white">Workflows</h1>
+            <p class="mt-1 text-sm text-white">
                 Workflows gruppiert nach Prozessbereich, als kompakte Liste mit Kennzahlen.
             </p>
         </div>

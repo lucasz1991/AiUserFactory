@@ -78,7 +78,7 @@
     $quickPreviewReturnLabel = $quickPreviewRun ? $workflowReturnLabel($quickPreviewRun) : null;
 @endphp
 <div class="space-y-5" wire:loading.class="opacity-60 pointer-events-none">
-    <div class="rounded-2xl border border-slate-200 bg-white p-2 shadow-sm">
+    <div class="rounded-2xl border border-slate-200 bg-white container shadow-sm">
         <div class="flex flex-wrap items-start justify-between gap-2">
             <div class="min-w-0">
                 <div class="flex flex-wrap items-center gap-2">
@@ -176,13 +176,13 @@
     </div>
 
     @if (session()->has('success'))
-        <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
+        <div class="rounded-lg border border-emerald-200 bg-emerald-50 container text-sm text-emerald-900">
             {{ session('success') }}
         </div>
     @endif
 
     @if (session()->has('error'))
-        <div class="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-900">{{ session('error') }}</div>
+        <div class="rounded-lg border border-red-200 bg-red-50 container text-sm text-red-900">{{ session('error') }}</div>
     @endif
 
     @if(! $selectedWorkflow)
@@ -191,7 +191,7 @@
         </x-admin.panel>
     @else
         @if($workflowLocked)
-            <div class="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+            <div class="rounded-lg border border-amber-200 bg-amber-50 container text-sm text-amber-900">
                 <span class="font-semibold">Achtung: Dieser Workflow ist gesperrt.</span> {{ $selectedWorkflow->lock_reason }} Als Admin kannst du ihn trotzdem bearbeiten. Aenderungen koennen laufende oder eingebundene Workflows beeinflussen.
             </div>
         @endif
@@ -475,7 +475,7 @@
                 x-bind:class="isFullscreen ? 'fixed inset-0 z-[60] flex flex-col rounded-none border-0' : 'rounded-xl border border-slate-200'"
                 class="overflow-hidden "
             >
-                <div class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-5 py-4">
+                <div class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white container">
                     <div class="min-w-0">
                         <p class="text-sm font-semibold text-slate-900">{{ $selectedWorkflow->name }}</p>
                         <p class="mt-0.5 text-xs text-slate-500">
@@ -484,7 +484,7 @@
                         </p>
                     </div>
                     <div class="flex flex-wrap items-center gap-3">
-                        <div x-show="showRoutes" class="flex items-center gap-4 text-[11px] font-semibold text-slate-500">
+                        <div x-show="showRoutes" class="flex items-center gacontainer text-[11px] font-semibold text-slate-500">
                             <span class="inline-flex items-center gap-1.5"><span class="h-0.5 w-5 rounded-full bg-emerald-500"></span>Erfolg</span>
                             <span class="inline-flex items-center gap-1.5"><span class="h-0.5 w-5 border-t-2 border-dashed border-rose-400"></span>Fehlschlag</span>
                         </div>
@@ -591,7 +591,7 @@
                     </button>
                 </div>
                 <div class="border-b border-slate-200 px-4">
-                    <nav class="-mb-px flex gap-4 overflow-x-auto" aria-label="Task Gruppen">
+                    <nav class="-mb-px flex gacontainer overflow-x-auto" aria-label="Task Gruppen">
                         @foreach($taskGroups as $taskGroup)
                             <button
                                 type="button"
@@ -605,7 +605,7 @@
                         @endforeach
                     </nav>
                 </div>
-                <div class="flex-1 space-y-3 overflow-y-auto p-4">
+                <div class="flex-1 space-y-3 overflow-y-auto container">
                     @foreach($visibleTaskDefinitions as $taskDefinition)
                         <div
                             data-workflow-task-catalog-key="{{ $taskDefinition['key'] }}"
@@ -613,7 +613,7 @@
                             data-assistant-highlight-key="{{ $taskDefinition['key'] }}"
                             draggable="true"
                             x-on:dragstart.stop="$event.dataTransfer.setData('application/x-workflow-task-catalog', @js($taskDefinition['key'])); $event.dataTransfer.setData('text/plain', @js($taskDefinition['key'])); $event.dataTransfer.effectAllowed = 'copy'"
-                            class="cursor-grab rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-slate-400 hover:shadow-md active:cursor-grabbing"
+                            class="cursor-grab rounded-xl border border-slate-200 bg-white container shadow-sm transition hover:border-slate-400 hover:shadow-md active:cursor-grabbing"
                         >
                             <div class="flex items-start justify-between gap-3">
                                 <p class="text-sm font-semibold text-slate-900">{{ $taskDefinition['label'] }}</p>
@@ -717,7 +717,7 @@
                     @if($previewWorkflowRun)
                         <x-workflows.run-preview :workflow-run="$previewWorkflowRun" />
                     @else
-                        <div class="rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
+                        <div class="rounded-md border border-dashed border-slate-300 bg-slate-50 container text-sm text-slate-500">
                             Dieser Workflow-Lauf wurde noch nicht geladen.
                         </div>
                     @endif
@@ -779,7 +779,7 @@
                             @endif
                         </div>
                     @else
-                        <div class="grid gap-4 md:grid-cols-2">
+                        <div class="grid gacontainer md:grid-cols-2">
                             <div>
                                 <label for="workflow-new-step-type" class="block text-sm font-medium text-gray-700">Aufgabentyp</label>
                                 <select id="workflow-new-step-type" wire:model.live="newStepType" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
@@ -823,7 +823,7 @@
                         <label for="workflow-edit-step-description" class="block text-sm font-medium text-gray-700">Beschreibung</label>
                         <textarea id="workflow-edit-step-description" rows="3" wire:model.defer="editingStepDescription" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"></textarea>
                     </div>
-                    <div class="grid gap-4 md:grid-cols-2">
+                    <div class="grid gacontainer md:grid-cols-2">
                         <label class="flex items-center gap-3 rounded-md border border-gray-200 bg-gray-50 p-3 text-sm font-medium text-gray-700">
                             <input type="checkbox" wire:model.defer="editingStepEnabled" class="rounded border-gray-300 text-slate-900 shadow-sm focus:ring-slate-900">
                             Aktiv
@@ -833,7 +833,7 @@
                             <input id="workflow-edit-step-wait" type="number" min="0" max="3600" wire:model.defer="editingStepWaitAfterSeconds" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
                         </div>
                     </div>
-                    <div class="grid gap-4 md:grid-cols-2">
+                    <div class="grid gacontainer md:grid-cols-2">
                         @foreach([
                             'editingStepSuccessTarget' => 'Bei Erfolg',
                             'editingStepFailedTarget' => 'Bei Fehler',
@@ -854,7 +854,7 @@
                             </div>
                         @endforeach
                     </div>
-                    <div class="grid gap-4 md:grid-cols-2">
+                    <div class="grid gacontainer md:grid-cols-2">
                         <div>
                             <label for="workflow-edit-step-success-reason" class="block text-sm font-medium text-gray-700">Grund bei Erfolg</label>
                             <input id="workflow-edit-step-success-reason" type="text" wire:model.defer="editingStepSuccessReason" placeholder="z.B. Element gefunden / Login erfolgreich" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
@@ -927,7 +927,7 @@
         <x-dialog-modal wire:model="showActionLibraryModal" maxWidth="5xl">
             <x-slot name="title">Aktionsbibliothek</x-slot>
             <x-slot name="content">
-                <div class="grid gap-4 md:grid-cols-2">
+                <div class="grid gacontainer md:grid-cols-2">
                     <div>
                         <label for="workflow-action-person" class="block text-sm font-medium text-gray-700">Person</label>
                         <select id="workflow-action-person" wire:model.live="actionPersonFilter" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
