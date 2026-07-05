@@ -247,6 +247,10 @@ html::-webkit-scrollbar-thumb:hover {
 }
 /* Modal END */
 
+.box-padding{
+  padding: 1rem 1.5rem;
+}
+
 /* sidebar */
 .sidebar-open {
   left: 0;
