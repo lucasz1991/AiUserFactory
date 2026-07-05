@@ -140,6 +140,18 @@ export default {
             spacing: {
                 'box': '1.125rem',
             },
+            borderRadius: {
+                'box': '0.5rem',
+            },
+            boxShadow: {
+                'box': '0 4px 6px rgba(0, 0, 0, 0.1)',
+            },
+            backgroundColor: {
+                'box': '#ffffff',
+            },
+            borderColor: {
+                'box': '#e5e7eb',
+            },
         },
     },
 };

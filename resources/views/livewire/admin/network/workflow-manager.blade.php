@@ -78,7 +78,7 @@
     $quickPreviewReturnLabel = $quickPreviewRun ? $workflowReturnLabel($quickPreviewRun) : null;
 @endphp
 <div class="space-y-5" wire:loading.class="opacity-60 pointer-events-none">
-    <div class="box">
+    <div class="p-box shadow-box bg-box border border-box rounded-box">
         <div class="flex flex-wrap items-start justify-between gap-2">
             <div class="min-w-0">
                 <div class="flex flex-wrap items-center gap-2">
