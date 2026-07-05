@@ -28,7 +28,7 @@
                             @php
                                 $routeName = Route::currentRouteName();
                                 $bgWhiteRoutes = [
-                                    'dashboard',
+                                    'admin.dashboard',
                                     'admin.index', 
                                     'admin.network.workflows', 
                                     'admin.network.workflow.edit', 
