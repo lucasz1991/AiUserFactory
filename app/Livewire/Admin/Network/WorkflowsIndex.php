@@ -10,14 +10,10 @@ use Illuminate\Support\Str;
 use Livewire\Component;
 use Livewire\WithFileUploads;
 use Throwable;
-use Livewire\Persist;
 
 class WorkflowsIndex extends Component
 {
-    use WithFileUploads, Persist;
-
-    // Add the properties you want to persist
-    public $persist = ['activeGroup', 'activeSubcategory'];
+    use WithFileUploads;
 
     public string $activeGroup = 'all';
 
