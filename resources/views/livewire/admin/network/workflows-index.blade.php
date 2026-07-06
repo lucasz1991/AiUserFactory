@@ -60,7 +60,7 @@
     @endif
 
     <x-admin.panel title="Workflow-Gruppen">
-        <div x-data="{ activeGroup: $persist(@entangle('activeGroup')) }" class="border-b border-slate-200">
+        <div x-data="{ activeGroup: $persist(@entangle('activeGroup')) }" class="border-b border-slate-200 px-box">
             <nav class="-mb-px flex gap-4 overflow-x-auto" aria-label="Workflow Gruppen">
                 <button type="button" wire:click="selectWorkflowGroup('all')" class="whitespace-nowrap border-b-2 px-1 py-3 text-sm font-semibold {{ $activeGroup === 'all' ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700' }}">
                     Alle
@@ -76,7 +76,7 @@
         </div>
 
         @if($subcategories->isNotEmpty())
-            <div class="flex flex-wrap gap-2 border-b border-slate-100 py-3">
+            <div class="flex flex-wrap gap-2 border-b border-slate-100 py-3 px-box">
                 <button type="button" wire:click="$set('activeSubcategory', 'all')" class="rounded-md px-2.5 py-1.5 text-xs font-semibold ring-1 {{ $activeSubcategory === 'all' ? 'bg-slate-900 text-white ring-slate-900' : 'bg-white text-slate-600 ring-slate-200 hover:bg-slate-50' }}">
                     Alle Unterkategorien
                     <span class="ml-1 opacity-75">{{ $groupWorkflows->count() }}</span>
