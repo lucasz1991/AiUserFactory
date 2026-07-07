@@ -79,6 +79,20 @@
                 'count' => $workflows->where('category', $group)->count(),
             ];
         }
+
+        $workflowSubcategoryTabs = ['all' => [
+            'label' => 'Alle Unterkategorien',
+            'icon' => 'fad fa-layer-group',
+            'count' => $groupWorkflows->count(),
+        ]];
+
+        foreach ($subcategories as $subcategory) {
+            $workflowSubcategoryTabs[$subcategory] = [
+                'label' => $groupLabels[$subcategory] ?? str($subcategory)->replace(['_', '-'], ' ')->title()->toString(),
+                'icon' => 'fad fa-folder',
+                'count' => $groupWorkflows->where('subcategory', $subcategory)->count(),
+            ];
+        }
     @endphp
 
     <x-admin.panel class="overflow-visible border-slate-200 shadow-sm">
@@ -91,21 +105,23 @@
             class="px-4 pt-2"
             x-on:ui-tab-selected="if ($event.detail.group === 'network-workflows-group') $wire.selectWorkflowGroup($event.detail.tab)"
         >
-            <div class="rounded-b-lg border border-blue-200 bg-white shadow-sm">
+            <x-ui.navigation.hozizontal.tabs.horizontal-tab
+                :for="$activeGroup"
+                :active="$activeGroup"
+                group="network-workflows-group"
+                as="navigation"
+                panel-class="rounded-b-lg border border-blue-200 bg-white shadow-sm"
+            >
 
         @if($subcategories->isNotEmpty())
-            <div class="flex flex-wrap gap-2 border-b border-slate-100 bg-slate-50/70 px-4 py-3">
-                <button type="button" wire:click="$set('activeSubcategory', 'all')" class="rounded-md px-2.5 py-1.5 text-xs font-semibold ring-1 {{ $activeSubcategory === 'all' ? 'bg-slate-900 text-white ring-slate-900' : 'bg-white text-slate-600 ring-slate-200 hover:bg-slate-50' }}">
-                    Alle Unterkategorien
-                    <span class="ml-1 opacity-75">{{ $groupWorkflows->count() }}</span>
-                </button>
-                @foreach($subcategories as $subcategory)
-                    <button type="button" wire:click="$set('activeSubcategory', @js($subcategory))" class="rounded-md px-2.5 py-1.5 text-xs font-semibold ring-1 {{ $activeSubcategory === $subcategory ? 'bg-blue-600 text-white ring-blue-600' : 'bg-white text-slate-600 ring-slate-200 hover:bg-slate-50' }}">
-                        {{ $groupLabels[$subcategory] ?? str($subcategory)->replace(['_', '-'], ' ')->title() }}
-                        <span class="ml-1 opacity-75">{{ $groupWorkflows->where('subcategory', $subcategory)->count() }}</span>
-                    </button>
-                @endforeach
-            </div>
+            <x-ui.navigation.hozizontal.tabs.horizontal-tabs-panel
+                :tabs="$workflowSubcategoryTabs"
+                :default="$activeSubcategory"
+                :persist="false"
+                group="network-workflows-subcategory"
+                class="border-b border-slate-100 bg-slate-50/70 px-4 pt-1"
+                x-on:ui-tab-selected="if ($event.detail.group === 'network-workflows-subcategory') $wire.selectWorkflowSubcategory($event.detail.tab)"
+            />
         @endif
 
         @php
@@ -242,7 +258,7 @@
         <div class="border-t border-slate-100 p-4">
             {{ $visibleWorkflows->links() }}
         </div>
-            </div>
+            </x-ui.navigation.hozizontal.tabs.horizontal-tab>
         </x-ui.navigation.hozizontal.tabs.horizontal-tabs-panel>
     </x-admin.panel>
 

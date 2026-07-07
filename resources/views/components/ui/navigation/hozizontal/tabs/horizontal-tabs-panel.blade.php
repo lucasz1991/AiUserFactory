@@ -129,7 +129,9 @@
         </nav>
     </div>
 
-    <div class="content-wrap bg-white">
-        {{ $slot }}
-    </div>
+    @if(! $slot->isEmpty())
+        <div class="content-wrap bg-white">
+            {{ $slot }}
+        </div>
+    @endif
 </section>

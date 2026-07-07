@@ -132,6 +132,12 @@ class WorkflowsIndex extends Component
         $this->resetPage();
     }
 
+    public function selectWorkflowSubcategory(string $subcategory): void
+    {
+        $this->activeSubcategory = trim($subcategory) !== '' ? trim($subcategory) : 'all';
+        $this->resetPage();
+    }
+
     public function updatedActiveGroup(): void
     {
         $this->resetPage();

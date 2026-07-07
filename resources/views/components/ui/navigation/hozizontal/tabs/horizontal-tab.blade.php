@@ -3,6 +3,7 @@
     'active' => null,
     'group' => null,
     'icon' => null,
+    'as' => 'panel',
     'panelClass' => ' rounded-b-lg rounded-se-lg border border-blue-300 z-10',
 ])
 
@@ -13,8 +14,14 @@
     $iconClass = trim((string) ($icon ?? ''));
     $htmlIdPrefix = 'tabs-'.substr(md5($groupKey), 0, 10);
     $isInitiallyActive = $activeTab === '' || $activeTab === $panelFor;
+    $isNavigation = $as === 'navigation';
 @endphp
 
+@if($isNavigation)
+    <div class="{{ $panelClass }}">
+        {{ $slot }}
+    </div>
+@else
 <div
     id="{{ $htmlIdPrefix }}-panel-{{ $panelFor }}"
     x-data="{ localOpenTab: @js($activeTab) }"
@@ -32,3 +39,4 @@
         {{ $slot }}
     </div>
 </div>
+@endif
