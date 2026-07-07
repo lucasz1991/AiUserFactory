@@ -91,12 +91,7 @@
             class="px-4 pt-2"
             x-on:ui-tab-selected="if ($event.detail.group === 'network-workflows-group') $wire.selectWorkflowGroup($event.detail.tab)"
         >
-            <x-ui.navigation.hozizontal.tabs.horizontal-tab
-                :for="$activeGroup"
-                :active="$activeGroup"
-                group="network-workflows-group"
-                panel-class="rounded-b-lg border border-blue-200 bg-white shadow-sm"
-            >
+            <div class="rounded-b-lg border border-blue-200 bg-white shadow-sm">
 
         @if($subcategories->isNotEmpty())
             <div class="flex flex-wrap gap-2 border-b border-slate-100 bg-slate-50/70 px-4 py-3">
@@ -247,7 +242,7 @@
         <div class="border-t border-slate-100 p-4">
             {{ $visibleWorkflows->links() }}
         </div>
-            </x-ui.navigation.hozizontal.tabs.horizontal-tab>
+            </div>
         </x-ui.navigation.hozizontal.tabs.horizontal-tabs-panel>
     </x-admin.panel>
 
