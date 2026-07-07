@@ -9,11 +9,13 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Livewire\Component;
 use Livewire\WithFileUploads;
+use Livewire\WithPagination;
 use Throwable;
 
 class WorkflowsIndex extends Component
 {
     use WithFileUploads;
+    use WithPagination;
 
     public string $activeGroup = 'all';
 
@@ -94,9 +96,18 @@ class WorkflowsIndex extends Component
             $this->activeSubcategory = 'all';
         }
 
-        $visibleWorkflows = $this->activeSubcategory === 'all'
-            ? $groupWorkflows
-            : $groupWorkflows->where('subcategory', $this->activeSubcategory)->values();
+        $visibleWorkflows = $this->visibleWorkflowQuery()
+            ->with(['steps', 'includedByWorkflows'])
+            ->withCount([
+                'steps',
+                'runs',
+                'runs as successful_runs_count' => fn ($query) => $query->where('status', 'completed'),
+                'runs as failed_runs_count' => fn ($query) => $query->where('status', 'failed'),
+            ])
+            ->orderBy('category')
+            ->orderBy('subcategory')
+            ->orderBy('name')
+            ->paginate(10);
 
         return view('livewire.admin.network.workflows-index', [
             'workflows' => $workflows,
@@ -118,11 +129,28 @@ class WorkflowsIndex extends Component
     {
         $this->activeGroup = trim($group) !== '' ? trim($group) : 'all';
         $this->activeSubcategory = 'all';
+        $this->resetPage();
+    }
+
+    public function updatedActiveGroup(): void
+    {
+        $this->resetPage();
+    }
+
+    public function updatedActiveSubcategory(): void
+    {
+        $this->resetPage();
     }
 
     public function toggleSelectAllVisibleWorkflows(): void
     {
-        $visibleIds = $this->visibleWorkflowQuery()->pluck('id')->map(fn ($id): string => (string) $id);
+        $visibleIds = $this->visibleWorkflowQuery()
+            ->orderBy('category')
+            ->orderBy('subcategory')
+            ->orderBy('name')
+            ->forPage($this->getPage(), 10)
+            ->pluck('id')
+            ->map(fn ($id): string => (string) $id);
         $selectedIds = collect($this->selectedWorkflowIds)->map(fn ($id): string => (string) $id);
         $allVisibleSelected = $visibleIds->isNotEmpty() && $visibleIds->every(fn (string $id): bool => $selectedIds->contains($id));
 

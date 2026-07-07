@@ -92,7 +92,7 @@
 
         @php
             $selectedIdStrings = collect($selectedWorkflowIds)->map(fn ($id) => (string) $id);
-            $visibleIdStrings = $visibleWorkflows->pluck('id')->map(fn ($id) => (string) $id);
+            $visibleIdStrings = $visibleWorkflows->getCollection()->pluck('id')->map(fn ($id) => (string) $id);
             $allVisibleSelected = $visibleIdStrings->isNotEmpty()
                 && $visibleIdStrings->every(fn ($id) => $selectedIdStrings->contains($id));
         @endphp
@@ -210,6 +210,10 @@
                     @endforelse
                 </tbody>
             </table>
+        </div>
+
+        <div class="border-t border-slate-100 p-4">
+            {{ $visibleWorkflows->links() }}
         </div>
     </x-admin.panel>
 
