@@ -59,24 +59,47 @@
         </div>
     @endif
 
-    <x-admin.panel title="Workflow-Gruppen">
-        <div x-data="{ activeGroup: $persist(@entangle('activeGroup')) }" class="border-b border-slate-200 px-4">
-            <nav class="-mb-px flex gap-4 overflow-x-auto" aria-label="Workflow Gruppen">
-                <button type="button" wire:click="selectWorkflowGroup('all')" class="whitespace-nowrap border-b-2 px-1 py-3 text-sm font-semibold {{ $activeGroup === 'all' ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700' }}">
-                    Alle
-                    <span class="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{{ $workflows->count() }}</span>
-                </button>
-                @foreach($groups as $group)
-                    <button type="button" wire:click="selectWorkflowGroup(@js($group))" class="whitespace-nowrap border-b-2 px-1 py-3 text-sm font-semibold {{ $activeGroup === $group ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700' }}">
-                        {{ $groupLabels[$group] ?? $group }}
-                        <span class="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{{ $workflows->where('category', $group)->count() }}</span>
-                    </button>
-                @endforeach
-            </nav>
-        </div>
+    @php
+        $workflowGroupTabs = ['all' => [
+            'label' => 'Alle',
+            'icon' => 'fad fa-layer-group',
+            'count' => $workflows->count(),
+        ]];
+
+        foreach ($groups as $group) {
+            $workflowGroupTabs[$group] = [
+                'label' => $groupLabels[$group] ?? $group,
+                'icon' => match ($group) {
+                    'mail' => 'fad fa-envelope',
+                    'browser' => 'fad fa-window-maximize',
+                    'data' => 'fad fa-database',
+                    'custom' => 'fad fa-sliders',
+                    default => 'fad fa-folder',
+                },
+                'count' => $workflows->where('category', $group)->count(),
+            ];
+        }
+    @endphp
+
+    <x-admin.panel class="overflow-visible border-slate-200 shadow-sm">
+        <x-ui.navigation.hozizontal.tabs.horizontal-tabs-panel
+            :tabs="$workflowGroupTabs"
+            :default="$activeGroup"
+            :sync-on-init="true"
+            persist-key="network-workflows-group"
+            group="network-workflows-group"
+            class="px-4 pt-2"
+            x-on:ui-tab-selected="if ($event.detail.group === 'network-workflows-group') $wire.selectWorkflowGroup($event.detail.tab)"
+        >
+            <x-ui.navigation.hozizontal.tabs.horizontal-tab
+                :for="$activeGroup"
+                :active="$activeGroup"
+                group="network-workflows-group"
+                panel-class="rounded-b-lg border border-blue-200 bg-white shadow-sm"
+            >
 
         @if($subcategories->isNotEmpty())
-            <div class="flex flex-wrap gap-2 border-b border-slate-100 py-3 px-4">
+            <div class="flex flex-wrap gap-2 border-b border-slate-100 bg-slate-50/70 px-4 py-3">
                 <button type="button" wire:click="$set('activeSubcategory', 'all')" class="rounded-md px-2.5 py-1.5 text-xs font-semibold ring-1 {{ $activeSubcategory === 'all' ? 'bg-slate-900 text-white ring-slate-900' : 'bg-white text-slate-600 ring-slate-200 hover:bg-slate-50' }}">
                     Alle Unterkategorien
                     <span class="ml-1 opacity-75">{{ $groupWorkflows->count() }}</span>
@@ -97,37 +120,46 @@
                 && $visibleIdStrings->every(fn ($id) => $selectedIdStrings->contains($id));
         @endphp
 
-        <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 py-3  px-4">
-            <div class="text-xs font-medium text-slate-500">
-                {{ count($selectedWorkflowIds) }} ausgewählt
+        <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3">
+            <div class="flex min-w-0 items-center gap-2 text-xs font-medium text-slate-500">
+                <span class="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-blue-50 px-2 font-bold text-blue-700 ring-1 ring-blue-100">{{ count($selectedWorkflowIds) }}</span>
+                <span>ausgewählt</span>
             </div>
-            <div class="flex flex-wrap justify-end gap-2">
-                <button type="button" wire:click="toggleSelectAllVisibleWorkflows" class="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">
-                    {{ $allVisibleSelected ? 'Sichtbare abwählen' : 'Alle sichtbaren auswählen' }}
+            <div class="relative" x-data="{ open: false }" x-on:keydown.escape.window="open = false">
+                <button type="button" x-on:click="open = ! open" x-bind:aria-expanded="open" class="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
+                    Auswahlaktionen
+                    <svg class="h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" /></svg>
                 </button>
-                @if(count($selectedWorkflowIds) < $workflows->count())
-                    <button type="button" wire:click="selectAllWorkflows" class="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">
-                        Alle {{ $workflows->count() }} auswählen
+                <div x-cloak x-show="open" x-transition x-on:click.outside="open = false" class="absolute right-0 z-50 mt-2 w-64 rounded-lg border border-slate-200 bg-white p-1.5 shadow-xl">
+                    <button type="button" wire:click="toggleSelectAllVisibleWorkflows" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-100">
+                        {{ $allVisibleSelected ? 'Sichtbare abwählen' : 'Sichtbare auswählen' }}
                     </button>
-                @endif
-                @if(count($selectedWorkflowIds) > 0)
-                    <button type="button" wire:click="clearWorkflowSelection" class="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">
-                        Auswahl aufheben
+                    @if(count($selectedWorkflowIds) < $workflows->count())
+                        <button type="button" wire:click="selectAllWorkflows" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-100">
+                            Alle {{ $workflows->count() }} auswählen
+                        </button>
+                    @endif
+                    @if(count($selectedWorkflowIds) > 0)
+                        <button type="button" wire:click="clearWorkflowSelection" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-slate-600 hover:bg-slate-100">
+                            Auswahl aufheben
+                        </button>
+                    @endif
+                    <div class="my-1 border-t border-slate-100"></div>
+                    <button
+                        type="button"
+                        wire:click="exportSelectedWorkflows"
+                        wire:loading.attr="disabled"
+                        x-on:click="open = false"
+                        @disabled(count($selectedWorkflowIds) === 0)
+                        class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-blue-700 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        Auswahl als ZIP exportieren
                     </button>
-                @endif
-                <button
-                    type="button"
-                    wire:click="exportSelectedWorkflows"
-                    wire:loading.attr="disabled"
-                    @disabled(count($selectedWorkflowIds) === 0)
-                    class="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                    Auswahl als ZIP exportieren
-                </button>
+                </div>
             </div>
         </div>
 
-        <div class="overflow-visible">
+        <div class="overflow-visible bg-white">
             <table class="w-full table-fixed divide-y divide-slate-200">
                 <thead class="bg-slate-50">
                     <tr>
@@ -215,6 +247,8 @@
         <div class="border-t border-slate-100 p-4">
             {{ $visibleWorkflows->links() }}
         </div>
+            </x-ui.navigation.hozizontal.tabs.horizontal-tab>
+        </x-ui.navigation.hozizontal.tabs.horizontal-tabs-panel>
     </x-admin.panel>
 
     <x-dialog-modal wire:model="showCreateWorkflowModal" maxWidth="2xl">

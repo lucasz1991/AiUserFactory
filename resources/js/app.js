@@ -4,6 +4,7 @@ import mask from '@alpinejs/mask';
 import resize from '@alpinejs/resize';
 import intersect from '@alpinejs/intersect';
 import sort from '@alpinejs/sort';
+import persist from '@alpinejs/persist';
 
 function registerAlpinePlugins() {
   if (!window.Alpine || window.Alpine.__aiUserFactoryPluginsRegistered) {
@@ -15,6 +16,7 @@ function registerAlpinePlugins() {
   window.Alpine.plugin(resize);
   window.Alpine.plugin(intersect);
   window.Alpine.plugin(sort);
+  window.Alpine.plugin(persist);
   window.Alpine.__aiUserFactoryPluginsRegistered = true;
 }
 

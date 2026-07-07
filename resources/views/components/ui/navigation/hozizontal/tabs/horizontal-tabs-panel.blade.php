@@ -4,6 +4,7 @@
     'default' => null,
     'persistKey' => null,
     'persist' => true,
+    'syncOnInit' => false,
     'group' => null,
     // optional: 'sm' | 'md' | 'lg' | 'xl' | '2xl'
     'collapseAt' => null,
@@ -63,6 +64,10 @@
         initTabs() {
             if (!@js(array_map('strval', array_keys($tabs))).includes(this.openTab)) {
                 this.openTab = @js((string) $initial);
+            }
+
+            if (@js($syncOnInit) && this.openTab !== @js((string) $initial)) {
+                this.$nextTick(() => this.$dispatch('ui-tab-selected', { group: @js($groupKey), tab: this.openTab }));
             }
         }
     }"
