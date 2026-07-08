@@ -122,7 +122,7 @@
                 group="network-workflows-subcategory"
                 tab-list-class=""
                 content-class=""
-                class="bg-slate-50/70"
+                variant="subnav"
                 x-on:ui-tab-selected="if ($event.detail.group === 'network-workflows-subcategory') $wire.selectWorkflowSubcategory($event.detail.tab)"
             />
         @endif

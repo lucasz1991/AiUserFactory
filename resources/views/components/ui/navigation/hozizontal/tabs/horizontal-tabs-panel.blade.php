@@ -8,6 +8,7 @@
     'group' => null,
     'tabListClass' => 'pt-2',
     'contentClass' => 'content-wrap bg-white',
+    'variant' => 'primary',
     // optional: 'sm' | 'md' | 'lg' | 'xl' | '2xl'
     'collapseAt' => null,
 ])
@@ -26,6 +27,30 @@
     $groupKey = $group ?: $key;
     $htmlIdPrefix = 'tabs-'.substr(md5($groupKey), 0, 10);
     $tabCount = count($tabs);
+    $tabVariant = in_array($variant, ['primary', 'subnav'], true) ? $variant : 'primary';
+    $isSubnav = $tabVariant === 'subnav';
+    $stripClass = $isSubnav
+        ? 'border-y border-slate-200 bg-slate-50/95 px-3 py-2'
+        : 'border-b border-slate-200 bg-slate-100/80 px-2 pt-2';
+    $listClass = $isSubnav
+        ? 'flex w-full max-w-full justify-start gap-1.5 overflow-x-auto overflow-y-hidden'
+        : 'flex w-full max-w-full justify-start gap-1 overflow-x-auto overflow-y-hidden';
+    $itemClass = $isSubnav ? 'relative flex-none' : 'relative -mb-px flex-none';
+    $buttonClass = $isSubnav
+        ? 'group/tab relative block h-full overflow-hidden rounded-md border text-xs font-semibold shadow-sm transition focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-200'
+        : 'group/tab relative block h-full overflow-hidden rounded-t-lg border border-b-0 text-sm font-semibold shadow-sm transition focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-200';
+    $buttonActiveClass = $isSubnav
+        ? 'border-blue-200 bg-white text-blue-800 shadow-sm ring-1 ring-blue-100'
+        : 'border-slate-200 bg-white text-blue-950 shadow-sm';
+    $buttonInactiveClass = $isSubnav
+        ? 'border-transparent bg-slate-100 text-slate-600 shadow-none hover:border-slate-200 hover:bg-white hover:text-slate-800'
+        : 'border-slate-200 bg-slate-200/80 text-slate-600 shadow-none hover:bg-slate-50 hover:text-blue-900';
+    $labelClass = $isSubnav
+        ? 'flex h-full items-center justify-center overflow-hidden px-3 py-2 text-ellipsis whitespace-nowrap'
+        : 'flex h-full items-center justify-center overflow-hidden px-4 py-2.5 text-ellipsis whitespace-nowrap';
+    $countClass = $isSubnav
+        ? 'ml-1.5 inline-flex min-w-5 items-center justify-center rounded-full bg-blue-50 px-1.5 py-0.5 text-[11px] font-bold text-blue-700 ring-1 ring-blue-100'
+        : 'ml-2 inline-flex min-w-5 items-center justify-center rounded-full bg-slate-100 px-1.5 py-0.5 text-[11px] font-bold text-slate-600 ring-1 ring-slate-200';
     $defaultIcons = [
         'quelle-suche' => 'fad fa-database',
         'filter' => 'fad fa-filter',
@@ -46,9 +71,7 @@
     {{ $attributes->merge(['class' => 'w-full']) }}
     x-data="{
         openTab: @if($persist) $persist(@js($initial)).as(@js($key)) @else @js($initial) @endif,
-        hoverTab: null,
         tabIcons: {},
-        isExpanded(id) { return this.openTab === id || this.hoverTab === id; },
         iconClass(id, fallback) {
             return `${this.tabIcons[id] || fallback} fa-fw shrink-0 text-center leading-none`;
         },
@@ -76,9 +99,9 @@
     x-init="initTabs()"
     x-on:ui-tab-icon="registerTabIcon($event)"
 >
-    <div class="w-full max-w-full overflow-hidden">
+    <div class="w-full max-w-full overflow-hidden {{ $stripClass }}">
         <nav class="w-full max-w-full overflow-hidden" aria-label="Tabs" role="tablist" aria-orientation="horizontal">
-            <ul x-ref="tabRow" class="flex w-full max-w-full justify-start overflow-hidden {{ $tabListClass }}">
+            <ul x-ref="tabRow" class="{{ $listClass }} {{ $tabListClass }}">
                 @foreach($tabs as $tabKey => $tab)
                     @php
                         $tabId = (string) $tabKey;
@@ -91,7 +114,7 @@
                         $countLabel = $count !== null ? number_format((int) $count, 0, ',', '.') : null;
                     @endphp
                     <li
-                        class="relative flex-none"
+                        class="{{ $itemClass }}"
                         :style="{
                             zIndex: @js($tabCount - $loop->index),
                         }"
@@ -102,26 +125,41 @@
                             aria-controls="{{ $htmlIdPrefix }}-panel-{{ $tabId }}"
                             aria-label="{{ $label }}@if($countLabel) {{ $countLabel }}@endif"
                             @click.prevent="selectTab(@js($tabId))"
-                            @mouseenter="hoverTab = @js($tabId)"
-                            @mouseleave="hoverTab = null"
-                            class="group/tab relative block overflow-hidden h-full rounded-t-md border border-b-0 border-gray-400 text-sm font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-200"
+                            class="{{ $buttonClass }}"
                             role="tab"
                             :aria-selected="(openTab === @js($tabId)).toString()"
                             :tabindex="openTab === @js($tabId) ? 0 : -1"
+                            :class="openTab === @js($tabId) ? @js($buttonActiveClass) : @js($buttonInactiveClass)"
                         >
+                            @if($isSubnav)
+                                <span
+                                    aria-hidden="true"
+                                    class="absolute left-2 top-1/2 h-1.5 w-1.5 -translate-y-1/2 rounded-full bg-blue-600 transition-opacity"
+                                    :class="openTab === @js($tabId) ? 'opacity-100' : 'opacity-0'"
+                                ></span>
+                            @else
+                                <span
+                                    aria-hidden="true"
+                                    class="absolute inset-x-2 top-0 h-0.5 rounded-full bg-blue-600 transition-opacity"
+                                    :class="openTab === @js($tabId) ? 'opacity-100' : 'opacity-0'"
+                                ></span>
+                            @endif
                             <span
-                                class="flex h-full items-center justify-center overflow-hidden px-4 py-[0.7em] text-ellipsis whitespace-nowrap transition-[background-color,color] duration-200 ease-out"
+                                class="{{ $labelClass }} transition-[background-color,color] duration-200 ease-out"
                                 :class="[
-                                    openTab === @js($tabId) ? 'bg-blue-50 text-blue-950' : 'bg-slate-300 text-slate-700 group-hover/tab:bg-blue-100 group-hover/tab:text-blue-900',
+                                    @js($isSubnav) ? 'pl-5' : '',
                                     @js($loop->first) ? 'pl-5' : '',
                                     @js($loop->last) ? 'pr-5' : ''
                                 ]"
                             >
                                 <span class="inline-flex h-5 min-w-0 items-center justify-center gap-2 align-middle leading-none">
                                     <i :class="iconClass(@js($tabId), @js($iconClass))" aria-hidden="true"></i>
-                                    <span class="flex h-5 min-w-0 items-center truncate text-center leading-none" x-show="isExpanded(@js($tabId))" x-transition.opacity.duration.150ms>
-                                        {{ $label }}@if($countLabel)&nbsp;{{ $countLabel }}@endif
+                                    <span class="flex h-5 min-w-0 items-center truncate text-center leading-none">
+                                        {{ $label }}
                                     </span>
+                                    @if($countLabel)
+                                        <span class="{{ $countClass }}">{{ $countLabel }}</span>
+                                    @endif
                                 </span>
                             </span>
                         </button>
