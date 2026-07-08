@@ -1,4 +1,4 @@
-<div class="space-y-6" wire:loading.class="opacity-60 pointer-events-none">
+<div class="space-y-6" wire:loading.class="opacity-90">
     <div class="flex flex-wrap items-start justify-between gap-4">
         <div>
             <h1 class="text-2xl font-semibold text-white">Workflows</h1>
@@ -118,11 +118,13 @@
             <x-ui.navigation.hozizontal.tabs.horizontal-tabs-panel
                 :tabs="$workflowSubcategoryTabs"
                 :default="$activeSubcategory"
-                :persist="false"
+                :sync-on-init="true"
+                persist-key="network-workflows-subcategory-{{ $activeGroup }}"
                 group="network-workflows-subcategory"
                 tab-list-class=""
                 content-class=""
                 variant="subnav"
+                wire:key="workflow-subcategory-tabs-{{ $activeGroup }}"
                 x-on:ui-tab-selected="if ($event.detail.group === 'network-workflows-subcategory') $wire.selectWorkflowSubcategory($event.detail.tab)"
             />
         @endif

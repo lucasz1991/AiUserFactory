@@ -83,6 +83,10 @@
             this.tabIcons[event.detail.tab] = event.detail.icon;
         },
         selectTab(id) {
+            if (this.openTab === id) {
+                return;
+            }
+
             this.openTab = id;
             this.$dispatch('ui-tab-selected', { group: @js($groupKey), tab: id });
         },
