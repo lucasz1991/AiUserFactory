@@ -18,7 +18,7 @@
 @endphp
 
 @if($isNavigation)
-    <div class="{{ $panelClass }}">
+    <div @class([$panelClass => trim((string) $panelClass) !== ''])>
         {{ $slot }}
     </div>
 @else
@@ -35,7 +35,7 @@
     :aria-hidden="(localOpenTab !== @js($panelFor)).toString()"
     @unless($isInitiallyActive) style="display: none;" @endunless
 >
-    <div class="{{ $panelClass }}">
+    <div @class([$panelClass => trim((string) $panelClass) !== ''])>
         {{ $slot }}
     </div>
 </div>

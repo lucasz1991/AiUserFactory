@@ -102,7 +102,8 @@
             :sync-on-init="true"
             persist-key="network-workflows-group"
             group="network-workflows-group"
-            class="px-4 pt-2"
+            tab-list-class=""
+            content-class=""
             x-on:ui-tab-selected="if ($event.detail.group === 'network-workflows-group') $wire.selectWorkflowGroup($event.detail.tab)"
         >
             <x-ui.navigation.hozizontal.tabs.horizontal-tab
@@ -110,7 +111,7 @@
                 :active="$activeGroup"
                 group="network-workflows-group"
                 as="navigation"
-                panel-class="rounded-b-lg border border-blue-200 bg-white shadow-sm"
+                panel-class=""
             >
 
         @if($subcategories->isNotEmpty())
@@ -119,7 +120,9 @@
                 :default="$activeSubcategory"
                 :persist="false"
                 group="network-workflows-subcategory"
-                class="border-b border-slate-100 bg-slate-50/70 px-4 pt-1"
+                tab-list-class=""
+                content-class=""
+                class="bg-slate-50/70"
                 x-on:ui-tab-selected="if ($event.detail.group === 'network-workflows-subcategory') $wire.selectWorkflowSubcategory($event.detail.tab)"
             />
         @endif

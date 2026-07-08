@@ -6,6 +6,8 @@
     'persist' => true,
     'syncOnInit' => false,
     'group' => null,
+    'tabListClass' => 'pt-2',
+    'contentClass' => 'content-wrap bg-white',
     // optional: 'sm' | 'md' | 'lg' | 'xl' | '2xl'
     'collapseAt' => null,
 ])
@@ -76,7 +78,7 @@
 >
     <div class="w-full max-w-full overflow-hidden">
         <nav class="w-full max-w-full overflow-hidden" aria-label="Tabs" role="tablist" aria-orientation="horizontal">
-            <ul x-ref="tabRow" class="flex w-full max-w-full justify-start overflow-hidden pt-2">
+            <ul x-ref="tabRow" class="flex w-full max-w-full justify-start overflow-hidden {{ $tabListClass }}">
                 @foreach($tabs as $tabKey => $tab)
                     @php
                         $tabId = (string) $tabKey;
@@ -130,7 +132,7 @@
     </div>
 
     @if(! $slot->isEmpty())
-        <div class="content-wrap bg-white">
+        <div @class([$contentClass => $contentClass !== ''])>
             {{ $slot }}
         </div>
     @endif
