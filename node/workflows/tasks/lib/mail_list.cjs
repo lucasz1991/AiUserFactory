@@ -1252,12 +1252,19 @@ function valueFromPath(root = {}, path = '') {
     }, root);
 }
 
+function isPlainObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value);
+}
+
 function workflowVariableRoot(context = {}) {
+  const workflow = isPlainObject(context.workflow) ? context.workflow : {};
   const workflowVariables = {
-    ...(context.workflow_variables && typeof context.workflow_variables === 'object' ? context.workflow_variables : {}),
-    ...(context.workflowVariables && typeof context.workflowVariables === 'object' ? context.workflowVariables : {}),
-    ...(context.lastResult?.workflow_variables && typeof context.lastResult.workflow_variables === 'object' ? context.lastResult.workflow_variables : {}),
-    ...(context.lastResult?.workflowVariables && typeof context.lastResult.workflowVariables === 'object' ? context.lastResult.workflowVariables : {}),
+    ...(isPlainObject(workflow.workflow_variables) ? workflow.workflow_variables : {}),
+    ...(isPlainObject(workflow.workflowVariables) ? workflow.workflowVariables : {}),
+    ...(isPlainObject(context.workflow_variables) ? context.workflow_variables : {}),
+    ...(isPlainObject(context.workflowVariables) ? context.workflowVariables : {}),
+    ...(isPlainObject(context.lastResult?.workflow_variables) ? context.lastResult.workflow_variables : {}),
+    ...(isPlainObject(context.lastResult?.workflowVariables) ? context.lastResult.workflowVariables : {}),
   };
 
   return {
@@ -1286,11 +1293,11 @@ function setWorkflowVariable(context = {}, name, value) {
   const key = variableName(name, 'mail_value');
 
   context.workflow_variables = {
-    ...(context.workflow_variables || {}),
+    ...(isPlainObject(context.workflow_variables) ? context.workflow_variables : {}),
     [key]: value,
   };
   context.workflowVariables = {
-    ...(context.workflowVariables || {}),
+    ...(isPlainObject(context.workflowVariables) ? context.workflowVariables : {}),
     [key]: value,
   };
 

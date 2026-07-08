@@ -66,3 +66,105 @@ test('embedded workflow inputs are resolved before input validation runs', () =>
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test('workflow variables from persisted context can be used as task input values', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workflow-variable-values-'));
+  const runtimePath = path.join(directory, 'runtime.json');
+  const resultPath = path.join(directory, 'result.json');
+  const statusPath = path.join(directory, 'status.json');
+  const echoTaskPath = path.join(directory, 'echo_input.cjs');
+
+  fs.writeFileSync(echoTaskPath, `
+'use strict';
+
+async function run(context = {}) {
+  return {
+    ok: true,
+    status: 'success',
+    resolvedValue: context.input?.value,
+    resolvedInputValue: context.input?.inputValue,
+  };
+}
+
+module.exports = { key: 'test.echo_input', run };
+`);
+
+  const runtime = {
+    resultPath,
+    statusPath,
+    runDirectory: directory,
+    livePreviewEnabled: false,
+    workflow: {
+      workflow_return: '654321',
+      workflow_variables: {
+        custom_token: 'ABC123',
+      },
+    },
+    tasks: [
+      {
+        key: 'custom-variable',
+        task_key: 'test.echo_input',
+        title: 'Custom variable',
+        kind: 'data',
+        runner: 'node',
+        node_script: echoTaskPath,
+        value: 'custom_token',
+        input: 'custom_token',
+      },
+      {
+        key: 'input-only-variable',
+        task_key: 'test.echo_input',
+        title: 'Input only variable',
+        kind: 'data',
+        runner: 'node',
+        node_script: echoTaskPath,
+        value: '',
+        input: 'custom_token',
+      },
+      {
+        key: 'workflow-return',
+        task_key: 'test.echo_input',
+        title: 'Workflow return',
+        kind: 'data',
+        runner: 'node',
+        node_script: echoTaskPath,
+        value: 'workflow_return',
+        input: 'workflow_return',
+      },
+      {
+        key: 'literal-value',
+        task_key: 'test.echo_input',
+        title: 'Literal value',
+        kind: 'data',
+        runner: 'node',
+        node_script: echoTaskPath,
+        value: 'normaler Text',
+        input: 'normaler Text',
+      },
+    ],
+  };
+
+  fs.writeFileSync(runtimePath, JSON.stringify(runtime));
+  const processResult = spawnSync(process.execPath, [runnerPath, runtimePath], {
+    cwd: basePath,
+    encoding: 'utf8',
+    timeout: 15000,
+  });
+
+  try {
+    assert.equal(processResult.status, 0, processResult.stderr || processResult.stdout);
+    const result = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
+    const tasks = Object.fromEntries(result.tasks.map((task) => [task.key, task]));
+
+    assert.equal(result.ok, true);
+    assert.equal(tasks['custom-variable'].resolvedValue, 'ABC123');
+    assert.equal(tasks['custom-variable'].resolvedInputValue, 'ABC123');
+    assert.equal(tasks['input-only-variable'].resolvedValue, 'ABC123');
+    assert.equal(tasks['input-only-variable'].resolvedInputValue, 'ABC123');
+    assert.equal(tasks['workflow-return'].resolvedValue, '654321');
+    assert.equal(tasks['literal-value'].resolvedValue, 'normaler Text');
+    assert.equal(result.workflow_variables.custom_token, 'ABC123');
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

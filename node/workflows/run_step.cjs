@@ -396,6 +396,63 @@ function valueFromPath(source, keyPath) {
   return current;
 }
 
+function isPlainObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function firstResolvedValue(...values) {
+  for (const value of values) {
+    if (value !== undefined && value !== null && value !== '') {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
+function firstConfiguredValue(...values) {
+  for (const value of values) {
+    if (value === undefined || value === null) {
+      continue;
+    }
+
+    if (typeof value === 'string' && value.trim() === '') {
+      continue;
+    }
+
+    return value;
+  }
+
+  return '';
+}
+
+function workflowVariablesFromContext(context = {}) {
+  const workflow = isPlainObject(context.workflow) ? context.workflow : {};
+
+  return {
+    ...(isPlainObject(workflow.workflow_variables) ? workflow.workflow_variables : {}),
+    ...(isPlainObject(workflow.workflowVariables) ? workflow.workflowVariables : {}),
+    ...(isPlainObject(context.workflow_variables) ? context.workflow_variables : {}),
+    ...(isPlainObject(context.workflowVariables) ? context.workflowVariables : {}),
+    ...(isPlainObject(context.lastResult?.workflow_variables) ? context.lastResult.workflow_variables : {}),
+    ...(isPlainObject(context.lastResult?.workflowVariables) ? context.lastResult.workflowVariables : {}),
+  };
+}
+
+function valueFromWorkflowVariables(variables = {}, name = '') {
+  const normalized = String(name || '').trim();
+
+  if (!normalized || !isPlainObject(variables)) {
+    return undefined;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(variables, normalized)) {
+    return variables[normalized];
+  }
+
+  return valueFromPath(variables, normalized);
+}
+
 function normalizeMailboxSource(value) {
   const normalized = String(value ?? '').trim().toLowerCase();
 
@@ -463,6 +520,12 @@ function scopedWorkflowContext(context = {}, mailboxSource = 'person') {
 
 function resolveString(value, context = {}) {
   const normalized = String(value ?? '').trim();
+  const workflow = runtime.workflow || {};
+  const workflowVariables = workflowVariablesFromContext({
+    workflow,
+    ...context,
+  });
+  const exactWorkflowVariable = valueFromWorkflowVariables(workflowVariables, normalized);
 
   const directRuntimeKeys = [
     'new_password',
@@ -477,11 +540,14 @@ function resolveString(value, context = {}) {
     'workflow_return_ok',
   ];
 
+  if (exactWorkflowVariable !== undefined) {
+    return exactWorkflowVariable ?? '';
+  }
+
   if ((!normalized.includes('.') && !directRuntimeKeys.includes(normalized)) || normalized.includes('://')) {
     return value;
   }
 
-  const workflow = runtime.workflow || {};
   const verificationAccount = context.verificationMailbox
     || context.verification_mailbox
     || context.veri_account
@@ -530,8 +596,8 @@ function resolveString(value, context = {}) {
   const lookupRoot = {
     ...workflow,
     workflow,
-    workflowVariables: context.workflowVariables || context.lastResult?.workflowVariables || {},
-    workflow_variables: context.workflow_variables || context.lastResult?.workflow_variables || {},
+    workflowVariables,
+    workflow_variables: workflowVariables,
     person: personForLookup,
     account,
     email_account: account,
@@ -539,16 +605,16 @@ function resolveString(value, context = {}) {
     verification_mailbox: verificationAccount,
     veri_account: verificationAccount,
     'veri-account': verificationAccount,
-    new_password: context.new_password || context.generated_password || account?.password || context.lastResult?.new_password || '',
-    generated_password: context.generated_password || context.new_password || account?.password || context.lastResult?.generated_password || context.lastResult?.new_password || '',
-    'generated-password': context.generated_password || context.new_password || account?.password || context.lastResult?.['generated-password'] || context.lastResult?.generated_password || context.lastResult?.new_password || '',
-    new_mail_username: account?.username || context.lastResult?.account?.username || '',
-    new_mail_address: account?.email || context.lastResult?.account?.email || '',
-    verification_code: context.verification_code || context.verificationCode || context.lastResult?.verification_code || context.lastResult?.verificationCode || '',
-    verificationCode: context.verificationCode || context.verification_code || context.lastResult?.verificationCode || context.lastResult?.verification_code || '',
-    workflow_return: context.workflow_return ?? context.workflowReturn ?? context.lastResult?.workflow_return ?? context.lastResult?.workflowReturn ?? '',
-    workflowReturn: context.workflowReturn ?? context.workflow_return ?? context.lastResult?.workflowReturn ?? context.lastResult?.workflow_return ?? '',
-    workflow_return_ok: context.workflow_return_ok ?? context.lastResult?.workflow_return_ok ?? '',
+    new_password: firstResolvedValue(context.new_password, context.generated_password, workflow.new_password, workflow.generated_password, valueFromWorkflowVariables(workflowVariables, 'new_password'), valueFromWorkflowVariables(workflowVariables, 'generated_password'), valueFromWorkflowVariables(workflowVariables, 'generated-password'), account?.password, context.lastResult?.new_password) ?? '',
+    generated_password: firstResolvedValue(context.generated_password, context.new_password, workflow.generated_password, workflow.new_password, valueFromWorkflowVariables(workflowVariables, 'generated_password'), valueFromWorkflowVariables(workflowVariables, 'new_password'), valueFromWorkflowVariables(workflowVariables, 'generated-password'), account?.password, context.lastResult?.generated_password, context.lastResult?.new_password) ?? '',
+    'generated-password': firstResolvedValue(context.generated_password, context.new_password, workflow.generated_password, workflow.new_password, valueFromWorkflowVariables(workflowVariables, 'generated-password'), valueFromWorkflowVariables(workflowVariables, 'generated_password'), valueFromWorkflowVariables(workflowVariables, 'new_password'), account?.password, context.lastResult?.['generated-password'], context.lastResult?.generated_password, context.lastResult?.new_password) ?? '',
+    new_mail_username: firstResolvedValue(account?.username, context.lastResult?.account?.username) ?? '',
+    new_mail_address: firstResolvedValue(account?.email, context.lastResult?.account?.email) ?? '',
+    verification_code: firstResolvedValue(context.verification_code, context.verificationCode, workflow.verification_code, workflow.verificationCode, valueFromWorkflowVariables(workflowVariables, 'verification_code'), valueFromWorkflowVariables(workflowVariables, 'verificationCode'), context.lastResult?.verification_code, context.lastResult?.verificationCode) ?? '',
+    verificationCode: firstResolvedValue(context.verificationCode, context.verification_code, workflow.verificationCode, workflow.verification_code, valueFromWorkflowVariables(workflowVariables, 'verificationCode'), valueFromWorkflowVariables(workflowVariables, 'verification_code'), context.lastResult?.verificationCode, context.lastResult?.verification_code) ?? '',
+    workflow_return: firstResolvedValue(context.workflow_return, context.workflowReturn, workflow.workflow_return, workflow.workflowReturn, valueFromWorkflowVariables(workflowVariables, 'workflow_return'), valueFromWorkflowVariables(workflowVariables, 'workflowReturn'), context.lastResult?.workflow_return, context.lastResult?.workflowReturn) ?? '',
+    workflowReturn: firstResolvedValue(context.workflowReturn, context.workflow_return, workflow.workflowReturn, workflow.workflow_return, valueFromWorkflowVariables(workflowVariables, 'workflowReturn'), valueFromWorkflowVariables(workflowVariables, 'workflow_return'), context.lastResult?.workflowReturn, context.lastResult?.workflow_return) ?? '',
+    workflow_return_ok: firstResolvedValue(context.workflow_return_ok, workflow.workflow_return_ok, valueFromWorkflowVariables(workflowVariables, 'workflow_return_ok'), context.lastResult?.workflow_return_ok) ?? '',
   };
   const resolved = valueFromPath(lookupRoot, normalized);
 
@@ -562,6 +628,9 @@ function resolveString(value, context = {}) {
 function taskInput(task, context = {}) {
   const mailboxSource = normalizeMailboxSource(task.script_person_source || task.scriptPersonSource || task.mailbox_source || task.mailboxSource || 'person');
   const valueContext = scopedWorkflowContext(context, mailboxSource);
+  const rawValue = firstConfiguredValue(task.value, task.input);
+  const rawInput = firstConfiguredValue(task.input, task.value);
+  const rawUrl = firstConfiguredValue(task.url, task.value, task.input);
   const browserWindow = normalizeBrowserWindowName(
     task.browser_window_name
     || task.browser_window
@@ -580,10 +649,10 @@ function taskInput(task, context = {}) {
     mailbox_source: mailboxSource,
     scriptPersonSource: mailboxSource,
     script_person_source: mailboxSource,
-    value: resolveString(task.value ?? task.input ?? '', valueContext),
-    inputValue: resolveString(task.input ?? task.value ?? '', valueContext),
-    input_value: resolveString(task.input ?? task.value ?? '', valueContext),
-    url: resolveString(task.url ?? task.value ?? task.input ?? '', valueContext),
+    value: resolveString(rawValue, valueContext),
+    inputValue: resolveString(rawInput, valueContext),
+    input_value: resolveString(rawInput, valueContext),
+    url: resolveString(rawUrl, valueContext),
     selector: task.selector || task.element_selector || task.input_selector || '',
     elementSelector: task.element_selector || task.selector || '',
     element_selector: task.element_selector || task.selector || '',
@@ -677,12 +746,7 @@ function resolveEmbeddedWorkflowInputs(task = {}, context = {}) {
 }
 
 function applyEmbeddedWorkflowInputs(task = {}, context = {}) {
-  const inheritedWorkflowVariables = {
-    ...(context.workflow?.workflow_variables && typeof context.workflow.workflow_variables === 'object' ? context.workflow.workflow_variables : {}),
-    ...(context.workflow?.workflowVariables && typeof context.workflow.workflowVariables === 'object' ? context.workflow.workflowVariables : {}),
-    ...(context.workflow_variables || {}),
-    ...(context.workflowVariables || {}),
-  };
+  const inheritedWorkflowVariables = workflowVariablesFromContext(context);
 
   context.workflow_variables = inheritedWorkflowVariables;
   context.workflowVariables = inheritedWorkflowVariables;
@@ -2222,8 +2286,13 @@ async function run() {
   pushEvent('starting', 'Workflow-Task-Runner startet.');
   writeStatus('starting', 'starting', 'Workflow-Task-Runner startet.');
 
+  const workflowContext = isPlainObject(runtime.workflow) ? runtime.workflow : {};
+  const initialWorkflowVariables = workflowVariablesFromContext({ workflow: workflowContext });
   const context = {
-    workflow: runtime.workflow || {},
+    ...workflowContext,
+    workflow: workflowContext,
+    workflow_variables: initialWorkflowVariables,
+    workflowVariables: initialWorkflowVariables,
     preview: {
       enabled: runtime.livePreviewEnabled !== false,
       livePreviewPath: runtime.livePreviewPath,
@@ -2457,17 +2526,17 @@ async function run() {
       context.lastResult = result;
 
       const resultWorkflowVariables = {
-        ...(result.workflow_variables && typeof result.workflow_variables === 'object' ? result.workflow_variables : {}),
-        ...(result.workflowVariables && typeof result.workflowVariables === 'object' ? result.workflowVariables : {}),
+        ...(isPlainObject(result.workflow_variables) ? result.workflow_variables : {}),
+        ...(isPlainObject(result.workflowVariables) ? result.workflowVariables : {}),
       };
 
       if (Object.keys(resultWorkflowVariables).length > 0) {
         context.workflow_variables = {
-          ...(context.workflow_variables || {}),
+          ...(isPlainObject(context.workflow_variables) ? context.workflow_variables : {}),
           ...resultWorkflowVariables,
         };
         context.workflowVariables = {
-          ...(context.workflowVariables || {}),
+          ...(isPlainObject(context.workflowVariables) ? context.workflowVariables : {}),
           ...resultWorkflowVariables,
         };
       }
@@ -2484,12 +2553,12 @@ async function run() {
         context.workflowReturn = workflowReturn;
         context.workflow_return_ok = workflowReturnOk;
         context.workflow_variables = {
-          ...(context.workflow_variables || {}),
+          ...(isPlainObject(context.workflow_variables) ? context.workflow_variables : {}),
           workflow_return: workflowReturn,
           workflow_return_ok: workflowReturnOk,
         };
         context.workflowVariables = {
-          ...(context.workflowVariables || {}),
+          ...(isPlainObject(context.workflowVariables) ? context.workflowVariables : {}),
           workflow_return: workflowReturn,
           workflow_return_ok: workflowReturnOk,
         };
@@ -2521,12 +2590,12 @@ async function run() {
         context.verification_code = verificationCode;
         context.verificationCode = verificationCode;
         context.workflow_variables = {
-          ...(context.workflow_variables || {}),
+          ...(isPlainObject(context.workflow_variables) ? context.workflow_variables : {}),
           verification_code: verificationCode,
           verificationCode,
         };
         context.workflowVariables = {
-          ...(context.workflowVariables || {}),
+          ...(isPlainObject(context.workflowVariables) ? context.workflowVariables : {}),
           verification_code: verificationCode,
           verificationCode,
         };
