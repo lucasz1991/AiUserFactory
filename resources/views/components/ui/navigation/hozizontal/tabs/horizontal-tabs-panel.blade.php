@@ -68,12 +68,21 @@
 
 <section
     id="{{ $htmlIdPrefix }}"
+    data-active-tab="{{ (string) $initial }}"
     {{ $attributes->merge(['class' => 'w-full']) }}
     x-data="{
         openTab: @if($persist) $persist(@js($initial)).as(@js($key)) @else @js($initial) @endif,
         tabIcons: {},
+        activeTabObserver: null,
         iconClass(id, fallback) {
             return `${this.tabIcons[id] || fallback} fa-fw shrink-0 text-center leading-none`;
+        },
+        syncFromServerActiveTab() {
+            const serverTab = this.$el.dataset.activeTab;
+
+            if (serverTab && serverTab !== this.openTab) {
+                this.openTab = serverTab;
+            }
         },
         registerTabIcon(event) {
             if (event.detail.group !== @js($groupKey) || !event.detail.tab || !event.detail.icon) {
@@ -88,12 +97,18 @@
             }
 
             this.openTab = id;
+            this.$el.dataset.activeTab = id;
             this.$dispatch('ui-tab-selected', { group: @js($groupKey), tab: id });
         },
         initTabs() {
             if (!@js(array_map('strval', array_keys($tabs))).includes(this.openTab)) {
                 this.openTab = @js((string) $initial);
             }
+
+            this.$el.dataset.activeTab = this.openTab;
+
+            this.activeTabObserver = new MutationObserver(() => this.syncFromServerActiveTab());
+            this.activeTabObserver.observe(this.$el, { attributes: true, attributeFilter: ['data-active-tab'] });
 
             if (@js($syncOnInit) && this.openTab !== @js((string) $initial)) {
                 this.$nextTick(() => this.$dispatch('ui-tab-selected', { group: @js($groupKey), tab: this.openTab }));
