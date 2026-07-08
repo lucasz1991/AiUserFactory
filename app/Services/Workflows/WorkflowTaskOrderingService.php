@@ -40,31 +40,48 @@ class WorkflowTaskOrderingService
 
         $targetPosition = max(0, $targetPosition);
 
+        $movingTasks = $this->pairedTasks($sourceStep, $movingTask);
+
         if ((int) $sourceStep->id === (int) $targetStep->id) {
             $allTasks = collect($this->tasks($targetStep))->values();
-            $originalPosition = $allTasks->search(fn (array $task): bool => (string) ($task['key'] ?? '') === $taskKey);
+            $movingKeys = collect($movingTasks)
+                ->map(fn (array $task): string => (string) ($task['key'] ?? ''))
+                ->filter()
+                ->values()
+                ->all();
+            $originalPositions = $allTasks
+                ->keys()
+                ->filter(fn (int $index): bool => in_array((string) ($allTasks->get($index)['key'] ?? ''), $movingKeys, true))
+                ->values();
 
-            if ($originalPosition !== false && $targetPosition > $originalPosition) {
-                $targetPosition--;
+            foreach ($originalPositions as $originalPosition) {
+                if ($targetPosition > $originalPosition) {
+                    $targetPosition--;
+                }
             }
 
             $tasks = $allTasks
-                ->reject(fn (array $task): bool => (string) ($task['key'] ?? '') === $taskKey)
+                ->reject(fn (array $task): bool => in_array((string) ($task['key'] ?? ''), $movingKeys, true))
                 ->values();
 
-            $tasks->splice(min($targetPosition, $tasks->count()), 0, [$movingTask]);
+            $tasks->splice(min($targetPosition, $tasks->count()), 0, $movingTasks);
             $this->saveTasks($targetStep, $tasks->values()->toArray());
 
             return true;
         }
 
+        $movingKeys = collect($movingTasks)
+            ->map(fn (array $task): string => (string) ($task['key'] ?? ''))
+            ->filter()
+            ->values()
+            ->all();
         $sourceTasks = collect($this->tasks($sourceStep))
-            ->reject(fn (array $task): bool => (string) ($task['key'] ?? '') === $taskKey)
+            ->reject(fn (array $task): bool => in_array((string) ($task['key'] ?? ''), $movingKeys, true))
             ->values()
             ->toArray();
         $targetTasks = collect($this->tasks($targetStep))->values();
 
-        $targetTasks->splice(min($targetPosition, $targetTasks->count()), 0, [$movingTask]);
+        $targetTasks->splice(min($targetPosition, $targetTasks->count()), 0, $movingTasks);
 
         $this->saveTasks($sourceStep, $sourceTasks);
         $this->saveTasks($targetStep, $targetTasks->values()->toArray());
@@ -74,24 +91,39 @@ class WorkflowTaskOrderingService
 
     public function appendTask(WorkflowStep $step, array $task): void
     {
-        $tasks = $this->tasks($step);
-        $tasks[] = $task;
+        $this->appendTasks($step, [$task]);
+    }
 
-        $this->saveTasks($step, array_values($tasks));
+    public function appendTasks(WorkflowStep $step, array $newTasks): void
+    {
+        $tasks = array_values([...$this->tasks($step), ...array_values($newTasks)]);
+
+        $this->saveTasks($step, $tasks);
     }
 
     public function insertTask(WorkflowStep $step, array $task, int $targetPosition): void
     {
+        $this->insertTasks($step, [$task], $targetPosition);
+    }
+
+    public function insertTasks(WorkflowStep $step, array $newTasks, int $targetPosition): void
+    {
         $tasks = collect($this->tasks($step))->values();
-        $tasks->splice(min(max(0, $targetPosition), $tasks->count()), 0, [$task]);
+        $tasks->splice(min(max(0, $targetPosition), $tasks->count()), 0, array_values($newTasks));
 
         $this->saveTasks($step, $tasks->values()->toArray());
     }
 
     public function removeTask(WorkflowStep $step, string $taskKey): void
     {
+        $tasksBeforeRemoval = collect($this->tasks($step));
+        $task = $tasksBeforeRemoval
+            ->first(fn (array $task): bool => (string) ($task['key'] ?? '') === $taskKey);
+        $pairId = is_array($task) ? trim((string) ($task['loop_pair_id'] ?? $task['loopPairId'] ?? '')) : '';
+
         $tasks = collect($this->tasks($step))
-            ->reject(fn (array $task): bool => (string) ($task['key'] ?? '') === $taskKey)
+            ->reject(fn (array $task): bool => (string) ($task['key'] ?? '') === $taskKey
+                || ($pairId !== '' && trim((string) ($task['loop_pair_id'] ?? $task['loopPairId'] ?? '')) === $pairId))
             ->values()
             ->toArray();
 
@@ -133,6 +165,33 @@ class WorkflowTaskOrderingService
         $config['tasks'] = $this->normalizeTaskOrder($tasks);
 
         $step->forceFill(['config_json' => $config])->save();
+    }
+
+    protected function pairedTasks(WorkflowStep $step, array $task): array
+    {
+        $pairId = trim((string) ($task['loop_pair_id'] ?? $task['loopPairId'] ?? ''));
+
+        if ($pairId === '') {
+            return [$task];
+        }
+
+        $paired = collect($this->tasks($step))
+            ->filter(fn (array $candidate): bool => trim((string) ($candidate['loop_pair_id'] ?? $candidate['loopPairId'] ?? '')) === $pairId)
+            ->values()
+            ->all();
+
+        if ($paired === []) {
+            return [$task];
+        }
+
+        return collect($paired)
+            ->sortBy(fn (array $candidate): int => match ((string) ($candidate['loop_pair_segment'] ?? $candidate['loopPairSegment'] ?? '')) {
+                'start' => 0,
+                'end' => 2,
+                default => 1,
+            })
+            ->values()
+            ->all();
     }
 
     protected function normalizeTaskOrder(array $tasks): array

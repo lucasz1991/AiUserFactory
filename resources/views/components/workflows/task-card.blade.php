@@ -6,6 +6,7 @@
 @php
     $browserWindow = trim((string) data_get($task, 'browser_window_name', data_get($task, 'browser_window', '')));
     $isWorkflowTask = (string) data_get($task, 'runner') === 'workflow';
+    $loopPairSegment = trim((string) data_get($task, 'loop_pair_segment', ''));
     $kind = trim((string) data_get($task, 'kind', 'data')) ?: 'data';
     $kindTone = match ($kind) {
         'browser' => 'bg-sky-500',
@@ -52,6 +53,11 @@
     @if($isWorkflowTask)
         <div class="mt-2 inline-flex max-w-full items-center rounded border border-violet-200 bg-violet-50 px-2 py-0.5 text-[11px] font-semibold text-violet-800">
             <span class="truncate">Eingebetteter Workflow</span>
+        </div>
+    @endif
+    @if(in_array($loopPairSegment, ['start', 'end'], true))
+        <div class="mt-2 inline-flex max-w-full items-center rounded border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-800">
+            <span class="truncate">{{ $loopPairSegment === 'start' ? 'Loop-Start' : 'Loop-Ende' }}</span>
         </div>
     @endif
 </div>

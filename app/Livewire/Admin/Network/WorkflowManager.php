@@ -174,6 +174,10 @@ class WorkflowManager extends Component
 
     public int $editingTaskFailedRetryLimit = 0;
 
+    public string $editingTaskLoopPairSegment = '';
+
+    public string $editingTaskLoopPairEndKey = '';
+
     public function mount(Workflow $workflow): void
     {
         $this->selectedWorkflowId = $workflow->id;
@@ -730,10 +734,16 @@ class WorkflowManager extends Component
             $task['on_error'] = $failedRoute;
         }
 
+        $tasksToInsert = [$task];
+
+        if ($this->isLoopStartTaskKey($validated['newTaskCatalogKey'])) {
+            $tasksToInsert = $this->buildLoopPairTasks($task, $tasks);
+        }
+
         if ($this->newTaskInsertPosition !== null) {
-            app(WorkflowTaskOrderingService::class)->insertTask($step, $task, $this->newTaskInsertPosition);
+            app(WorkflowTaskOrderingService::class)->insertTasks($step, $tasksToInsert, $this->newTaskInsertPosition);
         } else {
-            app(WorkflowTaskOrderingService::class)->appendTask($step, $task);
+            app(WorkflowTaskOrderingService::class)->appendTasks($step, $tasksToInsert);
         }
 
         $this->newTaskTitle = '';
@@ -773,8 +783,11 @@ class WorkflowManager extends Component
             return;
         }
 
+        $loopPair = $this->editableLoopPairTask($rawTasks, $task);
+        $task = $loopPair['task'];
+
         $this->editingTaskStepId = $step->id;
-        $this->editingTaskKey = $taskKey;
+        $this->editingTaskKey = (string) ($task['key'] ?? $taskKey);
         $this->editingTaskCatalogKey = trim((string) ($task['task_key'] ?? '')) ?: 'browser.open_url';
         $this->editingTaskTitle = (string) ($task['title'] ?? 'Task');
         $this->editingTaskKind = (string) ($task['kind'] ?? 'browser');
@@ -795,6 +808,8 @@ class WorkflowManager extends Component
         $this->editingTaskSuccessTarget = $this->routeValueFromTarget($task['next'] ?? null);
         $this->editingTaskFailedTarget = $this->routeValueFromTarget($task['on_error'] ?? null);
         $this->editingTaskFailedRetryLimit = max(0, (int) data_get($task, 'on_error.max_attempts', 0));
+        $this->editingTaskLoopPairSegment = $loopPair['segment'];
+        $this->editingTaskLoopPairEndKey = $loopPair['end_key'];
         $this->applyTaskDefinitionToForm('editingTask', $this->editingTaskCatalogKey, false);
         $this->editingTaskExtra = $this->taskExtraFieldsFromTask($this->taskFormConfig($this->editingTaskCatalogKey), $task);
         $this->showEditTaskModal = true;
@@ -832,6 +847,12 @@ class WorkflowManager extends Component
 
         if (! $definition) {
             $this->addError('editingTaskCatalogKey', 'Dieser Workflow oder Task ist nicht verfuegbar.');
+
+            return;
+        }
+
+        if ($this->editingTaskLoopPairSegment !== '' && ! $this->isLoopStartTaskKey($validated['editingTaskCatalogKey'])) {
+            $this->addError('editingTaskCatalogKey', 'Loop-Start und Loop-Ende werden gemeinsam bearbeitet; die Funktion bleibt eine Schleife.');
 
             return;
         }
@@ -934,9 +955,15 @@ class WorkflowManager extends Component
             ->values()
             ->toArray();
 
+        if ($this->editingTaskLoopPairSegment !== '') {
+            $config['tasks'] = $this->syncLoopPairTasks($config['tasks'], $this->editingTaskKey);
+        }
+
         $step->forceFill(['config_json' => $config])->save();
 
         $this->showEditTaskModal = false;
+        $this->editingTaskLoopPairSegment = '';
+        $this->editingTaskLoopPairEndKey = '';
 
         session()->flash('success', 'Step-Karte wurde gespeichert.');
     }
@@ -1763,6 +1790,138 @@ class WorkflowManager extends Component
         unset($card['node_script'], $card['php_handler']);
 
         return $card;
+    }
+
+    protected function isLoopStartTaskKey(string $taskKey): bool
+    {
+        return trim($taskKey) === 'loop.for_each_element';
+    }
+
+    protected function isLoopEndTaskKey(string $taskKey): bool
+    {
+        return trim($taskKey) === 'loop.end';
+    }
+
+    protected function buildLoopPairTasks(array $startTask, array $existingTasks): array
+    {
+        $pairId = 'loop-'.(string) Str::uuid();
+        $startKey = trim((string) ($startTask['key'] ?? 'loop-start')) ?: 'loop-start';
+        $endKey = $this->uniqueTaskKey([...$existingTasks, $startTask], ($startTask['title'] ?? 'Loop').' Ende');
+
+        $startTask['loop_pair_id'] = $pairId;
+        $startTask['loop_pair_segment'] = 'start';
+        $startTask['loop_start_key'] = $startKey;
+        $startTask['loop_end_key'] = $endKey;
+
+        return [
+            $startTask,
+            $this->loopEndTaskForStart($startTask, $endKey, $pairId),
+        ];
+    }
+
+    protected function loopEndTaskForStart(array $startTask, string $endKey, string $pairId): array
+    {
+        $startKey = trim((string) ($startTask['key'] ?? '')) ?: 'loop-start';
+        $browserWindow = $this->normalizeBrowserWindowName((string) ($startTask['browser_window_name'] ?? $startTask['browser_window'] ?? 'main'));
+        $title = trim((string) ($startTask['title'] ?? 'Loop'));
+
+        return $this->taskCardFromDefinition('loop.end', [
+            'key' => $endKey,
+            'title' => 'Loop-Ende: '.($title !== '' ? $title : $startKey),
+            'description' => 'Automatisches Endsegment fuer '.($title !== '' ? $title : $startKey).'.',
+            'browser_window' => $browserWindow,
+            'browser_window_name' => $browserWindow,
+            'loop_pair_id' => $pairId,
+            'loop_pair_segment' => 'end',
+            'loop_start_key' => $startKey,
+            'loop_end_key' => $endKey,
+            'status' => 'configured',
+        ]);
+    }
+
+    protected function editableLoopPairTask(array $tasks, array $selectedTask): array
+    {
+        $pairId = trim((string) ($selectedTask['loop_pair_id'] ?? $selectedTask['loopPairId'] ?? ''));
+        $segment = trim((string) ($selectedTask['loop_pair_segment'] ?? $selectedTask['loopPairSegment'] ?? ''));
+
+        if ($pairId === '') {
+            return [
+                'task' => $selectedTask,
+                'segment' => '',
+                'end_key' => '',
+            ];
+        }
+
+        $pairedTasks = collect($tasks)
+            ->filter(fn (mixed $task): bool => is_array($task) && trim((string) ($task['loop_pair_id'] ?? $task['loopPairId'] ?? '')) === $pairId);
+        $startTask = $pairedTasks->first(fn (array $task): bool => $this->isLoopStartTaskKey((string) ($task['task_key'] ?? '')))
+            ?: $pairedTasks->first(fn (array $task): bool => trim((string) ($task['loop_pair_segment'] ?? $task['loopPairSegment'] ?? '')) === 'start')
+            ?: $selectedTask;
+        $endTask = $pairedTasks->first(fn (array $task): bool => $this->isLoopEndTaskKey((string) ($task['task_key'] ?? '')))
+            ?: $pairedTasks->first(fn (array $task): bool => trim((string) ($task['loop_pair_segment'] ?? $task['loopPairSegment'] ?? '')) === 'end');
+
+        return [
+            'task' => $startTask,
+            'segment' => $segment !== '' ? $segment : 'start',
+            'end_key' => is_array($endTask) ? (string) ($endTask['key'] ?? '') : (string) ($startTask['loop_end_key'] ?? ''),
+        ];
+    }
+
+    protected function syncLoopPairTasks(array $tasks, string $startTaskKey): array
+    {
+        $tasks = collect($tasks)
+            ->filter(fn (mixed $task): bool => is_array($task))
+            ->values();
+        $startIndex = $tasks->search(fn (array $task): bool => (string) ($task['key'] ?? '') === $startTaskKey);
+
+        if ($startIndex === false) {
+            return $tasks->all();
+        }
+
+        $startTask = $tasks->get($startIndex);
+        $pairId = trim((string) ($startTask['loop_pair_id'] ?? $startTask['loopPairId'] ?? ''));
+
+        if ($pairId === '') {
+            return $tasks->all();
+        }
+
+        $endIndex = $tasks->search(fn (array $task): bool => trim((string) ($task['loop_pair_id'] ?? $task['loopPairId'] ?? '')) === $pairId
+            && ($this->isLoopEndTaskKey((string) ($task['task_key'] ?? '')) || trim((string) ($task['loop_pair_segment'] ?? $task['loopPairSegment'] ?? '')) === 'end'));
+        $endKey = $endIndex !== false
+            ? (string) ($tasks->get($endIndex)['key'] ?? '')
+            : (trim((string) ($startTask['loop_end_key'] ?? '')) ?: $this->uniqueTaskKey($tasks->all(), ($startTask['title'] ?? 'Loop').' Ende'));
+        $startTask['loop_pair_segment'] = 'start';
+        $startTask['loop_start_key'] = (string) ($startTask['key'] ?? $startTaskKey);
+        $startTask['loop_end_key'] = $endKey;
+        $endTask = $this->loopEndTaskForStart($startTask, $endKey, $pairId);
+
+        if ($endIndex !== false) {
+            $existingEndTask = $tasks->get($endIndex);
+            $endTask = array_replace($existingEndTask, $endTask, [
+                'order_id' => $existingEndTask['order_id'] ?? null,
+                'position' => $existingEndTask['position'] ?? null,
+            ]);
+        }
+
+        $synced = $tasks
+            ->map(function (array $task, int $index) use ($startIndex, $endIndex, $startTask, $endTask): array {
+                if ($index === $startIndex) {
+                    return $startTask;
+                }
+
+                if ($endIndex !== false && $index === $endIndex) {
+                    return $endTask;
+                }
+
+                return $task;
+            })
+            ->values();
+
+        if ($endIndex === false) {
+            $synced->splice($startIndex + 1, 0, [$endTask]);
+        }
+
+        return $synced->values()->all();
     }
 
     protected function validateTaskFieldRequirements(string $prefix, array $formConfig): bool

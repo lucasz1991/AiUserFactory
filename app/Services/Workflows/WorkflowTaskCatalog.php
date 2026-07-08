@@ -63,6 +63,46 @@ class WorkflowTaskCatalog
                     'failure_payload' => true,
                 ],
             ],
+            'browser.open_browser_session' => [
+                'label' => 'Browser-Session laden und letzte URL oeffnen',
+                'kind' => 'browser',
+                'runner' => 'node',
+                'node_script' => 'node/workflows/tasks/browser/open_browser_session.cjs',
+                'browser_window' => 'main',
+                'timeout_seconds' => 120,
+                'description' => 'Laedt gespeicherte Cookies und Browser-Storage der Bezugs-Person und oeffnet standardmaessig die zuletzt gespeicherte URL der Session.',
+                'form' => [
+                    'browser_window' => true,
+                    'browser_window_create' => true,
+                    'browser_window_label' => 'Browserfenster',
+                    'browser_window_placeholder' => 'main, session, login',
+                    'selector' => false,
+                    'value' => false,
+                    'value_required' => false,
+                    'url' => true,
+                    'url_label' => 'URL ueberschreiben (optional)',
+                    'url_placeholder' => 'leer = letzte URL der gespeicherten Session',
+                    'mailbox_source' => false,
+                    'success_payload' => false,
+                    'failure_payload' => true,
+                    'extra_fields' => [
+                        [
+                            'name' => 'session_key',
+                            'label' => 'Session-Key',
+                            'placeholder' => 'leer = neueste gespeicherte Session',
+                            'help' => 'Optional. Waehlt gezielt einen Eintrag aus metadata.browser_sessions.',
+                            'tab' => 'Session',
+                        ],
+                        [
+                            'name' => 'target_domain',
+                            'label' => 'Domain/URL',
+                            'placeholder' => 'example.com oder https://example.com',
+                            'help' => 'Optional. Wenn kein Session-Key gesetzt ist, wird die passende gespeicherte Session zu dieser Domain geladen.',
+                            'tab' => 'Session',
+                        ],
+                    ],
+                ],
+            ],
             'webmail.check_session' => [
                 'label' => 'Webmailportal-Session pruefen',
                 'kind' => 'browser',
@@ -583,6 +623,25 @@ class WorkflowTaskCatalog
                         ['name' => 'empty_target', 'label' => 'Zielkarte wenn fertig/leer', 'placeholder' => 'Karten-Key von array_length oder workflow_return', 'tab' => 'Routen'],
                         ['name' => 'error_target', 'label' => 'Zielkarte bei Fehler', 'placeholder' => 'Karten-Key der Fehlerbehandlung', 'tab' => 'Routen'],
                     ],
+                ],
+            ],
+            'loop.end' => [
+                'label' => 'Loop-Ende',
+                'kind' => 'browser',
+                'runner' => 'node',
+                'node_script' => 'node/workflows/tasks/loop/end.cjs',
+                'browser_window' => 'main',
+                'timeout_seconds' => 15,
+                'description' => 'Automatisches Endsegment einer Schleife. Springt zur Startkarte zurueck, solange die Schleife aktiv ist.',
+                'hidden_from_library' => true,
+                'form' => [
+                    'browser_window' => true,
+                    'selector' => false,
+                    'value' => false,
+                    'url' => false,
+                    'mailbox_source' => false,
+                    'success_payload' => false,
+                    'failure_payload' => false,
                 ],
             ],
             'browser.read_element_fields' => [
@@ -1359,6 +1418,7 @@ class WorkflowTaskCatalog
     public function options(): array
     {
         return collect($this->all())
+            ->filter(fn (array $task): bool => ! (bool) ($task['hidden_from_library'] ?? false))
             ->map(fn (array $task, string $key): array => [
                 'key' => $key,
                 'label' => $task['label'],
@@ -1411,7 +1471,7 @@ class WorkflowTaskCatalog
             $definition['browser_window'] = 'main';
         }
 
-        foreach (['node_script', 'php_handler', 'workflow_id', 'workflow_slug', 'browser_window', 'browser_window_name', 'selector', 'element_selector', 'input_selector', 'input', 'value', 'url', 'mailbox_source', 'script_person_source', 'success_payload', 'failure_payload', 'next', 'on_partial', 'on_error', 'status_routes'] as $key) {
+        foreach (['node_script', 'php_handler', 'workflow_id', 'workflow_slug', 'browser_window', 'browser_window_name', 'selector', 'element_selector', 'input_selector', 'input', 'value', 'url', 'mailbox_source', 'script_person_source', 'success_payload', 'failure_payload', 'next', 'on_partial', 'on_error', 'status_routes', 'loop_pair_id', 'loop_pair_segment', 'loop_start_key', 'loop_end_key'] as $key) {
             $value = Arr::get($overrides, $key, Arr::get($definition, $key));
 
             if ($value !== null && $value !== '') {

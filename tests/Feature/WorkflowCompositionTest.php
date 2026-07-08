@@ -525,6 +525,43 @@ class WorkflowCompositionTest extends TestCase
         $this->assertSame($boundary['key'], $runtimeFirst['embedded_workflow_boundary_key']);
     }
 
+    public function test_loop_start_creates_and_manages_paired_end_task(): void
+    {
+        $workflow = $this->workflow('loop-pair-editor');
+        $step = $this->step($workflow, 'Loop list', []);
+
+        Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
+            ->call('prepareTaskFromCatalog', $step->id, 'loop.for_each_element', 0)
+            ->set('newTaskElementSelector', '.result')
+            ->set('newTaskBrowserWindow', 'main')
+            ->call('addTaskCard')
+            ->assertHasNoErrors();
+
+        $tasks = $step->fresh()->task_cards;
+        $this->assertCount(2, $tasks);
+        $this->assertSame('loop.for_each_element', $tasks[0]['task_key']);
+        $this->assertSame('loop.end', $tasks[1]['task_key']);
+        $this->assertSame($tasks[0]['loop_pair_id'], $tasks[1]['loop_pair_id']);
+        $this->assertSame($tasks[0]['key'], $tasks[1]['loop_start_key']);
+
+        Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
+            ->call('openEditTaskCard', $step->id, $tasks[1]['key'])
+            ->set('editingTaskTitle', 'Ergebnis Loop')
+            ->set('editingTaskElementSelector', '.product-card')
+            ->call('saveEditTaskCard')
+            ->assertHasNoErrors();
+
+        $editedTasks = $step->fresh()->task_cards;
+        $this->assertSame('Ergebnis Loop', $editedTasks[0]['title']);
+        $this->assertSame('.product-card', $editedTasks[0]['selector']);
+        $this->assertSame('Loop-Ende: Ergebnis Loop', $editedTasks[1]['title']);
+
+        Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
+            ->call('removeTaskCard', $step->id, $editedTasks[1]['key']);
+
+        $this->assertSame([], $step->fresh()->task_cards);
+    }
+
     protected function workflow(string $slug): Workflow
     {
         return Workflow::query()->create([

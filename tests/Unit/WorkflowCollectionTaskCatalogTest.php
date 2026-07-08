@@ -12,7 +12,9 @@ class WorkflowCollectionTaskCatalogTest extends TestCase
         $catalog = new WorkflowTaskCatalog;
         $expected = [
             'browser.scroll' => 'node/workflows/tasks/browser/scroll.cjs',
+            'browser.open_browser_session' => 'node/workflows/tasks/browser/open_browser_session.cjs',
             'loop.for_each_element' => 'node/workflows/tasks/loop/for_each_element.cjs',
+            'loop.end' => 'node/workflows/tasks/loop/end.cjs',
             'browser.read_element_fields' => 'node/workflows/tasks/browser/read_element_fields.cjs',
             'data.append_to_array' => 'node/workflows/tasks/data/append_to_array.cjs',
             'decision.array_length' => 'node/workflows/tasks/decision/array_length.cjs',

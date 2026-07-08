@@ -2,6 +2,7 @@
     $isEdit = ($mode ?? 'create') === 'edit';
     $prefix = $isEdit ? 'editingTask' : 'newTask';
     $catalogKey = $isEdit ? $editingTaskCatalogKey : $newTaskCatalogKey;
+    $isLoopPairEdit = $isEdit && in_array($editingTaskLoopPairSegment ?? '', ['start', 'end'], true);
     $selectedDefinition = collect($taskDefinitions)->firstWhere('key', $catalogKey) ?? [];
     $usesBrowserWindow = in_array($selectedDefinition['kind'] ?? '', ['browser', 'input', 'wait'], true) && $catalogKey !== 'wait.seconds';
     $form = array_replace([
@@ -222,12 +223,17 @@
 
         <div class="{{ $isEdit ? 'md:col-span-2' : '' }}">
             <label class="block text-sm font-medium text-gray-700">Funktion / Node-Skript</label>
-            <select wire:model.live="{{ $prefix }}CatalogKey" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+            <select wire:model.live="{{ $prefix }}CatalogKey" @if($isLoopPairEdit) disabled @endif class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 disabled:bg-slate-100 disabled:text-slate-500">
                 @foreach($taskDefinitions as $taskDefinition)
                     <option value="{{ $taskDefinition['key'] }}">{{ $taskDefinition['label'] }} ({{ $taskDefinition['runner'] }})</option>
                 @endforeach
             </select>
             @error($prefix.'CatalogKey') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+            @if($isLoopPairEdit)
+                <p class="mt-2 rounded-md border border-emerald-200 bg-emerald-50 p-2 text-xs leading-5 text-emerald-900">
+                    Loop-Start und Loop-Ende sind gekoppelt. Dieses Modal speichert beide Segmente gemeinsam.
+                </p>
+            @endif
             @if(($selectedDefinition['description'] ?? '') !== '')
                 <p class="mt-2 text-xs leading-5 text-slate-500">{{ $selectedDefinition['description'] }}</p>
             @endif

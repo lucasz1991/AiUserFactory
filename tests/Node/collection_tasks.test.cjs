@@ -8,6 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const loopTask = require('../../node/workflows/tasks/loop/for_each_element.cjs');
+const loopEndTask = require('../../node/workflows/tasks/loop/end.cjs');
 const readFieldsTask = require('../../node/workflows/tasks/browser/read_element_fields.cjs');
 const readSearchResultTask = require('../../node/workflows/tasks/browser/read_searchengine_result.cjs');
 const appendTask = require('../../node/workflows/tasks/data/append_to_array.cjs');
@@ -140,6 +141,46 @@ test('generic element loop reads fields and appends a deduplicated result array'
   assert.equal(completed.processed_count, 2);
   assert.equal(completed.route_target_key, 'return-results');
   assert.equal(context.workflow_variables.top_results.length, 2);
+});
+
+test('loop end routes back to start while the loop is active and continues after completion', async () => {
+  const handles = [
+    searchResult('Only result', '/only', 'Only description'),
+  ];
+  const context = {
+    page: {
+      $$: async (selector) => (selector === '.result' ? handles : []),
+    },
+    workflow_variables: {},
+    input: {
+      key: 'result-loop',
+      selector: '.result',
+      store_current_element_as: 'current_result',
+      store_index_as: 'result_index',
+    },
+  };
+
+  const firstLoop = await loopTask.run(context);
+  assert.equal(firstLoop.loop_complete, false);
+
+  context.input = { loop_start_key: 'result-loop' };
+  const firstEnd = await loopEndTask.run(context);
+  assert.equal(firstEnd.route_target_key, 'result-loop');
+  assert.equal(firstEnd.loop_complete, false);
+
+  context.input = {
+    key: 'result-loop',
+    selector: '.result',
+    store_current_element_as: 'current_result',
+    store_index_as: 'result_index',
+  };
+  const completed = await loopTask.run(context);
+  assert.equal(completed.loop_complete, true);
+
+  context.input = { loop_start_key: 'result-loop' };
+  const finalEnd = await loopEndTask.run(context);
+  assert.equal(finalEnd.loop_complete, true);
+  assert.equal(finalEnd.route_target_key, undefined);
 });
 
 test('search result wrapper supports fallback selectors and optional fields', async () => {

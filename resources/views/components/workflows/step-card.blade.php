@@ -154,6 +154,7 @@
                     $sourceNode = $step->action_key.'::'.$taskKey;
                     $successTarget = $routeNodeForTask(is_array($task['next'] ?? null) ? $task['next'] : null);
                     $failedTarget = $routeNodeForTask(is_array($task['on_error'] ?? null) ? $task['on_error'] : null);
+                    $isLoopPairTask = trim((string) data_get($task, 'loop_pair_id', '')) !== '';
                     $previousTask = $loop->first ? null : ($step->task_cards[$loop->index - 1] ?? null);
                     $previousTarget = is_array($previousTask)
                         ? $routeNodeForTask(is_array($previousTask['next'] ?? null) ? $previousTask['next'] : null)
@@ -202,7 +203,7 @@
                             @if(! $locked)
                                 <x-slot name="actions">
                                     <button type="button" wire:click="openEditTaskCard({{ $step->id }}, @js($task['key'] ?? ''))" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-100">Bearbeiten</button>
-                                    <button type="button" wire:click="removeTaskCard({{ $step->id }}, @js($task['key'] ?? ''))" wire:confirm="Step-Karte wirklich entfernen?" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-red-700 hover:bg-red-50">Entfernen</button>
+                                    <button type="button" wire:click="removeTaskCard({{ $step->id }}, @js($task['key'] ?? ''))" wire:confirm="{{ $isLoopPairTask ? 'Loop-Start und Loop-Ende wirklich entfernen?' : 'Step-Karte wirklich entfernen?' }}" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-red-700 hover:bg-red-50">Entfernen</button>
                                 </x-slot>
                             @endif
                         </x-workflows.task-card>

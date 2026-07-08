@@ -1012,7 +1012,9 @@ class WorkflowTaskRunner
         $script = match ((string) ($task['task_key'] ?? '')) {
             'browser.hover' => 'node/workflows/tasks/browser/hover.cjs',
             'browser.scroll' => 'node/workflows/tasks/browser/scroll.cjs',
+            'browser.open_browser_session' => 'node/workflows/tasks/browser/open_browser_session.cjs',
             'loop.for_each_element' => 'node/workflows/tasks/loop/for_each_element.cjs',
+            'loop.end' => 'node/workflows/tasks/loop/end.cjs',
             'browser.read_element_fields' => 'node/workflows/tasks/browser/read_element_fields.cjs',
             'browser.read_searchengine_result' => 'node/workflows/tasks/browser/read_searchengine_result.cjs',
             'data.append_to_array' => 'node/workflows/tasks/data/append_to_array.cjs',
@@ -1094,20 +1096,20 @@ class WorkflowTaskRunner
     protected function publicRuntimeContext(array $runtimeContext): array
     {
         $public = $runtimeContext;
-        unset($public['browser'], $public['browser_runtime'], $public['browserWsEndpoint'], $public['browser_ws_endpoint']);
+        unset($public['browser'], $public['browser_runtime'], $public['browserWsEndpoint'], $public['browser_ws_endpoint'], $public['browserSessions'], $public['browser_sessions']);
 
         foreach (['account', 'email_account', 'verificationMailbox', 'verification_mailbox', 'veri_account', 'veri-account'] as $key) {
             if (isset($public[$key]) && is_array($public[$key])) {
-                unset($public[$key]['password'], $public[$key]['passwordEncrypted'], $public[$key]['password_encrypted'], $public[$key]['webmailSession'], $public[$key]['webmail_session']);
+                unset($public[$key]['password'], $public[$key]['passwordEncrypted'], $public[$key]['password_encrypted'], $public[$key]['webmailSession'], $public[$key]['webmail_session'], $public[$key]['browserSessions'], $public[$key]['browser_sessions']);
             }
         }
 
         if (isset($public['person']['emailAccount']) && is_array($public['person']['emailAccount'])) {
-            unset($public['person']['emailAccount']['password'], $public['person']['emailAccount']['passwordEncrypted'], $public['person']['emailAccount']['password_encrypted'], $public['person']['emailAccount']['webmailSession'], $public['person']['emailAccount']['webmail_session']);
+            unset($public['person']['emailAccount']['password'], $public['person']['emailAccount']['passwordEncrypted'], $public['person']['emailAccount']['password_encrypted'], $public['person']['emailAccount']['webmailSession'], $public['person']['emailAccount']['webmail_session'], $public['person']['emailAccount']['browserSessions'], $public['person']['emailAccount']['browser_sessions']);
         }
 
         if (isset($public['person']) && is_array($public['person'])) {
-            unset($public['person']['password'], $public['person']['passwordEncrypted'], $public['person']['password_encrypted']);
+            unset($public['person']['password'], $public['person']['passwordEncrypted'], $public['person']['password_encrypted'], $public['person']['browserSessions'], $public['person']['browser_sessions']);
 
             if (isset($public['person']['metadata']) && is_array($public['person']['metadata'])) {
                 unset($public['person']['metadata']['browser_sessions']);
