@@ -6,6 +6,10 @@ const {
   domainMatches,
   normalizeDomain,
 } = require('../lib/webmail_session_capture.cjs');
+const {
+  restoreBrowserSession,
+  sessionFinalUrl,
+} = require('../lib/browser_session_restore.cjs');
 
 function text(value) {
   return String(value ?? '').trim();
@@ -17,19 +21,6 @@ function isObject(value) {
 
 function sessionKey(value) {
   return text(value).toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
-}
-
-function safeCookies(cookies = []) {
-  return cookies
-    .filter((cookie) => cookie && cookie.name && (cookie.domain || cookie.url))
-    .map((cookie) => {
-      const nextCookie = { ...cookie };
-      delete nextCookie.partitionKey;
-      delete nextCookie.sourcePort;
-      delete nextCookie.sourceScheme;
-
-      return nextCookie;
-    });
 }
 
 function sessionEntries(value, source = '') {
@@ -72,47 +63,6 @@ function browserSessionsFromContext(context = {}) {
   ];
 
   return candidates.flatMap(([value, source]) => sessionEntries(value, source));
-}
-
-function storageEntries(session = {}) {
-  const origins = Array.isArray(session.origins) ? session.origins : [];
-  const entries = origins
-    .filter((entry) => isObject(entry))
-    .map((entry) => ({
-      url: text(entry.url || entry.origin),
-      origin: text(entry.origin || ''),
-      localStorage: isObject(entry.localStorage) ? entry.localStorage : {},
-      sessionStorage: isObject(entry.sessionStorage) ? entry.sessionStorage : {},
-    }));
-  const storage = isObject(session.storage) ? session.storage : {};
-  const finalUrl = text(session.finalUrl || session.final_url || session.url || '');
-  const finalOrigin = originFromUrl(finalUrl);
-
-  if (
-    finalOrigin !== ''
-    && (
-      Object.keys(storage.localStorage || {}).length > 0
-      || Object.keys(storage.sessionStorage || {}).length > 0
-    )
-    && !entries.some((entry) => entry.origin === finalOrigin)
-  ) {
-    entries.push({
-      url: finalUrl || finalOrigin,
-      origin: finalOrigin,
-      localStorage: isObject(storage.localStorage) ? storage.localStorage : {},
-      sessionStorage: isObject(storage.sessionStorage) ? storage.sessionStorage : {},
-    });
-  }
-
-  return entries;
-}
-
-function originFromUrl(value) {
-  try {
-    return new URL(text(value)).origin;
-  } catch {
-    return '';
-  }
 }
 
 function sessionTimestamp(session = {}) {
@@ -169,38 +119,6 @@ function selectSession(sessions = [], input = {}) {
   return [...sessions].sort((left, right) => sessionTimestamp(right) - sessionTimestamp(left))[0] || null;
 }
 
-async function restoreStorageEntry(page, entry = {}, timeout = 120000) {
-  const targetUrl = text(entry.url || entry.origin);
-
-  if (!/^https?:\/\//i.test(targetUrl)) {
-    return false;
-  }
-
-  const hasStorage = Object.keys(entry.localStorage || {}).length > 0
-    || Object.keys(entry.sessionStorage || {}).length > 0;
-
-  if (!hasStorage) {
-    return false;
-  }
-
-  await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout });
-
-  return page.evaluate((payload) => {
-    for (const [key, value] of Object.entries(payload.localStorage || {})) {
-      window.localStorage.setItem(key, String(value));
-    }
-
-    for (const [key, value] of Object.entries(payload.sessionStorage || {})) {
-      window.sessionStorage.setItem(key, String(value));
-    }
-
-    return true;
-  }, {
-    localStorage: entry.localStorage || {},
-    sessionStorage: entry.sessionStorage || {},
-  }).catch(() => false);
-}
-
 async function run(context = {}) {
   const page = context.page;
   const input = context.input || {};
@@ -223,7 +141,8 @@ async function run(context = {}) {
     };
   }
 
-  const targetUrl = text(input.url || input.target_url || input.targetUrl || session.finalUrl || session.final_url || session.url || '');
+  const storedFinalUrl = sessionFinalUrl(session);
+  const targetUrl = text(input.url || input.target_url || input.targetUrl || storedFinalUrl);
 
   if (!/^https?:\/\//i.test(targetUrl)) {
     return {
@@ -234,39 +153,45 @@ async function run(context = {}) {
     };
   }
 
-  const cookies = safeCookies(Array.isArray(session.cookies) ? session.cookies : []);
-  let cookiesRestored = 0;
+  const restored = await restoreBrowserSession(page, session, targetUrl, {
+    timeout,
+    waitUntil: input.waitUntil || 'domcontentloaded',
+  });
 
-  if (cookies.length > 0 && typeof page.setCookie === 'function') {
-    await page.setCookie(...cookies).catch(() => {});
-    cookiesRestored = cookies.length;
+  if (restored.cookieAttemptCount > 0 && restored.cookieCount === 0 && restored.storageOriginCount === 0) {
+    return {
+      ok: false,
+      status: 'failed',
+      statusMessage: 'Die gespeicherten Cookies und Browser-Storage-Daten konnten nicht geladen werden.',
+      sessionKey: session.sessionKey || session.session_key || '',
+      cookieAttemptCount: restored.cookieAttemptCount,
+      cookieFailureCount: restored.cookieFailureCount,
+      storageOriginFailureCount: restored.storageOriginFailureCount,
+    };
   }
 
-  let storageOriginsRestored = 0;
-
-  for (const entry of storageEntries(session)) {
-    if (await restoreStorageEntry(page, entry, timeout)) {
-      storageOriginsRestored += 1;
-    }
-  }
-
-  await page.goto(targetUrl, { waitUntil: input.waitUntil || 'domcontentloaded', timeout });
-
-  if (storageOriginsRestored > 0) {
-    await page.reload({ waitUntil: input.waitUntil || 'domcontentloaded', timeout }).catch(() => {});
-  }
+  const actualUrl = typeof page.url === 'function' ? page.url() : targetUrl;
+  const redirected = text(actualUrl) !== '' && text(actualUrl) !== targetUrl;
 
   return captureTaskPreview(context, {
     ok: true,
     status: 'success',
-    statusMessage: 'Browser-Session wurde geladen und die letzte URL wurde geoeffnet.',
-    url: typeof page.url === 'function' ? page.url() : targetUrl,
+    statusMessage: redirected
+      ? 'Browser-Session wurde geladen; die gespeicherte URL hat auf eine andere Seite weitergeleitet.'
+      : 'Browser-Session wurde geladen und die letzte URL wurde geoeffnet.',
+    url: actualUrl,
     finalUrl: targetUrl,
+    requestedUrl: targetUrl,
+    redirected,
     sessionKey: session.sessionKey || session.session_key || '',
     sessionLabel: session.label || '',
     domain: session.domain || domainFromUrl(targetUrl),
-    cookieCount: cookiesRestored,
-    storageOriginCount: storageOriginsRestored,
+    cookieAttemptCount: restored.cookieAttemptCount,
+    cookieCount: restored.cookieCount,
+    cookieFailureCount: restored.cookieFailureCount,
+    storageOriginCount: restored.storageOriginCount,
+    storageOriginFailureCount: restored.storageOriginFailureCount,
+    storageStrategy: restored.storageStrategy,
   });
 }
 

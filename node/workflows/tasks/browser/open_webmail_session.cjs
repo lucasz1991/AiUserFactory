@@ -1,108 +1,15 @@
 'use strict';
 
 const { captureTaskPreview } = require('../lib/preview.cjs');
-
-function normalizeText(value) {
-  return String(value ?? '').trim();
-}
+const { accountFromContext, normalizeText } = require('../lib/webmail_context.cjs');
+const {
+  restoreBrowserSession,
+  sessionFinalUrl,
+} = require('../lib/browser_session_restore.cjs');
 
 function isMailboxSourceToken(value) {
   return ['person', 'reference_person', 'verification', 'verification_mailbox', 'veri-account', 'veri_account', 'main', 'master']
     .includes(normalizeText(value).toLowerCase());
-}
-
-function normalizeMailboxSource(value) {
-  const normalized = normalizeText(value).toLowerCase();
-
-  return ['verification', 'verification_mailbox', 'veri-account', 'veri_account', 'main', 'master'].includes(normalized)
-    ? 'verification'
-    : 'person';
-}
-
-function personAccountFromContext(context = {}) {
-  const workflow = context.workflow || {};
-  const person = context.person || workflow.person || {};
-  const workflowAccount = workflow.account
-    || workflow.email_account
-    || person.emailAccount
-    || {};
-
-  return {
-    ...workflowAccount,
-    ...(context.account || {}),
-    webmailSession: context.account?.webmailSession || workflowAccount.webmailSession || workflowAccount.webmail_session || null,
-    webmail_session: context.account?.webmail_session || workflowAccount.webmail_session || workflowAccount.webmailSession || null,
-  };
-}
-
-function verificationAccountFromContext(context = {}) {
-  const workflow = context.workflow || {};
-  const verificationAccount = context.verificationMailbox
-    || context.verification_mailbox
-    || context.veri_account
-    || context['veri-account']
-    || workflow.verificationMailbox
-    || workflow.verification_mailbox
-    || workflow.veri_account
-    || workflow['veri-account']
-    || {};
-
-  return {
-    ...verificationAccount,
-    webmailSession: verificationAccount.webmailSession || verificationAccount.webmail_session || null,
-    webmail_session: verificationAccount.webmail_session || verificationAccount.webmailSession || null,
-  };
-}
-
-function accountFromContext(context = {}, input = {}) {
-  const mailboxSource = normalizeMailboxSource(input.script_person_source || input.scriptPersonSource || input.mailbox_source || input.mailboxSource || input.account_source || input.accountSource || input.value || 'person');
-  const account = mailboxSource === 'verification'
-    ? verificationAccountFromContext(context)
-    : personAccountFromContext(context);
-
-  return { account, mailboxSource };
-}
-
-function storageValues(session = {}) {
-  const storage = session.storage || {};
-
-  return {
-    localStorage: storage.localStorage || session.localStorage || {},
-    sessionStorage: storage.sessionStorage || session.sessionStorage || {},
-  };
-}
-
-function safeCookies(cookies = []) {
-  return cookies
-    .filter((cookie) => cookie && cookie.name && (cookie.domain || cookie.url))
-    .map((cookie) => {
-      const nextCookie = { ...cookie };
-      delete nextCookie.partitionKey;
-      delete nextCookie.sourcePort;
-      delete nextCookie.sourceScheme;
-
-      return nextCookie;
-    });
-}
-
-async function restoreStorage(page, session = {}) {
-  const storage = storageValues(session);
-
-  if (Object.keys(storage.localStorage).length === 0 && Object.keys(storage.sessionStorage).length === 0) {
-    return false;
-  }
-
-  return page.evaluate((payload) => {
-    for (const [key, value] of Object.entries(payload.localStorage || {})) {
-      window.localStorage.setItem(key, String(value));
-    }
-
-    for (const [key, value] of Object.entries(payload.sessionStorage || {})) {
-      window.sessionStorage.setItem(key, String(value));
-    }
-
-    return true;
-  }, storage).catch(() => false);
 }
 
 async function run(context = {}) {
@@ -112,7 +19,9 @@ async function run(context = {}) {
   const session = account.webmailSession || account.webmail_session || null;
   const fallbackUrl = normalizeText(account.webmailUrl || account.webmail_url || 'https://mail.proton.me');
   const valueAsUrl = isMailboxSourceToken(input.value) ? '' : input.value;
-  const targetUrl = normalizeText(input.url || input.webmailUrl || valueAsUrl || session?.finalUrl || fallbackUrl);
+  const explicitUrl = normalizeText(input.url || input.target_url || input.targetUrl || input.webmailUrl || input.webmail_url || valueAsUrl);
+  const storedFinalUrl = sessionFinalUrl(session || {});
+  const targetUrl = explicitUrl || storedFinalUrl || fallbackUrl;
   const timeout = Number(input.timeoutMs || context.timeoutMs || 120000);
 
   if (!page || typeof page.goto !== 'function') {
@@ -134,34 +43,46 @@ async function run(context = {}) {
     return { ok: false, status: 'failed', statusMessage: 'Keine gueltige Webmail-URL fuer die Session vorhanden.' };
   }
 
-  const cookies = safeCookies(Array.isArray(session.cookies) ? session.cookies : []);
-  let cookiesRestored = 0;
+  const restored = await restoreBrowserSession(page, session, targetUrl, {
+    timeout,
+    waitUntil: input.waitUntil || 'domcontentloaded',
+  });
 
-  if (cookies.length > 0 && typeof page.setCookie === 'function') {
-    await page.setCookie(...cookies).catch(() => {});
-    cookiesRestored = cookies.length;
+  if (restored.cookieAttemptCount > 0 && restored.cookieCount === 0 && restored.storageOriginCount === 0) {
+    return {
+      ok: false,
+      status: 'failed',
+      statusMessage: 'Die gespeicherten Webmail-Cookies und Storage-Daten konnten nicht geladen werden.',
+      mailboxSource,
+      cookieAttemptCount: restored.cookieAttemptCount,
+      cookieFailureCount: restored.cookieFailureCount,
+      storageOriginFailureCount: restored.storageOriginFailureCount,
+    };
   }
 
-  await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout });
-
-  const storageRestored = await restoreStorage(page, session);
-
-  if (storageRestored) {
-    await page.reload({ waitUntil: 'domcontentloaded', timeout }).catch(() => page.goto(targetUrl, {
-      waitUntil: 'domcontentloaded',
-      timeout,
-    }));
-  }
+  const actualUrl = typeof page.url === 'function' ? page.url() : targetUrl;
+  const redirected = normalizeText(actualUrl) !== '' && normalizeText(actualUrl) !== targetUrl;
 
   return captureTaskPreview(context, {
     ok: true,
     status: 'success',
-    statusMessage: 'Webmail-Session wurde geladen und das Webmailportal wurde geoeffnet.',
-    url: typeof page.url === 'function' ? page.url() : targetUrl,
+    statusMessage: redirected
+      ? 'Webmail-Session wurde geladen; die gespeicherte URL hat auf eine andere Seite weitergeleitet.'
+      : 'Webmail-Session wurde geladen und die zuletzt aktive URL wurde geoeffnet.',
+    url: actualUrl,
+    finalUrl: targetUrl,
+    requestedUrl: targetUrl,
+    redirected,
+    targetUrlSource: explicitUrl !== '' ? 'input' : (storedFinalUrl !== '' ? 'session' : 'fallback'),
     mailboxSource,
     mailboxEmail: account.email || '',
-    cookieCount: cookiesRestored,
-    storageRestored,
+    cookieAttemptCount: restored.cookieAttemptCount,
+    cookieCount: restored.cookieCount,
+    cookieFailureCount: restored.cookieFailureCount,
+    storageRestored: restored.storageOriginCount > 0,
+    storageOriginCount: restored.storageOriginCount,
+    storageOriginFailureCount: restored.storageOriginFailureCount,
+    storageStrategy: restored.storageStrategy,
   });
 }
 
