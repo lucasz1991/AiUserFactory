@@ -27,6 +27,7 @@ class WorkflowAssistantToolService
             'Sprich Deutsch, kurz, konkret und operativ. Nutze vorhandene Workflow-Daten und Tools, bevor du Vermutungen anstellst.',
             'Du kannst Workflows analysieren, neue Workflows anlegen, Listen/Steps erstellen, Tags setzen, Tasks konfigurieren und vorhandene Workflows aktualisieren.',
             'Nutze list_task_catalog, bevor du konkrete Task-Keys erfindest. Nutze get_workflow_context oder analyze_last_workflow_run, bevor du Fehlerursachen bewertest.',
+            'Rufe nach analyze_last_workflow_run immer present_workflow_improvements mit bis zu acht konkreten, durch die Run-Daten belegten Verbesserungen auf. Verwende die gelieferten Step- und Task-Kennungen; erfinde keine Ziele.',
             'Nutze search_workflow_tasks und get_nodescript_content_debugg, wenn du bestehende Tasks oder Node-Skripte verstehen musst.',
             'Bei eingebetteten Workflows: nutze list_embedded_workflow_candidates und erklaere kurz, warum ein Workflow eingebettet werden sollte.',
             'Wenn du dem Nutzer mehrere klare Optionen anbietest, nutze present_chat_options, damit klickbare Auswahlbuttons erscheinen.',
@@ -330,6 +331,32 @@ class WorkflowAssistantToolService
                 ],
                 'required' => ['target_type'],
             ]),
+            $this->tool('present_workflow_improvements', 'Zeige belegte Verbesserungen aus einem analysierten Workflow-Testlauf und markiere zuordenbare Listen oder Tasks im Editor.', [
+                'type' => 'object',
+                'properties' => [
+                    'workflow_id' => ['type' => 'integer'],
+                    'run_id' => ['type' => 'integer'],
+                    'improvements' => [
+                        'type' => 'array',
+                        'maxItems' => 8,
+                        'items' => [
+                            'type' => 'object',
+                            'properties' => [
+                                'severity' => ['type' => 'string', 'enum' => ['error', 'warning', 'info']],
+                                'title' => ['type' => 'string'],
+                                'explanation' => ['type' => 'string'],
+                                'recommendation' => ['type' => 'string'],
+                                'step_id' => ['type' => 'integer'],
+                                'step_action_key' => ['type' => 'string'],
+                                'task_card_key' => ['type' => 'string'],
+                            ],
+                            'required' => ['severity', 'title', 'explanation', 'recommendation'],
+                            'additionalProperties' => false,
+                        ],
+                    ],
+                ],
+                'required' => ['workflow_id', 'run_id', 'improvements'],
+            ]),
             $this->tool('present_chat_options', 'Zeige dem Nutzer anklickbare Antwortoptionen.', [
                 'type' => 'object',
                 'properties' => [
@@ -383,6 +410,7 @@ class WorkflowAssistantToolService
             'workflow_test_run' => $this->workflowTestRun($arguments),
             'navigate' => $this->navigate($arguments),
             'highlight_workflow_element' => $this->highlightWorkflowElement($arguments),
+            'present_workflow_improvements' => $this->presentWorkflowImprovements($arguments),
             'present_chat_options' => $this->presentChatOptions($arguments),
             default => $this->error('UNKNOWN_TOOL', 'Unbekanntes Tool: '.$name),
         };
@@ -1132,6 +1160,7 @@ class WorkflowAssistantToolService
 
             if ($value === '') {
                 unset($tasks[$taskIndex][$taskField]);
+
                 continue;
             }
 
@@ -1508,6 +1537,122 @@ class WorkflowAssistantToolService
                 'key' => $key !== '' ? $key : null,
                 'selector' => $this->stringValue($arguments['selector'] ?? null, 300),
                 'label' => $this->stringValue($arguments['label'] ?? null, 120),
+            ],
+        ];
+    }
+
+    protected function presentWorkflowImprovements(array $arguments): array
+    {
+        $workflowId = $this->positiveInteger($arguments['workflow_id'] ?? null);
+        $runId = $this->positiveInteger($arguments['run_id'] ?? null);
+
+        if (! $workflowId || ! $runId) {
+            return $this->error('IMPROVEMENT_CONTEXT_REQUIRED', 'Workflow-ID und Run-ID werden fuer Verbesserungshinweise benoetigt.');
+        }
+
+        $run = WorkflowRun::query()
+            ->with(['workflow.steps' => fn ($query) => $query->ordered()])
+            ->find($runId);
+
+        if (! $run || (int) $run->workflow_id !== $workflowId || ! $run->workflow) {
+            return $this->error('RUN_NOT_FOUND', 'Der analysierte Workflow-Run wurde nicht gefunden.');
+        }
+
+        $steps = $run->workflow->steps;
+        $severityRanks = ['info' => 1, 'warning' => 2, 'error' => 3];
+        $normalized = [];
+
+        foreach (array_slice(is_array($arguments['improvements'] ?? null) ? $arguments['improvements'] : [], 0, 8) as $index => $item) {
+            if (! is_array($item)) {
+                continue;
+            }
+
+            $title = $this->stringValue($item['title'] ?? null, 160);
+            $explanation = $this->stringValue($item['explanation'] ?? null, 800);
+            $recommendation = $this->stringValue($item['recommendation'] ?? null, 800);
+
+            if (! $title || ! $explanation || ! $recommendation) {
+                continue;
+            }
+
+            $severity = Str::lower(trim((string) ($item['severity'] ?? 'info')));
+            $severity = isset($severityRanks[$severity]) ? $severity : 'info';
+            $requestedStepId = $this->positiveInteger($item['step_id'] ?? null);
+            $requestedStepAction = trim((string) ($item['step_action_key'] ?? ''));
+            $requestedTaskKey = trim((string) ($item['task_card_key'] ?? ''));
+            $step = $requestedStepId
+                ? $steps->first(fn (WorkflowStep $candidate): bool => (int) $candidate->id === $requestedStepId)
+                : null;
+
+            if (! $step && $requestedStepAction !== '') {
+                $step = $steps->first(fn (WorkflowStep $candidate): bool => (string) $candidate->action_key === $requestedStepAction);
+            }
+
+            if (! $step && $requestedTaskKey !== '') {
+                $matchingSteps = $steps->filter(fn (WorkflowStep $candidate): bool => collect($candidate->task_cards)
+                    ->contains(fn (array $task): bool => (string) ($task['key'] ?? '') === $requestedTaskKey));
+
+                if ($matchingSteps->count() === 1) {
+                    $step = $matchingSteps->first();
+                }
+            }
+
+            $taskExists = $step && $requestedTaskKey !== '' && collect($step->task_cards)
+                ->contains(fn (array $task): bool => (string) ($task['key'] ?? '') === $requestedTaskKey);
+            $highlightable = (bool) $step && ($requestedTaskKey === '' || $taskExists);
+            $targetType = $taskExists ? 'workflow_task' : 'workflow_list';
+            $stepId = $highlightable ? (int) $step->id : null;
+            $stepActionKey = $highlightable ? (string) $step->action_key : null;
+            $taskCardKey = $taskExists ? $requestedTaskKey : null;
+            $dedupeKey = $highlightable
+                ? $targetType.':'.$stepId.':'.($taskCardKey ?? '*')
+                : 'unmapped:'.Str::lower($title.'|'.$recommendation);
+            $candidate = [
+                'id' => 'improvement-'.$runId.'-'.$index,
+                'workflow_id' => $workflowId,
+                'run_id' => $runId,
+                'severity' => $severity,
+                'title' => $title,
+                'explanation' => $explanation,
+                'recommendation' => $recommendation,
+                'target_type' => $targetType,
+                'step_id' => $stepId,
+                'step_action_key' => $stepActionKey,
+                'task_card_key' => $taskCardKey,
+                'highlightable' => $highlightable,
+            ];
+
+            if (! isset($normalized[$dedupeKey])) {
+                $normalized[$dedupeKey] = $candidate;
+
+                continue;
+            }
+
+            $existing = $normalized[$dedupeKey];
+
+            if ($severityRanks[$candidate['severity']] > $severityRanks[$existing['severity']]) {
+                $existing['severity'] = $candidate['severity'];
+                $existing['title'] = $candidate['title'];
+            }
+
+            $existing['explanation'] = $this->joinImprovementText($existing['explanation'], $candidate['explanation'], 800);
+            $existing['recommendation'] = $this->joinImprovementText($existing['recommendation'], $candidate['recommendation'], 800);
+            $normalized[$dedupeKey] = $existing;
+        }
+
+        $improvements = array_slice(array_values($normalized), 0, 8);
+
+        return [
+            'ok' => true,
+            'message' => count($improvements).' Verbesserungshinweis(e) fuer Run #'.$runId.' vorbereitet.',
+            'workflow_id' => $workflowId,
+            'run_id' => $runId,
+            'improvements' => $improvements,
+            'ui_action' => [
+                'type' => 'highlight_workflow_improvements',
+                'workflow_id' => $workflowId,
+                'run_id' => $runId,
+                'improvements' => $improvements,
             ],
         ];
     }
@@ -1982,18 +2127,71 @@ class WorkflowAssistantToolService
             'context_excerpt' => $this->jsonExcerpt($run->context_json, 1600),
             'result_excerpt' => $this->jsonExcerpt($run->result_json, $includeDebug ? 5000 : 1800),
             'step_runs' => $run->stepRuns
-                ->map(fn ($stepRun): array => [
-                    'id' => (int) $stepRun->id,
-                    'step_id' => (int) $stepRun->workflow_step_id,
-                    'step_name' => $stepRun->workflowStep?->name,
-                    'step_action_key' => $stepRun->workflowStep?->action_key,
-                    'status' => $stepRun->status,
-                    'error_message' => $stepRun->error_message,
-                    'duration_ms' => $stepRun->duration_ms,
-                    'result_excerpt' => $this->jsonExcerpt($stepRun->result_json, $includeDebug ? 3000 : 1000),
-                ])
+                ->map(function ($stepRun) use ($includeDebug): array {
+                    $result = is_array($stepRun->result_json) ? $stepRun->result_json : [];
+                    $resultTasks = collect(is_array($result['tasks'] ?? null) ? $result['tasks'] : [])
+                        ->filter(fn (mixed $task): bool => is_array($task))
+                        ->values();
+                    $configuredTasks = collect($stepRun->workflowStep?->task_cards ?? []);
+                    $configuredByKey = $configuredTasks->keyBy(fn (array $task): string => (string) ($task['key'] ?? ''));
+                    $taskResults = $configuredTasks
+                        ->map(function (array $task) use ($resultTasks, $stepRun, $includeDebug): array {
+                            $taskKey = (string) ($task['key'] ?? '');
+                            $resultTask = $resultTasks->first(fn (array $candidate): bool => (string) ($candidate['key'] ?? '') === $taskKey);
+
+                            return $this->taskRunSummary($task, $resultTask, (string) $stepRun->status, $includeDebug);
+                        })
+                        ->concat($resultTasks
+                            ->reject(fn (array $task): bool => $configuredByKey->has((string) ($task['key'] ?? '')))
+                            ->map(fn (array $task): array => $this->taskRunSummary([], $task, (string) $stepRun->status, $includeDebug)))
+                        ->values()
+                        ->all();
+
+                    return [
+                        'id' => (int) $stepRun->id,
+                        'step_id' => (int) $stepRun->workflow_step_id,
+                        'step_name' => $stepRun->workflowStep?->name,
+                        'step_action_key' => $stepRun->workflowStep?->action_key,
+                        'status' => $stepRun->status,
+                        'error_message' => $stepRun->error_message,
+                        'duration_ms' => $stepRun->duration_ms,
+                        'task_results' => $taskResults,
+                        'result_excerpt' => $this->jsonExcerpt($stepRun->result_json, $includeDebug ? 3000 : 1000),
+                    ];
+                })
                 ->values()
                 ->all(),
+        ];
+    }
+
+    protected function taskRunSummary(array $configuredTask, mixed $resultTask, string $stepStatus, bool $includeDebug): array
+    {
+        $resultTask = is_array($resultTask) ? $resultTask : [];
+        $task = array_replace($configuredTask, $resultTask);
+        $status = trim((string) ($resultTask['status'] ?? ''));
+
+        if ($status === '') {
+            $status = $resultTask === [] ? 'not_reported' : $stepStatus;
+        }
+
+        $errorMessage = $resultTask['error_message']
+            ?? $resultTask['errorMessage']
+            ?? null;
+
+        if (! $errorMessage && in_array($status, ['failed', 'error', 'timeout', 'timed_out'], true)) {
+            $errorMessage = $resultTask['statusMessage'] ?? $resultTask['message'] ?? null;
+        }
+
+        return [
+            'task_card_key' => trim((string) ($task['key'] ?? '')),
+            'task_key' => trim((string) ($task['task_key'] ?? '')),
+            'title' => trim((string) ($task['title'] ?? $task['label'] ?? 'Task')),
+            'status' => $status,
+            'error_message' => $this->stringValue($errorMessage, 500),
+            'duration_ms' => is_numeric($resultTask['duration_ms'] ?? null)
+                ? (int) $resultTask['duration_ms']
+                : (is_numeric($resultTask['durationMs'] ?? null) ? (int) $resultTask['durationMs'] : null),
+            'result_excerpt' => $this->jsonExcerpt($resultTask, $includeDebug ? 1400 : 500),
         ];
     }
 
@@ -2122,6 +2320,7 @@ class WorkflowAssistantToolService
 
                 if (is_array($value)) {
                     $walk($value, $field);
+
                     continue;
                 }
 
@@ -2163,6 +2362,15 @@ class WorkflowAssistantToolService
         }
 
         return Str::limit(json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?: '', 1200, '');
+    }
+
+    protected function joinImprovementText(string $existing, string $addition, int $limit): string
+    {
+        if ($existing === $addition || str_contains($existing, $addition)) {
+            return $existing;
+        }
+
+        return Str::limit($existing.' '.$addition, $limit, '');
     }
 
     protected function slugValue(mixed $value, string $fallback): string

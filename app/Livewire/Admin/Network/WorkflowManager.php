@@ -815,6 +815,32 @@ class WorkflowManager extends Component
         $this->showEditTaskModal = true;
     }
 
+    public function openAssistantImprovement(int $workflowId, int $stepId, ?string $taskKey = null): void
+    {
+        if ((int) $this->selectedWorkflowId !== $workflowId) {
+            return;
+        }
+
+        $step = $this->stepForSelectedWorkflow($stepId);
+
+        if (! $step) {
+            return;
+        }
+
+        $this->showRunPreviewModal = false;
+        $this->showEditStepModal = false;
+        $this->showEditTaskModal = false;
+        $taskKey = trim((string) $taskKey);
+
+        if ($taskKey !== '' && collect($step->task_cards)->contains(fn (array $task): bool => (string) ($task['key'] ?? '') === $taskKey)) {
+            $this->openEditTaskCard($step->id, $taskKey);
+        } else {
+            $this->openEditStep($step->id);
+        }
+
+        $this->dispatch('assistant-reapply-workflow-improvements');
+    }
+
     public function saveEditTaskCard(?string $mailboxSourceOverride = null): void
     {
         $step = $this->editingTaskStepId ? $this->stepForSelectedWorkflow($this->editingTaskStepId) : null;

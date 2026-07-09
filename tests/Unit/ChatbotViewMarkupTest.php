@@ -29,6 +29,10 @@ class ChatbotViewMarkupTest extends TestCase
         $this->assertStringContainsString('voiceProviderSupported()', $definition);
         $this->assertStringContainsString('toggleVoskVoice()', $definition);
         $this->assertStringContainsString('transcribeVoskBlob(blob)', $definition);
+        $this->assertStringContainsString('setWorkflowImprovements(improvements = [])', $definition);
+        $this->assertStringContainsString('applyImprovementHighlights()', $definition);
+        $this->assertStringContainsString('openWorkflowImprovement(improvement = {})', $definition);
+        $this->assertStringContainsString("new CustomEvent('assistant-open-workflow-improvement'", $definition);
         $this->assertStringNotContainsString("this.ttsPlaying = true;\n            this.speaking = true;", $definition);
         $this->assertStringEndsWith('}', trim($definition));
 
@@ -46,5 +50,9 @@ class ChatbotViewMarkupTest extends TestCase
         $this->assertStringContainsString('window.MediaRecorder', $source);
         $this->assertStringContainsString('speechRate: @js($assistantSpeechRate)', $source);
         $this->assertStringContainsString('speed: Number(this.speechRate || 1)', $definition);
+        $this->assertStringContainsString('assistant-improvement-error', $source);
+        $this->assertStringContainsString('assistant-improvement-warning', $source);
+        $this->assertStringContainsString('assistant-improvement-info', $source);
+        $this->assertStringContainsString("\$item['improvements']", $source);
     }
 }

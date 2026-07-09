@@ -77,7 +77,21 @@
     $quickPreviewDurationLabel = $quickPreviewRun ? $formatRunDuration($quickPreviewRun) : null;
     $quickPreviewReturnLabel = $quickPreviewRun ? $workflowReturnLabel($quickPreviewRun) : null;
 @endphp
-<div class="space-y-5" wire:loading.class="opacity-60 pointer-events-none">
+<div
+    class="space-y-5"
+    wire:loading.class="opacity-60 pointer-events-none"
+    x-data="{}"
+    data-workflow-manager-root
+    data-workflow-id="{{ $selectedWorkflow?->id ?? '' }}"
+    x-on:assistant-open-workflow-improvement.window="
+        const detail = Array.isArray($event.detail) ? ($event.detail[0] || {}) : ($event.detail || {});
+        const workflowId = Number(detail.workflow_id || 0);
+        const stepId = Number(detail.step_id || 0);
+        if (workflowId === {{ (int) ($selectedWorkflow?->id ?? 0) }} && stepId > 0) {
+            $wire.openAssistantImprovement(workflowId, stepId, detail.task_card_key || null);
+        }
+    "
+>
     <div class="p-box shadow-box bg-box border border-box rounded-box">
         <div class="flex flex-wrap items-start justify-between gap-2">
             <div class="min-w-0">
