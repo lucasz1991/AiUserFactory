@@ -122,6 +122,94 @@ test('webmail session prepares stored origin storage before opening snake-case f
   ]);
 });
 
+test('webmail session uses newer matching person session instead of stale requested verification session', async () => {
+  const calls = [];
+  const page = {
+    currentUrl: '',
+    async setCookie(cookie) {
+      calls.push(['setCookie', cookie.value]);
+    },
+    async goto(url) {
+      this.currentUrl = url;
+      calls.push(['goto', url]);
+    },
+    url() {
+      return this.currentUrl;
+    },
+  };
+  const context = {
+    page,
+    input: { mailbox_source: 'verification' },
+    account: {
+      email: 'same@example.test',
+      webmailSession: {
+        capturedAt: '2026-07-10T00:27:07.000Z',
+        finalUrl: 'https://mail.example.test/inbox/new',
+        cookies: [{ name: 'sid', value: 'new-person-session', domain: '.example.test', path: '/' }],
+      },
+    },
+    verificationMailbox: {
+      email: 'same@example.test',
+      webmailSession: {
+        capturedAt: '2026-07-09T00:00:00.000Z',
+        finalUrl: 'https://mail.example.test/inbox/stale',
+        cookies: [{ name: 'sid', value: 'stale-verification-session', domain: '.example.test', path: '/' }],
+      },
+    },
+  };
+
+  const result = await openWebmailSessionTask.run(context);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.mailboxSource, 'person');
+  assert.equal(result.requestedMailboxSource, 'verification');
+  assert.equal(result.mailboxSourceAdjusted, true);
+  assert.equal(result.finalUrl, 'https://mail.example.test/inbox/new');
+  assert.deepEqual(calls, [
+    ['setCookie', 'new-person-session'],
+    ['goto', 'https://mail.example.test/inbox/new'],
+  ]);
+});
+
+test('strict webmail source does not substitute a newer matching session', async () => {
+  const page = {
+    currentUrl: '',
+    async setCookie() {},
+    async goto(url) {
+      this.currentUrl = url;
+    },
+    url() {
+      return this.currentUrl;
+    },
+  };
+  const context = {
+    page,
+    input: { mailbox_source: 'verification', strict_mailbox_source: true },
+    account: {
+      email: 'same@example.test',
+      webmailSession: {
+        capturedAt: '2026-07-10T00:27:07.000Z',
+        finalUrl: 'https://mail.example.test/inbox/new',
+        cookies: [{ name: 'sid', value: 'new', domain: '.example.test', path: '/' }],
+      },
+    },
+    verificationMailbox: {
+      email: 'same@example.test',
+      webmailSession: {
+        capturedAt: '2026-07-09T00:00:00.000Z',
+        finalUrl: 'https://mail.example.test/inbox/stale',
+        cookies: [{ name: 'sid', value: 'stale', domain: '.example.test', path: '/' }],
+      },
+    },
+  };
+
+  const result = await openWebmailSessionTask.run(context);
+
+  assert.equal(result.mailboxSource, 'verification');
+  assert.equal(result.mailboxSourceAdjusted, false);
+  assert.equal(result.finalUrl, 'https://mail.example.test/inbox/stale');
+});
+
 test('failed cookie writes are reported instead of counted as restored', async () => {
   const page = {
     currentUrl: '',

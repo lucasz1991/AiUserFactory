@@ -48,6 +48,7 @@ class WorkflowTaskRunner
             'livePreviewIntervalSeconds' => $livePreviewIntervalSeconds,
             'livePreviewIntervalMs' => $livePreviewIntervalSeconds * 1000,
             'livePreviewPollIntervalSeconds' => $livePreviewIntervalSeconds,
+            'browserProfileKey' => $this->workflowBrowserProfileKey($run, $step, $runtimeContext),
             'browserEngine' => $settings['browser_engine'] ?? 'cloak-with-chrome-fallback',
             'cloakHumanizeEnabled' => (bool) ($settings['cloak_humanize_enabled'] ?? false),
             'cloakHumanPreset' => $settings['cloak_human_preset'] ?? '',
@@ -105,7 +106,8 @@ class WorkflowTaskRunner
             'livePreviewPollIntervalSeconds' => $livePreviewIntervalSeconds,
             'livePreviewPath' => $publicRunDirectory.DIRECTORY_SEPARATOR.'live.png',
             'livePreviewRelativePath' => $this->publicScreenshotRelativePath($runId),
-            'browserProfilePath' => $this->workflowBrowserProfilePath($run),
+            'browserProfileKey' => $this->workflowBrowserProfileKey($run, $step, $runtimeContext),
+            'browserProfilePath' => $this->workflowBrowserProfilePath($run, $step, $runtimeContext),
             'browserEngine' => $settings['browser_engine'] ?? 'cloak-with-chrome-fallback',
             'cloakHumanizeEnabled' => (bool) ($settings['cloak_humanize_enabled'] ?? false),
             'cloakHumanPreset' => $settings['cloak_human_preset'] ?? '',
@@ -1047,9 +1049,42 @@ class WorkflowTaskRunner
         return storage_path('app/workflow-task-runs/'.$runId);
     }
 
-    protected function workflowBrowserProfilePath(WorkflowRun $run): string
+    protected function workflowBrowserProfilePath(WorkflowRun $run, WorkflowStep $step, array $runtimeContext = []): string
     {
-        return storage_path('app/workflow-runs/'.$run->run_uuid.'/browser-profile');
+        return storage_path('app/browser-profiles/workflows/'.$this->workflowBrowserProfileKey($run, $step, $runtimeContext));
+    }
+
+    protected function workflowBrowserProfileKey(WorkflowRun $run, WorkflowStep $step, array $runtimeContext = []): string
+    {
+        $settings = is_array($run->workflow?->settings_json) ? $run->workflow->settings_json : [];
+
+        if (array_key_exists('persistent_browser_profile', $settings)
+            && ! filter_var($settings['persistent_browser_profile'], FILTER_VALIDATE_BOOL)) {
+            return 'run-'.Str::lower((string) $run->run_uuid);
+        }
+
+        $mailboxSource = collect(data_get($step->config_json, 'tasks', []))
+            ->first(fn (mixed $task): bool => is_array($task) && in_array((string) ($task['task_key'] ?? ''), [
+                'browser.open_webmail_session',
+                'data.persist_webmail_session',
+            ], true));
+        $mailboxSource = is_array($mailboxSource)
+            ? strtolower(trim((string) ($mailboxSource['script_person_source'] ?? $mailboxSource['mailbox_source'] ?? 'person')))
+            : 'person';
+        $account = in_array($mailboxSource, ['verification', 'verification_mailbox', 'veri-account', 'veri_account', 'main', 'master'], true)
+            ? data_get($runtimeContext, 'verificationMailbox', data_get($runtimeContext, 'verification_mailbox', []))
+            : data_get($runtimeContext, 'account', []);
+        $identity = strtolower(trim((string) data_get($account, 'email', data_get($account, 'username', ''))));
+
+        if ($identity !== '') {
+            return 'mailbox-'.substr(hash('sha256', $identity), 0, 24);
+        }
+
+        $personId = (int) (data_get($runtimeContext, 'personId') ?: data_get($run->context_json, 'person_id'));
+
+        return $personId > 0
+            ? 'person-'.$personId
+            : 'workflow-'.((int) $run->workflow_id ?: 'anonymous');
     }
 
     protected function devDebugRuntimeConfig(WorkflowRun $run, WorkflowStep $step, WorkflowStepRun $stepRun, bool $localArtifacts = true): array
