@@ -97,6 +97,45 @@ class WorkflowTransferServiceTest extends TestCase
         }
     }
 
+    public function test_csv_export_survives_quotes_and_backslashes_in_step_config(): void
+    {
+        $workflow = $this->workflow('quoted-flow', 'Quoted Flow');
+        $workflow->steps()->create($this->stepAttributes('Quoted step', 'quoted-step', [
+            'tasks' => [[
+                'key' => 'klick-buttonlogin',
+                'title' => 'klick = button:login',
+                'selector' => 'button:has-text("Login") , a:has-text("Login")',
+                'php_handler' => 'App\\Services\\Workflows\\Tasks\\PersistBrowserSessionTask@delete',
+                'on_error' => [
+                    'type' => 'card',
+                    'card_key' => 'if-element-vorhanden',
+                    'label' => 'Portal Url oeffnen / IF has-text("Login")',
+                ],
+            ]],
+        ]));
+
+        $service = app(WorkflowTransferService::class);
+        $csv = $service->csv([$workflow]);
+
+        // Jede Zeile muss RFC-4180-konform bleiben (Spaltenanzahl stabil).
+        $lines = array_values(array_filter(explode("\n", trim(preg_replace('/^\xEF\xBB\xBF/', '', $csv)))));
+        foreach ($lines as $line) {
+            $this->assertCount(12, str_getcsv($line, ',', '"', ''));
+        }
+
+        $workflow->delete();
+        $result = $service->importCsv($csv);
+
+        $this->assertSame(['total' => 1, 'created' => 1, 'updated' => 0], $result);
+
+        $imported = Workflow::query()->where('slug', 'quoted-flow')->firstOrFail();
+        $task = data_get($imported->steps()->firstOrFail()->config_json, 'tasks.0');
+
+        $this->assertSame('button:has-text("Login") , a:has-text("Login")', data_get($task, 'selector'));
+        $this->assertSame('App\\Services\\Workflows\\Tasks\\PersistBrowserSessionTask@delete', data_get($task, 'php_handler'));
+        $this->assertSame('Portal Url oeffnen / IF has-text("Login")', data_get($task, 'on_error.label'));
+    }
+
     public function test_workflow_list_can_select_visible_or_all_workflows(): void
     {
         $custom = $this->workflow('custom-flow', 'Custom Flow');

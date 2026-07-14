@@ -76,6 +76,16 @@ class WorkflowStep extends Model
         return $this->hasMany(WorkflowStepRun::class);
     }
 
+    public function taskAttempts(): HasMany
+    {
+        return $this->hasMany(WorkflowTaskAttempt::class)->orderBy('attempt_number');
+    }
+
+    public function checkpoints(): HasMany
+    {
+        return $this->hasMany(WorkflowRunCheckpoint::class)->orderBy('sequence');
+    }
+
     public function scopeOrdered(Builder $query): Builder
     {
         return $query->orderBy('position')->orderBy('id');

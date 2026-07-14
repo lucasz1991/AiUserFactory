@@ -3,8 +3,10 @@
 namespace App\Livewire\Tools;
 
 use App\Models\Setting;
+use App\Models\WorkflowCopilotSession;
 use App\Services\Ai\AiConnectionService;
 use App\Services\Ai\WorkflowAssistantToolService;
+use App\Services\Workflows\WorkflowCopilotSessionService;
 use App\Services\Workflows\WorkflowTransferService;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
@@ -21,6 +23,8 @@ class Chatbot extends Component
 
     private const TRANSCRIPT_KEY = 'ai_user_factory_chatbot_transcript';
 
+    private const COPILOT_SESSION_KEY = 'ai_user_factory_active_workflow_copilot_session';
+
     public string $message = '';
 
     public array $chatHistory = [];
@@ -28,6 +32,14 @@ class Chatbot extends Component
     public array $toolEvents = [];
 
     public array $pageContext = [];
+
+    public ?int $activeCopilotSessionId = null;
+
+    public int $copilotLastEventSequence = 0;
+
+    public array $copilotStatus = [];
+
+    public array $copilotEventFeed = [];
 
     public bool $isLoading = false;
 
@@ -63,6 +75,7 @@ class Chatbot extends Component
         $this->chatHistory = Session::get(self::DISPLAY_HISTORY_KEY, []);
         $this->toolEvents = [];
         $this->pageContext = $this->initialPageContext();
+        $this->restoreCopilotSession();
     }
 
     public function render()
@@ -76,6 +89,10 @@ class Chatbot extends Component
             ...$this->pageContext,
             ...$context,
         ]);
+
+        if (! $this->activeCopilotSessionId && $this->pageContext['workflow_id']) {
+            $this->attachLatestCopilotSession((int) $this->pageContext['workflow_id']);
+        }
     }
 
     public function quickAction(string $prompt): void
@@ -121,6 +138,23 @@ class Chatbot extends Component
         $this->appendDisplayMessage('user', $this->displayMessageForUserPrompt($userMessage));
 
         try {
+            $copilotSession = $this->activeCopilotSession();
+
+            if ($copilotSession && $this->isCopilotSessionActive($copilotSession)) {
+                app(WorkflowCopilotSessionService::class)->instruction($copilotSession, $userMessage, [
+                    'user_id' => Auth::id(),
+                    'source' => 'workflow-copilot-chat',
+                ]);
+                $this->appendDisplayMessage(
+                    'assistant',
+                    'Die Anweisung wurde gespeichert und wird am naechsten sicheren Checkpoint beruecksichtigt.',
+                    'success',
+                );
+                $this->pollCopilotSession();
+
+                return;
+            }
+
             if (! $this->assistantEnabled) {
                 $this->appendDisplayMessage('assistant', 'Der AI Workflow Copilot ist in den Einstellungen deaktiviert.', 'error');
 
@@ -192,6 +226,102 @@ class Chatbot extends Component
         $this->toolEvents = [];
         $this->message = '';
         $this->workflowImportFile = null;
+    }
+
+    public function attachCopilotSession(int $sessionId): void
+    {
+        $session = WorkflowCopilotSession::query()->find($sessionId);
+
+        if (! $session) {
+            return;
+        }
+
+        $this->activeCopilotSessionId = (int) $session->getKey();
+        $this->copilotLastEventSequence = 0;
+        $this->copilotEventFeed = [];
+        Session::put(self::COPILOT_SESSION_KEY, $this->activeCopilotSessionId);
+        $this->pollCopilotSession();
+    }
+
+    public function pollCopilotSession(): void
+    {
+        $session = $this->activeCopilotSession();
+
+        if (! $session) {
+            $this->activeCopilotSessionId = null;
+            $this->copilotStatus = [];
+            $this->copilotEventFeed = [];
+            Session::forget(self::COPILOT_SESSION_KEY);
+
+            return;
+        }
+
+        $session->loadMissing('workflow');
+        $events = app(WorkflowCopilotSessionService::class)
+            ->eventsAfter($session, $this->copilotLastEventSequence, 100);
+
+        foreach ($events as $event) {
+            $sequence = (int) ($event->sequence ?? 0);
+            $this->copilotLastEventSequence = max($this->copilotLastEventSequence, $sequence);
+
+            if (! $this->isVisibleCopilotEvent((string) ($event->event_type ?? ''))) {
+                continue;
+            }
+
+            $message = $this->sanitizeAssistantText((string) ($event->message ?? ''));
+
+            if ($message === '') {
+                continue;
+            }
+
+            $feedItem = [
+                'id' => (int) $event->getKey(),
+                'sequence' => $sequence,
+                'event_type' => (string) ($event->event_type ?? 'status'),
+                'phase' => (string) ($event->phase ?? $session->phase ?? ''),
+                'tone' => $this->copilotTone((string) ($event->level ?? 'info')),
+                'message' => $message,
+                'time' => optional($event->occurred_at ?? $event->created_at)->format('H:i:s') ?? now()->format('H:i:s'),
+            ];
+            $this->copilotEventFeed[] = $feedItem;
+
+            if ((bool) ($event->is_milestone ?? false) && ! $this->hasCopilotMilestone($event->getKey())) {
+                $this->appendDisplayMessage(
+                    'assistant',
+                    $message,
+                    $feedItem['tone'],
+                    null,
+                    ['copilot_event_id' => (int) $event->getKey()],
+                );
+            }
+        }
+
+        $this->copilotEventFeed = array_slice($this->copilotEventFeed, -20);
+        $this->copilotStatus = $this->copilotStatusPayload($session->fresh(['workflow']) ?? $session);
+    }
+
+    public function pauseCopilotSession(): void
+    {
+        if ($session = $this->activeCopilotSession()) {
+            app(WorkflowCopilotSessionService::class)->pause($session, 'Im Workflow-Copilot-Chat pausiert.');
+            $this->pollCopilotSession();
+        }
+    }
+
+    public function resumeCopilotSession(): void
+    {
+        if ($session = $this->activeCopilotSession()) {
+            app(WorkflowCopilotSessionService::class)->resume($session);
+            $this->pollCopilotSession();
+        }
+    }
+
+    public function stopCopilotSession(): void
+    {
+        if ($session = $this->activeCopilotSession()) {
+            app(WorkflowCopilotSessionService::class)->stop($session, 'Im Workflow-Copilot-Chat gestoppt.');
+            $this->pollCopilotSession();
+        }
     }
 
     public function dismissToolEvent(string $eventId): void
@@ -400,7 +530,7 @@ class Chatbot extends Component
         return is_array($decoded) ? $decoded : [];
     }
 
-    private function appendDisplayMessage(string $role, string $content, string $tone = 'neutral', ?array $options = null): void
+    private function appendDisplayMessage(string $role, string $content, string $tone = 'neutral', ?array $options = null, array $metadata = []): void
     {
         $message = [
             'role' => $role,
@@ -409,6 +539,7 @@ class Chatbot extends Component
             'time' => now()->format('H:i'),
             'options' => $options,
             'selected_option_index' => null,
+            ...$metadata,
         ];
 
         $this->chatHistory[] = $message;
@@ -463,6 +594,109 @@ class Chatbot extends Component
         $settings = Setting::getValue('ai_assistant', 'workflow_copilot');
 
         return is_array($settings) ? $settings : [];
+    }
+
+    private function restoreCopilotSession(): void
+    {
+        $sessionId = (int) Session::get(self::COPILOT_SESSION_KEY, 0);
+
+        if ($sessionId > 0) {
+            $this->attachCopilotSession($sessionId);
+        }
+    }
+
+    private function attachLatestCopilotSession(int $workflowId): void
+    {
+        $session = WorkflowCopilotSession::query()
+            ->where('workflow_id', $workflowId)
+            ->whereIn('status', WorkflowCopilotSession::ACTIVE_STATUSES)
+            ->latest('id')
+            ->first();
+
+        if ($session) {
+            $this->attachCopilotSession((int) $session->getKey());
+        }
+    }
+
+    private function activeCopilotSession(): ?WorkflowCopilotSession
+    {
+        if (! $this->activeCopilotSessionId) {
+            return null;
+        }
+
+        return WorkflowCopilotSession::query()->find($this->activeCopilotSessionId);
+    }
+
+    private function isCopilotSessionActive(WorkflowCopilotSession $session): bool
+    {
+        return in_array((string) $session->status, WorkflowCopilotSession::ACTIVE_STATUSES, true);
+    }
+
+    private function isVisibleCopilotEvent(string $eventType): bool
+    {
+        $eventType = Str::lower(trim($eventType));
+
+        return ! in_array($eventType, [
+            'reasoning',
+            'model_reasoning',
+            'internal_reasoning',
+            'internal_analysis',
+            'chain_of_thought',
+            'thought',
+        ], true);
+    }
+
+    private function hasCopilotMilestone(mixed $eventId): bool
+    {
+        return collect($this->chatHistory)->contains(
+            fn (mixed $message): bool => is_array($message)
+                && (string) ($message['copilot_event_id'] ?? '') === (string) $eventId,
+        );
+    }
+
+    private function copilotTone(string $level): string
+    {
+        return match (Str::lower($level)) {
+            'success', 'completed' => 'success',
+            'error', 'failed', 'critical' => 'error',
+            default => 'neutral',
+        };
+    }
+
+    private function copilotStatusPayload(WorkflowCopilotSession $session): array
+    {
+        $state = is_array($session->state_json) ? $session->state_json : [];
+        $budget = is_array($session->budget_json) ? $session->budget_json : [];
+        $usage = is_array($session->usage_json) ? $session->usage_json : [];
+        $maxMinutes = max(1, (int) ($budget['max_minutes'] ?? 90));
+        $elapsedMinutes = $session->started_at
+            ? max(0, (int) $session->started_at->diffInMinutes(now()))
+            : 0;
+
+        return [
+            'id' => (int) $session->getKey(),
+            'workflow_id' => (int) $session->workflow_id,
+            'workflow_name' => (string) ($session->workflow?->name ?? 'Workflow'),
+            'status' => (string) $session->status,
+            'active' => $this->isCopilotSessionActive($session),
+            'paused' => (string) $session->status === WorkflowCopilotSession::STATUS_PAUSED,
+            'phase' => (string) ($session->phase ?? data_get($state, 'phase', 'vorbereiten')),
+            'current_step_name' => (string) data_get($state, 'current_step_name', data_get($state, 'cursor.step_name', '')),
+            'current_task_key' => (string) data_get($state, 'current_task_key', data_get($state, 'cursor.task_key', '')),
+            'latest_screenshot_url' => (string) data_get($state, 'latest_screenshot_url', data_get($state, 'observation.screenshot_url', '')),
+            'page_state' => (string) data_get($state, 'page_state', data_get($state, 'observation.page_state', '')),
+            'last_action' => (string) data_get($state, 'last_action', ''),
+            'current_result' => (string) data_get($state, 'current_result', ''),
+            'next_action' => (string) data_get($state, 'next_action', ''),
+            'repair_iteration' => (int) ($session->repair_round ?? 0),
+            'max_repair_iterations' => max(1, (int) ($budget['max_repair_iterations'] ?? 15)),
+            'probe_actions' => (int) ($usage['probe_actions'] ?? 0),
+            'max_probe_actions' => max(1, (int) ($budget['max_probe_actions'] ?? 60)),
+            'elapsed_minutes' => $elapsedMinutes,
+            'remaining_minutes' => max(0, $maxMinutes - $elapsedMinutes),
+            'started_at' => optional($session->started_at)->format('d.m.Y H:i:s'),
+            'finished_at' => optional($session->finished_at)->format('d.m.Y H:i:s'),
+        ];
     }
 
     private function initialPageContext(): array

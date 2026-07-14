@@ -2225,6 +2225,10 @@ function routeMaxAttempts(route = {}) {
   return Number.isFinite(attempts) ? Math.max(0, Math.floor(attempts)) : 0;
 }
 
+// Rueckwaerts-Routen ohne konfiguriertes max_attempts wuerden sonst bis zum
+// Watchdog zyklieren; jeder Zyklus kann durch Task-Timeouts Minuten kosten.
+const DEFAULT_BACK_ROUTE_ATTEMPTS = 3;
+
 function routeAttemptKey(task = {}, route = {}, targetCardKey = '') {
   return [
     embeddedFrameKeyForTask(task),
@@ -2740,17 +2744,26 @@ async function run() {
         if (canFollowFailureRouteInNode) {
           const maxAttempts = routeMaxAttempts(failureRoute);
           const isBackRoute = targetTaskIndex <= taskIndex;
+          const attemptLimit = maxAttempts > 0
+            ? maxAttempts
+            : (isBackRoute ? DEFAULT_BACK_ROUTE_ATTEMPTS : 0);
 
-          if (isBackRoute && targetIsInSameEmbeddedFrame && maxAttempts > 0) {
+          if (attemptLimit > 0) {
             const attemptKey = routeAttemptKey(task, failureRoute, targetCardKey);
             const attempts = routeAttemptCounts.get(attemptKey) || 0;
 
-            if (attempts >= maxAttempts) {
+            if (attempts >= attemptLimit) {
               requestedFailureRouteTask = {
                 ...task,
                 key: task.route_source_task_key || task.parent_task_key || task.key,
               };
-              requestedRouteMessage = 'Fehlerroute im eingebetteten Workflow wurde zu oft wiederholt.';
+              requestedRouteMessage = `Fehlerroute wurde zu oft wiederholt: ${targetCardKey}.`;
+              pushEvent('task-route-attempts-exhausted', requestedRouteMessage, {
+                taskKey: task.key,
+                targetTaskKey: targetCardKey,
+                attempts,
+                attemptLimit,
+              });
               break;
             }
 
@@ -2855,6 +2868,32 @@ async function run() {
         : runtimeTasks.findIndex((candidate) => String(candidate.key || '') === targetCardKey);
 
       if (targetTaskIndex >= 0) {
+        const isBackRoute = targetTaskIndex <= taskIndex;
+
+        if (isBackRoute) {
+          const maxAttempts = routeMaxAttempts(successRoute);
+          const attemptLimit = maxAttempts > 0 ? maxAttempts : DEFAULT_BACK_ROUTE_ATTEMPTS;
+          const attemptKey = routeAttemptKey(task, successRoute, targetCardKey);
+          const attempts = routeAttemptCounts.get(attemptKey) || 0;
+
+          if (attempts >= attemptLimit) {
+            requestedFailureRouteTask = {
+              ...task,
+              key: task.route_source_task_key || task.parent_task_key || task.key,
+            };
+            requestedRouteMessage = `Erfolgsroute wurde zu oft wiederholt: ${targetCardKey}.`;
+            pushEvent('task-route-attempts-exhausted', requestedRouteMessage, {
+              taskKey: task.key,
+              targetTaskKey: targetCardKey,
+              attempts,
+              attemptLimit,
+            });
+            break;
+          }
+
+          routeAttemptCounts.set(attemptKey, attempts + 1);
+        }
+
         routeTransitions += 1;
 
         if (routeTransitions > maxRouteTransitions) {

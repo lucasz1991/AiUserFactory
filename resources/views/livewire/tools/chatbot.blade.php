@@ -821,6 +821,7 @@
     }"
     x-on:assistant-ui-action.window="handleUiAction($event)"
     x-on:assistant-workflow-page-refresh.window="refreshWorkflowPage()"
+    x-on:workflow-copilot-session-activated.window="setOpen(true); callLivewire('attachCopilotSession', Number($event.detail.sessionId || $event.detail.session_id || 0))"
     x-on:keydown.escape.window="if (showChat) closeChat()"
     class="workflow-copilot"
 >
@@ -835,6 +836,10 @@
             transition: outline-color .2s ease, box-shadow .2s ease;
         }
     </style>
+
+    @if($activeCopilotSessionId && data_get($copilotStatus, 'active'))
+        <span class="hidden" wire:poll.2s="pollCopilotSession" aria-hidden="true"></span>
+    @endif
 
     @if($assistantEnabled)
         <button
@@ -1034,6 +1039,101 @@
                     x-ref="messages"
                     class="scroll-container min-h-0 flex-1 space-y-3 overflow-y-auto bg-slate-50 px-4 py-4"
                 >
+                    @if($activeCopilotSessionId && $copilotStatus !== [])
+                        <section
+                            wire:key="workflow-copilot-session-status-{{ $activeCopilotSessionId }}"
+                            class="overflow-hidden rounded-2xl border border-cyan-200 bg-white shadow-lg shadow-cyan-100/50"
+                            aria-live="polite"
+                        >
+                            <div class="bg-gradient-to-r from-slate-950 via-cyan-900 to-emerald-800 px-4 py-3 text-white">
+                                <div class="flex items-start justify-between gap-3">
+                                    <div class="min-w-0">
+                                        <p class="truncate text-sm font-black">{{ data_get($copilotStatus, 'workflow_name', 'Workflow') }}</p>
+                                        <p class="mt-0.5 text-[10px] font-semibold uppercase tracking-[.14em] text-cyan-100">
+                                            System-Ausfuehrung · {{ data_get($copilotStatus, 'phase', 'vorbereiten') }}
+                                        </p>
+                                    </div>
+                                    <span class="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-white/15 px-2.5 py-1 text-[10px] font-bold">
+                                        <span class="h-1.5 w-1.5 rounded-full {{ data_get($copilotStatus, 'active') ? 'animate-pulse bg-emerald-300' : 'bg-slate-300' }}"></span>
+                                        {{ data_get($copilotStatus, 'status', 'unbekannt') }}
+                                    </span>
+                                </div>
+                            </div>
+
+                            <div class="space-y-3 p-4">
+                                @if(data_get($copilotStatus, 'latest_screenshot_url'))
+                                    <a href="{{ data_get($copilotStatus, 'latest_screenshot_url') }}" target="_blank" rel="noopener noreferrer" class="block overflow-hidden rounded-xl border border-slate-200 bg-slate-100">
+                                        <img src="{{ data_get($copilotStatus, 'latest_screenshot_url') }}" alt="Letzter Workflow-Copilot-Screenshot" class="max-h-44 w-full object-contain" loading="lazy">
+                                    </a>
+                                @endif
+
+                                <dl class="grid grid-cols-2 gap-2 text-xs">
+                                    <div class="rounded-lg bg-slate-50 p-2.5">
+                                        <dt class="font-semibold text-slate-500">Aktueller Step</dt>
+                                        <dd class="mt-1 break-words font-bold text-slate-900">{{ data_get($copilotStatus, 'current_step_name') ?: 'Wird vorbereitet' }}</dd>
+                                    </div>
+                                    <div class="rounded-lg bg-slate-50 p-2.5">
+                                        <dt class="font-semibold text-slate-500">Aktueller Task</dt>
+                                        <dd class="mt-1 break-words font-mono text-[11px] font-bold text-slate-900">{{ data_get($copilotStatus, 'current_task_key') ?: '-' }}</dd>
+                                    </div>
+                                </dl>
+
+                                @foreach([
+                                    'page_state' => 'Erkannter Bildschirm',
+                                    'last_action' => 'Letzte Aktion',
+                                    'current_result' => 'Aktuelles Ergebnis',
+                                    'next_action' => 'Naechster Schritt',
+                                ] as $statusKey => $statusLabel)
+                                    @if(filled(data_get($copilotStatus, $statusKey)))
+                                        <div class="text-xs leading-5">
+                                            <span class="font-bold text-slate-500">{{ $statusLabel }}:</span>
+                                            <span class="text-slate-800">{{ data_get($copilotStatus, $statusKey) }}</span>
+                                        </div>
+                                    @endif
+                                @endforeach
+
+                                <div class="grid grid-cols-3 gap-2 text-center text-[10px]">
+                                    <div class="rounded-lg border border-slate-200 px-2 py-2">
+                                        <strong class="block text-sm text-slate-900">{{ data_get($copilotStatus, 'repair_iteration', 0) }}/{{ data_get($copilotStatus, 'max_repair_iterations', 15) }}</strong>
+                                        Reparaturen
+                                    </div>
+                                    <div class="rounded-lg border border-slate-200 px-2 py-2">
+                                        <strong class="block text-sm text-slate-900">{{ data_get($copilotStatus, 'probe_actions', 0) }}/{{ data_get($copilotStatus, 'max_probe_actions', 60) }}</strong>
+                                        Proben
+                                    </div>
+                                    <div class="rounded-lg border border-slate-200 px-2 py-2">
+                                        <strong class="block text-sm text-slate-900">{{ data_get($copilotStatus, 'remaining_minutes', 0) }}m</strong>
+                                        Restzeit
+                                    </div>
+                                </div>
+
+                                @if($copilotEventFeed !== [])
+                                    <div class="space-y-1.5 border-t border-slate-100 pt-3">
+                                        <p class="text-[10px] font-black uppercase tracking-[.12em] text-slate-400">Aktuelle Arbeitsschritte</p>
+                                        @foreach(array_slice($copilotEventFeed, -6) as $event)
+                                            <div wire:key="copilot-feed-{{ $event['id'] }}" class="flex items-start gap-2 text-xs leading-5">
+                                                <span class="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full {{ $event['tone'] === 'error' ? 'bg-rose-500' : ($event['tone'] === 'success' ? 'bg-emerald-500' : 'bg-cyan-500') }}"></span>
+                                                <span class="min-w-0 flex-1 text-slate-700">{{ $event['message'] }}</span>
+                                                <time class="shrink-0 text-[9px] text-slate-400">{{ $event['time'] }}</time>
+                                            </div>
+                                        @endforeach
+                                    </div>
+                                @endif
+
+                                @if(data_get($copilotStatus, 'active'))
+                                    <div class="flex flex-wrap gap-2 border-t border-slate-100 pt-3">
+                                        @if(data_get($copilotStatus, 'paused'))
+                                            <button type="button" wire:click="resumeCopilotSession" wire:loading.attr="disabled" class="rounded-lg bg-emerald-600 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-emerald-700 disabled:opacity-50">Fortsetzen</button>
+                                        @else
+                                            <button type="button" wire:click="pauseCopilotSession" wire:loading.attr="disabled" class="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-[11px] font-bold text-amber-800 hover:bg-amber-100 disabled:opacity-50">Pausieren</button>
+                                        @endif
+                                        <button type="button" wire:click="stopCopilotSession" wire:confirm="Autonome Workflow-Optimierung wirklich stoppen?" wire:loading.attr="disabled" class="rounded-lg border border-rose-300 bg-rose-50 px-3 py-1.5 text-[11px] font-bold text-rose-700 hover:bg-rose-100 disabled:opacity-50">Stoppen</button>
+                                    </div>
+                                @endif
+                            </div>
+                        </section>
+                    @endif
+
                     @forelse($chatHistory as $index => $item)
                         @php
                             $role = $item['role'] ?? 'assistant';

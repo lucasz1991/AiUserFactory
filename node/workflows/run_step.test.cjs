@@ -262,6 +262,71 @@ test('unresolved embedded success route bubbles to the parent failure route', ()
   assert.deepEqual(result.tasks.map((task) => task.key), ['embedded-task']);
 });
 
+test('backward success route stops after configured max attempts', () => {
+  const result = executeTasks([
+    returnTask('loop-entry', true),
+    {
+      ...returnTask('loop-back', true),
+      next: {
+        type: 'card',
+        card_key: 'loop-entry',
+        max_attempts: 2,
+      },
+    },
+  ]);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.routeRequested, true);
+  assert.equal(result.routeOutcome, 'failed');
+  assert.equal(result.completedTaskKey, 'loop-back');
+  assert.match(result.statusMessage, /Erfolgsroute wurde zu oft wiederholt/);
+  assert.equal(result.events.filter((event) => (
+    event.stage === 'task-route-attempts-exhausted'
+  )).length, 1);
+});
+
+test('backward success route without max attempts stops at the default limit', () => {
+  const result = executeTasks([
+    returnTask('loop-entry', true),
+    {
+      ...returnTask('loop-back', true),
+      next: {
+        type: 'card',
+        card_key: 'loop-entry',
+      },
+    },
+  ]);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.routeRequested, true);
+  assert.equal(result.routeOutcome, 'failed');
+  assert.match(result.statusMessage, /Erfolgsroute wurde zu oft wiederholt/);
+});
+
+test('forward on_error route stops after configured max attempts', () => {
+  const failingLoop = branchTask('failing-check', {
+    type: 'card',
+    card_key: 'forward-target',
+    max_attempts: 1,
+  });
+  const result = executeTasks([
+    failingLoop,
+    returnTask('must-be-skipped', true),
+    {
+      ...returnTask('forward-target', true),
+      next: {
+        type: 'card',
+        card_key: 'failing-check',
+      },
+    },
+  ]);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.routeRequested, true);
+  assert.equal(result.routeOutcome, 'failed');
+  assert.match(result.statusMessage, /zu oft wiederholt/);
+});
+
 test('embedded workflow follows backward on_error routes until max attempts is reached', () => {
   const result = executeTasks([
     waitTask('embedded-first', 'embedded-frame', {

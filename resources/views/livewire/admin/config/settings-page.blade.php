@@ -349,6 +349,47 @@
                     @error('assistantInstructions') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
                 </div>
 
+                <div class="rounded-lg border border-gray-200 bg-white p-5">
+                    <h3 class="text-sm font-semibold text-gray-900">Autonome Workflow-Optimierung</h3>
+                    <p class="mt-1 text-sm text-gray-500">
+                        Die Reparatur nutzt ausschliesslich die System-Ausfuehrung. Bildverstehen kombiniert Screenshots mit einer bereinigten DOM-Elementkarte; Fallback-Modelle werden der Reihe nach versucht.
+                    </p>
+
+                    <div class="mt-5 grid gap-6 md:grid-cols-2 xl:grid-cols-4">
+                        <div class="md:col-span-2 xl:col-span-4">
+                            <label for="assistant-vision-fallback-models" class="block text-sm font-medium text-gray-700">Vision-Fallback-Modelle</label>
+                            <textarea id="assistant-vision-fallback-models" rows="4" wire:model.defer="assistantVisionFallbackModels" placeholder="google/gemini-2.5-flash\nanthropic/claude-sonnet-4" class="mt-1 block w-full rounded-md border border-gray-300 p-3 font-mono text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"></textarea>
+                            <p class="mt-1 text-xs text-gray-500">Ein Modell pro Zeile, in der gewuenschten Reihenfolge. Das primaere Bildverstehen-Modell wird weiterhin unter OpenRouter festgelegt.</p>
+                            @error('assistantVisionFallbackModels') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                        </div>
+
+                        <div>
+                            <label for="assistant-copilot-max-minutes" class="block text-sm font-medium text-gray-700">Maximale Laufzeit (Min.)</label>
+                            <input id="assistant-copilot-max-minutes" type="number" min="5" max="1440" wire:model.defer="assistantCopilotMaxMinutes" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500" />
+                            @error('assistantCopilotMaxMinutes') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                        </div>
+
+                        <div>
+                            <label for="assistant-copilot-max-repair-iterations" class="block text-sm font-medium text-gray-700">Reparaturrunden</label>
+                            <input id="assistant-copilot-max-repair-iterations" type="number" min="1" max="100" wire:model.defer="assistantCopilotMaxRepairIterations" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500" />
+                            @error('assistantCopilotMaxRepairIterations') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                        </div>
+
+                        <div>
+                            <label for="assistant-copilot-max-probe-actions" class="block text-sm font-medium text-gray-700">Probeaktionen</label>
+                            <input id="assistant-copilot-max-probe-actions" type="number" min="1" max="500" wire:model.defer="assistantCopilotMaxProbeActions" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500" />
+                            @error('assistantCopilotMaxProbeActions') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                        </div>
+
+                        <div>
+                            <label for="assistant-copilot-max-same-state-repeats" class="block text-sm font-medium text-gray-700">Gleicher Zustand</label>
+                            <input id="assistant-copilot-max-same-state-repeats" type="number" min="1" max="10" wire:model.defer="assistantCopilotMaxSameStateRepeats" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500" />
+                            <p class="mt-1 text-xs text-gray-500">Danach gilt der Lauf als festgefahren.</p>
+                            @error('assistantCopilotMaxSameStateRepeats') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                        </div>
+                    </div>
+                </div>
+
                 <div class="rounded-lg border border-slate-100 bg-slate-50 p-4 text-sm text-slate-600">
                     <p class="font-semibold">Verfuegbare Chatbot-Funktionen</p>
                     <p class="mt-1">

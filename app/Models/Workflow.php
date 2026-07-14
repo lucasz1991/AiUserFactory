@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
@@ -19,6 +20,11 @@ class Workflow extends Model
         'subcategory',
         'is_active',
         'is_locked',
+        'active_workflow_copilot_session_id',
+        'copilot_revision',
+        'copilot_locked_at',
+        'copilot_verification_status',
+        'copilot_verified_at',
         'trigger_type',
         'settings_json',
         'last_run_at',
@@ -27,6 +33,9 @@ class Workflow extends Model
     protected $casts = [
         'is_active' => 'boolean',
         'is_locked' => 'boolean',
+        'copilot_revision' => 'integer',
+        'copilot_locked_at' => 'datetime',
+        'copilot_verified_at' => 'datetime',
         'settings_json' => 'array',
         'last_run_at' => 'datetime',
     ];
@@ -44,6 +53,21 @@ class Workflow extends Model
     public function runs(): HasMany
     {
         return $this->hasMany(WorkflowRun::class)->latest('id');
+    }
+
+    public function copilotSessions(): HasMany
+    {
+        return $this->hasMany(WorkflowCopilotSession::class)->latest('id');
+    }
+
+    public function activeCopilotSession(): BelongsTo
+    {
+        return $this->belongsTo(WorkflowCopilotSession::class, 'active_workflow_copilot_session_id');
+    }
+
+    public function revisions(): HasMany
+    {
+        return $this->hasMany(WorkflowRevision::class)->orderBy('revision_number');
     }
 
     public function includedWorkflows(): BelongsToMany
@@ -75,11 +99,20 @@ class Workflow extends Model
 
     public function getIsEditLockedAttribute(): bool
     {
-        return (bool) $this->is_locked || $this->is_included;
+        return (bool) $this->is_locked || $this->is_included || $this->has_active_copilot_lock;
+    }
+
+    public function getHasActiveCopilotLockAttribute(): bool
+    {
+        return $this->active_workflow_copilot_session_id !== null;
     }
 
     public function getLockReasonAttribute(): string
     {
+        if ($this->has_active_copilot_lock) {
+            return 'Wird durch eine Workflow-Copilot-Sitzung optimiert.';
+        }
+
         if ($this->is_included) {
             $parents = $this->relationLoaded('includedByWorkflows')
                 ? $this->includedByWorkflows->pluck('name')->filter()->join(', ')

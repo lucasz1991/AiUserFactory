@@ -46,7 +46,10 @@ class WorkflowTransferService
         }
 
         fwrite($stream, "\xEF\xBB\xBF");
-        fputcsv($stream, self::HEADERS);
+        // Escape-Zeichen deaktivieren: Mit dem PHP-Default "\\" werden Felder,
+        // die \" enthalten (JSON-escapte Quotes in steps_json), nicht RFC-4180-
+        // konform verdoppelt und zerbrechen beim Re-Import das CSV-Quoting.
+        fputcsv($stream, self::HEADERS, ',', '"', '');
 
         foreach ($workflows as $workflow) {
             $steps = $workflow->steps
@@ -79,7 +82,7 @@ class WorkflowTransferService
                 (string) $workflow->trigger_type,
                 $this->encodeJson(is_array($workflow->settings_json) ? $workflow->settings_json : []),
                 $this->encodeJson($steps),
-            ]);
+            ], ',', '"', '');
         }
 
         rewind($stream);
@@ -290,7 +293,7 @@ class WorkflowTransferService
 
         fwrite($stream, $csv);
         rewind($stream);
-        $headers = fgetcsv($stream);
+        $headers = fgetcsv($stream, null, ',', '"', '');
 
         if ($headers !== self::HEADERS) {
             fclose($stream);
@@ -300,7 +303,7 @@ class WorkflowTransferService
         $definitions = [];
         $line = 1;
 
-        while (($row = fgetcsv($stream)) !== false) {
+        while (($row = fgetcsv($stream, null, ',', '"', '')) !== false) {
             $line++;
 
             if ($row === [null] || $row === []) {

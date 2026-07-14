@@ -5,11 +5,14 @@ namespace App\Livewire\Admin\Network;
 use App\Models\Device;
 use App\Models\NetworkNode;
 use App\Models\Person;
+use App\Models\Setting;
 use App\Models\Workflow;
+use App\Models\WorkflowCopilotSession;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowStep;
 use App\Services\Workflows\PersonaActionWorkflowCatalog;
 use App\Services\Workflows\WorkflowExecutionService;
+use App\Services\Workflows\WorkflowCopilotSessionService;
 use App\Services\Workflows\WorkflowRunDebugPackageService;
 use App\Services\Workflows\WorkflowTaskCatalog;
 use App\Services\Workflows\WorkflowTaskOrderingService;
@@ -102,6 +105,34 @@ class WorkflowManager extends Component
 
     public bool $showRunPreviewModal = false;
 
+    public bool $showCopilotModal = false;
+
+    public bool $showCopilotPreviewModal = false;
+
+    public ?int $activeCopilotSessionId = null;
+
+    public string $copilotGoal = '';
+
+    public string $copilotSuccessCriteria = '';
+
+    public string $copilotPersonId = '';
+
+    public string $copilotWorkflowInputs = '';
+
+    public int $copilotMaxMinutes = 90;
+
+    public int $copilotMaxRepairIterations = 15;
+
+    public int $copilotMaxProbeActions = 60;
+
+    public int $copilotMaxSameStateRepeats = 2;
+
+    public string $copilotRewindCheckpoint = '';
+
+    public array $copilotStatus = [];
+
+    public array $copilotEvents = [];
+
     public ?int $previewWorkflowRunId = null;
 
     public bool $showAddStepModal = false;
@@ -182,6 +213,8 @@ class WorkflowManager extends Component
     {
         $this->selectedWorkflowId = $workflow->id;
         $this->loadWorkflowForm();
+        $this->loadCopilotDefaults();
+        $this->restoreWorkflowCopilotSession();
     }
 
     public function render()
@@ -225,6 +258,7 @@ class WorkflowManager extends Component
             'steps' => $steps,
             'quickPreviewRun' => $quickPreviewRun,
             'previewWorkflowRun' => $this->previewWorkflowRun(),
+            'activeCopilotSession' => $this->activeCopilotSession(),
             'persons' => $persons,
             'runNetworkNodes' => NetworkNode::query()->available()->orderBy('name')->get(),
             'runDevices' => Device::query()->with('networkNode')->orderBy('name')->get(),

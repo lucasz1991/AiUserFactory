@@ -76,6 +76,25 @@ class WorkflowResultNormalizerTest extends TestCase
         $this->assertSame(1, $embedded['task_count'] ?? null);
     }
 
+    public function test_failed_task_downgrade_replaces_success_diagnostic_reason(): void
+    {
+        $normalized = $this->normalize([
+            'ok' => true,
+            'status' => 'success',
+            'tasks' => [[
+                'ok' => false,
+                'status' => 'failed',
+                'task_key' => 'browser.click',
+                'statusMessage' => 'Kein klickbares Ziel uebergeben oder gefunden.',
+                'selector' => 'button:has-text("Login")',
+            ]],
+        ], ['state' => 'completed']);
+
+        $this->assertSame('failed', $normalized['technical_status']);
+        $this->assertNotSame('success', $normalized['diagnostic_reason_code']);
+        $this->assertNotSame('Ausfuehrung erfolgreich.', $normalized['diagnostic_reason']);
+    }
+
     protected function normalize(array $result, array $status = []): array
     {
         $result = $this->normalizer()->normalizeStepResult($this->step(), $status, $result, 'workflow-task');

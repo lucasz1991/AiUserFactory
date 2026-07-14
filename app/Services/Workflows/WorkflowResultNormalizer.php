@@ -223,6 +223,23 @@ class WorkflowResultNormalizer
         $normalized['empty_result'] = (bool) $normalized['empty_result'] || $empty;
         $normalized['retryable'] = (bool) $normalized['retryable'] || $retryable;
         $normalized['state_mismatch'] = (bool) $normalized['state_mismatch'] || $stateMismatch;
+
+        // Wenn Task-Auswertungen den Status auf failed herabstufen, darf der
+        // Diagnose-Code nicht auf "success" ("Ausfuehrung erfolgreich.") stehen
+        // bleiben — sonst widersprechen sich result_class und diagnostic_reason.
+        $merged = ($normalized['technical_status'] ?? '') === 'failed'
+            || ($normalized['business_status'] ?? '') === 'failed';
+
+        if ($merged && in_array($normalized['diagnostic_reason_code'] ?? '', ['', 'success'], true)) {
+            $failureReason = $evaluations
+                ->first(fn (array $item): bool => (
+                    (($item['technical_status'] ?? '') === 'failed' || ($item['business_status'] ?? '') === 'failed')
+                    && ! in_array($item['diagnostic_reason_code'] ?? '', ['', 'success'], true)
+                ));
+            $normalized['diagnostic_reason_code'] = $failureReason['diagnostic_reason_code'] ?? 'hard_failure';
+            $normalized['diagnostic_reason'] = $this->reasonText($normalized['diagnostic_reason_code']);
+        }
+
         $normalized['result_class'] = $this->resultClass(
             $normalized['technical_status'],
             $normalized['business_status'],

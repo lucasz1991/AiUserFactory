@@ -22,6 +22,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
 class WorkflowExecutionService
@@ -38,6 +39,28 @@ class WorkflowExecutionService
 
     public function start(Workflow $workflow, array $context = [], string $requestedBy = 'admin-ui'): WorkflowRun
     {
+        $workflow->refresh();
+        $copilotSessionId = max(0, (int) ($context['workflow_copilot_session_id'] ?? $context['workflowCopilotSessionId'] ?? 0));
+
+        if (Schema::hasColumn('workflows', 'active_workflow_copilot_session_id')) {
+            $activeCopilotSessionId = max(0, (int) $workflow->active_workflow_copilot_session_id);
+
+            if ($activeCopilotSessionId > 0 && $copilotSessionId !== $activeCopilotSessionId) {
+                throw new \RuntimeException('Dieser Workflow ist durch eine aktive Copilot-Optimierung exklusiv gesperrt.');
+            }
+        }
+
+        if ($copilotSessionId > 0) {
+            $context = array_replace($context, [
+                'workflow_copilot_session_id' => $copilotSessionId,
+                'execution_target' => 'system',
+                'network_node_id' => null,
+                'device_id' => null,
+                'allow_client_reassignment' => false,
+                'max_client_reassignments' => 0,
+            ]);
+        }
+
         if (! $workflow->is_active) {
             throw new \RuntimeException('Dieser Workflow ist deaktiviert.');
         }
@@ -2782,17 +2805,23 @@ class WorkflowExecutionService
 
     protected function normalizeContext(array $context): array
     {
+        $copilotSessionId = max(0, (int) ($context['workflow_copilot_session_id'] ?? $context['workflowCopilotSessionId'] ?? 0));
+        $executionTarget = $copilotSessionId > 0
+            ? 'system'
+            : (in_array(($context['execution_target'] ?? 'system'), ['system', 'client_controller'], true)
+                ? (string) ($context['execution_target'] ?? 'system')
+                : 'system');
+
         return [
             ...$context,
             'person_id' => (int) ($context['person_id'] ?? $context['personId'] ?? 0) ?: null,
             'started_from' => (string) ($context['started_from'] ?? 'workflow-manager'),
-            'execution_target' => in_array(($context['execution_target'] ?? 'system'), ['system', 'client_controller'], true)
-                ? (string) ($context['execution_target'] ?? 'system')
-                : 'system',
-            'network_node_id' => (int) ($context['network_node_id'] ?? 0) ?: null,
-            'device_id' => (int) ($context['device_id'] ?? 0) ?: null,
-            'requested_network_node_id' => (int) ($context['network_node_id'] ?? 0) ?: null,
-            'requested_device_id' => (int) ($context['device_id'] ?? 0) ?: null,
+            'workflow_copilot_session_id' => $copilotSessionId ?: null,
+            'execution_target' => $executionTarget,
+            'network_node_id' => $copilotSessionId > 0 ? null : ((int) ($context['network_node_id'] ?? 0) ?: null),
+            'device_id' => $copilotSessionId > 0 ? null : ((int) ($context['device_id'] ?? 0) ?: null),
+            'requested_network_node_id' => $copilotSessionId > 0 ? null : ((int) ($context['network_node_id'] ?? 0) ?: null),
+            'requested_device_id' => $copilotSessionId > 0 ? null : ((int) ($context['device_id'] ?? 0) ?: null),
             'allow_client_reassignment' => false,
             'max_client_reassignments' => 0,
         ];
@@ -2810,6 +2839,10 @@ class WorkflowExecutionService
 
     protected function usesClientController(WorkflowRun $run): bool
     {
+        if ((int) data_get($run->context_json, 'workflow_copilot_session_id', 0) > 0) {
+            return false;
+        }
+
         return data_get($run->context_json, 'execution_target', 'system') === 'client_controller';
     }
 

@@ -44,6 +44,11 @@ class SettingsPage extends Component
     public string $assistantVoskTranscriptionUrl = '';
     public string $assistantEspeakNgSpeechUrl = '';
     public string $assistantEspeakNgVoice = 'de';
+    public string $assistantVisionFallbackModels = '';
+    public int $assistantCopilotMaxMinutes = 90;
+    public int $assistantCopilotMaxRepairIterations = 15;
+    public int $assistantCopilotMaxProbeActions = 60;
+    public int $assistantCopilotMaxSameStateRepeats = 2;
 
     // ClientController settings tab
     public string $ccServerDomain = '';
@@ -154,7 +159,19 @@ class SettingsPage extends Component
             'assistantVoskTranscriptionUrl' => ['nullable', 'required_if:assistantSpeechInputProvider,vosk', 'url', 'max:2048'],
             'assistantEspeakNgSpeechUrl' => ['nullable', 'required_if:assistantSpeechOutputProvider,espeak_ng', 'url', 'max:2048'],
             'assistantEspeakNgVoice' => ['nullable', 'string', 'max:80'],
+            'assistantVisionFallbackModels' => ['nullable', 'string', 'max:4000'],
+            'assistantCopilotMaxMinutes' => ['required', 'integer', 'min:5', 'max:1440'],
+            'assistantCopilotMaxRepairIterations' => ['required', 'integer', 'min:1', 'max:100'],
+            'assistantCopilotMaxProbeActions' => ['required', 'integer', 'min:1', 'max:500'],
+            'assistantCopilotMaxSameStateRepeats' => ['required', 'integer', 'min:1', 'max:10'],
         ]);
+
+        $visionFallbackModels = collect(preg_split('/[\r\n,]+/', (string) ($validated['assistantVisionFallbackModels'] ?? '')) ?: [])
+            ->map(fn (string $model): string => trim($model))
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
 
         Setting::setValue('ai_assistant', 'workflow_copilot', [
             'enabled' => (bool) $validated['assistantEnabled'],
@@ -168,6 +185,13 @@ class SettingsPage extends Component
             'vosk_transcription_url' => trim((string) ($validated['assistantVoskTranscriptionUrl'] ?? '')),
             'espeak_ng_speech_url' => trim((string) ($validated['assistantEspeakNgSpeechUrl'] ?? '')),
             'espeak_ng_voice' => trim((string) ($validated['assistantEspeakNgVoice'] ?? '')) ?: 'de',
+            'vision_fallback_models' => $visionFallbackModels,
+            'optimization_defaults' => [
+                'max_minutes' => (int) $validated['assistantCopilotMaxMinutes'],
+                'max_repair_iterations' => (int) $validated['assistantCopilotMaxRepairIterations'],
+                'max_probe_actions' => (int) $validated['assistantCopilotMaxProbeActions'],
+                'max_same_state_repeats' => (int) $validated['assistantCopilotMaxSameStateRepeats'],
+            ],
         ]);
 
         session()->flash('success', 'AI Chatbot-Einstellungen wurden gespeichert.');
@@ -270,6 +294,21 @@ class SettingsPage extends Component
         $this->assistantVoskTranscriptionUrl = trim((string) ($settings['vosk_transcription_url'] ?? ''));
         $this->assistantEspeakNgSpeechUrl = trim((string) ($settings['espeak_ng_speech_url'] ?? ''));
         $this->assistantEspeakNgVoice = trim((string) ($settings['espeak_ng_voice'] ?? 'de')) ?: 'de';
+        $visionFallbackModels = is_array($settings['vision_fallback_models'] ?? null)
+            ? $settings['vision_fallback_models']
+            : preg_split('/[\r\n,]+/', (string) ($settings['vision_fallback_models'] ?? ''));
+        $this->assistantVisionFallbackModels = collect($visionFallbackModels ?: [])
+            ->map(fn (mixed $model): string => trim((string) $model))
+            ->filter()
+            ->unique()
+            ->implode("\n");
+        $optimizationDefaults = is_array($settings['optimization_defaults'] ?? null)
+            ? $settings['optimization_defaults']
+            : [];
+        $this->assistantCopilotMaxMinutes = max(5, min(1440, (int) ($optimizationDefaults['max_minutes'] ?? 90)));
+        $this->assistantCopilotMaxRepairIterations = max(1, min(100, (int) ($optimizationDefaults['max_repair_iterations'] ?? 15)));
+        $this->assistantCopilotMaxProbeActions = max(1, min(500, (int) ($optimizationDefaults['max_probe_actions'] ?? 60)));
+        $this->assistantCopilotMaxSameStateRepeats = max(1, min(10, (int) ($optimizationDefaults['max_same_state_repeats'] ?? 2)));
     }
 
     protected function loadClientControllerSettings(): void

@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class WorkflowRunArtifact extends Model
 {
@@ -53,5 +54,10 @@ class WorkflowRunArtifact extends Model
     public function workflowStepRun(): BelongsTo
     {
         return $this->belongsTo(WorkflowStepRun::class);
+    }
+
+    public function copilotCheckpoints(): HasMany
+    {
+        return $this->hasMany(WorkflowRunCheckpoint::class, 'screenshot_artifact_id');
     }
 }

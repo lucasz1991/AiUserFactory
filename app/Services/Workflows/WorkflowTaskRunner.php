@@ -43,6 +43,7 @@ class WorkflowTaskRunner
             'tasks' => $this->runtimeTasks(
                 $step,
                 trim((string) ($runtimeContext['nextTaskKey'] ?? $runtimeContext['next_task_key'] ?? '')) ?: null,
+                (bool) ($runtimeContext['copilotSupervised'] ?? $runtimeContext['copilot_supervised'] ?? false),
             ),
             'livePreviewEnabled' => $livePreviewEnabled,
             'livePreviewIntervalSeconds' => $livePreviewIntervalSeconds,
@@ -81,7 +82,17 @@ class WorkflowTaskRunner
         $tasks = $this->runtimeTasks(
             $step,
             trim((string) ($runtimeContext['nextTaskKey'] ?? $runtimeContext['next_task_key'] ?? '')) ?: null,
+            (bool) ($runtimeContext['copilotSupervised'] ?? $runtimeContext['copilot_supervised'] ?? false),
         );
+
+        $transientTask = $runtimeContext['copilotTransientTask'] ?? $runtimeContext['copilot_transient_task'] ?? null;
+
+        if (is_array($transientTask) && $transientTask !== []) {
+            $tasks = $this->expandRuntimeTasks(
+                [$transientTask],
+                [(int) $step->workflow_id],
+            );
+        }
 
         $runtime = [
             'runId' => $runId,
@@ -411,7 +422,7 @@ class WorkflowTaskRunner
             ->toArray();
     }
 
-    protected function runtimeTasks(WorkflowStep $step, ?string $startTaskKey = null): array
+    protected function runtimeTasks(WorkflowStep $step, ?string $startTaskKey = null, bool $singleTask = false): array
     {
         $tasks = $step->task_cards;
 
@@ -425,6 +436,10 @@ class WorkflowTaskRunner
             }
 
             $tasks = array_slice($tasks, (int) $startIndex);
+        }
+
+        if ($singleTask) {
+            $tasks = array_slice($tasks, 0, 1);
         }
 
         return $this->expandRuntimeTasks(
