@@ -69,6 +69,27 @@ class WorkflowCopilotPersistenceTest extends TestCase
         $this->assertNull($workflow->fresh()->active_workflow_copilot_session_id);
     }
 
+    public function test_session_start_rejects_a_workflow_with_an_existing_active_run(): void
+    {
+        $workflow = $this->workflow('active-run-rejected');
+        $run = WorkflowRun::query()->create([
+            'run_uuid' => (string) str()->uuid(),
+            'workflow_id' => $workflow->id,
+            'status' => 'waiting',
+            'context_json' => [],
+        ]);
+
+        try {
+            app(WorkflowCopilotSessionService::class)->start($workflow);
+            $this->fail('An exclusive Copilot session must not start alongside an existing active run.');
+        } catch (DomainException $exception) {
+            $this->assertStringContainsString('aktiven Lauf #'.$run->id, $exception->getMessage());
+        }
+
+        $this->assertDatabaseCount('workflow_copilot_sessions', 0);
+        $this->assertNull($workflow->fresh()->active_workflow_copilot_session_id);
+    }
+
     public function test_events_are_sequenced_append_only_and_status_transitions_control_the_lock(): void
     {
         $workflow = $this->workflow('copilot-events');
@@ -128,7 +149,7 @@ class WorkflowCopilotPersistenceTest extends TestCase
         $normalRun = WorkflowRun::query()->create([
             'run_uuid' => (string) str()->uuid(),
             'workflow_id' => $workflow->id,
-            'status' => 'queued',
+            'status' => 'completed',
             'context_json' => [],
         ]);
         $this->assertNull($normalRun->workflow_copilot_session_id);
@@ -296,4 +317,16 @@ class WorkflowCopilotPersistenceTest extends TestCase
             'name' => $name,
             'type' => WorkflowStep::TYPE_BROWSER_TASK,
             'action_key' => str($name)->slug(),
-          
+            'position' => 10,
+            'is_enabled' => true,
+            'config_json' => [
+                'tasks' => [[
+                    'key' => 'login-click',
+                    'task_key' => 'browser.click',
+                    'title' => 'Login klicken',
+                    'selector' => $selector,
+                ]],
+            ],
+        ]);
+    }
+}

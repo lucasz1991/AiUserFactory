@@ -1272,7 +1272,7 @@ async function devDomSnapshot(targetPage) {
       }
 
       const role = element.getAttribute('role');
-      const text = normalize(element.innerText || element.textContent || element.getAttribute('value') || '').slice(0, 80);
+      const text = normalize(element.innerText || element.textContent || '').slice(0, 80);
 
       if (role) return `${tag}[role="${escapeCss(role)}"]${text ? ` /* text: ${text} */` : ''}`;
       if (text && ['a', 'button', 'label', 'span', 'div'].includes(tag)) return `${tag} /* text: ${text} */`;
@@ -1280,14 +1280,40 @@ async function devDomSnapshot(targetPage) {
       return tag;
     };
     const selectorSuggestions = Array.from(document.querySelectorAll('button,a,input,textarea,select,[role],[aria-label],[data-testid],[data-test],[data-cy],[data-qa]'))
-      .map((element) => ({
-        selector: selectorFor(element),
-        tag: String(element.tagName || '').toLowerCase(),
-        text: normalize(element.innerText || element.textContent || element.getAttribute('value') || '').slice(0, 120),
-        id: element.id || '',
-        role: element.getAttribute('role') || '',
-        ariaLabel: element.getAttribute('aria-label') || '',
-      }))
+      .map((element) => {
+        const tag = String(element.tagName || '').toLowerCase();
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+        const formControl = ['input', 'textarea', 'select'].includes(tag);
+        const visible = rect.width > 0
+          && rect.height > 0
+          && style.display !== 'none'
+          && style.visibility !== 'hidden'
+          && Number.parseFloat(style.opacity || '1') > 0
+          && element.getAttribute('aria-hidden') !== 'true';
+
+        return {
+          selector: selectorFor(element),
+          tag,
+          type: element.getAttribute('type') || '',
+          text: formControl ? '' : normalize(element.innerText || element.textContent || '').slice(0, 120),
+          id: element.id || '',
+          role: element.getAttribute('role') || '',
+          ariaLabel: element.getAttribute('aria-label') || '',
+          name: element.getAttribute('name') || '',
+          placeholder: element.getAttribute('placeholder') || '',
+          visible,
+          enabled: !element.disabled && element.getAttribute('aria-disabled') !== 'true',
+          focused: document.activeElement === element,
+          selected: Boolean(element.selected || element.checked || element.getAttribute('aria-selected') === 'true'),
+          boundingBox: {
+            x: Number(rect.x.toFixed(2)),
+            y: Number(rect.y.toFixed(2)),
+            width: Number(rect.width.toFixed(2)),
+            height: Number(rect.height.toFixed(2)),
+          },
+        };
+      })
       .filter((item) => item.selector && !/nth-child/i.test(item.selector))
       .slice(0, 50);
 
@@ -1296,6 +1322,13 @@ async function devDomSnapshot(targetPage) {
       title: document.title || '',
       url: window.location.href,
       readyState: document.readyState,
+      viewport: {
+        width: window.innerWidth,
+        height: window.innerHeight,
+        deviceScaleFactor: window.devicePixelRatio || 1,
+        scrollX: window.scrollX || 0,
+        scrollY: window.scrollY || 0,
+      },
       visibleTextExcerpt: visibleText.slice(0, 5000),
       uiState: classifyUiState(),
       selectorSuggestions,
@@ -1359,6 +1392,7 @@ async function captureStepArtifactPhase(context, phase, task = {}) {
         title: snapshot.title,
         readyState: snapshot.readyState,
         uiState: snapshot.uiState,
+        viewport: snapshot.viewport,
         capturedAt: now(),
       })} -->\n${snapshot.html}`);
 
@@ -1371,6 +1405,7 @@ async function captureStepArtifactPhase(context, phase, task = {}) {
         status: 'success',
         metadata: {
           readyState: snapshot.readyState,
+          viewport: snapshot.viewport,
           visibleTextExcerpt: snapshot.visibleTextExcerpt,
           uiState: snapshot.uiState,
           selectorSuggestions: snapshot.selectorSuggestions,
@@ -1411,6 +1446,7 @@ async function captureStepArtifactPhase(context, phase, task = {}) {
         metadata: {
           readyState: snapshot.readyState || null,
           uiState: snapshot.uiState || null,
+          viewport: snapshot.viewport || null,
         },
       }));
     } catch (error) {

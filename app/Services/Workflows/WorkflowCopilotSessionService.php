@@ -16,6 +16,15 @@ use Illuminate\Support\Str;
 
 class WorkflowCopilotSessionService
 {
+    /** @var list<string> */
+    private const ACTIVE_WORKFLOW_RUN_STATUSES = [
+        'queued',
+        'running',
+        'waiting',
+        'stop_requested',
+        'unreachable',
+    ];
+
     public const DEFAULT_BUDGET = [
         'max_minutes' => 90,
         'max_repair_iterations' => 15,
@@ -43,6 +52,7 @@ class WorkflowCopilotSessionService
         WorkflowCopilotSession::STATUS_PAUSED => [
             WorkflowCopilotSession::STATUS_RUNNING,
             WorkflowCopilotSession::STATUS_REPAIRING,
+            WorkflowCopilotSession::STATUS_VERIFYING,
             WorkflowCopilotSession::STATUS_BUDGET_EXHAUSTED,
             WorkflowCopilotSession::STATUS_FAILED,
             WorkflowCopilotSession::STATUS_STOPPED,
@@ -98,6 +108,19 @@ class WorkflowCopilotSessionService
                     'active_workflow_copilot_session_id' => null,
                     'copilot_locked_at' => null,
                 ]);
+            }
+
+            $activeRun = WorkflowRun::query()
+                ->where('workflow_id', $lockedWorkflow->getKey())
+                ->whereIn('status', self::ACTIVE_WORKFLOW_RUN_STATUSES)
+                ->lockForUpdate()
+                ->orderByDesc('id')
+                ->first();
+
+            if ($activeRun) {
+                throw new DomainException(
+                    'Workflow #'.$lockedWorkflow->getKey().' hat noch den aktiven Lauf #'.$activeRun->getKey().'. Dieser muss vor der exklusiven Copilot-Optimierung beendet werden.',
+                );
             }
 
             $now = now();
@@ -221,13 +244,37 @@ class WorkflowCopilotSessionService
 
     public function resume(WorkflowCopilotSession $session): WorkflowCopilotSession
     {
-        return $this->transition(
-            $session,
-            WorkflowCopilotSession::STATUS_RUNNING,
-            'executing',
-            ['processed_checkpoint_id' => null],
-            'Workflow-Copilot-Sitzung wird fortgesetzt.',
-        );
+        return DB::transaction(function () use ($session): WorkflowCopilotSession {
+            Workflow::query()->lockForUpdate()->findOrFail($session->workflow_id);
+            $lockedSession = WorkflowCopilotSession::query()->lockForUpdate()->findOrFail($session->getKey());
+            $state = is_array($lockedSession->state_json) ? $lockedSession->state_json : [];
+            $resume = is_array($state['resume_after_pause'] ?? null) ? $state['resume_after_pause'] : [];
+            $resumeStatus = (string) ($resume['status'] ?? WorkflowCopilotSession::STATUS_RUNNING);
+
+            if (! in_array($resumeStatus, [
+                WorkflowCopilotSession::STATUS_RUNNING,
+                WorkflowCopilotSession::STATUS_REPAIRING,
+                WorkflowCopilotSession::STATUS_VERIFYING,
+            ], true)) {
+                $resumeStatus = WorkflowCopilotSession::STATUS_RUNNING;
+            }
+
+            $resumePhase = trim((string) ($resume['phase'] ?? '')) ?: match ($resumeStatus) {
+                WorkflowCopilotSession::STATUS_REPAIRING => 'repairing',
+                WorkflowCopilotSession::STATUS_VERIFYING => 'verifying',
+                default => 'executing',
+            };
+            $state['resume_after_pause'] = null;
+            $state['processed_checkpoint_id'] = null;
+
+            return $this->transition(
+                $lockedSession,
+                $resumeStatus,
+                $resumePhase,
+                $state,
+                'Workflow-Copilot-Sitzung wird fortgesetzt.',
+            );
+        });
     }
 
     public function stop(WorkflowCopilotSession $session, ?string $reason = null): WorkflowCopilotSession
@@ -271,6 +318,15 @@ class WorkflowCopilotSessionService
                 is_array($lockedSession->state_json) ? $lockedSession->state_json : [],
                 $state,
             );
+
+            if ($status === WorkflowCopilotSession::STATUS_PAUSED && $from !== WorkflowCopilotSession::STATUS_PAUSED) {
+                $mergedState['resume_after_pause'] = [
+                    'status' => $from,
+                    'phase' => (string) $lockedSession->phase,
+                    'paused_at' => $now->toIso8601String(),
+                ];
+            }
+
             $lockedSession->forceFill([
                 'status' => $status,
                 'phase' => $phase ?: $lockedSession->phase,
@@ -374,9 +430,42 @@ class WorkflowCopilotSessionService
                 throw new DomainException('Der Workflow-Run ist bereits einer anderen Copilot-Sitzung zugeordnet.');
             }
 
+            $runContext = is_array($lockedRun->context_json) ? $lockedRun->context_json : [];
+            $runIsFinal = in_array((string) $lockedRun->status, [
+                'completed',
+                'failed',
+                'cancelled',
+                'timed_out',
+                'lost',
+            ], true);
+
+            if (! $runIsFinal && (($runContext['execution_target'] ?? null) !== WorkflowCopilotSession::EXECUTION_TARGET_SYSTEM
+                || filled($runContext['network_node_id'] ?? null)
+                || filled($runContext['device_id'] ?? null))) {
+                throw new DomainException('Ein aktiver Workflow-Run darf nur als reine System-Ausfuehrung an den Copilot gebunden werden.');
+            }
+
+            $alreadyAttached = (int) $lockedRun->workflow_copilot_session_id === (int) $lockedSession->getKey()
+                && (int) $lockedSession->active_workflow_run_id === (int) $lockedRun->getKey();
+
+            if ($alreadyAttached) {
+                return $lockedSession->fresh(['activeRun']) ?? $lockedSession;
+            }
+
+            $runContext = array_replace($runContext, [
+                'workflow_copilot_session_id' => (int) $lockedSession->getKey(),
+                'workflow_revision' => (int) $lockedSession->current_revision,
+                'execution_target' => WorkflowCopilotSession::EXECUTION_TARGET_SYSTEM,
+                'network_node_id' => null,
+                'device_id' => null,
+                'allow_client_reassignment' => false,
+                'max_client_reassignments' => 0,
+            ]);
+
             $lockedRun->forceFill([
                 'workflow_copilot_session_id' => $lockedSession->getKey(),
                 'workflow_revision' => (int) $lockedSession->current_revision,
+                'context_json' => $runContext,
             ])->save();
             $lockedSession->forceFill([
                 'active_workflow_run_id' => $lockedRun->getKey(),

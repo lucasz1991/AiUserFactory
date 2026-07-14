@@ -27,6 +27,8 @@ class Chatbot extends Component
 
     private const COPILOT_SESSION_KEY = 'ai_user_factory_active_workflow_copilot_session';
 
+    private const COPILOT_CLEARED_SEQUENCES_KEY = 'ai_user_factory_workflow_copilot_cleared_sequences';
+
     public string $message = '';
 
     public array $chatHistory = [];
@@ -92,7 +94,7 @@ class Chatbot extends Component
             ...$context,
         ]);
 
-        if (! $this->activeCopilotSessionId && $this->pageContext['workflow_id']) {
+        if ($this->pageContext['workflow_id']) {
             $this->attachLatestCopilotSession((int) $this->pageContext['workflow_id']);
         }
     }
@@ -226,8 +228,20 @@ class Chatbot extends Component
     {
         Session::forget([self::DISPLAY_HISTORY_KEY, self::TRANSCRIPT_KEY]);
 
+        if ($session = $this->activeCopilotSession()) {
+            $clearedSequences = Session::get(self::COPILOT_CLEARED_SEQUENCES_KEY, []);
+            $clearedSequences = is_array($clearedSequences) ? $clearedSequences : [];
+            $clearedSequences[(string) $session->getKey()] = max(
+                $this->copilotLastEventSequence,
+                (int) ($session->last_event_sequence ?? 0),
+            );
+            Session::put(self::COPILOT_CLEARED_SEQUENCES_KEY, $clearedSequences);
+            $this->copilotLastEventSequence = $clearedSequences[(string) $session->getKey()];
+        }
+
         $this->chatHistory = [];
         $this->toolEvents = [];
+        $this->copilotEventFeed = [];
         $this->message = '';
         $this->workflowImportFile = null;
         $this->dispatch('assistant-ui-action', action: [
@@ -238,17 +252,19 @@ class Chatbot extends Component
 
     public function attachCopilotSession(int $sessionId): void
     {
-        $session = WorkflowCopilotSession::query()->find($sessionId);
+        $session = WorkflowCopilotSession::query()->with('workflow')->find($sessionId);
 
         if (! $session) {
             return;
         }
 
         $this->activeCopilotSessionId = (int) $session->getKey();
-        $this->copilotLastEventSequence = max(0, (int) ($session->last_event_sequence ?? 0) - 100);
-        $this->copilotEventFeed = [];
         Session::put(self::COPILOT_SESSION_KEY, $this->activeCopilotSessionId);
-        $this->pollCopilotSession();
+        $this->restoreCopilotProjection($session);
+
+        if ($this->isCopilotSessionActive($session)) {
+            $this->pollCopilotSession();
+        }
     }
 
     public function pollCopilotSession(): void
@@ -300,7 +316,11 @@ class Chatbot extends Component
                     $feedItem['tone'],
                     null,
                     null,
-                    ['copilot_event_id' => (int) $event->getKey()],
+                    [
+                        'copilot_event_id' => (int) $event->getKey(),
+                        'copilot_session_id' => (int) $session->getKey(),
+                        'copilot_event_sequence' => $sequence,
+                    ],
                 );
             }
         }
@@ -601,7 +621,7 @@ class Chatbot extends Component
     ): void {
         $message = [
             'role' => $role,
-            'content' => $content,
+            'content' => $role === 'assistant' ? $this->sanitizeAssistantText($content) : $content,
             'tone' => $tone,
             'time' => now()->format('H:i'),
             'options' => $options,
@@ -674,6 +694,14 @@ class Chatbot extends Component
 
     private function restoreCopilotSession(): void
     {
+        $workflowId = (int) ($this->pageContext['workflow_id'] ?? 0);
+
+        if ($workflowId > 0) {
+            $this->attachLatestCopilotSession($workflowId);
+
+            return;
+        }
+
         $sessionId = (int) Session::get(self::COPILOT_SESSION_KEY, 0);
 
         if ($sessionId > 0) {
@@ -683,15 +711,123 @@ class Chatbot extends Component
 
     private function attachLatestCopilotSession(int $workflowId): void
     {
-        $session = WorkflowCopilotSession::query()
-            ->where('workflow_id', $workflowId)
-            ->whereIn('status', WorkflowCopilotSession::ACTIVE_STATUSES)
-            ->latest('id')
-            ->first();
+        $session = $this->preferredCopilotSessionForWorkflow($workflowId);
 
         if ($session) {
-            $this->attachCopilotSession((int) $session->getKey());
+            if ((int) $this->activeCopilotSessionId !== (int) $session->getKey()) {
+                $this->attachCopilotSession((int) $session->getKey());
+            }
+
+            return;
         }
+
+        $current = $this->activeCopilotSession();
+
+        if ($current && (int) $current->workflow_id !== $workflowId) {
+            $this->activeCopilotSessionId = null;
+            $this->copilotLastEventSequence = 0;
+            $this->copilotStatus = [];
+            $this->copilotEventFeed = [];
+            Session::forget(self::COPILOT_SESSION_KEY);
+        }
+    }
+
+    private function preferredCopilotSessionForWorkflow(int $workflowId): ?WorkflowCopilotSession
+    {
+        $query = WorkflowCopilotSession::query()->where('workflow_id', $workflowId);
+
+        return (clone $query)
+            ->whereIn('status', WorkflowCopilotSession::ACTIVE_STATUSES)
+            ->latest('id')
+            ->first()
+            ?? (clone $query)
+                ->whereIn('status', WorkflowCopilotSession::TERMINAL_STATUSES)
+                ->latest('id')
+                ->first();
+    }
+
+    private function restoreCopilotProjection(WorkflowCopilotSession $session): void
+    {
+        $clearedSequence = $this->copilotClearedSequence($session);
+        $events = $session->events()
+            ->where('sequence', '>', $clearedSequence)
+            ->latest('sequence')
+            ->limit(100)
+            ->get()
+            ->sortBy('sequence')
+            ->values();
+
+        $this->copilotEventFeed = $events
+            ->filter(fn ($event): bool => $this->isVisibleCopilotEvent((string) ($event->event_type ?? '')))
+            ->map(fn ($event): array => $this->copilotFeedItem($event, $session))
+            ->take(-20)
+            ->values()
+            ->all();
+
+        $milestones = $session->events()
+            ->where('is_milestone', true)
+            ->where('sequence', '>', $clearedSequence)
+            ->latest('sequence')
+            ->limit(80)
+            ->get()
+            ->sortBy('sequence');
+
+        foreach ($milestones as $event) {
+            if (! $this->isVisibleCopilotEvent((string) ($event->event_type ?? ''))
+                || $this->hasCopilotMilestone($event->getKey())) {
+                continue;
+            }
+
+            $message = $this->sanitizeAssistantText((string) ($event->message ?? ''));
+
+            if ($message === '') {
+                continue;
+            }
+
+            $this->appendDisplayMessage(
+                'assistant',
+                $message,
+                $this->copilotTone((string) ($event->level ?? 'info')),
+                null,
+                null,
+                [
+                    'copilot_event_id' => (int) $event->getKey(),
+                    'copilot_session_id' => (int) $session->getKey(),
+                    'copilot_event_sequence' => (int) ($event->sequence ?? 0),
+                ],
+            );
+        }
+
+        $latestSequence = max(
+            (int) $events->max('sequence'),
+            (int) $milestones->max('sequence'),
+        );
+        $this->copilotLastEventSequence = max($clearedSequence, $latestSequence);
+        $this->copilotStatus = $this->copilotStatusPayload($session);
+    }
+
+    private function copilotClearedSequence(WorkflowCopilotSession $session): int
+    {
+        $clearedSequences = Session::get(self::COPILOT_CLEARED_SEQUENCES_KEY, []);
+
+        return max(0, (int) data_get(
+            is_array($clearedSequences) ? $clearedSequences : [],
+            (string) $session->getKey(),
+            0,
+        ));
+    }
+
+    private function copilotFeedItem(mixed $event, WorkflowCopilotSession $session): array
+    {
+        return [
+            'id' => (int) $event->getKey(),
+            'sequence' => (int) ($event->sequence ?? 0),
+            'event_type' => (string) ($event->event_type ?? 'status'),
+            'phase' => (string) ($event->phase ?? $session->phase ?? ''),
+            'tone' => $this->copilotTone((string) ($event->level ?? 'info')),
+            'message' => $this->sanitizeAssistantText((string) ($event->message ?? '')),
+            'time' => optional($event->occurred_at ?? $event->created_at)->format('H:i:s') ?? now()->format('H:i:s'),
+        ];
     }
 
     private function activeCopilotSession(): ?WorkflowCopilotSession
@@ -772,6 +908,49 @@ class Chatbot extends Component
             'remaining_minutes' => max(0, $maxMinutes - $elapsedMinutes),
             'started_at' => optional($session->started_at)->format('d.m.Y H:i:s'),
             'finished_at' => optional($session->finished_at)->format('d.m.Y H:i:s'),
+            'verification_report' => $this->copilotVerificationReport($session, $state),
+        ];
+    }
+
+    private function copilotVerificationReport(WorkflowCopilotSession $session, array $state): ?array
+    {
+        $event = $session->events()
+            ->whereIn('event_type', ['verification.passed', 'verification.failed'])
+            ->latest('sequence')
+            ->first();
+        $stateVerification = data_get($state, 'verification');
+
+        if (! $event && ! is_array($stateVerification)) {
+            return null;
+        }
+
+        $payload = is_array($event?->payload_json) ? $event->payload_json : [];
+        $criteria = data_get($payload, 'criteria_evaluation', data_get($state, 'verification.criteria', []));
+        $criteria = is_array($criteria) ? $criteria : [];
+        $vision = data_get($state, 'verification.vision', data_get($payload, 'vision', []));
+        $vision = is_array($vision) ? $vision : [];
+        $pass = $event
+            ? (string) $event->event_type === 'verification.passed'
+            : (bool) data_get($state, 'verification.pass', false);
+
+        return [
+            'final' => in_array((string) $session->status, WorkflowCopilotSession::TERMINAL_STATUSES, true),
+            'pass' => $pass,
+            'message' => $this->sanitizeAssistantText((string) ($event?->message ?? ($pass
+                ? 'Workflow vollstaendig erfolgreich und automatisch verifiziert.'
+                : 'Die letzte Endpruefung wurde nicht bestanden.'))),
+            'workflow_run_id' => (int) ($payload['workflow_run_id'] ?? data_get($state, 'verification_run_id', 0)),
+            'revision' => (int) ($payload['revision'] ?? $session->current_revision ?? 0),
+            'technical_status' => (string) ($payload['technical_status'] ?? ''),
+            'business_status' => (string) ($payload['business_status'] ?? ''),
+            'criteria_pass' => (bool) ($criteria['pass'] ?? false),
+            'criteria_passed' => (int) ($criteria['passed'] ?? 0),
+            'criteria_total' => (int) ($criteria['total'] ?? 0),
+            'vision_verdict' => (string) ($payload['vision_verdict'] ?? $vision['verdict'] ?? ''),
+            'vision_confidence' => is_numeric($payload['vision_confidence'] ?? $vision['confidence'] ?? null)
+                ? (float) ($payload['vision_confidence'] ?? $vision['confidence'])
+                : null,
+            'time' => optional($event?->occurred_at ?? $event?->created_at)->format('d.m.Y H:i:s'),
         ];
     }
 
@@ -906,7 +1085,22 @@ class Chatbot extends Component
 
     private function sanitizeAssistantText(string $text): string
     {
-        $text = preg_replace('/\n{3,}/', "\n\n", trim($text)) ?? trim($text);
+        $text = str_replace("\0", '', trim($text));
+        $patterns = [
+            '#\b(?:wss?|cdp)://[^\s"\']+#i' => '[BROWSER-ENDPOINT REDACTED]',
+            '/\bBearer\s+[A-Za-z0-9._~+\/\-]+=*/i' => 'Bearer [REDACTED]',
+            '/\b(password|passwd|pwd|secret|token|cookie|authorization|signature|credential|session(?:_?id)?|api[_-]?key)\s*[:=]\s*[^\s,;]+/i' => '$1=[REDACTED]',
+            '/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/' => '[TOKEN REDACTED]',
+            '/\b[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}\b/i' => '[EMAIL REDACTED]',
+            '/(?<!\d)(?:\+?\d[\s().-]*){8,}(?!\d)/' => '[PHONE REDACTED]',
+        ];
+
+        foreach ($patterns as $pattern => $replacement) {
+            $text = preg_replace($pattern, $replacement, $text) ?? $text;
+        }
+
+        $text = preg_replace('/([?&](?:token|secret|signature|session|api[_-]?key)=)[^&\s]+/i', '$1[REDACTED]', $text) ?? $text;
+        $text = preg_replace('/\n{3,}/', "\n\n", $text) ?? $text;
 
         return Str::limit($text, 12000, '');
     }

@@ -4,8 +4,9 @@ namespace Tests\Feature;
 
 use App\Jobs\RunWorkflowJob;
 use App\Models\Workflow;
-use App\Models\WorkflowCopilotSession;
+use App\Models\WorkflowRun;
 use App\Models\WorkflowStep;
+use App\Models\WorkflowStepRun;
 use App\Services\Workflows\WorkflowCopilotSessionService;
 use App\Services\Workflows\WorkflowExecutionService;
 use App\Services\Workflows\WorkflowTaskRunner;
@@ -73,6 +74,265 @@ class WorkflowCopilotExecutionInvariantTest extends TestCase
         $this->assertCount(1, $segment);
         $this->assertSame('second-task', $segment[0]['key']);
         $this->assertSame('wait.seconds', $segment[0]['task_key']);
+    }
+
+    public function test_paused_session_cannot_start_or_resume_a_copilot_run(): void
+    {
+        Queue::fake();
+        [$workflow, $step] = $this->workflow();
+        $sessions = app(WorkflowCopilotSessionService::class);
+        $session = $sessions->start($workflow);
+        $run = app(WorkflowExecutionService::class)->start($workflow, [
+            'workflow_copilot_session_id' => $session->id,
+            'copilot_supervised' => true,
+            'execution_target' => 'client_controller',
+        ], 'workflow-copilot');
+        $this->putRunAtCheckpoint($run, $step, 'first-task');
+        $sessions->pause($session);
+        Queue::fake();
+
+        try {
+            app(WorkflowExecutionService::class)->start($workflow, [
+                'workflow_copilot_session_id' => $session->id,
+                'copilot_supervised' => true,
+            ], 'workflow-copilot');
+            $this->fail('A paused session must not start a new run.');
+        } catch (RuntimeException $exception) {
+            $this->assertStringContainsString('pausiert', $exception->getMessage());
+        }
+
+        app(WorkflowExecutionService::class)->resumeCopilotCheckpoint($run);
+        app(WorkflowExecutionService::class)->retryCopilotTask($run, 'first-task');
+
+        $run->refresh();
+        $this->assertSame('waiting', $run->status);
+        $this->assertSame('checkpoint-first-task', data_get($run->context_json, 'copilot_checkpoint.id'));
+        Queue::assertNotPushed(RunWorkflowJob::class);
+    }
+
+    public function test_worker_guard_does_not_start_a_step_after_session_pause_or_stop(): void
+    {
+        Queue::fake();
+        [$pausedWorkflow] = $this->workflow();
+        $sessions = app(WorkflowCopilotSessionService::class);
+        $execution = app(WorkflowExecutionService::class);
+        $pausedSession = $sessions->start($pausedWorkflow);
+        $pausedRun = $execution->start($pausedWorkflow, [
+            'workflow_copilot_session_id' => $pausedSession->id,
+            'copilot_supervised' => true,
+        ], 'workflow-copilot');
+        $sessions->pause($pausedSession);
+
+        (new RunWorkflowJob($pausedRun->id))->handle($execution);
+
+        $this->assertSame('queued', $pausedRun->fresh()->status);
+        $this->assertDatabaseMissing('workflow_step_runs', ['workflow_run_id' => $pausedRun->id]);
+
+        [$stoppedWorkflow] = $this->workflow();
+        $stoppedSession = $sessions->start($stoppedWorkflow);
+        $stoppedRun = $execution->start($stoppedWorkflow, [
+            'workflow_copilot_session_id' => $stoppedSession->id,
+            'copilot_supervised' => true,
+        ], 'workflow-copilot');
+        $sessions->stop($stoppedSession);
+
+        (new RunWorkflowJob($stoppedRun->id))->handle($execution);
+
+        $stoppedRun->refresh();
+        $this->assertSame('cancelled', $stoppedRun->status);
+        $this->assertSame('workflow-copilot-advance-guard', data_get($stoppedRun->result_json, 'source'));
+        $this->assertDatabaseMissing('workflow_step_runs', ['workflow_run_id' => $stoppedRun->id]);
+    }
+
+    public function test_copilot_retry_rejects_a_client_target_even_when_the_ids_match(): void
+    {
+        Queue::fake();
+        [$workflow, $step] = $this->workflow();
+        $session = app(WorkflowCopilotSessionService::class)->start($workflow);
+        $run = app(WorkflowExecutionService::class)->start($workflow, [
+            'workflow_copilot_session_id' => $session->id,
+            'copilot_supervised' => true,
+        ], 'workflow-copilot');
+        $this->putRunAtCheckpoint($run, $step, 'first-task');
+        $run->refresh();
+        $context = $run->context_json;
+        $context['execution_target'] = 'client_controller';
+        $run->forceFill(['context_json' => $context])->save();
+        Queue::fake();
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('execution_target=system');
+
+        app(WorkflowExecutionService::class)->retryCopilotTask($run, 'first-task');
+    }
+
+    public function test_valid_retry_and_resume_are_dispatched_only_after_locked_state_changes(): void
+    {
+        Queue::fake();
+        [$workflow, $step] = $this->workflow();
+        $session = app(WorkflowCopilotSessionService::class)->start($workflow);
+        $execution = app(WorkflowExecutionService::class);
+        $retryRun = $execution->start($workflow, [
+            'workflow_copilot_session_id' => $session->id,
+            'copilot_supervised' => true,
+        ], 'workflow-copilot');
+        $retryStepRun = $this->putRunAtCheckpoint($retryRun, $step, 'first-task');
+        Queue::fake();
+
+        $execution->retryCopilotTask($retryRun, 'first-task');
+
+        $retryRun->refresh();
+        $this->assertSame('running', $retryRun->status);
+        $this->assertSame('system', data_get($retryRun->context_json, 'execution_target'));
+        $this->assertNull(data_get($retryRun->context_json, 'copilot_checkpoint'));
+        $this->assertSame('queued', $retryStepRun->fresh()->status);
+        Queue::assertPushed(RunWorkflowJob::class, fn (RunWorkflowJob $job): bool => $job->workflowRunId === $retryRun->id);
+
+        $resumeRun = $execution->start($workflow, [
+            'workflow_copilot_session_id' => $session->id,
+            'copilot_supervised' => true,
+        ], 'workflow-copilot');
+        $resumeStepRun = $this->putRunAtCheckpoint($resumeRun, $step, 'first-task');
+        Queue::fake();
+
+        $execution->resumeCopilotCheckpoint($resumeRun);
+
+        $resumeRun->refresh();
+        $this->assertSame('running', $resumeRun->status);
+        $this->assertSame('second-task', data_get($resumeRun->context_json, 'next_task_key'));
+        $this->assertNull(data_get($resumeRun->context_json, 'copilot_checkpoint'));
+        $this->assertSame('queued', $resumeStepRun->fresh()->status);
+        Queue::assertPushed(RunWorkflowJob::class, fn (RunWorkflowJob $job): bool => $job->workflowRunId === $resumeRun->id);
+    }
+
+    public function test_repeated_monitoring_reuses_the_runtime_checkpoint_uuid(): void
+    {
+        Queue::fake();
+        [$workflow, $step] = $this->workflow();
+        $session = app(WorkflowCopilotSessionService::class)->start($workflow);
+        $run = app(WorkflowExecutionService::class)->start($workflow, [
+            'workflow_copilot_session_id' => $session->id,
+            'copilot_supervised' => true,
+        ], 'workflow-copilot');
+        $stepRun = $this->putRunAtCheckpoint($run, $step, 'first-task', false);
+        $execution = app(WorkflowExecutionService::class);
+        $method = new ReflectionMethod($execution, 'holdCopilotTaskCheckpoint');
+        $method->setAccessible(true);
+        $status = ['state' => 'failed', 'message' => 'Element nicht gefunden.'];
+        $result = ['ok' => false, 'status' => 'failed', 'statusMessage' => 'Element nicht gefunden.'];
+
+        $firstId = $method->invoke($execution, $stepRun, $status, $result, false);
+        $secondId = $method->invoke($execution, $stepRun->fresh(), $status, $result, false);
+
+        $this->assertNotSame('', $firstId);
+        $this->assertSame($firstId, $secondId);
+        $this->assertSame($firstId, data_get($run->fresh()->context_json, 'copilot_checkpoint.id'));
+        $this->assertSame($firstId, data_get($stepRun->fresh()->result_json, 'copilotCheckpointId'));
+    }
+
+    public function test_system_copilot_run_always_captures_observation_artifacts_without_dev_mode(): void
+    {
+        Queue::fake();
+        [$workflow, $step] = $this->workflow();
+        $workflow->forceFill(['settings_json' => [
+            'dev_mode' => false,
+            'development' => false,
+            'dev_capture_dom_before_step' => false,
+            'dev_capture_dom_after_step' => false,
+            'dev_capture_screenshot_before_step' => false,
+            'dev_capture_screenshot_after_step' => false,
+            'dev_keep_artifacts' => false,
+        ]])->save();
+        $session = app(WorkflowCopilotSessionService::class)->start($workflow);
+        $run = app(WorkflowExecutionService::class)->start($workflow, [
+            'workflow_copilot_session_id' => $session->id,
+            'copilot_supervised' => true,
+        ], 'workflow-copilot');
+        $stepRun = (new WorkflowStepRun)->forceFill(['id' => 9001]);
+        $runner = app(WorkflowTaskRunner::class);
+        $method = new ReflectionMethod($runner, 'devDebugRuntimeConfig');
+        $method->setAccessible(true);
+
+        $copilotConfig = $method->invoke($runner, $run, $step, $stepRun, true);
+        $normalRun = (new WorkflowRun)->forceFill([
+            'workflow_id' => $workflow->id,
+            'context_json' => ['execution_target' => 'system'],
+        ]);
+        $normalRun->setRelation('workflow', $workflow->fresh());
+        $normalConfig = $method->invoke($runner, $normalRun, $step, $stepRun, true);
+
+        $this->assertTrue($copilotConfig['enabled']);
+        $this->assertTrue($copilotConfig['copilotObservation']);
+        $this->assertTrue($copilotConfig['captureDomBeforeStep']);
+        $this->assertTrue($copilotConfig['captureDomAfterStep']);
+        $this->assertTrue($copilotConfig['captureScreenshotBeforeStep']);
+        $this->assertTrue($copilotConfig['captureScreenshotAfterStep']);
+        $this->assertTrue($copilotConfig['keepArtifacts']);
+        $this->assertFalse($normalConfig['enabled']);
+        $this->assertFalse($normalConfig['copilotObservation']);
+    }
+
+    public function test_waiting_copilot_checkpoint_is_not_expired_by_the_general_step_timeout(): void
+    {
+        Queue::fake();
+        [$workflow, $step] = $this->workflow();
+        $session = app(WorkflowCopilotSessionService::class)->start($workflow);
+        $execution = app(WorkflowExecutionService::class);
+        $run = $execution->start($workflow, [
+            'workflow_copilot_session_id' => $session->id,
+            'copilot_supervised' => true,
+        ], 'workflow-copilot');
+        $stepRun = $this->putRunAtCheckpoint($run, $step, 'first-task');
+        $stepRun->forceFill(['started_at' => now()->subHours(2)])->save();
+
+        $execution->expireTimedOutRuns();
+
+        $this->assertSame('waiting', $run->fresh()->status);
+        $this->assertSame('waiting', $stepRun->fresh()->status);
+        $this->assertSame('checkpoint-first-task', data_get($run->fresh()->context_json, 'copilot_checkpoint.id'));
+        $this->assertNull($stepRun->fresh()->finished_at);
+    }
+
+    private function putRunAtCheckpoint(
+        WorkflowRun $run,
+        WorkflowStep $step,
+        string $taskKey,
+        bool $withCheckpoint = true,
+    ): WorkflowStepRun {
+        $context = is_array($run->context_json) ? $run->context_json : [];
+        $context['copilot_supervised'] = true;
+        $context['execution_target'] = 'system';
+        $context['copilot_current_task_key'] = $taskKey;
+
+        if ($withCheckpoint) {
+            $context['copilot_checkpoint'] = [
+                'id' => 'checkpoint-'.$taskKey,
+                'workflow_step_id' => $step->id,
+                'task_key' => $taskKey,
+                'successful' => true,
+                'outcome' => 'success',
+                'next_action' => 'next_task',
+                'next_task_key' => 'second-task',
+                'result' => ['ok' => true],
+            ];
+        } else {
+            unset($context['copilot_checkpoint']);
+        }
+
+        $run->forceFill([
+            'status' => 'waiting',
+            'current_workflow_step_id' => $step->id,
+            'context_json' => $context,
+        ])->save();
+
+        return WorkflowStepRun::query()->create([
+            'workflow_run_id' => $run->id,
+            'workflow_step_id' => $step->id,
+            'status' => 'waiting',
+            'external_run_type' => 'workflow-task',
+            'external_run_id' => 'external-'.$taskKey,
+            'result_json' => [],
+        ]);
     }
 
     private function workflow(): array

@@ -9,6 +9,7 @@ use App\Models\Setting;
 use App\Models\Workflow;
 use App\Models\WorkflowCopilotSession;
 use App\Models\WorkflowRun;
+use App\Models\WorkflowStep;
 use App\Services\Workflows\WorkflowCopilotSessionService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
@@ -149,6 +150,169 @@ class WorkflowCopilotLiveUiTest extends TestCase
         );
     }
 
+    public function test_chat_rebuilds_canonical_milestones_and_final_report_after_session_loss(): void
+    {
+        $workflow = $this->workflow('copilot-terminal-restore');
+        $service = app(WorkflowCopilotSessionService::class);
+        $session = $service->start($workflow, [
+            'goal' => 'Workflow vollstaendig abschliessen.',
+            'success_criteria' => ['assertions' => ['Erfolgsseite sichtbar']],
+        ]);
+        $observation = $service->appendEvent(
+            $session,
+            'observation.completed',
+            'Screenshot und DOM wurden dauerhaft erfasst.',
+            [],
+            'observing',
+            'info',
+            true,
+        );
+        $verification = $service->appendEvent(
+            $session,
+            'verification.passed',
+            'Workflow vollstaendig erfolgreich und automatisch verifiziert.',
+            [
+                'workflow_run_id' => 4711,
+                'revision' => 7,
+                'criteria_evaluation' => ['pass' => true, 'passed' => 2, 'total' => 2],
+                'vision_verdict' => 'pass',
+                'vision_confidence' => 0.94,
+                'technical_status' => 'success',
+                'business_status' => 'success',
+            ],
+            'verifying',
+            'success',
+            true,
+        );
+        $session = $service->transition(
+            $session,
+            WorkflowCopilotSession::STATUS_SUCCEEDED,
+            'completed',
+            [
+                'verification_run_id' => 4711,
+                'verification' => [
+                    'pass' => true,
+                    'criteria' => ['pass' => true, 'passed' => 2, 'total' => 2],
+                    'vision' => ['verdict' => 'pass', 'confidence' => 0.94],
+                ],
+            ],
+        );
+
+        session()->flush();
+
+        $chat = Livewire::test(Chatbot::class)
+            ->call('updatePageContext', ['workflow_id' => $workflow->id])
+            ->assertSet('activeCopilotSessionId', $session->id)
+            ->assertSet('copilotStatus.active', false)
+            ->assertSet('copilotStatus.verification_report.pass', true)
+            ->assertSee('Finaler Verifikationsbericht')
+            ->assertSee('Workflow vollstaendig erfolgreich und automatisch verifiziert.')
+            ->assertDontSee('wire:poll.2s="pollCopilotSession"', false);
+
+        $history = collect($chat->get('chatHistory'));
+        $this->assertCount(1, $history->where('copilot_event_id', $observation->id));
+        $this->assertCount(1, $history->where('copilot_event_id', $verification->id));
+
+        $chat->call('pollCopilotSession')->call('pollCopilotSession');
+        $this->assertCount(1, collect($chat->get('chatHistory'))->where('copilot_event_id', $verification->id));
+
+        session()->flush();
+
+        $manager = Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
+            ->assertSet('activeCopilotSessionId', $session->id)
+            ->assertSet('copilotStatus.verification_report.pass', true)
+            ->call('openCopilotOptimization')
+            ->assertSet('showCopilotPreviewModal', true)
+            ->assertSee('Finaler Verifikationsbericht')
+            ->assertDontSee('wire:poll.2s="refreshCopilotSession"', false)
+            ->call('closeCopilotPreview')
+            ->assertSet('activeCopilotSessionId', null)
+            ->call('openCopilotOptimization')
+            ->assertSet('showCopilotModal', true);
+    }
+
+    public function test_clear_chat_hides_old_copilot_events_locally_without_deleting_the_audit_log(): void
+    {
+        $workflow = $this->workflow('copilot-clear-chat');
+        $service = app(WorkflowCopilotSessionService::class);
+        $session = $service->start($workflow);
+        $oldMilestone = $service->appendEvent(
+            $session,
+            'observation.completed',
+            'Alter sichtbarer Meilenstein.',
+            [],
+            'observing',
+            'info',
+            true,
+        );
+
+        $chat = Livewire::test(Chatbot::class)
+            ->call('updatePageContext', ['workflow_id' => $workflow->id]);
+
+        $this->assertCount(1, collect($chat->get('chatHistory'))->where('copilot_event_id', $oldMilestone->id));
+
+        $chat
+            ->call('clearChat')
+            ->assertSet('chatHistory', [])
+            ->call('pollCopilotSession')
+            ->assertSet('chatHistory', []);
+
+        $this->assertDatabaseHas('workflow_copilot_events', ['id' => $oldMilestone->id]);
+
+        $newMilestone = $service->appendEvent(
+            $session->fresh(),
+            'task.started',
+            'Neuer Meilenstein nach dem Leeren.',
+            [],
+            'executing',
+            'info',
+            true,
+        );
+        $chat->call('pollCopilotSession');
+        $history = collect($chat->get('chatHistory'));
+        $this->assertCount(0, $history->where('copilot_event_id', $oldMilestone->id));
+        $this->assertCount(1, $history->where('copilot_event_id', $newMilestone->id));
+
+        session()->flush();
+
+        $restored = Livewire::test(Chatbot::class)
+            ->call('updatePageContext', ['workflow_id' => $workflow->id]);
+        $restoredHistory = collect($restored->get('chatHistory'));
+        $this->assertCount(1, $restoredHistory->where('copilot_event_id', $oldMilestone->id));
+        $this->assertCount(1, $restoredHistory->where('copilot_event_id', $newMilestone->id));
+    }
+
+    public function test_workflow_page_prefers_an_active_session_over_a_newer_terminal_session(): void
+    {
+        $workflow = $this->workflow('copilot-active-priority');
+        $active = app(WorkflowCopilotSessionService::class)->start($workflow);
+        WorkflowCopilotSession::query()->create([
+            'session_uuid' => (string) str()->uuid(),
+            'workflow_id' => $workflow->id,
+            'status' => WorkflowCopilotSession::STATUS_STOPPED,
+            'phase' => 'stopped',
+            'execution_target' => 'system',
+            'success_criteria_json' => [],
+            'workflow_inputs_json' => [],
+            'budget_json' => [],
+            'usage_json' => [],
+            'state_json' => [],
+            'started_at' => now(),
+            'finished_at' => now(),
+        ]);
+
+        session()->flush();
+
+        Livewire::test(Chatbot::class)
+            ->call('updatePageContext', ['workflow_id' => $workflow->id])
+            ->assertSet('activeCopilotSessionId', $active->id)
+            ->assertSet('copilotStatus.active', true);
+
+        Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
+            ->assertSet('activeCopilotSessionId', $active->id)
+            ->assertSet('copilotStatus.active', true);
+    }
+
     public function test_manager_cancels_the_active_run_before_stopping_the_session(): void
     {
         Queue::fake();
@@ -172,6 +336,26 @@ class WorkflowCopilotLiveUiTest extends TestCase
         $this->assertSame('cancelled', $run->fresh()->status);
         $this->assertSame(WorkflowCopilotSession::STATUS_STOPPED, $session->fresh()->status);
         $this->assertNull($workflow->fresh()->active_workflow_copilot_session_id);
+    }
+
+    public function test_active_copilot_lock_blocks_manual_livewire_mutations(): void
+    {
+        $workflow = $this->workflow('copilot-manual-edit-lock');
+        $step = $workflow->steps()->create([
+            'name' => 'Locked step',
+            'type' => WorkflowStep::TYPE_BROWSER_TASK,
+            'action_key' => 'locked-step',
+            'position' => 10,
+            'is_enabled' => true,
+            'config_json' => ['tasks' => []],
+        ]);
+        app(WorkflowCopilotSessionService::class)->start($workflow, ['goal' => 'Workflow pruefen.']);
+
+        Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
+            ->call('toggleStep', $step->id);
+
+        $this->assertTrue($step->fresh()->is_enabled);
+        $this->assertNotNull($workflow->fresh()->active_workflow_copilot_session_id);
     }
 
     private function workflow(string $slug): Workflow

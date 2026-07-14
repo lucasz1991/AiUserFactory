@@ -5,9 +5,11 @@ namespace Tests\Feature;
 use App\Livewire\Admin\Network\WorkflowsIndex;
 use App\Models\Workflow;
 use App\Models\WorkflowStep;
+use App\Services\Workflows\WorkflowCopilotSessionService;
 use App\Services\Workflows\WorkflowTransferService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
+use RuntimeException;
 use Tests\TestCase;
 use ZipArchive;
 
@@ -150,6 +152,19 @@ class WorkflowTransferServiceTest extends TestCase
             ->assertSet('selectedWorkflowIds', [(string) $custom->id, (string) $mail->id])
             ->call('clearWorkflowSelection')
             ->assertSet('selectedWorkflowIds', []);
+    }
+
+    public function test_import_cannot_overwrite_a_workflow_locked_by_copilot(): void
+    {
+        $workflow = $this->workflow('locked-import', 'Locked Import');
+        $workflow->steps()->create($this->stepAttributes('Original step', 'original-step'));
+        $csv = app(WorkflowTransferService::class)->csv([$workflow]);
+        app(WorkflowCopilotSessionService::class)->start($workflow);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Copilot-Optimierung exklusiv gesperrt');
+
+        app(WorkflowTransferService::class)->importCsv($csv);
     }
 
     protected function workflow(string $slug, string $name): Workflow

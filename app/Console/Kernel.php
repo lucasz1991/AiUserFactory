@@ -3,8 +3,9 @@
 namespace App\Console;
 
 use App\Jobs\ExpireWorkflowRunsJob;
-use App\Jobs\SyncManagedProcessesJob;
+use App\Jobs\ReconcileWorkflowCopilotSessionsJob;
 use App\Jobs\SuperviseManagedProcessesJob;
+use App\Jobs\SyncManagedProcessesJob;
 use App\Models\NetworkNode;
 use App\Services\Simulation\NetworkActivityPlanningSettings;
 use Illuminate\Console\Scheduling\Schedule;
@@ -29,6 +30,14 @@ class Kernel extends ConsoleKernel
 
         if (Schema::hasTable('workflow_step_runs')) {
             $schedule->job(new ExpireWorkflowRunsJob)
+                ->everyMinute()
+                ->withoutOverlapping(5);
+        }
+
+        if (Schema::hasTable('workflow_copilot_sessions')
+            && Schema::hasTable('workflow_copilot_events')
+            && Schema::hasTable('workflow_runs')) {
+            $schedule->job(new ReconcileWorkflowCopilotSessionsJob)
                 ->everyMinute()
                 ->withoutOverlapping(5);
         }

@@ -29,6 +29,15 @@ use Illuminate\Support\Str;
 
 class WorkflowExecutionService
 {
+    /** @var list<string> */
+    private const FINAL_RUN_STATUSES = [
+        'completed',
+        'failed',
+        'cancelled',
+        'timed_out',
+        'lost',
+    ];
+
     public function __construct(
         protected MailAccountRegistrationRunner $mailRegistration,
         protected WebmailSessionRunner $webmailSession,
@@ -58,6 +67,8 @@ class WorkflowExecutionService
             if ($activeCopilotSessionId > 0 && $copilotSessionId !== $activeCopilotSessionId) {
                 throw new \RuntimeException('Dieser Workflow ist durch eine aktive Copilot-Optimierung exklusiv gesperrt.');
             }
+
+            $copilotSession = null;
 
             if ($copilotSessionId > 0) {
                 $copilotSession = WorkflowCopilotSession::query()->lockForUpdate()->find($copilotSessionId);
@@ -101,6 +112,54 @@ class WorkflowExecutionService
                 throw new \RuntimeException('Dieser Workflow hat keine aktiven Schritte.');
             }
 
+            if ($copilotSession) {
+                $existingRun = null;
+
+                if ($copilotSession->active_workflow_run_id) {
+                    $candidate = WorkflowRun::query()
+                        ->lockForUpdate()
+                        ->find($copilotSession->active_workflow_run_id);
+
+                    if ($candidate && ! in_array((string) $candidate->status, self::FINAL_RUN_STATUSES, true)) {
+                        $existingRun = $candidate;
+                    }
+                }
+
+                $existingRun ??= WorkflowRun::query()
+                    ->where('workflow_copilot_session_id', $copilotSession->id)
+                    ->whereNotIn('status', self::FINAL_RUN_STATUSES)
+                    ->lockForUpdate()
+                    ->orderByDesc('id')
+                    ->first();
+
+                if ($existingRun) {
+                    $existingContext = is_array($existingRun->context_json) ? $existingRun->context_json : [];
+                    $samePurpose = (bool) ($existingContext['copilot_verification_run'] ?? false)
+                        === (bool) ($context['copilot_verification_run'] ?? false);
+                    $systemOnly = ($existingContext['execution_target'] ?? null) === WorkflowCopilotSession::EXECUTION_TARGET_SYSTEM
+                        && blank($existingContext['network_node_id'] ?? null)
+                        && blank($existingContext['device_id'] ?? null);
+                    $sameRevision = (int) $existingRun->workflow_revision === (int) ($lockedWorkflow->copilot_revision ?? 0);
+                    $sameOwner = (int) $existingRun->workflow_id === (int) $lockedWorkflow->id
+                        && (int) $existingRun->workflow_copilot_session_id === (int) $copilotSession->id;
+
+                    if (! $samePurpose || ! $systemOnly || ! $sameRevision || ! $sameOwner) {
+                        throw new \RuntimeException(
+                            'Die Copilot-Sitzung besitzt bereits einen nicht-finalen Lauf, der nicht sicher wiederverwendet werden kann.',
+                        );
+                    }
+
+                    if ((int) $copilotSession->active_workflow_run_id !== (int) $existingRun->id) {
+                        $copilotSession->forceFill([
+                            'active_workflow_run_id' => $existingRun->id,
+                            'last_activity_at' => now(),
+                        ])->save();
+                    }
+
+                    return $existingRun;
+                }
+            }
+
             $attributes = [
                 'run_uuid' => (string) Str::uuid(),
                 'workflow_id' => $lockedWorkflow->id,
@@ -120,15 +179,99 @@ class WorkflowExecutionService
 
             $lockedWorkflow->forceFill(['last_run_at' => now()])->save();
 
+            if ($copilotSession) {
+                $copilotSession->forceFill([
+                    'active_workflow_run_id' => $run->id,
+                    'last_activity_at' => now(),
+                ])->save();
+                RunWorkflowJob::dispatch($run->id)->afterCommit();
+            }
+
             return $run;
         });
 
-        RunWorkflowJob::dispatch($run->id);
+        if ($copilotSessionId === 0) {
+            RunWorkflowJob::dispatch($run->id);
+        }
 
         return $run;
     }
 
     public function advance(int|WorkflowRun $workflowRun): void
+    {
+        $runId = $workflowRun instanceof WorkflowRun ? (int) $workflowRun->id : (int) $workflowRun;
+        $locator = WorkflowRun::query()
+            ->select(['id', 'workflow_id', 'workflow_copilot_session_id', 'context_json'])
+            ->find($runId);
+
+        if (! $locator) {
+            throw (new \Illuminate\Database\Eloquent\ModelNotFoundException)->setModel(WorkflowRun::class, [$runId]);
+        }
+
+        $sessionId = (int) (
+            $locator->workflow_copilot_session_id
+            ?: data_get($locator->context_json, 'workflow_copilot_session_id', 0)
+        );
+
+        if ($sessionId <= 0) {
+            $this->advanceRun($runId);
+
+            return;
+        }
+
+        DB::transaction(function () use ($locator, $sessionId): void {
+            $workflow = Workflow::query()->lockForUpdate()->findOrFail($locator->workflow_id);
+            $session = WorkflowCopilotSession::query()->lockForUpdate()->find($sessionId);
+            $run = WorkflowRun::query()->lockForUpdate()->findOrFail($locator->id);
+            $context = is_array($run->context_json) ? $run->context_json : [];
+            $contextSessionId = (int) ($context['workflow_copilot_session_id'] ?? 0);
+
+            $identityMatches = $session
+                && (int) $session->workflow_id === (int) $workflow->id
+                && (int) $run->workflow_id === (int) $workflow->id
+                && (int) $run->workflow_copilot_session_id === (int) $session->id
+                && $contextSessionId === (int) $session->id;
+            $systemTarget = $identityMatches
+                && $session->execution_target === WorkflowCopilotSession::EXECUTION_TARGET_SYSTEM
+                && ($context['execution_target'] ?? null) === 'system';
+            $ownerMatches = $systemTarget
+                && (! Schema::hasColumn('workflows', 'active_workflow_copilot_session_id')
+                    || (int) $workflow->active_workflow_copilot_session_id === (int) $session->id);
+            $statusAllowsExecution = $ownerMatches && in_array($session->status, [
+                WorkflowCopilotSession::STATUS_RUNNING,
+                WorkflowCopilotSession::STATUS_REPAIRING,
+                WorkflowCopilotSession::STATUS_VERIFYING,
+            ], true);
+
+            if (! $statusAllowsExecution) {
+                if ($session?->status === WorkflowCopilotSession::STATUS_STOPPED
+                    && ! $this->isFinalStatus((string) $run->status)
+                    && ! $run->stepRuns()->exists()) {
+                    $message = 'Workflow-Lauf wurde gestoppt, bevor der erste System-Task gestartet wurde.';
+                    $run->forceFill([
+                        'status' => 'cancelled',
+                        'current_workflow_step_id' => null,
+                        'finished_at' => now(),
+                        'result_json' => [
+                            'ok' => false,
+                            'status' => 'cancelled',
+                            'statusMessage' => $message,
+                            'source' => 'workflow-copilot-advance-guard',
+                        ],
+                        'error_message' => $message,
+                    ])->save();
+                }
+
+                return;
+            }
+
+            unset($context['copilot_advance_blocked']);
+            $run->forceFill(['context_json' => $context])->save();
+            $this->advanceRun($run);
+        });
+    }
+
+    protected function advanceRun(int|WorkflowRun $workflowRun): void
     {
         $run = $this->loadRun($workflowRun);
 
@@ -501,90 +644,86 @@ class WorkflowExecutionService
 
     public function resumeCopilotCheckpoint(int|WorkflowRun $workflowRun): void
     {
-        $run = $this->loadRun($workflowRun);
-        $context = is_array($run->context_json) ? $run->context_json : [];
-        $checkpoint = is_array($context['copilot_checkpoint'] ?? null) ? $context['copilot_checkpoint'] : [];
+        $runId = $workflowRun instanceof WorkflowRun ? (int) $workflowRun->id : (int) $workflowRun;
+        $this->withLockedCopilotRun($runId, function (WorkflowRun $run): void {
+            $context = is_array($run->context_json) ? $run->context_json : [];
+            $checkpoint = is_array($context['copilot_checkpoint'] ?? null) ? $context['copilot_checkpoint'] : [];
 
-        if (! $this->isCopilotSupervisedRun($run) || $checkpoint === []) {
-            return;
-        }
-
-        $session = $run->copilotSession;
-
-        if (! $session || ! in_array($session->status, [
-            WorkflowCopilotSession::STATUS_RUNNING,
-            WorkflowCopilotSession::STATUS_REPAIRING,
-        ], true)) {
-            return;
-        }
-
-        $stepRun = $run->stepRuns()
-            ->where('workflow_step_id', (int) ($checkpoint['workflow_step_id'] ?? $run->current_workflow_step_id))
-            ->first();
-
-        if (! $stepRun) {
-            throw new \RuntimeException('Der Copilot-Checkpoint verweist auf keinen Workflow-Schritt.');
-        }
-
-        $action = trim((string) ($checkpoint['next_action'] ?? ''));
-        $result = is_array($checkpoint['result'] ?? null) ? $checkpoint['result'] : [];
-        $outcome = trim((string) ($checkpoint['outcome'] ?? 'success')) ?: 'success';
-
-        unset(
-            $context['copilot_checkpoint'],
-            $context['copilot_transient_task'],
-            $context['copilot_probe_plan'],
-            $context['copilot_segment_started_at'],
-        );
-
-        if ($action === 'next_task') {
-            $nextTaskKey = trim((string) ($checkpoint['next_task_key'] ?? ''));
-
-            if ($nextTaskKey === '') {
-                throw new \RuntimeException('Der naechste Copilot-Task fehlt im Checkpoint.');
+            if ($checkpoint === []) {
+                return;
             }
 
-            $context['next_task_key'] = $nextTaskKey;
-            $context['copilot_current_task_key'] = $nextTaskKey;
+            $stepRun = WorkflowStepRun::query()
+                ->where('workflow_run_id', $run->id)
+                ->where('workflow_step_id', (int) ($checkpoint['workflow_step_id'] ?? $run->current_workflow_step_id))
+                ->lockForUpdate()
+                ->first();
+
+            if (! $stepRun) {
+                throw new \RuntimeException('Der Copilot-Checkpoint verweist auf keinen Workflow-Schritt.');
+            }
+
+            $action = trim((string) ($checkpoint['next_action'] ?? ''));
+            $result = is_array($checkpoint['result'] ?? null) ? $checkpoint['result'] : [];
+            $outcome = trim((string) ($checkpoint['outcome'] ?? 'success')) ?: 'success';
+
+            unset(
+                $context['copilot_checkpoint'],
+                $context['copilot_transient_task'],
+                $context['copilot_probe_plan'],
+                $context['copilot_segment_started_at'],
+            );
+
+            if ($action === 'next_task') {
+                $nextTaskKey = trim((string) ($checkpoint['next_task_key'] ?? ''));
+
+                if ($nextTaskKey === '') {
+                    throw new \RuntimeException('Der naechste Copilot-Task fehlt im Checkpoint.');
+                }
+
+                $context['next_task_key'] = $nextTaskKey;
+                $context['copilot_current_task_key'] = $nextTaskKey;
+                $run->forceFill([
+                    'status' => 'running',
+                    'context_json' => $context,
+                ])->save();
+                $stepRun->forceFill([
+                    'status' => 'queued',
+                    'external_run_type' => null,
+                    'external_run_id' => null,
+                    'finished_at' => null,
+                    'duration_ms' => null,
+                    'error_message' => null,
+                ])->save();
+
+                RunWorkflowJob::dispatch($run->id);
+
+                return;
+            }
+
+            if ($action !== 'complete_step') {
+                return;
+            }
+
+            unset($context['next_task_key'], $context['copilot_current_task_key']);
             $run->forceFill([
                 'status' => 'running',
                 'context_json' => $context,
             ])->save();
-            $stepRun->forceFill([
-                'status' => 'queued',
-                'external_run_type' => null,
-                'external_run_id' => null,
-                'finished_at' => null,
-                'duration_ms' => null,
-                'error_message' => null,
-            ])->save();
+            $this->completeStepRun(
+                $stepRun,
+                $result,
+                in_array($outcome, ['failed', 'timeout'], true) ? $outcome : 'completed',
+            );
+            $this->continueAfterStep(
+                $run,
+                $stepRun,
+                $result,
+                $outcome,
+                max(0, (int) $stepRun->workflowStep->wait_after_seconds),
+            );
 
-            RunWorkflowJob::dispatch($run->id);
-
-            return;
-        }
-
-        if ($action !== 'complete_step') {
-            return;
-        }
-
-        unset($context['next_task_key'], $context['copilot_current_task_key']);
-        $run->forceFill([
-            'status' => 'running',
-            'context_json' => $context,
-        ])->save();
-        $this->completeStepRun(
-            $stepRun,
-            $result,
-            in_array($outcome, ['failed', 'timeout'], true) ? $outcome : 'completed',
-        );
-        $this->continueAfterStep(
-            $run,
-            $stepRun,
-            $result,
-            $outcome,
-            max(0, (int) $stepRun->workflowStep->wait_after_seconds),
-        );
+        });
     }
 
     public function retryCopilotTask(
@@ -593,59 +732,65 @@ class WorkflowExecutionService
         ?array $transientTask = null,
         array $repairPlan = [],
     ): void {
-        $run = $this->loadRun($workflowRun);
-
-        if (! $this->isCopilotSupervisedRun($run)) {
-            throw new \RuntimeException('Task-Proben sind nur in ueberwachten Copilot-Laeufen erlaubt.');
-        }
-
         $taskKey = trim($taskKey);
 
         if ($taskKey === '') {
             throw new \InvalidArgumentException('Task-Key fuer den Copilot-Wiederholungsversuch fehlt.');
         }
 
-        $context = is_array($run->context_json) ? $run->context_json : [];
-        $checkpoint = is_array($context['copilot_checkpoint'] ?? null) ? $context['copilot_checkpoint'] : [];
-        $stepId = (int) ($checkpoint['workflow_step_id'] ?? $run->current_workflow_step_id);
-        $stepRun = $run->stepRuns()->where('workflow_step_id', $stepId)->first();
+        $runId = $workflowRun instanceof WorkflowRun ? (int) $workflowRun->id : (int) $workflowRun;
+        $this->withLockedCopilotRun(
+            $runId,
+            function (WorkflowRun $run) use ($taskKey, $transientTask, $repairPlan): void {
+                $context = is_array($run->context_json) ? $run->context_json : [];
+                $checkpoint = is_array($context['copilot_checkpoint'] ?? null) ? $context['copilot_checkpoint'] : [];
+                $stepId = (int) ($checkpoint['workflow_step_id'] ?? $run->current_workflow_step_id);
+                $stepRun = WorkflowStepRun::query()
+                    ->where('workflow_run_id', $run->id)
+                    ->where('workflow_step_id', $stepId)
+                    ->lockForUpdate()
+                    ->first();
 
-        if (! $stepRun) {
-            throw new \RuntimeException('Workflow-Schritt fuer den Copilot-Wiederholungsversuch wurde nicht gefunden.');
-        }
+                if (! $stepRun) {
+                    throw new \RuntimeException('Workflow-Schritt fuer den Copilot-Wiederholungsversuch wurde nicht gefunden.');
+                }
 
-        $context['execution_target'] = 'system';
-        $context['copilot_supervised'] = true;
-        $context['next_task_key'] = $taskKey;
-        $context['copilot_current_task_key'] = $taskKey;
-        $context['copilot_repair_plan'] = $repairPlan;
-        unset($context['copilot_checkpoint']);
+                $context['execution_target'] = 'system';
+                $context['network_node_id'] = null;
+                $context['device_id'] = null;
+                $context['copilot_supervised'] = true;
+                $context['next_task_key'] = $taskKey;
+                $context['copilot_current_task_key'] = $taskKey;
+                $context['copilot_repair_plan'] = $repairPlan;
+                unset($context['copilot_checkpoint']);
 
-        if (is_array($transientTask) && $transientTask !== []) {
-            $context['copilot_transient_task'] = $transientTask;
-            $context['copilot_probe_plan'] = $repairPlan;
-        } else {
-            unset($context['copilot_transient_task'], $context['copilot_probe_plan']);
-        }
+                if (is_array($transientTask) && $transientTask !== []) {
+                    $context['copilot_transient_task'] = $transientTask;
+                    $context['copilot_probe_plan'] = $repairPlan;
+                } else {
+                    unset($context['copilot_transient_task'], $context['copilot_probe_plan']);
+                }
 
-        $run->forceFill([
-            'status' => 'running',
-            'current_workflow_step_id' => $stepId,
-            'context_json' => $context,
-            'finished_at' => null,
-            'error_message' => null,
-        ])->save();
-        $stepRun->forceFill([
-            'status' => 'queued',
-            'external_run_type' => null,
-            'external_run_id' => null,
-            'started_at' => null,
-            'finished_at' => null,
-            'duration_ms' => null,
-            'error_message' => null,
-        ])->save();
+                $run->forceFill([
+                    'status' => 'running',
+                    'current_workflow_step_id' => $stepId,
+                    'context_json' => $context,
+                    'finished_at' => null,
+                    'error_message' => null,
+                ])->save();
+                $stepRun->forceFill([
+                    'status' => 'queued',
+                    'external_run_type' => null,
+                    'external_run_id' => null,
+                    'started_at' => null,
+                    'finished_at' => null,
+                    'duration_ms' => null,
+                    'error_message' => null,
+                ])->save();
 
-        RunWorkflowJob::dispatch($run->id);
+                RunWorkflowJob::dispatch($run->id);
+            },
+        );
     }
 
     protected function holdCopilotTaskCheckpoint(
@@ -653,9 +798,30 @@ class WorkflowExecutionService
         array $status,
         array $result,
         bool $successful,
-    ): void {
-        $run = $this->loadRun($stepRun->workflow_run_id);
-        $stepRun = $run->stepRuns->firstWhere('id', $stepRun->id) ?? $stepRun;
+    ): string {
+        [$checkpointId, $sessionId] = DB::transaction(
+            fn (): array => $this->persistCopilotTaskCheckpoint($stepRun, $status, $result, $successful),
+        );
+
+        if ($sessionId > 0) {
+            WorkflowCopilotSupervisorJob::dispatch($sessionId);
+        }
+
+        return $checkpointId;
+    }
+
+    protected function persistCopilotTaskCheckpoint(
+        WorkflowStepRun $stepRun,
+        array $status,
+        array $result,
+        bool $successful,
+    ): array {
+        $run = WorkflowRun::query()->lockForUpdate()->findOrFail($stepRun->workflow_run_id);
+        $stepRun = WorkflowStepRun::query()
+            ->where('workflow_run_id', $run->id)
+            ->whereKey($stepRun->id)
+            ->lockForUpdate()
+            ->firstOrFail();
         $step = $stepRun->workflowStep;
         $context = is_array($run->context_json) ? $run->context_json : [];
         $currentTaskKey = trim((string) ($context['copilot_current_task_key'] ?? ''));
@@ -706,10 +872,27 @@ class WorkflowExecutionService
         }
 
         $publicResult = $this->publicRunSnapshot($result);
+        $resultSignature = hash('sha256', (string) json_encode(
+            $publicResult,
+            JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION,
+        ));
+        $existingCheckpoint = is_array($context['copilot_checkpoint'] ?? null)
+            ? $context['copilot_checkpoint']
+            : [];
+        $reusableCheckpointId = (string) ($existingCheckpoint['id'] ?? '');
+        $sameRuntimeResult = $reusableCheckpointId !== ''
+            && (int) ($existingCheckpoint['workflow_step_run_id'] ?? 0) === (int) $stepRun->id
+            && (int) ($existingCheckpoint['workflow_step_id'] ?? 0) === (int) $step->id
+            && (string) ($existingCheckpoint['external_run_id'] ?? '') === (string) $stepRun->external_run_id
+            && (string) ($existingCheckpoint['task_key'] ?? '') === $currentTaskKey
+            && (bool) ($existingCheckpoint['successful'] ?? false) === $successful
+            && (string) ($existingCheckpoint['outcome'] ?? '') === $outcome
+            && (string) ($existingCheckpoint['result_signature'] ?? '') === $resultSignature;
         $checkpoint = [
-            'id' => (string) Str::uuid(),
+            'id' => $sameRuntimeResult ? $reusableCheckpointId : (string) Str::uuid(),
             'kind' => $isProbe ? 'probe' : 'regular',
             'workflow_step_id' => (int) $step->id,
+            'workflow_step_run_id' => (int) $stepRun->id,
             'workflow_step_name' => (string) $step->name,
             'task_key' => $currentTaskKey,
             'task_title' => (string) (collect($step->task_cards)->firstWhere('key', $currentTaskKey)['title'] ?? $transientTask['title'] ?? $currentTaskKey),
@@ -718,6 +901,7 @@ class WorkflowExecutionService
             'next_action' => $nextAction,
             'next_task_key' => $nextTaskKey,
             'result' => $publicResult,
+            'result_signature' => $resultSignature,
             'status' => $this->publicRunSnapshot($status),
             'external_run_id' => (string) $stepRun->external_run_id,
             'started_at' => (string) ($context['copilot_segment_started_at'] ?? optional($stepRun->started_at)->toIso8601String()),
@@ -743,7 +927,10 @@ class WorkflowExecutionService
             ),
         ])->save();
 
-        WorkflowCopilotSupervisorJob::dispatch((int) data_get($run->context_json, 'workflow_copilot_session_id'));
+        return [
+            (string) $checkpoint['id'],
+            (int) ($run->workflow_copilot_session_id ?: data_get($context, 'workflow_copilot_session_id', 0)),
+        ];
     }
 
     public function expireTimedOutRuns(): void
@@ -1396,6 +1583,10 @@ class WorkflowExecutionService
             return;
         }
 
+        if ($this->isWaitingAtCopilotCheckpoint($stepRun)) {
+            return;
+        }
+
         $timeoutSeconds = $this->stepTimeoutSeconds($stepRun->workflowStep);
         $message = 'Workflow-Schritt hat das Timeout von '.$timeoutSeconds.' Sekunden ueberschritten.';
         $result = [
@@ -1424,6 +1615,19 @@ class WorkflowExecutionService
 
         $this->failStepRun($stepRun, $message, $result);
         $this->failRun($stepRun->workflowRun, $message);
+    }
+
+    protected function isWaitingAtCopilotCheckpoint(WorkflowStepRun $stepRun): bool
+    {
+        if ($stepRun->status !== 'waiting' || ! $this->isCopilotSupervisedRun($stepRun->workflowRun)) {
+            return false;
+        }
+
+        $checkpoint = data_get($stepRun->workflowRun->context_json, 'copilot_checkpoint');
+
+        return is_array($checkpoint)
+            && trim((string) ($checkpoint['id'] ?? '')) !== ''
+            && (int) ($checkpoint['workflow_step_id'] ?? 0) === (int) $stepRun->workflow_step_id;
     }
 
     protected function completeRun(WorkflowRun $run): void
@@ -3183,6 +3387,77 @@ class WorkflowExecutionService
         }
 
         return data_get($run->context_json, 'execution_target', 'system') === 'client_controller';
+    }
+
+    /**
+     * Serializes every Copilot continuation against workflow/session controls.
+     *
+     * A user pause or stop that commits first wins and turns a queued supervisor
+     * continuation into a no-op. Invalid ownership or a client execution target
+     * is rejected instead of being silently repaired in memory.
+     */
+    protected function withLockedCopilotRun(int $runId, callable $callback): mixed
+    {
+        $locator = WorkflowRun::query()
+            ->select(['id', 'workflow_id', 'workflow_copilot_session_id'])
+            ->find($runId);
+
+        if (! $locator) {
+            throw new \RuntimeException('Der Workflow-Run wurde nicht gefunden.');
+        }
+
+        $sessionId = (int) $locator->workflow_copilot_session_id;
+
+        if ($sessionId <= 0) {
+            throw new \RuntimeException('Task-Proben sind nur in ueberwachten Copilot-Laeufen erlaubt.');
+        }
+
+        return DB::transaction(function () use ($locator, $sessionId, $callback): mixed {
+            $workflow = Workflow::query()->lockForUpdate()->findOrFail($locator->workflow_id);
+            $session = WorkflowCopilotSession::query()->lockForUpdate()->find($sessionId);
+
+            if (! $session || (int) $session->workflow_id !== (int) $workflow->id) {
+                throw new \RuntimeException('Die Workflow-Copilot-Sitzung gehoert nicht zu diesem Workflow.');
+            }
+
+            $run = WorkflowRun::query()->lockForUpdate()->findOrFail($locator->id);
+            $context = is_array($run->context_json) ? $run->context_json : [];
+            $contextSessionId = (int) ($context['workflow_copilot_session_id'] ?? 0);
+
+            if ((int) $run->workflow_id !== (int) $workflow->id
+                || (int) $run->workflow_copilot_session_id !== (int) $session->id
+                || $contextSessionId !== (int) $session->id) {
+                throw new \RuntimeException('Der Workflow-Run ist nicht eindeutig der aktiven Copilot-Sitzung zugeordnet.');
+            }
+
+            if (! (bool) ($context['copilot_supervised'] ?? false)) {
+                throw new \RuntimeException('Task-Proben sind nur in ueberwachten Copilot-Laeufen erlaubt.');
+            }
+
+            if (($context['execution_target'] ?? null) !== 'system'
+                || $session->execution_target !== WorkflowCopilotSession::EXECUTION_TARGET_SYSTEM) {
+                throw new \RuntimeException('Workflow-Copilot-Laeufe duerfen ausschliesslich auf execution_target=system laufen.');
+            }
+
+            if (! in_array($session->status, [
+                WorkflowCopilotSession::STATUS_RUNNING,
+                WorkflowCopilotSession::STATUS_REPAIRING,
+                WorkflowCopilotSession::STATUS_VERIFYING,
+            ], true)) {
+                return null;
+            }
+
+            if (Schema::hasColumn('workflows', 'active_workflow_copilot_session_id')
+                && (int) $workflow->active_workflow_copilot_session_id !== (int) $session->id) {
+                throw new \RuntimeException('Die Workflow-Copilot-Sitzung besitzt den exklusiven Workflow-Lock nicht.');
+            }
+
+            if ($run->status !== 'waiting') {
+                return null;
+            }
+
+            return $callback($run, $workflow, $session);
+        });
     }
 
     protected function isCopilotSupervisedRun(WorkflowRun $run): bool

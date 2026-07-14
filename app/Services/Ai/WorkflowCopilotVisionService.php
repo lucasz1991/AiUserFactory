@@ -14,6 +14,12 @@ class WorkflowCopilotVisionService
 {
     protected const MIN_ACTION_CONFIDENCE = 0.55;
 
+    protected const MAX_ANALYSIS_SECONDS = 120;
+
+    protected const MAX_MODEL_TIMEOUT_SECONDS = 35;
+
+    protected const MAX_DOM_TIMEOUT_SECONDS = 25;
+
     protected const TASKS_REQUIRING_ELEMENT_REF = [
         'browser.click',
         'browser.hover',
@@ -39,6 +45,12 @@ class WorkflowCopilotVisionService
 
         if ($image !== null) {
             foreach ($models as $index => $model) {
+                $remainingSeconds = $this->remainingAnalysisSeconds($startedAt);
+
+                if ($remainingSeconds < 5) {
+                    break;
+                }
+
                 $attemptStartedAt = microtime(true);
 
                 try {
@@ -47,7 +59,7 @@ class WorkflowCopilotVisionService
                         'temperature' => 0,
                         'max_completion_tokens' => 1800,
                         'response_format' => ['type' => 'json_object'],
-                        '_timeout' => 120,
+                        '_timeout' => min(self::MAX_MODEL_TIMEOUT_SECONDS, $remainingSeconds),
                     ]);
                     $decoded = $this->decodeResponse($response);
                     $result = $this->normalizeResult($decoded, $safeObservation);
@@ -79,6 +91,19 @@ class WorkflowCopilotVisionService
         }
 
         if ($this->hasDomEvidence($safeObservation)) {
+            $remainingSeconds = $this->remainingAnalysisSeconds($startedAt);
+
+            if ($remainingSeconds < 5) {
+                return $this->finish(
+                    $this->safePauseResult($safeObservation),
+                    null,
+                    'safe_pause',
+                    $attempts,
+                    $startedAt,
+                    $attempts !== [],
+                );
+            }
+
             $attemptStartedAt = microtime(true);
             $model = $models[0] ?? 'configured-data-model';
 
@@ -91,7 +116,7 @@ class WorkflowCopilotVisionService
                         'model' => $models[0] ?? null,
                         'temperature' => 0,
                         'max_completion_tokens' => 1600,
-                        '_timeout' => 90,
+                        '_timeout' => min(self::MAX_DOM_TIMEOUT_SECONDS, $remainingSeconds),
                     ], static fn (mixed $value): bool => $value !== null),
                 );
                 $result = $this->normalizeResult($decoded, $safeObservation);
@@ -202,6 +227,8 @@ class WorkflowCopilotVisionService
                 'available_for_vision' => $hasValidImage,
                 'mime_type' => data_get($observation, 'screenshot.mime_type'),
                 'size_bytes' => data_get($observation, 'screenshot.size_bytes'),
+                'width' => data_get($observation, 'screenshot.width'),
+                'height' => data_get($observation, 'screenshot.height'),
             ],
             'evidence_sufficient' => $hasValidImage || $hasDomEvidence,
         ]);
@@ -540,5 +567,10 @@ class WorkflowCopilotVisionService
     protected function durationMs(float $startedAt): int
     {
         return max(0, (int) round((microtime(true) - $startedAt) * 1000));
+    }
+
+    protected function remainingAnalysisSeconds(float $startedAt): int
+    {
+        return max(0, self::MAX_ANALYSIS_SECONDS - (int) ceil(microtime(true) - $startedAt));
     }
 }

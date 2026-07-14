@@ -930,10 +930,40 @@
                                     </div>
                                 </div>
 
+                                @if(is_array(data_get($copilotStatus, 'verification_report')))
+                                    @php
+                                        $verificationReport = data_get($copilotStatus, 'verification_report');
+                                    @endphp
+                                    <section
+                                        data-workflow-copilot-verification-report
+                                        class="rounded-xl border p-4 text-sm {{ data_get($verificationReport, 'pass') ? 'border-emerald-200 bg-emerald-50 text-emerald-950' : 'border-amber-200 bg-amber-50 text-amber-950' }}"
+                                    >
+                                        <div class="flex flex-wrap items-center justify-between gap-2">
+                                            <h3 class="font-bold">{{ data_get($verificationReport, 'final') ? 'Finaler Verifikationsbericht' : 'Letzte Verifikationspruefung' }}</h3>
+                                            <span class="rounded-full bg-white/70 px-3 py-1 text-xs font-bold">{{ data_get($verificationReport, 'pass') ? 'BESTANDEN' : 'NICHT BESTANDEN' }}</span>
+                                        </div>
+                                        <p class="mt-2 leading-6">{{ data_get($verificationReport, 'message') }}</p>
+                                        <dl class="mt-3 grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-4">
+                                            <div class="rounded-lg bg-white/60 p-2"><dt class="font-semibold opacity-60">Revision</dt><dd class="mt-1 font-bold">{{ data_get($verificationReport, 'revision') ?: '-' }}</dd></div>
+                                            <div class="rounded-lg bg-white/60 p-2"><dt class="font-semibold opacity-60">Kontrolllauf</dt><dd class="mt-1 font-bold">{{ data_get($verificationReport, 'workflow_run_id') ? '#'.data_get($verificationReport, 'workflow_run_id') : '-' }}</dd></div>
+                                            <div class="rounded-lg bg-white/60 p-2"><dt class="font-semibold opacity-60">Zielassertionen</dt><dd class="mt-1 font-bold">{{ data_get($verificationReport, 'criteria_total') > 0 ? data_get($verificationReport, 'criteria_passed').'/'.data_get($verificationReport, 'criteria_total') : '-' }}</dd></div>
+                                            <div class="rounded-lg bg-white/60 p-2">
+                                                <dt class="font-semibold opacity-60">Bildanalyse</dt>
+                                                <dd class="mt-1 font-bold">
+                                                    {{ data_get($verificationReport, 'vision_verdict') ?: '-' }}
+                                                    @if(data_get($verificationReport, 'vision_confidence') !== null)
+                                                        ({{ number_format((float) data_get($verificationReport, 'vision_confidence') * 100, 0, ',', '.') }} %)
+                                                    @endif
+                                                </dd>
+                                            </div>
+                                        </dl>
+                                    </section>
+                                @endif
+
                                 <div class="rounded-xl border border-slate-200 bg-white p-4">
                                     <div class="flex items-center justify-between gap-3">
                                         <h3 class="text-sm font-bold text-slate-900">Live-Ereignisse</h3>
-                                        <span class="text-xs text-slate-500">Aktualisierung alle 2 Sekunden</span>
+                                        <span class="text-xs text-slate-500">{{ data_get($copilotStatus, 'active') ? 'Aktualisierung alle 2 Sekunden' : 'Gespeicherter Sitzungsverlauf' }}</span>
                                     </div>
                                     <div class="mt-3 max-h-72 space-y-2 overflow-y-auto">
                                         @forelse($copilotEvents as $event)

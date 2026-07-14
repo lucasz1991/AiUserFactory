@@ -23,24 +23,28 @@ test('IF element task follows success when the element exists', async () => {
 });
 
 test('IF element task follows failure when the element is absent', async () => {
-  let receivedTimeout = null;
+  const receivedTimeouts = [];
   const frame = {
     waitForSelector: async (_selector, options) => {
-      receivedTimeout ??= options.timeout;
+      receivedTimeouts.push(options.timeout);
 
       return null;
     },
   };
+  const startedAt = Date.now();
   const result = await task.run({
     input: { selector: '#missing', timeout_seconds: 2 },
     page: {
       frames: () => [frame],
     },
   });
+  const elapsedMs = Date.now() - startedAt;
 
   assert.equal(result.ok, true);
   assert.equal(result.status, 'not_found');
   assert.equal(result.elementExists, false);
   assert.equal(result.branchOutcome, 'failed');
-  assert.ok(receivedTimeout > 1500 && receivedTimeout <= 2000);
+  assert.ok(receivedTimeouts.length > 1);
+  assert.ok(receivedTimeouts.every((timeout) => timeout > 0 && timeout <= 100));
+  assert.ok(elapsedMs >= 1500 && elapsedMs <= 3500);
 });

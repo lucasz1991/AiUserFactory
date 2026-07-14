@@ -96,9 +96,15 @@ HTML);
         $this->assertSame('debug/screen.png', $observation['screenshot_relative_path']);
         $this->assertStringStartsWith('data:image/png;base64,', (string) $observation['screenshot_data_url']);
         $this->assertTrue(data_get($observation, 'screenshot.available_for_vision'));
+        $this->assertSame(1, data_get($observation, 'screenshot.width'));
+        $this->assertSame(1, data_get($observation, 'screenshot.height'));
         $this->assertTrue($observation['evidence_sufficient']);
         $this->assertGreaterThan(0, $observation['sensitive_fields_removed']);
         $this->assertNotEmpty($observation['interaction_map']);
+        $this->assertSame(
+            range(1, count($observation['interaction_map'])),
+            array_column($observation['interaction_map'], 'element_number'),
+        );
         $this->assertSame(
             array_column($observation['interaction_map'], 'element_ref'),
             array_column($repeat['interaction_map'], 'element_ref'),
@@ -204,6 +210,95 @@ HTML);
         $this->assertLessThanOrEqual(
             WorkflowCopilotObservationService::MAX_OBSERVATION_BYTES,
             strlen(json_encode($withoutImage, JSON_UNESCAPED_SLASHES)),
+        );
+    }
+
+    public function test_element_reference_stays_stable_when_text_changes_but_selector_does_not(): void
+    {
+        $run = (new WorkflowRun)->forceFill([
+            'id' => 5,
+            'result_json' => [
+                'interaction_map' => [[
+                    'tag' => 'button',
+                    'text' => 'Weiter',
+                    'selector' => 'button[data-testid="continue"]',
+                    'visible' => true,
+                ]],
+            ],
+        ]);
+        $run->setRelation('stepRuns', collect());
+        $run->setRelation('artifacts', collect());
+        $service = new WorkflowCopilotObservationService(Mockery::mock(WorkflowDebugArtifactService::class));
+        $first = $service->observe($run);
+
+        $run->result_json = [
+            'interaction_map' => [[
+                'tag' => 'button',
+                'text' => 'Bitte warten ...',
+                'selector' => 'button[data-testid="continue"]',
+                'visible' => true,
+            ]],
+        ];
+        $second = $service->observe($run);
+
+        $this->assertSame(
+            data_get($first, 'interaction_map.0.element_ref'),
+            data_get($second, 'interaction_map.0.element_ref'),
+        );
+    }
+
+    public function test_explicitly_hidden_elements_are_removed_from_the_model_interaction_map(): void
+    {
+        $run = (new WorkflowRun)->forceFill([
+            'id' => 5,
+            'result_json' => [
+                'interaction_map' => [[
+                    'tag' => 'button',
+                    'text' => 'Hidden admin action',
+                    'selector' => '#hidden-admin-action',
+                    'visible' => false,
+                ], [
+                    'tag' => 'button',
+                    'text' => 'Visible action',
+                    'selector' => '#visible-action',
+                    'visible' => true,
+                ]],
+            ],
+        ]);
+        $run->setRelation('stepRuns', collect());
+        $run->setRelation('artifacts', collect());
+
+        $observation = (new WorkflowCopilotObservationService(Mockery::mock(WorkflowDebugArtifactService::class)))->observe($run);
+        $serialized = json_encode($observation['interaction_map'], JSON_UNESCAPED_SLASHES);
+
+        $this->assertCount(1, $observation['interaction_map']);
+        $this->assertSame('#visible-action', data_get($observation, 'interaction_map.0.selector_candidates.0'));
+        $this->assertSame(1, data_get($observation, 'interaction_map.0.element_number'));
+        $this->assertStringNotContainsString('hidden-admin-action', $serialized);
+    }
+
+    public function test_unstable_long_identifier_is_not_exposed_as_a_selector_candidate(): void
+    {
+        $run = (new WorkflowRun)->forceFill([
+            'id' => 5,
+            'result_json' => [
+                'interaction_map' => [[
+                    'tag' => 'button',
+                    'text' => 'Continue',
+                    'selector' => '[id="user_0123456789abcdefghijklmnop"]',
+                    'visible' => true,
+                ]],
+            ],
+        ]);
+        $run->setRelation('stepRuns', collect());
+        $run->setRelation('artifacts', collect());
+
+        $observation = (new WorkflowCopilotObservationService(Mockery::mock(WorkflowDebugArtifactService::class)))->observe($run);
+
+        $this->assertSame([], data_get($observation, 'interaction_map.0.selector_candidates'));
+        $this->assertStringNotContainsString(
+            '0123456789abcdefghijklmnop',
+            json_encode($observation['interaction_map'], JSON_UNESCAPED_SLASHES),
         );
     }
 

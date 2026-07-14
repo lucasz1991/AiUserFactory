@@ -12,8 +12,8 @@ use App\Models\WorkflowCopilotSession;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowStep;
 use App\Services\Workflows\PersonaActionWorkflowCatalog;
-use App\Services\Workflows\WorkflowExecutionService;
 use App\Services\Workflows\WorkflowCopilotSessionService;
+use App\Services\Workflows\WorkflowExecutionService;
 use App\Services\Workflows\WorkflowRunDebugPackageService;
 use App\Services\Workflows\WorkflowTaskCatalog;
 use App\Services\Workflows\WorkflowTaskOrderingService;
@@ -111,6 +111,8 @@ class WorkflowManager extends Component
     public bool $showCopilotPreviewModal = false;
 
     public ?int $activeCopilotSessionId = null;
+
+    public ?int $dismissedCopilotTerminalSessionId = null;
 
     public string $copilotGoal = '';
 
@@ -1373,7 +1375,10 @@ class WorkflowManager extends Component
 
         $session = $this->activeCopilotSession();
 
-        if ($session && ! $session->retainsWorkflowLock()) {
+        if ($session
+            && in_array((string) $session->status, WorkflowCopilotSession::TERMINAL_STATUSES, true)
+            && ! $session->retainsWorkflowLock()) {
+            $this->dismissedCopilotTerminalSessionId = (int) $session->getKey();
             $this->activeCopilotSessionId = null;
             $this->copilotStatus = [];
             $this->copilotEvents = [];
@@ -1513,11 +1518,7 @@ class WorkflowManager extends Component
             return;
         }
 
-        $session = WorkflowCopilotSession::query()
-            ->where('workflow_id', $this->selectedWorkflowId)
-            ->whereIn('status', WorkflowCopilotSession::LOCK_RETAINING_STATUSES)
-            ->latest('id')
-            ->first();
+        $session = $this->preferredCopilotSessionForWorkflow();
 
         if (! $session) {
             return;
@@ -1543,11 +1544,34 @@ class WorkflowManager extends Component
             return null;
         }
 
-        return WorkflowCopilotSession::query()
-            ->where('workflow_id', $this->selectedWorkflowId)
-            ->whereIn('status', WorkflowCopilotSession::LOCK_RETAINING_STATUSES)
+        return $this->preferredCopilotSessionForWorkflow();
+    }
+
+    protected function preferredCopilotSessionForWorkflow(): ?WorkflowCopilotSession
+    {
+        if (! $this->selectedWorkflowId) {
+            return null;
+        }
+
+        $query = WorkflowCopilotSession::query()
+            ->where('workflow_id', $this->selectedWorkflowId);
+        $active = (clone $query)
+            ->whereIn('status', WorkflowCopilotSession::ACTIVE_STATUSES)
             ->latest('id')
             ->first();
+
+        if ($active) {
+            return $active;
+        }
+
+        $terminal = (clone $query)
+            ->whereIn('status', WorkflowCopilotSession::TERMINAL_STATUSES)
+            ->latest('id')
+            ->first();
+
+        return $terminal && (int) $terminal->getKey() !== (int) $this->dismissedCopilotTerminalSessionId
+            ? $terminal
+            : null;
     }
 
     protected function parseCopilotSuccessCriteria(string $criteria): array
@@ -1657,9 +1681,52 @@ class WorkflowManager extends Component
             'remaining_minutes' => max(0, $maxMinutes - $elapsedMinutes),
             'started_at' => optional($session->started_at)->format('d.m.Y H:i:s'),
             'finished_at' => optional($session->finished_at)->format('d.m.Y H:i:s'),
+            'verification_report' => $this->copilotVerificationReport($session, $state),
             'checkpoints' => $checkpoints,
             'revisions' => $revisions,
             'dom_elements' => $domElements,
+        ];
+    }
+
+    protected function copilotVerificationReport(WorkflowCopilotSession $session, array $state): ?array
+    {
+        $event = $session->events()
+            ->whereIn('event_type', ['verification.passed', 'verification.failed'])
+            ->latest('sequence')
+            ->first();
+        $stateVerification = data_get($state, 'verification');
+
+        if (! $event && ! is_array($stateVerification)) {
+            return null;
+        }
+
+        $payload = is_array($event?->payload_json) ? $event->payload_json : [];
+        $criteria = data_get($payload, 'criteria_evaluation', data_get($state, 'verification.criteria', []));
+        $criteria = is_array($criteria) ? $criteria : [];
+        $vision = data_get($state, 'verification.vision', data_get($payload, 'vision', []));
+        $vision = is_array($vision) ? $vision : [];
+        $pass = $event
+            ? (string) $event->event_type === 'verification.passed'
+            : (bool) data_get($state, 'verification.pass', false);
+
+        return [
+            'final' => in_array((string) $session->status, WorkflowCopilotSession::TERMINAL_STATUSES, true),
+            'pass' => $pass,
+            'message' => Str::limit(trim((string) ($event?->message ?? ($pass
+                ? 'Workflow vollstaendig erfolgreich und automatisch verifiziert.'
+                : 'Die letzte Endpruefung wurde nicht bestanden.'))), 2000, ''),
+            'workflow_run_id' => (int) ($payload['workflow_run_id'] ?? data_get($state, 'verification_run_id', 0)),
+            'revision' => (int) ($payload['revision'] ?? $session->current_revision ?? 0),
+            'technical_status' => (string) ($payload['technical_status'] ?? ''),
+            'business_status' => (string) ($payload['business_status'] ?? ''),
+            'criteria_pass' => (bool) ($criteria['pass'] ?? false),
+            'criteria_passed' => (int) ($criteria['passed'] ?? 0),
+            'criteria_total' => (int) ($criteria['total'] ?? 0),
+            'vision_verdict' => (string) ($payload['vision_verdict'] ?? $vision['verdict'] ?? ''),
+            'vision_confidence' => is_numeric($payload['vision_confidence'] ?? $vision['confidence'] ?? null)
+                ? (float) ($payload['vision_confidence'] ?? $vision['confidence'])
+                : null,
+            'time' => optional($event?->occurred_at ?? $event?->created_at)->format('d.m.Y H:i:s'),
         ];
     }
 
@@ -1726,7 +1793,15 @@ class WorkflowManager extends Component
 
     protected function editableWorkflow(): ?Workflow
     {
-        return $this->selectedWorkflow();
+        $workflow = $this->selectedWorkflow();
+
+        if ($workflow?->has_active_copilot_lock) {
+            session()->flash('error', 'Dieser Workflow wird gerade exklusiv durch den Copilot optimiert und kann nicht manuell veraendert werden.');
+
+            return null;
+        }
+
+        return $workflow;
     }
 
     protected function previewWorkflowRun(): ?WorkflowRun
@@ -2934,7 +3009,7 @@ class WorkflowManager extends Component
 
     protected function stepForSelectedWorkflow(int $stepId): ?WorkflowStep
     {
-        $workflow = $this->selectedWorkflow();
+        $workflow = $this->editableWorkflow();
 
         if (! $workflow) {
             return null;

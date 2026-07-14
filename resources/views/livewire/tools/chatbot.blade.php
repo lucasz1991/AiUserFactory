@@ -1258,6 +1258,41 @@
                                     </div>
                                 </div>
 
+                                @if(is_array(data_get($copilotStatus, 'verification_report')))
+                                    @php
+                                        $verificationReport = data_get($copilotStatus, 'verification_report');
+                                    @endphp
+                                    <section
+                                        data-workflow-copilot-verification-report
+                                        class="rounded-xl border p-3 text-xs {{ data_get($verificationReport, 'pass') ? 'border-emerald-200 bg-emerald-50 text-emerald-950' : 'border-amber-200 bg-amber-50 text-amber-950' }}"
+                                    >
+                                        <div class="flex items-center justify-between gap-2">
+                                            <strong>{{ data_get($verificationReport, 'final') ? 'Finaler Verifikationsbericht' : 'Letzte Verifikationspruefung' }}</strong>
+                                            <span class="rounded-full bg-white/70 px-2 py-0.5 font-bold">{{ data_get($verificationReport, 'pass') ? 'BESTANDEN' : 'NICHT BESTANDEN' }}</span>
+                                        </div>
+                                        <p class="mt-2 leading-5">{{ data_get($verificationReport, 'message') }}</p>
+                                        <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[10px] font-semibold opacity-80">
+                                            @if(data_get($verificationReport, 'revision'))
+                                                <span>Revision {{ data_get($verificationReport, 'revision') }}</span>
+                                            @endif
+                                            @if(data_get($verificationReport, 'workflow_run_id'))
+                                                <span>Kontrolllauf #{{ data_get($verificationReport, 'workflow_run_id') }}</span>
+                                            @endif
+                                            @if(data_get($verificationReport, 'criteria_total') > 0)
+                                                <span>Ziele {{ data_get($verificationReport, 'criteria_passed') }}/{{ data_get($verificationReport, 'criteria_total') }}</span>
+                                            @endif
+                                            @if(filled(data_get($verificationReport, 'vision_verdict')))
+                                                <span>
+                                                    Vision {{ data_get($verificationReport, 'vision_verdict') }}
+                                                    @if(data_get($verificationReport, 'vision_confidence') !== null)
+                                                        ({{ number_format((float) data_get($verificationReport, 'vision_confidence') * 100, 0, ',', '.') }} %)
+                                                    @endif
+                                                </span>
+                                            @endif
+                                        </div>
+                                    </section>
+                                @endif
+
                                 @if($copilotEventFeed !== [])
                                     <div class="space-y-1.5 border-t border-slate-100 pt-3">
                                         <p class="text-[10px] font-black uppercase tracking-[.12em] text-slate-400">Aktuelle Arbeitsschritte</p>

@@ -5,9 +5,6 @@ namespace App\Services\Workflows;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowRunArtifact;
 use App\Models\WorkflowStepRun;
-use DOMDocument;
-use DOMElement;
-use DOMXPath;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 use Intervention\Image\ImageManager;
@@ -101,6 +98,8 @@ class WorkflowCopilotObservationService
                 'artifact_id' => $screenshot['artifact_id'],
                 'mime_type' => $screenshot['mime_type'],
                 'size_bytes' => $screenshot['size_bytes'],
+                'width' => $screenshot['width'],
+                'height' => $screenshot['height'],
                 'available_for_vision' => $screenshot['data_url'] !== null,
             ],
             'evidence_sufficient' => $interactionMap !== []
@@ -248,100 +247,17 @@ class WorkflowCopilotObservationService
             $metadata = is_array($decoded) ? $decoded : [];
         }
 
-        $previous = libxml_use_internal_errors(true);
+        // Raw page HTML is attacker-controlled and cannot prove that an element
+        // was visible in the captured viewport. Only browser-evaluated metadata
+        // with an explicit visible=true flag may become model interaction data.
+        $elements = collect($metadata['interaction_map'] ?? $metadata['interactionMap'] ?? [])
+            ->filter(fn (mixed $element): bool => is_array($element)
+                && $this->boolOrNull($element['visible'] ?? $element['is_visible'] ?? $element['isVisible'] ?? null) === true)
+            ->take(self::MAX_ELEMENTS * 2)
+            ->values()
+            ->all();
 
-        try {
-            $document = new DOMDocument;
-
-            if (! @$document->loadHTML($html, LIBXML_NONET | LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_COMPACT)) {
-                return ['metadata' => $metadata, 'elements' => []];
-            }
-
-            $xpath = new DOMXPath($document);
-            $nodes = $xpath->query('//button | //a | //input | //textarea | //select | //*[@role] | //*[@aria-label] | //*[@data-testid] | //*[@data-test] | //*[@data-cy] | //*[@data-qa]');
-            $elements = [];
-
-            if ($nodes !== false) {
-                foreach ($nodes as $node) {
-                    if (! $node instanceof DOMElement) {
-                        continue;
-                    }
-
-                    $elements[] = $this->domElementCandidate($node, (string) ($artifact->browser_window ?: 'main'));
-
-                    if (count($elements) >= self::MAX_ELEMENTS * 2) {
-                        $this->payloadTruncated = true;
-
-                        break;
-                    }
-                }
-            }
-
-            return ['metadata' => $metadata, 'elements' => $elements];
-        } catch (Throwable) {
-            return ['metadata' => $metadata, 'elements' => []];
-        } finally {
-            libxml_clear_errors();
-            libxml_use_internal_errors($previous);
-        }
-    }
-
-    protected function domElementCandidate(DOMElement $element, string $window): array
-    {
-        $tag = Str::lower($element->tagName);
-        $type = Str::lower($element->getAttribute('type'));
-        $style = Str::lower($element->getAttribute('style'));
-        $hidden = $element->hasAttribute('hidden')
-            || $type === 'hidden'
-            || $element->getAttribute('aria-hidden') === 'true'
-            || str_contains($style, 'display:none')
-            || str_contains($style, 'visibility:hidden');
-        $selectors = [];
-
-        foreach (['data-testid', 'data-test', 'data-cy', 'data-qa', 'aria-label', 'name'] as $attribute) {
-            $value = trim($element->getAttribute($attribute));
-
-            if ($value !== '') {
-                $selectors[] = $tag.'['.$attribute.'="'.$this->escapeCssAttribute($value).'"]';
-            }
-        }
-
-        if (($id = trim($element->getAttribute('id'))) !== '') {
-            array_unshift($selectors, '[id="'.$this->escapeCssAttribute($id).'"]');
-        }
-
-        if (($role = trim($element->getAttribute('role'))) !== '') {
-            $selectors[] = $tag.'[role="'.$this->escapeCssAttribute($role).'"]';
-        }
-
-        $boundingBox = $this->decodeBoundingBox($element->getAttribute('data-bounding-box'));
-
-        if ($boundingBox === null && $element->hasAttribute('data-x')) {
-            $boundingBox = $this->normalizeBoundingBox([
-                'x' => $element->getAttribute('data-x'),
-                'y' => $element->getAttribute('data-y'),
-                'width' => $element->getAttribute('data-width'),
-                'height' => $element->getAttribute('data-height'),
-            ]);
-        }
-
-        return [
-            'tag' => $tag,
-            'role' => $role ?? '',
-            'type' => $type,
-            'text' => in_array($tag, ['input', 'textarea', 'select'], true) ? '[REDACTED]' : $element->textContent,
-            'aria' => $element->getAttribute('aria-label'),
-            'name' => $element->getAttribute('name'),
-            'placeholder' => $element->getAttribute('placeholder'),
-            'visible' => ! $hidden,
-            'enabled' => ! $element->hasAttribute('disabled') && $element->getAttribute('aria-disabled') !== 'true',
-            'focused' => $element->hasAttribute('autofocus') || $element->getAttribute('data-focused') === 'true',
-            'selected' => $element->hasAttribute('selected') || $element->hasAttribute('checked') || $element->getAttribute('aria-selected') === 'true',
-            'bounding_box' => $boundingBox,
-            'selector_candidates' => $selectors,
-            'frame' => $element->getAttribute('data-frame'),
-            'window' => $window,
-        ];
+        return ['metadata' => $metadata, 'elements' => $elements];
     }
 
     protected function collectInteractionCandidates(mixed $value, array &$candidates, int $depth = 0): void
@@ -431,7 +347,14 @@ class WorkflowCopilotObservationService
             }
         }
 
-        return array_values($normalized);
+        return collect(array_values($normalized))
+            ->values()
+            ->map(function (array $element, int $index): array {
+                $element['element_number'] = $index + 1;
+
+                return $element;
+            })
+            ->all();
     }
 
     protected function normalizeElement(array $candidate, string $defaultWindow): ?array
@@ -442,6 +365,14 @@ class WorkflowCopilotObservationService
         $aria = $this->safeString($candidate['aria'] ?? $candidate['aria_label'] ?? $candidate['ariaLabel'] ?? '', 180);
         $name = $this->safeString($candidate['name'] ?? '', 160);
         $placeholder = $this->safeString($candidate['placeholder'] ?? '', 180);
+        $visible = $this->boolOrNull($candidate['visible'] ?? $candidate['is_visible'] ?? $candidate['isVisible'] ?? null);
+
+        if ($visible === false) {
+            $this->sensitiveFieldsRemoved++;
+
+            return null;
+        }
+
         $isInput = in_array($tag, ['input', 'textarea', 'select', 'option'], true);
         $text = $isInput
             ? $this->redactedInputValue($candidate)
@@ -455,17 +386,14 @@ class WorkflowCopilotObservationService
         }
 
         $explicitRef = trim((string) ($candidate['element_ref'] ?? $candidate['elementRef'] ?? $candidate['ref'] ?? ''));
+        $stableIdentity = $selectors[0] ?? implode('|', [$role, $name, $aria, $text]);
         $elementRef = preg_match('/^(?:el|element|node)[_.:-][A-Za-z0-9_.:-]{1,70}$/', $explicitRef)
             ? $explicitRef
             : 'el_'.substr(hash('sha256', implode('|', [
                 $window,
                 $frame,
                 $tag,
-                $selectors[0] ?? '',
-                $role,
-                $name,
-                $aria,
-                $text,
+                $stableIdentity,
             ])), 0, 16);
 
         return [
@@ -477,7 +405,7 @@ class WorkflowCopilotObservationService
             'aria' => $aria ?: null,
             'name' => $name ?: null,
             'placeholder' => $placeholder ?: null,
-            'visible' => $this->boolOrNull($candidate['visible'] ?? $candidate['is_visible'] ?? $candidate['isVisible'] ?? null),
+            'visible' => $visible,
             'enabled' => $this->boolOrNull($candidate['enabled'] ?? $candidate['is_enabled'] ?? $candidate['isEnabled'] ?? null),
             'focused' => $this->boolOrNull($candidate['focused'] ?? $candidate['is_focused'] ?? $candidate['isFocused'] ?? null),
             'selected' => $this->boolOrNull($candidate['selected'] ?? $candidate['checked'] ?? $candidate['is_selected'] ?? null),
@@ -549,6 +477,12 @@ class WorkflowCopilotObservationService
     protected function safeSelector(string $selector): bool
     {
         if ($selector === '' || str_contains($selector, '<') || preg_match('/[\r\n]/', $selector)) {
+            return false;
+        }
+
+        if (preg_match('/[A-Za-z0-9_-]{24,}/', $selector)) {
+            $this->sensitiveFieldsRemoved++;
+
             return false;
         }
 
@@ -658,6 +592,8 @@ class WorkflowCopilotObservationService
             'data_url' => $data[0],
             'mime_type' => $data[1],
             'size_bytes' => $data[2],
+            'width' => $data[3] ?? null,
+            'height' => $data[4] ?? null,
         ];
     }
 
@@ -731,7 +667,7 @@ class WorkflowCopilotObservationService
     protected function localImageDataUrl(string $path): array
     {
         if (! is_file($path) || ! is_readable($path)) {
-            return [null, null, null];
+            return [null, null, null, null, null];
         }
 
         $size = filesize($path);
@@ -739,7 +675,7 @@ class WorkflowCopilotObservationService
         if (! is_int($size) || $size <= 0 || $size > self::MAX_SOURCE_SCREENSHOT_BYTES) {
             $this->payloadTruncated = $size > self::MAX_SOURCE_SCREENSHOT_BYTES;
 
-            return [null, null, $size ?: null];
+            return [null, null, $size ?: null, null, null];
         }
 
         $mime = function_exists('mime_content_type') ? mime_content_type($path) : null;
@@ -756,7 +692,7 @@ class WorkflowCopilotObservationService
         }
 
         if ($mime === '') {
-            return [null, null, $size];
+            return [null, null, $size, null, null];
         }
 
         $dimensions = @getimagesize($path);
@@ -773,15 +709,15 @@ class WorkflowCopilotObservationService
             if ($size > self::MAX_SCREENSHOT_BYTES) {
                 $this->payloadTruncated = true;
 
-                return [null, $mime, $size];
+                return [null, $mime, $size, $dimensions[0] ?? null, $dimensions[1] ?? null];
             }
         }
 
         $content = file_get_contents($path);
 
         return is_string($content)
-            ? ['data:'.$mime.';base64,'.base64_encode($content), $mime, $size]
-            : [null, $mime, $size];
+            ? ['data:'.$mime.';base64,'.base64_encode($content), $mime, $size, $dimensions[0] ?? null, $dimensions[1] ?? null]
+            : [null, $mime, $size, $dimensions[0] ?? null, $dimensions[1] ?? null];
     }
 
     protected function resizedImageDataUrl(string $path): array
@@ -794,20 +730,28 @@ class WorkflowCopilotObservationService
                 $size = strlen($encoded);
 
                 if ($size > 0 && $size <= self::MAX_SCREENSHOT_BYTES) {
-                    return ['data:image/webp;base64,'.base64_encode($encoded), 'image/webp', $size];
+                    $dimensions = @getimagesizefromstring($encoded);
+
+                    return [
+                        'data:image/webp;base64,'.base64_encode($encoded),
+                        'image/webp',
+                        $size,
+                        $dimensions[0] ?? null,
+                        $dimensions[1] ?? null,
+                    ];
                 }
             }
         } catch (Throwable) {
             // The unmodified image remains usable when it is already below the hard byte limit.
         }
 
-        return [null, null, null];
+        return [null, null, null, null, null];
     }
 
     protected function validatedInlineImage(string $dataUrl): array
     {
         if (! preg_match('#^data:(image/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=\r\n]+)$#', $dataUrl, $match)) {
-            return [null, null, null];
+            return [null, null, null, null, null];
         }
 
         $binary = base64_decode($match[2], true);
@@ -815,10 +759,18 @@ class WorkflowCopilotObservationService
         if (! is_string($binary) || strlen($binary) === 0 || strlen($binary) > self::MAX_SCREENSHOT_BYTES) {
             $this->payloadTruncated = is_string($binary) && strlen($binary) > self::MAX_SCREENSHOT_BYTES;
 
-            return [null, $match[1], is_string($binary) ? strlen($binary) : null];
+            return [null, $match[1], is_string($binary) ? strlen($binary) : null, null, null];
         }
 
-        return ['data:'.$match[1].';base64,'.base64_encode($binary), $match[1], strlen($binary)];
+        $dimensions = @getimagesizefromstring($binary);
+
+        return [
+            'data:'.$match[1].';base64,'.base64_encode($binary),
+            $match[1],
+            strlen($binary),
+            $dimensions[0] ?? null,
+            $dimensions[1] ?? null,
+        ];
     }
 
     protected function limitObservation(array $observation): array
@@ -1147,6 +1099,12 @@ class WorkflowCopilotObservationService
             'device_scale_factor' => is_numeric($viewport['device_scale_factor'] ?? $viewport['deviceScaleFactor'] ?? null)
                 ? max(0.1, min(10, (float) ($viewport['device_scale_factor'] ?? $viewport['deviceScaleFactor'])))
                 : null,
+            'scroll_x' => is_numeric($viewport['scroll_x'] ?? $viewport['scrollX'] ?? null)
+                ? (float) ($viewport['scroll_x'] ?? $viewport['scrollX'])
+                : 0.0,
+            'scroll_y' => is_numeric($viewport['scroll_y'] ?? $viewport['scrollY'] ?? null)
+                ? (float) ($viewport['scroll_y'] ?? $viewport['scrollY'])
+                : 0.0,
         ];
     }
 

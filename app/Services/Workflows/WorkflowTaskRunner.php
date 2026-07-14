@@ -1105,8 +1105,11 @@ class WorkflowTaskRunner
     protected function devDebugRuntimeConfig(WorkflowRun $run, WorkflowStep $step, WorkflowStepRun $stepRun, bool $localArtifacts = true): array
     {
         $settings = is_array($run->workflow?->settings_json) ? $run->workflow->settings_json : [];
+        $copilotObservation = (int) $run->workflow_copilot_session_id > 0
+            || (int) data_get($run->context_json, 'workflow_copilot_session_id', 0) > 0;
         $enabled = $localArtifacts && (
-            filter_var($settings['dev_mode'] ?? false, FILTER_VALIDATE_BOOL)
+            $copilotObservation
+            || filter_var($settings['dev_mode'] ?? false, FILTER_VALIDATE_BOOL)
             || filter_var($settings['development'] ?? false, FILTER_VALIDATE_BOOL)
         );
 
@@ -1123,11 +1126,12 @@ class WorkflowTaskRunner
         return [
             'enabled' => $enabled,
             'dev_mode' => $enabled,
-            'captureDomBeforeStep' => (bool) ($settings['dev_capture_dom_before_step'] ?? true),
-            'captureDomAfterStep' => (bool) ($settings['dev_capture_dom_after_step'] ?? true),
-            'captureScreenshotBeforeStep' => (bool) ($settings['dev_capture_screenshot_before_step'] ?? true),
-            'captureScreenshotAfterStep' => (bool) ($settings['dev_capture_screenshot_after_step'] ?? true),
-            'keepArtifacts' => (bool) ($settings['dev_keep_artifacts'] ?? true),
+            'copilotObservation' => $copilotObservation,
+            'captureDomBeforeStep' => $copilotObservation || (bool) ($settings['dev_capture_dom_before_step'] ?? true),
+            'captureDomAfterStep' => $copilotObservation || (bool) ($settings['dev_capture_dom_after_step'] ?? true),
+            'captureScreenshotBeforeStep' => $copilotObservation || (bool) ($settings['dev_capture_screenshot_before_step'] ?? true),
+            'captureScreenshotAfterStep' => $copilotObservation || (bool) ($settings['dev_capture_screenshot_after_step'] ?? true),
+            'keepArtifacts' => $copilotObservation || (bool) ($settings['dev_keep_artifacts'] ?? true),
             'status' => trim((string) ($settings['dev_status'] ?? '')),
             'storageDisk' => 'local',
             'storagePath' => $relativeDirectory,

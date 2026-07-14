@@ -906,10 +906,10 @@ class WorkflowAssistantToolService
 
     protected function updateWorkflow(array $arguments): array
     {
-        $workflow = $this->resolveWorkflow($arguments);
+        $workflow = $this->resolveEditableWorkflow($arguments);
 
         if (! $workflow) {
-            return $this->error('WORKFLOW_NOT_FOUND', 'Workflow wurde nicht gefunden.');
+            return $this->error('WORKFLOW_NOT_EDITABLE', 'Workflow wurde nicht gefunden oder ist gesperrt.');
         }
 
         $attributes = [];

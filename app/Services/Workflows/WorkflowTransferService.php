@@ -162,7 +162,10 @@ class WorkflowTransferService
             $workflowsBySlug = collect();
 
             foreach ($definitions as $definition) {
-                $workflow = Workflow::query()->where('slug', $definition['slug'])->first();
+                $workflow = Workflow::query()
+                    ->where('slug', $definition['slug'])
+                    ->lockForUpdate()
+                    ->first();
                 $attributes = [
                     'name' => $definition['name'],
                     'description' => $definition['description'],
@@ -175,6 +178,12 @@ class WorkflowTransferService
                 ];
 
                 if ($workflow) {
+                    if ($workflow->has_active_copilot_lock) {
+                        throw new RuntimeException(
+                            'Workflow "'.$workflow->name.'" wird durch eine aktive Copilot-Optimierung exklusiv gesperrt und kann nicht importiert werden.',
+                        );
+                    }
+
                     $workflow->forceFill($attributes)->save();
                     $updated++;
                 } else {

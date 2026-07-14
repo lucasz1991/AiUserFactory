@@ -8,6 +8,7 @@ use App\Models\Workflow;
 use App\Models\WorkflowCopilotSession;
 use App\Models\WorkflowStep;
 use App\Services\Ai\WorkflowAssistantToolService;
+use App\Services\Workflows\WorkflowCopilotSessionService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
@@ -88,6 +89,22 @@ class WorkflowCopilotToolServiceTest extends TestCase
         $this->assertSame('WORKFLOW_OPTIMIZE_AUTO_EXECUTE_DISABLED', $result['error']);
         $this->assertDatabaseCount('workflow_copilot_sessions', 0);
         Queue::assertNotPushed(WorkflowCopilotSupervisorJob::class);
+    }
+
+    public function test_normal_assistant_update_cannot_bypass_an_active_copilot_lock(): void
+    {
+        Queue::fake();
+        $workflow = $this->workflow();
+        app(WorkflowCopilotSessionService::class)->start($workflow);
+
+        $result = app(WorkflowAssistantToolService::class)->execute('update_workflow', [
+            'workflow_id' => $workflow->id,
+            'name' => 'Must not be written',
+        ], (object) ['id' => 7]);
+
+        $this->assertFalse($result['ok']);
+        $this->assertSame('WORKFLOW_NOT_EDITABLE', $result['error']);
+        $this->assertNotSame('Must not be written', $workflow->fresh()->name);
     }
 
     private function workflow(): Workflow

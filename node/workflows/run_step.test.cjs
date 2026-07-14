@@ -88,6 +88,7 @@ function executeTasks(tasks, workflow = {}) {
     statusPath,
     runDirectory: directory,
     livePreviewEnabled: false,
+    keepWorkflowBrowserAlive: false,
     workflow,
     tasks,
   };
