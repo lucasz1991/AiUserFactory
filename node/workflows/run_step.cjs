@@ -280,6 +280,7 @@ function statusPayload(state, stage, message, extra = {}) {
     requestedBrowserEngine,
     activeBrowserEngine,
     browserFallbackReason,
+    browserProfileKey: runtime.browserProfileKey || null,
     browserProfilePath: runtime.browserProfilePath || null,
     browserWsEndpoint: browserWsEndpoint(),
     browserIdentity: browserIdentityPayload(),
@@ -371,6 +372,7 @@ function browserIdentityPayload() {
     requestedBrowserEngine,
     activeBrowserEngine,
     browserFallbackReason,
+    browserProfileKey: runtime.browserProfileKey || null,
     windows: windows.map((windowEntry) => ({
       key: windowEntry?.key || windowEntry?.name || '',
       targetId: windowEntry?.targetId || windowEntry?.target_id || '',

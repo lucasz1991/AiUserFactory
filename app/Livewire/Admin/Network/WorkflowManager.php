@@ -849,6 +849,32 @@ class WorkflowManager extends Component
         $this->showEditTaskModal = true;
     }
 
+    public function openAssistantImprovement(int $workflowId, int $stepId, ?string $taskKey = null): void
+    {
+        if ((int) $this->selectedWorkflowId !== $workflowId) {
+            return;
+        }
+
+        $step = $this->stepForSelectedWorkflow($stepId);
+
+        if (! $step) {
+            return;
+        }
+
+        $this->showRunPreviewModal = false;
+        $this->showEditStepModal = false;
+        $this->showEditTaskModal = false;
+        $taskKey = trim((string) $taskKey);
+
+        if ($taskKey !== '' && collect($step->task_cards)->contains(fn (array $task): bool => (string) ($task['key'] ?? '') === $taskKey)) {
+            $this->openEditTaskCard($step->id, $taskKey);
+        } else {
+            $this->openEditStep($step->id);
+        }
+
+        $this->dispatch('assistant-reapply-workflow-improvements');
+    }
+
     public function saveEditTaskCard(?string $mailboxSourceOverride = null): void
     {
         $step = $this->editingTaskStepId ? $this->stepForSelectedWorkflow($this->editingTaskStepId) : null;
@@ -1160,6 +1186,156 @@ class WorkflowManager extends Component
         } catch (\Throwable $exception) {
             session()->flash('success', 'Workflow konnte nicht gestartet werden: '.$exception->getMessage());
         }
+    }
+
+    public function openCopilotOptimization(): void
+    {
+        if ($session = $this->activeCopilotSession()) {
+            $this->activeCopilotSessionId = (int) $session->getKey();
+            $this->showCopilotPreviewModal = true;
+            $this->refreshCopilotSession();
+
+            return;
+        }
+
+        $this->resetErrorBag();
+        $this->showCopilotModal = true;
+    }
+
+    public function startCopilotOptimization(): void
+    {
+        $workflow = $this->selectedWorkflow();
+
+        if (! $workflow) {
+            return;
+        }
+
+        $validated = $this->validate([
+            'copilotGoal' => ['required', 'string', 'max:4000'],
+            'copilotSuccessCriteria' => ['required', 'string', 'max:8000'],
+            'copilotPersonId' => ['nullable', 'integer', 'exists:persons,id'],
+            'copilotWorkflowInputs' => ['nullable', 'json'],
+            'copilotMaxMinutes' => ['required', 'integer', 'min:5', 'max:1440'],
+            'copilotMaxRepairIterations' => ['required', 'integer', 'min:1', 'max:100'],
+            'copilotMaxProbeActions' => ['required', 'integer', 'min:1', 'max:500'],
+            'copilotMaxSameStateRepeats' => ['required', 'integer', 'min:1', 'max:10'],
+        ]);
+
+        $workflowInputs = trim((string) ($validated['copilotWorkflowInputs'] ?? '')) === ''
+            ? []
+            : json_decode((string) $validated['copilotWorkflowInputs'], true);
+
+        if (! is_array($workflowInputs) || ($workflowInputs !== [] && array_is_list($workflowInputs))) {
+            $this->addError('copilotWorkflowInputs', 'Workflow-Eingaben muessen ein JSON-Objekt mit benannten Werten sein.');
+
+            return;
+        }
+
+        $successCriteria = $this->parseCopilotSuccessCriteria($validated['copilotSuccessCriteria']);
+
+        try {
+            $session = app(WorkflowCopilotSessionService::class)->start($workflow, [
+                'person_id' => $validated['copilotPersonId'] ?: null,
+                'execution_target' => 'system',
+                'goal' => trim($validated['copilotGoal']),
+                'success_criteria' => $successCriteria,
+                'workflow_inputs' => $workflowInputs,
+                'budget' => [
+                    'max_minutes' => (int) $validated['copilotMaxMinutes'],
+                    'max_repair_iterations' => (int) $validated['copilotMaxRepairIterations'],
+                    'max_probe_actions' => (int) $validated['copilotMaxProbeActions'],
+                    'max_same_state_repeats' => (int) $validated['copilotMaxSameStateRepeats'],
+                ],
+            ]);
+
+            $this->activeCopilotSessionId = (int) $session->getKey();
+            $this->showCopilotModal = false;
+            $this->showCopilotPreviewModal = true;
+            $this->refreshCopilotSession();
+            $this->dispatch('workflow-copilot-session-activated', sessionId: (int) $session->getKey());
+            session()->flash('success', 'Autonome Workflow-Optimierung wurde in der System-Ausfuehrung gestartet.');
+        } catch (\Throwable $exception) {
+            $this->addError('copilotGoal', $exception->getMessage());
+        }
+    }
+
+    public function refreshCopilotSession(): void
+    {
+        $session = $this->activeCopilotSession();
+
+        if (! $session) {
+            $this->copilotStatus = [];
+            $this->copilotEvents = [];
+
+            return;
+        }
+
+        $session->loadMissing('workflow');
+        $this->copilotStatus = $this->copilotStatusPayload($session);
+        $afterSequence = max(0, (int) ($session->last_event_sequence ?? 0) - 50);
+        $this->copilotEvents = app(WorkflowCopilotSessionService::class)
+            ->eventsAfter($session, $afterSequence, 50)
+            ->filter(fn ($event): bool => $this->isVisibleCopilotEvent((string) ($event->event_type ?? '')))
+            ->map(fn ($event): array => [
+                'id' => (int) $event->getKey(),
+                'sequence' => (int) ($event->sequence ?? 0),
+                'phase' => (string) ($event->phase ?? ''),
+                'level' => (string) ($event->level ?? 'info'),
+                'message' => Str::limit(trim((string) ($event->message ?? '')), 2000, ''),
+                'is_milestone' => (bool) ($event->is_milestone ?? false),
+                'time' => optional($event->occurred_at ?? $event->created_at)->format('H:i:s'),
+            ])
+            ->values()
+            ->all();
+    }
+
+    public function pauseCopilotOptimization(): void
+    {
+        if ($session = $this->activeCopilotSession()) {
+            app(WorkflowCopilotSessionService::class)->pause($session, 'Im Workflow Manager pausiert.');
+            $this->refreshCopilotSession();
+        }
+    }
+
+    public function resumeCopilotOptimization(): void
+    {
+        if ($session = $this->activeCopilotSession()) {
+            app(WorkflowCopilotSessionService::class)->resume($session);
+            $this->refreshCopilotSession();
+        }
+    }
+
+    public function rewindCopilotOptimization(): void
+    {
+        $session = $this->activeCopilotSession();
+
+        if (! $session) {
+            return;
+        }
+
+        $checkpoint = trim($this->copilotRewindCheckpoint);
+
+        if ($checkpoint === '') {
+            $this->addError('copilotRewindCheckpoint', 'Bitte einen Checkpoint auswaehlen oder eingeben.');
+
+            return;
+        }
+
+        app(WorkflowCopilotSessionService::class)->rewind($session, $checkpoint, 'Im Workflow Manager angefordert.');
+        $this->refreshCopilotSession();
+    }
+
+    public function stopCopilotOptimization(): void
+    {
+        if ($session = $this->activeCopilotSession()) {
+            app(WorkflowCopilotSessionService::class)->stop($session, 'Im Workflow Manager gestoppt.');
+            $this->refreshCopilotSession();
+        }
+    }
+
+    public function closeCopilotPreview(): void
+    {
+        $this->showCopilotPreviewModal = false;
     }
 
     public function closeRunPreview(): void

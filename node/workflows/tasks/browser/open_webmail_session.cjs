@@ -1,9 +1,76 @@
 'use strict';
 
 const { captureTaskPreview } = require('../lib/preview.cjs');
+const { accountFromContext, normalizeText } = require('../lib/webmail_context.cjs');
+const {
+  restoreBrowserSession,
+  sessionFinalUrl,
+} = require('../lib/browser_session_restore.cjs');
 
-function normalizeText(value) {
-  return String(value ?? '').trim();
+function booleanValue(value) {
+  return value === true || value === 1 || value === '1' || String(value || '').toLowerCase() === 'true';
+}
+
+function sessionTimestamp(session = {}) {
+  const value = normalizeText(
+    session.capturedAt
+    || session.captured_at
+    || session.updatedAt
+    || session.updated_at
+    || '',
+  );
+  const timestamp = Date.parse(value);
+
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function mailboxIdentity(account = {}) {
+  return normalizeText(account.email || account.username || '').toLowerCase();
+}
+
+function accountSession(account = {}) {
+  const session = account.webmailSession || account.webmail_session || null;
+
+  return session && typeof session === 'object' ? session : null;
+}
+
+function sessionCandidates(context = {}, input = {}) {
+  const requested = accountFromContext(context, input);
+  const requestedIdentity = mailboxIdentity(requested.account);
+  const strictSource = booleanValue(input.strict_mailbox_source || input.strictMailboxSource);
+  const candidates = [{ ...requested, session: accountSession(requested.account), requested: true }];
+
+  if (!strictSource && requestedIdentity !== '') {
+    for (const mailboxSource of ['person', 'verification']) {
+      const candidate = accountFromContext(context, {
+        ...input,
+        value: '',
+        account_source: mailboxSource,
+        accountSource: mailboxSource,
+        mailbox_source: mailboxSource,
+        mailboxSource,
+        script_person_source: mailboxSource,
+        scriptPersonSource: mailboxSource,
+      });
+
+      if (
+        candidate.mailboxSource === requested.mailboxSource
+        || mailboxIdentity(candidate.account) !== requestedIdentity
+      ) {
+        continue;
+      }
+
+      candidates.push({ ...candidate, session: accountSession(candidate.account), requested: false });
+    }
+  }
+
+  return candidates
+    .filter((candidate) => candidate.session)
+    .sort((left, right) => {
+      const timestampDifference = sessionTimestamp(right.session) - sessionTimestamp(left.session);
+
+      return timestampDifference !== 0 ? timestampDifference : Number(right.requested) - Number(left.requested);
+    });
 }
 
 function isMailboxSourceToken(value) {
@@ -11,108 +78,19 @@ function isMailboxSourceToken(value) {
     .includes(normalizeText(value).toLowerCase());
 }
 
-function normalizeMailboxSource(value) {
-  const normalized = normalizeText(value).toLowerCase();
-
-  return ['verification', 'verification_mailbox', 'veri-account', 'veri_account', 'main', 'master'].includes(normalized)
-    ? 'verification'
-    : 'person';
-}
-
-function personAccountFromContext(context = {}) {
-  const workflow = context.workflow || {};
-  const person = context.person || workflow.person || {};
-  const workflowAccount = workflow.account
-    || workflow.email_account
-    || person.emailAccount
-    || {};
-
-  return {
-    ...workflowAccount,
-    ...(context.account || {}),
-    webmailSession: context.account?.webmailSession || workflowAccount.webmailSession || workflowAccount.webmail_session || null,
-    webmail_session: context.account?.webmail_session || workflowAccount.webmail_session || workflowAccount.webmailSession || null,
-  };
-}
-
-function verificationAccountFromContext(context = {}) {
-  const workflow = context.workflow || {};
-  const verificationAccount = context.verificationMailbox
-    || context.verification_mailbox
-    || context.veri_account
-    || context['veri-account']
-    || workflow.verificationMailbox
-    || workflow.verification_mailbox
-    || workflow.veri_account
-    || workflow['veri-account']
-    || {};
-
-  return {
-    ...verificationAccount,
-    webmailSession: verificationAccount.webmailSession || verificationAccount.webmail_session || null,
-    webmail_session: verificationAccount.webmail_session || verificationAccount.webmailSession || null,
-  };
-}
-
-function accountFromContext(context = {}, input = {}) {
-  const mailboxSource = normalizeMailboxSource(input.script_person_source || input.scriptPersonSource || input.mailbox_source || input.mailboxSource || input.account_source || input.accountSource || input.value || 'person');
-  const account = mailboxSource === 'verification'
-    ? verificationAccountFromContext(context)
-    : personAccountFromContext(context);
-
-  return { account, mailboxSource };
-}
-
-function storageValues(session = {}) {
-  const storage = session.storage || {};
-
-  return {
-    localStorage: storage.localStorage || session.localStorage || {},
-    sessionStorage: storage.sessionStorage || session.sessionStorage || {},
-  };
-}
-
-function safeCookies(cookies = []) {
-  return cookies
-    .filter((cookie) => cookie && cookie.name && (cookie.domain || cookie.url))
-    .map((cookie) => {
-      const nextCookie = { ...cookie };
-      delete nextCookie.partitionKey;
-      delete nextCookie.sourcePort;
-      delete nextCookie.sourceScheme;
-
-      return nextCookie;
-    });
-}
-
-async function restoreStorage(page, session = {}) {
-  const storage = storageValues(session);
-
-  if (Object.keys(storage.localStorage).length === 0 && Object.keys(storage.sessionStorage).length === 0) {
-    return false;
-  }
-
-  return page.evaluate((payload) => {
-    for (const [key, value] of Object.entries(payload.localStorage || {})) {
-      window.localStorage.setItem(key, String(value));
-    }
-
-    for (const [key, value] of Object.entries(payload.sessionStorage || {})) {
-      window.sessionStorage.setItem(key, String(value));
-    }
-
-    return true;
-  }, storage).catch(() => false);
-}
-
 async function run(context = {}) {
   const page = context.page;
   const input = context.input || {};
-  const { account, mailboxSource } = accountFromContext(context, input);
-  const session = account.webmailSession || account.webmail_session || null;
+  const requested = accountFromContext(context, input);
+  const candidates = sessionCandidates(context, input);
+  const selected = candidates[0] || { ...requested, session: null };
+  const { account, mailboxSource, session } = selected;
+  const requestedMailboxSource = requested.mailboxSource;
   const fallbackUrl = normalizeText(account.webmailUrl || account.webmail_url || 'https://mail.proton.me');
   const valueAsUrl = isMailboxSourceToken(input.value) ? '' : input.value;
-  const targetUrl = normalizeText(input.url || input.webmailUrl || valueAsUrl || session?.finalUrl || fallbackUrl);
+  const explicitUrl = normalizeText(input.url || input.target_url || input.targetUrl || input.webmailUrl || input.webmail_url || valueAsUrl);
+  const storedFinalUrl = sessionFinalUrl(session || {});
+  const targetUrl = explicitUrl || storedFinalUrl || fallbackUrl;
   const timeout = Number(input.timeoutMs || context.timeoutMs || 120000);
 
   if (!page || typeof page.goto !== 'function') {
@@ -126,7 +104,7 @@ async function run(context = {}) {
       ok: false,
       status: 'failed',
       statusMessage: `Keine gespeicherte Webmail-Session fuer ${accountLabel} gefunden.`,
-      mailboxSource,
+      mailboxSource: requestedMailboxSource,
     };
   }
 
@@ -134,34 +112,49 @@ async function run(context = {}) {
     return { ok: false, status: 'failed', statusMessage: 'Keine gueltige Webmail-URL fuer die Session vorhanden.' };
   }
 
-  const cookies = safeCookies(Array.isArray(session.cookies) ? session.cookies : []);
-  let cookiesRestored = 0;
+  const restored = await restoreBrowserSession(page, session, targetUrl, {
+    timeout,
+    waitUntil: input.waitUntil || 'domcontentloaded',
+  });
 
-  if (cookies.length > 0 && typeof page.setCookie === 'function') {
-    await page.setCookie(...cookies).catch(() => {});
-    cookiesRestored = cookies.length;
+  if (restored.cookieAttemptCount > 0 && restored.cookieCount === 0 && restored.storageOriginCount === 0) {
+    return {
+      ok: false,
+      status: 'failed',
+      statusMessage: 'Die gespeicherten Webmail-Cookies und Storage-Daten konnten nicht geladen werden.',
+      mailboxSource,
+      cookieAttemptCount: restored.cookieAttemptCount,
+      cookieFailureCount: restored.cookieFailureCount,
+      storageOriginFailureCount: restored.storageOriginFailureCount,
+    };
   }
 
-  await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout });
-
-  const storageRestored = await restoreStorage(page, session);
-
-  if (storageRestored) {
-    await page.reload({ waitUntil: 'domcontentloaded', timeout }).catch(() => page.goto(targetUrl, {
-      waitUntil: 'domcontentloaded',
-      timeout,
-    }));
-  }
+  const actualUrl = typeof page.url === 'function' ? page.url() : targetUrl;
+  const redirected = normalizeText(actualUrl) !== '' && normalizeText(actualUrl) !== targetUrl;
 
   return captureTaskPreview(context, {
     ok: true,
     status: 'success',
-    statusMessage: 'Webmail-Session wurde geladen und das Webmailportal wurde geoeffnet.',
-    url: typeof page.url === 'function' ? page.url() : targetUrl,
+    statusMessage: redirected
+      ? 'Webmail-Session wurde geladen; die gespeicherte URL hat auf eine andere Seite weitergeleitet.'
+      : 'Webmail-Session wurde geladen und die zuletzt aktive URL wurde geoeffnet.',
+    url: actualUrl,
+    finalUrl: targetUrl,
+    requestedUrl: targetUrl,
+    redirected,
+    targetUrlSource: explicitUrl !== '' ? 'input' : (storedFinalUrl !== '' ? 'session' : 'fallback'),
     mailboxSource,
+    requestedMailboxSource,
+    mailboxSourceAdjusted: mailboxSource !== requestedMailboxSource,
+    sessionCapturedAt: session.capturedAt || session.captured_at || session.updatedAt || session.updated_at || null,
     mailboxEmail: account.email || '',
-    cookieCount: cookiesRestored,
-    storageRestored,
+    cookieAttemptCount: restored.cookieAttemptCount,
+    cookieCount: restored.cookieCount,
+    cookieFailureCount: restored.cookieFailureCount,
+    storageRestored: restored.storageOriginCount > 0,
+    storageOriginCount: restored.storageOriginCount,
+    storageOriginFailureCount: restored.storageOriginFailureCount,
+    storageStrategy: restored.storageStrategy,
   });
 }
 

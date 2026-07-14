@@ -77,7 +77,21 @@
     $quickPreviewDurationLabel = $quickPreviewRun ? $formatRunDuration($quickPreviewRun) : null;
     $quickPreviewReturnLabel = $quickPreviewRun ? $workflowReturnLabel($quickPreviewRun) : null;
 @endphp
-<div class="space-y-5" wire:loading.class="opacity-60 pointer-events-none">
+<div
+    class="space-y-5"
+    wire:loading.class="opacity-60 pointer-events-none"
+    x-data="{}"
+    data-workflow-manager-root
+    data-workflow-id="{{ $selectedWorkflow?->id ?? '' }}"
+    x-on:assistant-open-workflow-improvement.window="
+        const detail = Array.isArray($event.detail) ? ($event.detail[0] || {}) : ($event.detail || {});
+        const workflowId = Number(detail.workflow_id || 0);
+        const stepId = Number(detail.step_id || 0);
+        if (workflowId === {{ (int) ($selectedWorkflow?->id ?? 0) }} && stepId > 0) {
+            $wire.openAssistantImprovement(workflowId, stepId, detail.task_card_key || null);
+        }
+    "
+>
     <div class="p-box shadow-box bg-box border border-box rounded-box">
         <div class="flex flex-wrap items-start justify-between gap-2">
             <div class="min-w-0">
@@ -199,6 +213,8 @@
             <div
                 x-data="{
                     focusedTask: '',
+                    hoveredRouteNode: '',
+                    activeRouteNode: '',
                     showRoutes: true,
                     isFullscreen: false,
                     bodyOverflowBeforeFullscreen: null,
@@ -250,6 +266,34 @@
                             document.body.style.overflow = this.bodyOverflowBeforeFullscreen ?? '';
                             document.documentElement.style.overflow = this.htmlOverflowBeforeFullscreen ?? '';
                         }
+                    },
+                    routeFocusNode() {
+                        return this.hoveredRouteNode || this.activeRouteNode || '';
+                    },
+                    setHoveredRouteNode(node = '') {
+                        this.hoveredRouteNode = String(node || '');
+                        this.renderRouteLines();
+                    },
+                    setActiveRouteNode(node = '') {
+                        this.activeRouteNode = String(node || '');
+                        this.renderRouteLines();
+                    },
+                    renderRouteLines() {
+                        const focusNode = this.routeFocusNode();
+                        const hasRelatedLine = focusNode !== '' && this.routeLines.some((line) => line.sourceNode === focusNode || line.targetNode === focusNode);
+
+                        this.routeSvgMarkup = this.routeLines.map((line) => {
+                            const color = line.type === 'failed' ? '#fb7185' : '#10b981';
+                            const marker = line.type === 'failed' ? 'url(#workflow-arrow-red)' : 'url(#workflow-arrow-green)';
+                            const dash = line.type === 'failed' ? ' stroke-dasharray=&quot;6 5&quot;' : '';
+                            const related = !hasRelatedLine || line.sourceNode === focusNode || line.targetNode === focusNode;
+                            const opacity = hasRelatedLine ? (related ? 1 : 0.5) : 0.9;
+                            const strokeWidth = related && hasRelatedLine ? 3.4 : 2.15;
+                            const filter = related && hasRelatedLine ? ' style=&quot;filter:drop-shadow(0 0 2px rgba(15,23,42,.24))&quot;' : '';
+                            const path = String(line.path || '').replace(/&/g, '&amp;').replace(/&quot;/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+                            return `<path d=&quot;${path}&quot; fill=&quot;none&quot; stroke-width=&quot;${strokeWidth}&quot; stroke-linecap=&quot;round&quot; stroke-linejoin=&quot;round&quot; stroke=&quot;${color}&quot; opacity=&quot;${opacity}&quot;${dash}${filter} marker-end=&quot;${marker}&quot;></path>`;
+                        }).join('');
                     },
                     refreshRouteLines() {
                         const surface = this.$refs.routeSurface;
@@ -340,6 +384,8 @@
 
                             return `${path} L ${end.x} ${end.y}`;
                         };
+                        const stepColumns = Array.from(surface.querySelectorAll('[data-workflow-step-column]'));
+                        const stepIndexes = new Map(stepColumns.map((column, index) => [column, index]));
                         let routeLane = 0;
                         const makeLine = (source, target, type) => {
                             const targetElement = targetNode(target);
@@ -356,11 +402,21 @@
                             const targetStepElement = targetElement.closest('[data-workflow-step-column]');
                             const sourceStepRect = sourceStepElement ? relativeRect(sourceStepElement) : sourceRect;
                             const targetStepRect = targetStepElement ? relativeRect(targetStepElement) : targetRect;
+                            const sourceStepIndex = stepIndexes.get(sourceStepElement) ?? -1;
+                            const targetStepIndex = stepIndexes.get(targetStepElement) ?? -1;
                             const laneIndex = routeLane++;
                             const sourceY = type === 'failed'
                                 ? sourceRect.top + (sourceRect.height * 0.68)
                                 : sourceRect.top + (sourceRect.height * 0.4);
                             const targetY = targetRect.centerY;
+                            const sourceNode = source.dataset.workflowTaskNode || '';
+                            const targetNodeKey = targetElement.dataset.workflowTaskNode || '';
+                            const lineResult = (points, radius = 9) => ({
+                                path: roundedPath(points, radius),
+                                type,
+                                sourceNode,
+                                targetNode: targetNodeKey,
+                            });
                             let points = [];
 
                             if (source === targetElement) {
@@ -373,7 +429,7 @@
                                     { x: sourceRect.right, y: targetY },
                                 ];
 
-                                return { path: roundedPath(points, 7), type };
+                                return lineResult(points, 7);
                             }
 
                             if (sourceStep === targetStep) {
@@ -395,25 +451,61 @@
                                     { x: targetRect.right, y: targetY },
                                 ];
 
-                                return { path: roundedPath(points), type };
+                                return lineResult(points);
                             }
 
-                            const sourceAnchorX = sourceRect.right;
-                            const targetAnchorX = targetRect.left;
-                            const laneInset = 14 + ((laneIndex % 3) * 5);
-                            const sourceLaneX = sourceStepRect.right + laneInset;
-                            const targetLaneX = targetStepRect.left - laneInset;
-                            const topLaneY = 18 + ((laneIndex % 7) * 7);
+                            const goesBack = targetStepIndex < sourceStepIndex || targetRect.centerX < sourceRect.centerX;
+                            const sourceAnchorX = goesBack ? sourceRect.left : sourceRect.right;
+                            const targetAnchorX = goesBack ? targetRect.right : targetRect.left;
+                            const adjacentSteps = sourceStepIndex >= 0
+                                && targetStepIndex >= 0
+                                && Math.abs(sourceStepIndex - targetStepIndex) === 1;
+
+                            if (adjacentSteps) {
+                                const gapLeft = goesBack ? targetStepRect.right : sourceStepRect.right;
+                                const gapRight = goesBack ? sourceStepRect.left : targetStepRect.left;
+                                const gapOffset = ((laneIndex % 5) - 2) * 3;
+                                const gapX = Math.max(gapLeft + 7, Math.min(gapRight - 7, ((gapLeft + gapRight) / 2) + gapOffset));
+                                points = [
+                                    { x: sourceAnchorX, y: sourceY },
+                                    { x: gapX, y: sourceY },
+                                    { x: gapX, y: targetY },
+                                    { x: targetAnchorX, y: targetY },
+                                ];
+
+                                return lineResult(points);
+                            }
+
+                            const firstStepIndex = Math.min(sourceStepIndex, targetStepIndex);
+                            const lastStepIndex = Math.max(sourceStepIndex, targetStepIndex);
+                            const involvedRects = nodes
+                                .filter((node) => {
+                                    const columnIndex = stepIndexes.get(node.closest('[data-workflow-step-column]')) ?? -1;
+
+                                    return columnIndex >= firstStepIndex && columnIndex <= lastStepIndex;
+                                })
+                                .map(relativeRect);
+                            const clearance = 14 + ((laneIndex % 4) * 6);
+                            const upperY = Math.max(12, Math.min(...involvedRects.map((rect) => rect.top), sourceRect.top, targetRect.top) - clearance);
+                            const lowerY = Math.min(
+                                surface.scrollHeight - 12,
+                                Math.max(...involvedRects.map((rect) => rect.bottom), sourceRect.bottom, targetRect.bottom) + clearance,
+                            );
+                            const upperCost = Math.abs(sourceY - upperY) + Math.abs(targetY - upperY);
+                            const lowerCost = Math.abs(sourceY - lowerY) + Math.abs(targetY - lowerY);
+                            const corridorY = lowerCost < upperCost ? lowerY : upperY;
+                            const sourceLaneX = sourceAnchorX + (goesBack ? -clearance : clearance);
+                            const targetLaneX = targetAnchorX + (goesBack ? clearance : -clearance);
                             points = [
                                 { x: sourceAnchorX, y: sourceY },
                                 { x: sourceLaneX, y: sourceY },
-                                { x: sourceLaneX, y: topLaneY },
-                                { x: targetLaneX, y: topLaneY },
+                                { x: sourceLaneX, y: corridorY },
+                                { x: targetLaneX, y: corridorY },
                                 { x: targetLaneX, y: targetY },
                                 { x: targetAnchorX, y: targetY },
                             ];
 
-                            return { path: roundedPath(points), type };
+                            return lineResult(points);
                         };
                         const lines = [];
 
@@ -460,14 +552,7 @@
                             height: surface.scrollHeight,
                         };
                         this.routeLines = lines;
-                        this.routeSvgMarkup = lines.map((line, index) => {
-                            const color = line.type === 'failed' ? '#fb7185' : '#10b981';
-                            const marker = line.type === 'failed' ? 'url(#workflow-arrow-red)' : 'url(#workflow-arrow-green)';
-                            const dash = line.type === 'failed' ? ' stroke-dasharray=&quot;6 5&quot;' : '';
-                            const path = String(line.path || '').replace(/&/g, '&amp;').replace(/&quot;/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-                            return `<path d=&quot;${path}&quot; fill=&quot;none&quot; stroke-width=&quot;2.15&quot; stroke-linecap=&quot;round&quot; stroke-linejoin=&quot;round&quot; stroke=&quot;${color}&quot; stroke-opacity=&quot;0.9&quot;${dash} marker-end=&quot;${marker}&quot;></path>`;
-                        }).join('');
+                        this.renderRouteLines();
                     },
                 }"
                 x-init="refreshRouteLines()"

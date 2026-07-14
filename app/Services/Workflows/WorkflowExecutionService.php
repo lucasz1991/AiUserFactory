@@ -4,6 +4,7 @@ namespace App\Services\Workflows;
 
 use App\Jobs\MonitorWorkflowStepRunJob;
 use App\Jobs\RunWorkflowJob;
+use App\Jobs\WorkflowCopilotSupervisorJob;
 use App\Models\Device;
 use App\Models\NetworkJob;
 use App\Models\NetworkNode;
@@ -348,6 +349,17 @@ class WorkflowExecutionService
 
         if (! is_array($status)) {
             $message = 'Der externe Node-Lauf konnte nicht gelesen werden.';
+
+            if ($this->isCopilotSupervisedRun($stepRun->workflowRun)) {
+                $this->holdCopilotTaskCheckpoint($stepRun, [], [
+                    'ok' => false,
+                    'status' => 'failed',
+                    'statusMessage' => $message,
+                ], false);
+
+                return;
+            }
+
             $this->failStepRun($stepRun, $message);
             $this->continueAfterStep($stepRun->workflowRun, $stepRun, ['ok' => false, 'statusMessage' => $message], 'failed');
 
@@ -405,6 +417,17 @@ class WorkflowExecutionService
 
         if (in_array($stepRun->external_run_type, ['workflow-task', 'client-controller-workflow-task'], true)) {
             $this->applyWorkflowVariablesResult($stepRun->workflowRun, $result);
+        }
+
+        if ($stepRun->external_run_type === 'workflow-task' && $this->isCopilotSupervisedRun($stepRun->workflowRun)) {
+            $this->holdCopilotTaskCheckpoint(
+                $stepRun,
+                $status,
+                $result,
+                $this->externalSucceeded($stepRun->workflowStep, $status, $result),
+            );
+
+            return;
         }
 
         if (! $this->externalSucceeded($stepRun->workflowStep, $status, $result)) {
@@ -857,6 +880,23 @@ class WorkflowExecutionService
 
     protected function startWorkflowTaskStep(WorkflowRun $run, WorkflowStep $step, WorkflowStepRun $stepRun): string
     {
+        if ($this->isCopilotSupervisedRun($run)) {
+            $context = is_array($run->context_json) ? $run->context_json : [];
+            $transientTask = is_array($context['copilot_transient_task'] ?? null) ? $context['copilot_transient_task'] : [];
+            $currentTaskKey = trim((string) ($transientTask['key'] ?? $context['next_task_key'] ?? ''));
+
+            if ($currentTaskKey === '') {
+                $currentTaskKey = trim((string) data_get($step->task_cards, '0.key', ''));
+            }
+
+            $context['copilot_current_task_key'] = $currentTaskKey;
+            $context['copilot_segment_started_at'] = now()->toIso8601String();
+            $context['copilot_supervised'] = true;
+            $context['execution_target'] = 'system';
+            unset($context['copilot_checkpoint']);
+            $run->forceFill(['context_json' => $context])->save();
+        }
+
         $stepRun->forceFill([
             'status' => 'running',
             'started_at' => now(),
@@ -1083,6 +1123,13 @@ class WorkflowExecutionService
             'timeoutSeconds' => $timeoutSeconds,
         ];
         $outcome = $this->hasRouteForOutcome($stepRun->workflowStep, 'timeout') ? 'timeout' : 'failed';
+
+        if ($this->isCopilotSupervisedRun($stepRun->workflowRun)) {
+            $this->cancelExternalRun($stepRun, $message);
+            $this->holdCopilotTaskCheckpoint($stepRun, [], $result, false);
+
+            return;
+        }
 
         if ($this->hasRouteForOutcome($stepRun->workflowStep, $outcome)) {
             $this->completeStepRun($stepRun, $result, 'timeout');

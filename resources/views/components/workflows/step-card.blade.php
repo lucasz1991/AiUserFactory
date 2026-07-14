@@ -53,7 +53,7 @@
     data-step-route-failed="{{ $stepFailedTarget }}"
     {{ $attributes->merge(['class' => 'relative flex min-h-[300px] w-[296px] min-w-[296px] max-w-[296px] shrink-0 flex-col rounded-xl border '.$enabledClass]) }}
 >
-    <div class="relative z-30 rounded-xl border border-sky-200 bg-sky-100 px-4 py-3">
+    <div class="relative z-30 rounded-xl border border-sky-200 bg-sky-100 px-4 py-3 mb-4">
         <div class="flex items-start justify-between gap-3">
             <div class="min-w-0">
                 <div class="flex flex-wrap items-center gap-2">
@@ -159,6 +159,9 @@
                     $previousTarget = is_array($previousTask)
                         ? $routeNodeForTask(is_array($previousTask['next'] ?? null) ? $previousTask['next'] : null)
                         : '';
+                    $previousNode = is_array($previousTask)
+                        ? $step->action_key.'::'.trim((string) ($previousTask['key'] ?? ''))
+                        : '';
                     $connectsFromPrevious = ! $loop->first && ($previousTarget === '' || $previousTarget === $sourceNode);
                 @endphp
                 <div
@@ -172,8 +175,15 @@
                         class="h-3 rounded border border-dashed border-transparent transition hover:h-8 hover:border-slate-300 hover:bg-slate-50"
                     ></div>
                     @if($connectsFromPrevious)
-                        <div class="ml-5 flex h-5 w-3 justify-center" aria-hidden="true">
-                            <span class="relative h-4 w-px bg-emerald-400">
+                        <div
+                            class="ml-5 flex h-5 w-3 justify-center transition-opacity"
+                            x-bind:class="routeFocusNode() && ![@js($previousNode), @js($sourceNode)].includes(routeFocusNode()) ? 'opacity-50' : 'opacity-100'"
+                            aria-hidden="true"
+                        >
+                            <span
+                                class="relative h-4 bg-emerald-400 transition-all"
+                                x-bind:class="routeFocusNode() && [@js($previousNode), @js($sourceNode)].includes(routeFocusNode()) ? 'w-0.5 shadow-sm shadow-emerald-400' : 'w-px'"
+                            >
                                 <span class="absolute -bottom-1 -left-[3px] h-0 w-0 border-x-[4px] border-t-[5px] border-x-transparent border-t-emerald-500"></span>
                             </span>
                         </div>
@@ -194,7 +204,9 @@
                             $event.dataTransfer.effectAllowed = 'move';
                         " @endif
                         @if(! $locked) x-on:dragend.window="dragInside = false" @endif
-                        x-on:click.stop="focusedTask = @js($step->id.'::'.($task['key'] ?? ''))"
+                        x-on:mouseenter="setHoveredRouteNode(@js($sourceNode))"
+                        x-on:mouseleave="setHoveredRouteNode('')"
+                        x-on:click.stop="focusedTask = @js($step->id.'::'.($task['key'] ?? '')); setActiveRouteNode(@js($sourceNode))"
                         @if(! $locked) x-on:dblclick.stop="$wire.openEditTaskCard({{ $step->id }}, @js($task['key'] ?? ''))" @endif
                         x-bind:class="focusedTask === @js($step->id.'::'.($task['key'] ?? '')) ? 'ring-2 ring-slate-400 ring-offset-2 ring-offset-slate-100' : ''"
                         class="relative z-20 w-full min-w-0 max-w-full rounded-lg"

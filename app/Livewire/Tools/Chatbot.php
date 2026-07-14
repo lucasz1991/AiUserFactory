@@ -168,6 +168,7 @@ class Chatbot extends Component
                 trim((string) ($response['message'] ?? '')) ?: 'Ich habe dazu gerade keine belastbare Antwort erhalten.',
                 'neutral',
                 $response['chat_options'] ?? null,
+                $response['improvements'] ?? null,
             );
 
             if (is_array($response['ui_action'] ?? null)) {
@@ -226,6 +227,10 @@ class Chatbot extends Component
         $this->toolEvents = [];
         $this->message = '';
         $this->workflowImportFile = null;
+        $this->dispatch('assistant-ui-action', action: [
+            'type' => 'highlight_workflow_improvements',
+            'improvements' => [],
+        ]);
     }
 
     public function attachCopilotSession(int $sessionId): void
@@ -291,6 +296,7 @@ class Chatbot extends Component
                     $message,
                     $feedItem['tone'],
                     null,
+                    null,
                     ['copilot_event_id' => (int) $event->getKey()],
                 );
             }
@@ -355,14 +361,19 @@ class Chatbot extends Component
             ],
         ];
         $chatOptions = null;
+        $improvements = null;
         $finalMessage = '';
         $uiAction = null;
         $refreshPage = false;
+        $analyzedRunContext = null;
+        $forceImprovementTool = false;
+        $improvementRetryUsed = false;
+        $roundLimit = $toolRounds;
 
         $this->stream('assistant-response-stream', '', true);
         $this->stream('assistant-status-stream', 'Kontext wird geprueft und die Anfrage vorbereitet.', true);
 
-        for ($round = 0; $round < $toolRounds; $round++) {
+        for ($round = 0; $round < $roundLimit; $round++) {
             if ($round > 0) {
                 $this->stream('assistant-status-stream', 'Werkzeugergebnisse werden ausgewertet.', true);
             }
@@ -370,7 +381,12 @@ class Chatbot extends Component
             $response = $ai->requestStreamed([
                 'messages' => $messages,
                 'tools' => $toolService->tools(),
-                'tool_choice' => 'auto',
+                'tool_choice' => $forceImprovementTool
+                    ? [
+                        'type' => 'function',
+                        'function' => ['name' => 'present_workflow_improvements'],
+                    ]
+                    : 'auto',
             ], 'text', function (string $chunk): void {
                 $chunk = $this->sanitizeAssistantChunk($chunk);
 
@@ -383,6 +399,25 @@ class Chatbot extends Component
             $toolCalls = $this->normalizeToolCalls(data_get($assistantMessage, 'tool_calls', data_get($assistantMessage, 'toolCalls', [])));
 
             if ($toolCalls === []) {
+                if ($analyzedRunContext && $improvements === null && ! $improvementRetryUsed) {
+                    $improvementRetryUsed = true;
+                    $forceImprovementTool = true;
+                    $roundLimit++;
+                    $messages[] = [
+                        'role' => 'assistant',
+                        'content' => $content !== '' ? $content : null,
+                    ];
+                    $messages[] = [
+                        'role' => 'user',
+                        'content' => 'Strukturiere jetzt die belegten Verbesserungen fuer Workflow #'
+                            .$analyzedRunContext['workflow_id'].' und Run #'.$analyzedRunContext['run_id']
+                            .' mit present_workflow_improvements. Nutze ein leeres improvements-Array, wenn keine Verbesserung belegt ist.',
+                    ];
+                    $this->stream('assistant-status-stream', 'Verbesserungen werden den Workflow-Elementen zugeordnet.', true);
+
+                    continue;
+                }
+
                 $this->stream('assistant-status-stream', 'Antwort wird fertiggestellt.', true);
                 $finalMessage = $content;
                 $messages[] = [
@@ -410,6 +445,18 @@ class Chatbot extends Component
 
                 if (is_array($result['chat_options'] ?? null)) {
                     $chatOptions = $result['chat_options'];
+                }
+
+                if ($toolCall['name'] === 'analyze_last_workflow_run' && ($result['ok'] ?? false)) {
+                    $analyzedRunContext = [
+                        'workflow_id' => (int) data_get($result, 'run.workflow_id'),
+                        'run_id' => (int) data_get($result, 'run.id'),
+                    ];
+                }
+
+                if ($toolCall['name'] === 'present_workflow_improvements' && is_array($result['improvements'] ?? null)) {
+                    $improvements = $result['improvements'];
+                    $forceImprovementTool = false;
                 }
 
                 if (($result['ok'] ?? false) && is_array($result['ui_action'] ?? null)) {
@@ -456,6 +503,7 @@ class Chatbot extends Component
         return [
             'message' => $this->sanitizeAssistantText($finalMessage),
             'chat_options' => $this->normalizeChatOptions($chatOptions),
+            'improvements' => $improvements === null ? null : ($this->normalizeImprovements($improvements) ?? []),
             'ui_action' => $uiAction,
             'refresh_page' => $refreshPage,
         ];
@@ -530,14 +578,21 @@ class Chatbot extends Component
         return is_array($decoded) ? $decoded : [];
     }
 
-    private function appendDisplayMessage(string $role, string $content, string $tone = 'neutral', ?array $options = null, array $metadata = []): void
-    {
+    private function appendDisplayMessage(
+        string $role,
+        string $content,
+        string $tone = 'neutral',
+        ?array $options = null,
+        ?array $improvements = null,
+        array $metadata = [],
+    ): void {
         $message = [
             'role' => $role,
             'content' => $content,
             'tone' => $tone,
             'time' => now()->format('H:i'),
             'options' => $options,
+            'improvements' => $improvements === null ? null : ($this->normalizeImprovements($improvements) ?? []),
             'selected_option_index' => null,
             ...$metadata,
         ];
@@ -585,6 +640,7 @@ class Chatbot extends Component
             'workflow_test_run' => 'Workflow-Testlauf wird gestartet.',
             'navigate' => 'Ansicht wird vorbereitet.',
             'highlight_workflow_element' => 'Workflow-Element wird markiert.',
+            'present_workflow_improvements' => 'Verbesserungen werden im Workflow zugeordnet.',
             default => 'Werkzeug '.$toolName.' wird ausgefuehrt.',
         };
     }
@@ -742,6 +798,42 @@ class Chatbot extends Component
             ->all();
 
         return count($normalized) >= 2 ? $normalized : null;
+    }
+
+    private function normalizeImprovements(mixed $improvements): ?array
+    {
+        $normalized = collect(is_array($improvements) ? $improvements : [])
+            ->filter(fn (mixed $improvement): bool => is_array($improvement) && filled($improvement['title'] ?? null))
+            ->take(8)
+            ->map(function (array $improvement, int $index): array {
+                $severity = trim((string) ($improvement['severity'] ?? 'info'));
+
+                return [
+                    'id' => trim((string) ($improvement['id'] ?? 'improvement-'.$index)),
+                    'workflow_id' => $this->positiveIntegerValue($improvement['workflow_id'] ?? null),
+                    'run_id' => $this->positiveIntegerValue($improvement['run_id'] ?? null),
+                    'severity' => in_array($severity, ['error', 'warning', 'info'], true) ? $severity : 'info',
+                    'title' => Str::limit(trim((string) ($improvement['title'] ?? 'Hinweis')), 160, ''),
+                    'explanation' => Str::limit(trim((string) ($improvement['explanation'] ?? '')), 800, ''),
+                    'recommendation' => Str::limit(trim((string) ($improvement['recommendation'] ?? '')), 800, ''),
+                    'target_type' => ($improvement['target_type'] ?? null) === 'workflow_task' ? 'workflow_task' : 'workflow_list',
+                    'step_id' => $this->positiveIntegerValue($improvement['step_id'] ?? null),
+                    'step_action_key' => Str::limit(trim((string) ($improvement['step_action_key'] ?? '')), 160, ''),
+                    'task_card_key' => Str::limit(trim((string) ($improvement['task_card_key'] ?? '')), 160, ''),
+                    'highlightable' => (bool) ($improvement['highlightable'] ?? false),
+                ];
+            })
+            ->values()
+            ->all();
+
+        return $normalized !== [] ? $normalized : null;
+    }
+
+    private function positiveIntegerValue(mixed $value): ?int
+    {
+        $number = (int) $value;
+
+        return $number > 0 ? $number : null;
     }
 
     private function displayMessageForUserPrompt(string $prompt): string

@@ -39,6 +39,8 @@
         lastAssistantMessageKey: null,
         toolAlertTimers: {},
         refreshTimer: null,
+        workflowImprovements: [],
+        improvementRefreshTimer: null,
         livewireComponent() {
             const root = this.$root.closest('[wire\\:id]');
             const id = root ? root.getAttribute('wire:id') : null;
@@ -67,8 +69,13 @@
             this.voiceSupported = this.voiceProviderSupported();
             this.speechSupported = Boolean(this.ttsEndpoint && window.fetch && window.Audio && window.URL);
             this.lastAssistantMessageKey = this.latestAssistantMessageKey(this.chatHistory);
+            this.workflowImprovements = this.latestWorkflowImprovements(this.chatHistory);
+            this._reapplyImprovementHighlights = () => this.queueImprovementHighlights();
+            document.addEventListener('livewire:updated', this._reapplyImprovementHighlights);
+            document.addEventListener('livewire:navigated', this._reapplyImprovementHighlights);
             this.$watch('chatHistory', (history) => {
                 this.handleNewAssistantMessage(history);
+                this.syncWorkflowImprovementsFromHistory(history);
                 this.scrollMessages();
             });
             this.$watch('isLoading', (loading) => {
@@ -89,7 +96,13 @@
             this.$nextTick(() => {
                 window.setTimeout(() => this.syncContext(), 0);
                 this.scrollMessages(false);
+                this.queueImprovementHighlights();
             });
+        },
+        destroy() {
+            document.removeEventListener('livewire:updated', this._reapplyImprovementHighlights);
+            document.removeEventListener('livewire:navigated', this._reapplyImprovementHighlights);
+            window.clearTimeout(this.improvementRefreshTimer);
         },
         readBool(key, fallback) {
             const stored = localStorage.getItem(key);
@@ -105,6 +118,7 @@
                 this.clearVoiceCaptureState();
                 this.syncContext();
                 this.scrollMessages(false);
+                this.queueImprovementHighlights();
             } else {
                 this.closeChat();
             }
@@ -260,6 +274,23 @@
             const messages = Array.isArray(history) ? history : [];
             const item = [...messages].reverse().find((message) => message && message.role === 'assistant');
             return item ? `${item.time || ''}|${item.content || ''}` : null;
+        },
+        latestWorkflowImprovements(history) {
+            const messages = Array.isArray(history) ? history : [];
+            const item = [...messages]
+                .reverse()
+                .find((message) => message && message.role === 'assistant' && Array.isArray(message.improvements));
+
+            return item ? item.improvements : [];
+        },
+        syncWorkflowImprovementsFromHistory(history) {
+            const improvements = this.latestWorkflowImprovements(history);
+            const currentKey = JSON.stringify(this.workflowImprovements || []);
+            const nextKey = JSON.stringify(improvements || []);
+
+            if (currentKey !== nextKey) {
+                this.setWorkflowImprovements(improvements);
+            }
         },
         handleNewAssistantMessage(history) {
             const messages = Array.isArray(history) ? history : [];
@@ -741,7 +772,105 @@
 
             if (action?.type === 'highlight' || action?.type === 'highlight_workflow_element') {
                 this.highlightElement(action);
+
+                return;
             }
+
+            if (action?.type === 'highlight_workflow_improvements') {
+                const improvements = Array.isArray(action.improvements)
+                    ? action.improvements.map((improvement) => ({
+                        ...improvement,
+                        workflow_id: improvement.workflow_id || action.workflow_id || null,
+                        run_id: improvement.run_id || action.run_id || null,
+                    }))
+                    : [];
+
+                this.setWorkflowImprovements(improvements);
+            }
+        },
+        setWorkflowImprovements(improvements = []) {
+            this.workflowImprovements = Array.isArray(improvements) ? improvements.slice(0, 8) : [];
+            this.queueImprovementHighlights();
+        },
+        queueImprovementHighlights() {
+            window.clearTimeout(this.improvementRefreshTimer);
+            this.improvementRefreshTimer = window.setTimeout(() => {
+                this.improvementRefreshTimer = null;
+                this.applyImprovementHighlights();
+            }, 80);
+        },
+        improvementTarget(improvement = {}) {
+            if (!improvement.highlightable) return null;
+
+            const stepId = String(improvement.step_id || '').trim();
+            const stepAction = String(improvement.step_action_key || '').trim();
+            const taskCardKey = String(improvement.task_card_key || '').trim();
+            const selectors = [];
+
+            if (stepAction && taskCardKey) {
+                selectors.push(`[data-workflow-task-node='${this.cssEscape(`${stepAction}::${taskCardKey}`)}']`);
+            }
+            if (stepId && taskCardKey) {
+                selectors.push(`[data-workflow-step-id='${this.cssEscape(stepId)}'] [data-workflow-task-key='${this.cssEscape(taskCardKey)}']`);
+            }
+            if (stepId && !taskCardKey) {
+                selectors.push(`[data-workflow-step-id='${this.cssEscape(stepId)}']`);
+            }
+            if (stepAction && !taskCardKey) {
+                selectors.push(`[data-workflow-step-column][data-workflow-step-action='${this.cssEscape(stepAction)}']`);
+            }
+
+            return selectors
+                .map((selector) => {
+                    try { return document.querySelector(selector); } catch { return null; }
+                })
+                .find(Boolean) || null;
+        },
+        applyImprovementHighlights() {
+            const classes = [
+                'assistant-improvement-error',
+                'assistant-improvement-warning',
+                'assistant-improvement-info',
+            ];
+            document.querySelectorAll(classes.map((name) => `.${name}`).join(','))
+                .forEach((node) => {
+                    node.classList.remove(...classes);
+                    node.removeAttribute('data-assistant-improvement-severity');
+                });
+
+            const severityRanks = { info: 1, warning: 2, error: 3 };
+            const targets = new Map();
+
+            this.workflowImprovements.forEach((improvement) => {
+                const target = this.improvementTarget(improvement);
+                if (!target) return;
+
+                const severity = ['error', 'warning', 'info'].includes(improvement.severity)
+                    ? improvement.severity
+                    : 'info';
+                const current = targets.get(target);
+
+                if (!current || severityRanks[severity] > severityRanks[current]) {
+                    targets.set(target, severity);
+                }
+            });
+
+            targets.forEach((severity, target) => {
+                target.classList.add(`assistant-improvement-${severity}`);
+                target.dataset.assistantImprovementSeverity = severity;
+            });
+        },
+        openWorkflowImprovement(improvement = {}) {
+            if (!improvement.highlightable) return;
+
+            const target = this.improvementTarget(improvement);
+            target?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+            this.closeChat();
+            window.setTimeout(() => {
+                window.dispatchEvent(new CustomEvent('assistant-open-workflow-improvement', {
+                    detail: improvement,
+                }));
+            }, 80);
         },
         cssEscape(value) {
             const text = String(value ?? '');
@@ -822,6 +951,7 @@
     x-on:assistant-ui-action.window="handleUiAction($event)"
     x-on:assistant-workflow-page-refresh.window="refreshWorkflowPage()"
     x-on:workflow-copilot-session-activated.window="setOpen(true); callLivewire('attachCopilotSession', Number($event.detail.sessionId || $event.detail.session_id || 0))"
+    x-on:assistant-reapply-workflow-improvements.window="queueImprovementHighlights()"
     x-on:keydown.escape.window="if (showChat) closeChat()"
     class="workflow-copilot"
 >
@@ -834,6 +964,27 @@
             outline-offset: 4px;
             box-shadow: 0 0 0 8px rgba(34, 211, 238, .18), 0 18px 40px -20px rgba(15, 23, 42, .45);
             transition: outline-color .2s ease, box-shadow .2s ease;
+        }
+        .assistant-improvement-error,
+        .assistant-improvement-warning,
+        .assistant-improvement-info {
+            position: relative;
+            z-index: 44;
+            outline: 3px solid transparent;
+            outline-offset: 4px;
+            transition: outline-color .2s ease, box-shadow .2s ease;
+        }
+        .assistant-improvement-error {
+            outline-color: rgb(244 63 94);
+            box-shadow: 0 0 0 7px rgba(244, 63, 94, .16), 0 18px 38px -22px rgba(159, 18, 57, .55);
+        }
+        .assistant-improvement-warning {
+            outline-color: rgb(245 158 11);
+            box-shadow: 0 0 0 7px rgba(245, 158, 11, .16), 0 18px 38px -22px rgba(146, 64, 14, .5);
+        }
+        .assistant-improvement-info {
+            outline-color: rgb(14 165 233);
+            box-shadow: 0 0 0 7px rgba(14, 165, 233, .15), 0 18px 38px -22px rgba(3, 105, 161, .5);
         }
     </style>
 
@@ -1175,6 +1326,50 @@
                                 </div>
                             </div>
                             <div class="whitespace-pre-line break-words">{!! nl2br(e($item['content'] ?? '')) !!}</div>
+
+                            @if(is_array($item['improvements'] ?? null) && $item['improvements'] !== [])
+                                <div class="mt-3 border-t border-slate-200 pt-1">
+                                    @foreach($item['improvements'] as $improvement)
+                                        @php
+                                            $severity = in_array($improvement['severity'] ?? null, ['error', 'warning', 'info'], true)
+                                                ? $improvement['severity']
+                                                : 'info';
+                                            $severityLabel = match ($severity) {
+                                                'error' => 'Fehler',
+                                                'warning' => 'Optimierung',
+                                                default => 'Hinweis',
+                                            };
+                                            $severityClasses = match ($severity) {
+                                                'error' => 'text-rose-700 before:bg-rose-500',
+                                                'warning' => 'text-amber-700 before:bg-amber-500',
+                                                default => 'text-sky-700 before:bg-sky-500',
+                                            };
+                                            $highlightable = (bool) ($improvement['highlightable'] ?? false);
+                                        @endphp
+                                        <button
+                                            type="button"
+                                            x-on:click="openWorkflowImprovement(@js($improvement))"
+                                            @disabled(! $highlightable)
+                                            class="group block w-full border-b border-slate-100 py-2.5 text-left last:border-b-0 {{ $highlightable ? 'cursor-pointer hover:bg-slate-50' : 'cursor-default' }}"
+                                        >
+                                            <span class="block px-1">
+                                                <span class="flex items-center justify-between gap-3">
+                                                    <span class="min-w-0 truncate text-xs font-black text-slate-900">{{ $improvement['title'] ?? 'Verbesserung' }}</span>
+                                                    <span class="relative shrink-0 pl-3 text-[10px] font-bold uppercase before:absolute before:left-0 before:top-1/2 before:h-1.5 before:w-1.5 before:-translate-y-1/2 before:rounded-full {{ $severityClasses }}">
+                                                        {{ $severityLabel }}
+                                                    </span>
+                                                </span>
+                                                @if(! blank($improvement['explanation'] ?? null))
+                                                    <span class="mt-1 block text-[11px] leading-4 text-slate-600">{{ $improvement['explanation'] }}</span>
+                                                @endif
+                                                @if(! blank($improvement['recommendation'] ?? null))
+                                                    <span class="mt-1 block text-[11px] font-semibold leading-4 text-slate-800">Empfehlung: {{ $improvement['recommendation'] }}</span>
+                                                @endif
+                                            </span>
+                                        </button>
+                                    @endforeach
+                                </div>
+                            @endif
 
                             @if(($item['options'] ?? null) && is_array($item['options']))
                                 <div class="mt-3 space-y-2 border-t border-slate-100 pt-3">
