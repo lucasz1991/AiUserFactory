@@ -2,9 +2,13 @@
 
 namespace App\Services\Ai;
 
+use App\Jobs\WorkflowCopilotSupervisorJob;
+use App\Models\Setting;
 use App\Models\Workflow;
+use App\Models\WorkflowCopilotSession;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowStep;
+use App\Services\Workflows\WorkflowCopilotSessionService;
 use App\Services\Workflows\WorkflowExecutionService;
 use App\Services\Workflows\WorkflowTaskCatalog;
 use App\Services\Workflows\WorkflowTaskOrderingService;
@@ -32,6 +36,7 @@ class WorkflowAssistantToolService
             'Bei eingebetteten Workflows: nutze list_embedded_workflow_candidates und erklaere kurz, warum ein Workflow eingebettet werden sollte.',
             'Wenn du dem Nutzer mehrere klare Optionen anbietest, nutze present_chat_options, damit klickbare Auswahlbuttons erscheinen.',
             'Wenn du ein sichtbares Workflow-Element besprichst, nutze highlight_workflow_element fuer workflow_row, workflow_list, workflow_task oder workflow_task_catalog.',
+            'Fuer autonome Reparaturtests nutze workflow_optimize_start und danach die workflow_optimize_*-Steuerungen. Diese Sitzungen laufen ausnahmslos auf execution_target=system und niemals auf einem ClientController.',
             'Lege keine Loeschoperationen an. Fuer gefaehrliche Aenderungen erst eine kurze Zusammenfassung geben und dann eine konkrete Aktualisierungsfunktion nutzen, wenn der Nutzer es beauftragt.',
             trim($extraInstructions),
         ])));
@@ -305,6 +310,63 @@ class WorkflowAssistantToolService
                     'open_process_monitor' => ['type' => 'boolean'],
                 ],
             ]),
+            $this->tool('workflow_optimize_start', 'Starte eine persistente autonome Workflow-Reparatur im System-Testweg. Nie auf einem Client.', [
+                'type' => 'object',
+                'properties' => [
+                    'workflow_id' => ['type' => 'integer'],
+                    'workflow_slug' => ['type' => 'string'],
+                    'workflow_query' => ['type' => 'string'],
+                    'person_id' => ['type' => 'integer'],
+                    'goal' => ['type' => 'string'],
+                    'success_criteria' => ['type' => 'array', 'items' => ['type' => 'string']],
+                    'workflow_inputs' => ['type' => 'object'],
+                    'max_minutes' => ['type' => 'integer', 'minimum' => 5, 'maximum' => 1440],
+                    'max_repair_iterations' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 100],
+                    'max_probe_actions' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 500],
+                    'max_same_state_repeats' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 10],
+                ],
+                'required' => ['goal'],
+            ]),
+            $this->tool('workflow_optimize_status', 'Lese Live-Status, Budget und letzte Ereignisse einer Copilot-Optimierung.', [
+                'type' => 'object',
+                'properties' => [
+                    'session_id' => ['type' => 'integer'],
+                    'workflow_id' => ['type' => 'integer'],
+                    'workflow_slug' => ['type' => 'string'],
+                    'workflow_query' => ['type' => 'string'],
+                ],
+            ]),
+            $this->tool('workflow_optimize_instruction', 'Speichere eine Benutzeranweisung fuer den naechsten sicheren Task-Checkpoint.', [
+                'type' => 'object',
+                'properties' => [
+                    'session_id' => ['type' => 'integer'],
+                    'workflow_id' => ['type' => 'integer'],
+                    'instruction' => ['type' => 'string'],
+                ],
+                'required' => ['instruction'],
+            ]),
+            $this->tool('workflow_optimize_pause', 'Pausiere die aktive Optimierung am naechsten sicheren Zustand.', [
+                'type' => 'object',
+                'properties' => ['session_id' => ['type' => 'integer'], 'workflow_id' => ['type' => 'integer']],
+            ]),
+            $this->tool('workflow_optimize_resume', 'Setze eine pausierte System-Optimierung fort.', [
+                'type' => 'object',
+                'properties' => ['session_id' => ['type' => 'integer'], 'workflow_id' => ['type' => 'integer']],
+            ]),
+            $this->tool('workflow_optimize_rewind', 'Springe logisch zu einem gespeicherten Copilot-Checkpoint zurueck.', [
+                'type' => 'object',
+                'properties' => [
+                    'session_id' => ['type' => 'integer'],
+                    'workflow_id' => ['type' => 'integer'],
+                    'checkpoint' => ['type' => ['integer', 'string']],
+                    'reason' => ['type' => 'string'],
+                ],
+                'required' => ['checkpoint'],
+            ]),
+            $this->tool('workflow_optimize_stop', 'Stoppe eine Optimierung und entsperre den Workflow als unverified.', [
+                'type' => 'object',
+                'properties' => ['session_id' => ['type' => 'integer'], 'workflow_id' => ['type' => 'integer']],
+            ]),
             $this->tool('navigate', 'Navigiere im Adminbereich zu Workflows, Workflow-Detail, Prozessen, Aktionen, Einstellungen oder Dashboard.', [
                 'type' => 'object',
                 'properties' => [
@@ -408,6 +470,13 @@ class WorkflowAssistantToolService
             'update_list_import' => $this->updateListImport($arguments),
             'update_task_import' => $this->updateTaskImport($arguments),
             'workflow_test_run' => $this->workflowTestRun($arguments),
+            'workflow_optimize_start' => $this->workflowOptimizeStart($arguments),
+            'workflow_optimize_status' => $this->workflowOptimizeStatus($arguments),
+            'workflow_optimize_instruction' => $this->workflowOptimizeInstruction($arguments, $user),
+            'workflow_optimize_pause' => $this->workflowOptimizePause($arguments),
+            'workflow_optimize_resume' => $this->workflowOptimizeResume($arguments),
+            'workflow_optimize_rewind' => $this->workflowOptimizeRewind($arguments),
+            'workflow_optimize_stop' => $this->workflowOptimizeStop($arguments),
             'navigate' => $this->navigate($arguments),
             'highlight_workflow_element' => $this->highlightWorkflowElement($arguments),
             'present_workflow_improvements' => $this->presentWorkflowImprovements($arguments),
@@ -1485,6 +1554,203 @@ class WorkflowAssistantToolService
         ];
     }
 
+    protected function workflowOptimizeStart(array $arguments): array
+    {
+        $copilotSettings = Setting::getValue('ai_assistant', 'workflow_copilot');
+        $optimizationDefaults = is_array(data_get($copilotSettings, 'optimization_defaults'))
+            ? data_get($copilotSettings, 'optimization_defaults')
+            : [];
+        $autoExecute = filter_var(
+            $optimizationDefaults['auto_execute_workflow_actions'] ?? true,
+            FILTER_VALIDATE_BOOL,
+        );
+
+        if (! $autoExecute) {
+            return $this->error(
+                'WORKFLOW_OPTIMIZE_AUTO_EXECUTE_DISABLED',
+                'Autonome Workflow-Aktionen sind in den Copilot-Einstellungen deaktiviert. Der Start wurde blockiert.',
+            );
+        }
+
+        $workflow = $this->resolveWorkflow($arguments);
+
+        if (! $workflow) {
+            return $this->error('WORKFLOW_NOT_FOUND', 'Workflow wurde nicht gefunden.');
+        }
+
+        $goal = trim((string) ($arguments['goal'] ?? ''));
+
+        if ($goal === '') {
+            return $this->error('GOAL_REQUIRED', 'Fuer die autonome Optimierung ist ein konkretes Ziel erforderlich.');
+        }
+
+        try {
+            $session = app(WorkflowCopilotSessionService::class)->start($workflow, [
+                'person_id' => $this->positiveInteger($arguments['person_id'] ?? null),
+                'execution_target' => WorkflowCopilotSession::EXECUTION_TARGET_SYSTEM,
+                'goal' => $goal,
+                'success_criteria' => collect(is_array($arguments['success_criteria'] ?? null) ? $arguments['success_criteria'] : [])
+                    ->map(fn (mixed $criterion): string => trim((string) $criterion))
+                    ->filter()
+                    ->take(50)
+                    ->values()
+                    ->all(),
+                'workflow_inputs' => is_array($arguments['workflow_inputs'] ?? null) ? $arguments['workflow_inputs'] : [],
+                'budget' => [
+                    'max_minutes' => max(5, min(1440, (int) ($arguments['max_minutes'] ?? $optimizationDefaults['max_minutes'] ?? 90))),
+                    'max_repair_iterations' => max(1, min(100, (int) ($arguments['max_repair_iterations'] ?? $optimizationDefaults['max_repair_iterations'] ?? 15))),
+                    'max_probe_actions' => max(1, min(500, (int) ($arguments['max_probe_actions'] ?? $optimizationDefaults['max_probe_actions'] ?? 60))),
+                    'max_same_state_repeats' => max(1, min(10, (int) ($arguments['max_same_state_repeats'] ?? $optimizationDefaults['max_same_state_repeats'] ?? 2))),
+                    'auto_execute_workflow_actions' => true,
+                ],
+            ]);
+            WorkflowCopilotSupervisorJob::dispatch($session->id);
+        } catch (\Throwable $exception) {
+            return $this->error('WORKFLOW_OPTIMIZE_START_FAILED', $exception->getMessage());
+        }
+
+        return [
+            'ok' => true,
+            'message' => 'Autonome Workflow-Optimierung wurde als System-Sitzung gestartet.',
+            'session' => $this->copilotSessionSummary($session),
+            'refresh_page' => true,
+            'ui_action' => [
+                'type' => 'workflow_copilot_session',
+                'session_id' => (int) $session->id,
+                'workflow_id' => (int) $workflow->id,
+            ],
+        ];
+    }
+
+    protected function workflowOptimizeStatus(array $arguments): array
+    {
+        $session = $this->resolveCopilotSession($arguments);
+
+        if (! $session) {
+            return $this->error('WORKFLOW_OPTIMIZE_SESSION_NOT_FOUND', 'Keine passende Copilot-Optimierung wurde gefunden.');
+        }
+
+        $events = app(WorkflowCopilotSessionService::class)
+            ->eventsAfter($session, max(0, (int) $session->last_event_sequence - 30), 30)
+            ->map(fn ($event): array => [
+                'sequence' => (int) $event->sequence,
+                'type' => (string) $event->event_type,
+                'phase' => (string) $event->phase,
+                'level' => (string) $event->level,
+                'message' => (string) $event->message,
+                'at' => optional($event->occurred_at)->toIso8601String(),
+            ])
+            ->values()
+            ->all();
+
+        return [
+            'ok' => true,
+            'message' => 'Copilot-Status wurde geladen.',
+            'session' => $this->copilotSessionSummary($session->fresh(['workflow', 'activeRun']) ?? $session),
+            'events' => $events,
+        ];
+    }
+
+    protected function workflowOptimizeInstruction(array $arguments, mixed $user): array
+    {
+        $session = $this->resolveCopilotSession($arguments);
+
+        if (! $session) {
+            return $this->error('WORKFLOW_OPTIMIZE_SESSION_NOT_FOUND', 'Keine aktive Copilot-Optimierung wurde gefunden.');
+        }
+
+        try {
+            app(WorkflowCopilotSessionService::class)->instruction(
+                $session,
+                (string) ($arguments['instruction'] ?? ''),
+                ['user_id' => $user?->id, 'source' => 'workflow-assistant-tool'],
+            );
+            WorkflowCopilotSupervisorJob::dispatch($session->id);
+        } catch (\Throwable $exception) {
+            return $this->error('WORKFLOW_OPTIMIZE_INSTRUCTION_FAILED', $exception->getMessage());
+        }
+
+        return ['ok' => true, 'message' => 'Anweisung wurde fuer den naechsten sicheren Task-Checkpoint gespeichert.', 'session' => $this->copilotSessionSummary($session->fresh() ?? $session)];
+    }
+
+    protected function workflowOptimizePause(array $arguments): array
+    {
+        $session = $this->resolveCopilotSession($arguments);
+
+        if (! $session) {
+            return $this->error('WORKFLOW_OPTIMIZE_SESSION_NOT_FOUND', 'Keine aktive Copilot-Optimierung wurde gefunden.');
+        }
+
+        try {
+            $session = app(WorkflowCopilotSessionService::class)->pause($session, 'Ueber den Workflow-Copilot-Chat pausiert.');
+        } catch (\Throwable $exception) {
+            return $this->error('WORKFLOW_OPTIMIZE_PAUSE_FAILED', $exception->getMessage());
+        }
+
+        return ['ok' => true, 'message' => 'Copilot-Optimierung wurde pausiert.', 'session' => $this->copilotSessionSummary($session)];
+    }
+
+    protected function workflowOptimizeResume(array $arguments): array
+    {
+        $session = $this->resolveCopilotSession($arguments);
+
+        if (! $session) {
+            return $this->error('WORKFLOW_OPTIMIZE_SESSION_NOT_FOUND', 'Keine pausierte Copilot-Optimierung wurde gefunden.');
+        }
+
+        try {
+            $session = app(WorkflowCopilotSessionService::class)->resume($session);
+            WorkflowCopilotSupervisorJob::dispatch($session->id);
+        } catch (\Throwable $exception) {
+            return $this->error('WORKFLOW_OPTIMIZE_RESUME_FAILED', $exception->getMessage());
+        }
+
+        return ['ok' => true, 'message' => 'Copilot-Optimierung wird in der System-Ausfuehrung fortgesetzt.', 'session' => $this->copilotSessionSummary($session)];
+    }
+
+    protected function workflowOptimizeRewind(array $arguments): array
+    {
+        $session = $this->resolveCopilotSession($arguments);
+
+        if (! $session) {
+            return $this->error('WORKFLOW_OPTIMIZE_SESSION_NOT_FOUND', 'Keine aktive Copilot-Optimierung wurde gefunden.');
+        }
+
+        try {
+            $session = app(WorkflowCopilotSessionService::class)->rewind(
+                $session,
+                $arguments['checkpoint'] ?? '',
+                trim((string) ($arguments['reason'] ?? 'Im Workflow-Copilot-Chat angefordert.')),
+            );
+            WorkflowCopilotSupervisorJob::dispatch($session->id);
+        } catch (\Throwable $exception) {
+            return $this->error('WORKFLOW_OPTIMIZE_REWIND_FAILED', $exception->getMessage());
+        }
+
+        return ['ok' => true, 'message' => 'Logischer Ruecksprung wurde eingeplant; externe Seiteneffekte bleiben bestehen.', 'session' => $this->copilotSessionSummary($session)];
+    }
+
+    protected function workflowOptimizeStop(array $arguments): array
+    {
+        $session = $this->resolveCopilotSession($arguments);
+
+        if (! $session) {
+            return $this->error('WORKFLOW_OPTIMIZE_SESSION_NOT_FOUND', 'Keine aktive Copilot-Optimierung wurde gefunden.');
+        }
+
+        try {
+            if ($session->activeRun && ! in_array($session->activeRun->status, ['completed', 'failed', 'cancelled', 'timed_out', 'lost'], true)) {
+                app(WorkflowExecutionService::class)->cancel($session->activeRun, 'Copilot-Optimierung wurde gestoppt.');
+            }
+
+            $session = app(WorkflowCopilotSessionService::class)->stop($session, 'Ueber den Workflow-Copilot-Chat gestoppt.');
+        } catch (\Throwable $exception) {
+            return $this->error('WORKFLOW_OPTIMIZE_STOP_FAILED', $exception->getMessage());
+        }
+
+        return ['ok' => true, 'message' => 'Copilot-Optimierung wurde gestoppt; die Revision bleibt unverified.', 'session' => $this->copilotSessionSummary($session)];
+    }
+
     protected function navigate(array $arguments): array
     {
         $target = Str::slug((string) ($arguments['target'] ?? 'workflows'), '_');
@@ -1823,6 +2089,64 @@ class WorkflowAssistantToolService
         }
 
         return null;
+    }
+
+    protected function resolveCopilotSession(array $arguments): ?WorkflowCopilotSession
+    {
+        $sessionId = $this->positiveInteger($arguments['session_id'] ?? null);
+
+        if ($sessionId) {
+            return WorkflowCopilotSession::query()
+                ->with(['workflow', 'activeRun'])
+                ->find($sessionId);
+        }
+
+        $workflowId = $this->positiveInteger($arguments['workflow_id'] ?? null);
+
+        if (! $workflowId && (filled($arguments['workflow_slug'] ?? null) || filled($arguments['workflow_query'] ?? null))) {
+            $workflowId = $this->resolveWorkflow($arguments, false)?->id;
+        }
+
+        if (! $workflowId) {
+            return null;
+        }
+
+        return WorkflowCopilotSession::query()
+            ->with(['workflow', 'activeRun'])
+            ->where('workflow_id', $workflowId)
+            ->whereIn('status', WorkflowCopilotSession::ACTIVE_STATUSES)
+            ->latest('id')
+            ->first();
+    }
+
+    protected function copilotSessionSummary(WorkflowCopilotSession $session): array
+    {
+        $session->loadMissing(['workflow', 'activeRun']);
+        $state = is_array($session->state_json) ? $session->state_json : [];
+
+        return [
+            'id' => (int) $session->id,
+            'uuid' => (string) $session->session_uuid,
+            'workflow_id' => (int) $session->workflow_id,
+            'workflow_name' => (string) ($session->workflow?->name ?? ''),
+            'status' => (string) $session->status,
+            'phase' => (string) $session->phase,
+            'execution_target' => 'system',
+            'active_run_id' => $session->active_workflow_run_id ? (int) $session->active_workflow_run_id : null,
+            'active_run_status' => $session->activeRun?->status,
+            'revision' => (int) $session->current_revision,
+            'repair_round' => (int) $session->repair_round,
+            'budget' => $session->budget_json ?: [],
+            'usage' => $session->usage_json ?: [],
+            'current_step' => data_get($state, 'current_step_name'),
+            'current_task' => data_get($state, 'current_task_key'),
+            'page_state' => data_get($state, 'page_state'),
+            'last_action' => data_get($state, 'last_action'),
+            'next_action' => data_get($state, 'next_action'),
+            'screenshot_url' => data_get($state, 'latest_screenshot_url'),
+            'started_at' => optional($session->started_at)->toIso8601String(),
+            'finished_at' => optional($session->finished_at)->toIso8601String(),
+        ];
     }
 
     protected function resolveEditableWorkflow(array $arguments): ?Workflow

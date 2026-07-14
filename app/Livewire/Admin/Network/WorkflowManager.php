@@ -2,6 +2,7 @@
 
 namespace App\Livewire\Admin\Network;
 
+use App\Jobs\WorkflowCopilotSupervisorJob;
 use App\Models\Device;
 use App\Models\NetworkNode;
 use App\Models\Person;
@@ -126,6 +127,8 @@ class WorkflowManager extends Component
     public int $copilotMaxProbeActions = 60;
 
     public int $copilotMaxSameStateRepeats = 2;
+
+    public bool $copilotAutoExecute = true;
 
     public string $copilotRewindCheckpoint = '';
 
@@ -1210,6 +1213,17 @@ class WorkflowManager extends Component
             return;
         }
 
+        $this->copilotAutoExecute = $this->copilotAutoExecutionAllowed();
+
+        if (! $this->copilotAutoExecute) {
+            $this->addError(
+                'copilotAutoExecute',
+                'Autonome Workflow-Aktionen sind in den Copilot-Einstellungen deaktiviert. Der Start wurde blockiert.',
+            );
+
+            return;
+        }
+
         $validated = $this->validate([
             'copilotGoal' => ['required', 'string', 'max:4000'],
             'copilotSuccessCriteria' => ['required', 'string', 'max:8000'],
@@ -1245,9 +1259,11 @@ class WorkflowManager extends Component
                     'max_repair_iterations' => (int) $validated['copilotMaxRepairIterations'],
                     'max_probe_actions' => (int) $validated['copilotMaxProbeActions'],
                     'max_same_state_repeats' => (int) $validated['copilotMaxSameStateRepeats'],
+                    'auto_execute_workflow_actions' => true,
                 ],
             ]);
 
+            WorkflowCopilotSupervisorJob::dispatch((int) $session->getKey());
             $this->activeCopilotSessionId = (int) $session->getKey();
             $this->showCopilotModal = false;
             $this->showCopilotPreviewModal = true;
@@ -1300,7 +1316,8 @@ class WorkflowManager extends Component
     public function resumeCopilotOptimization(): void
     {
         if ($session = $this->activeCopilotSession()) {
-            app(WorkflowCopilotSessionService::class)->resume($session);
+            $session = app(WorkflowCopilotSessionService::class)->resume($session);
+            WorkflowCopilotSupervisorJob::dispatch((int) $session->getKey());
             $this->refreshCopilotSession();
         }
     }
@@ -1313,29 +1330,55 @@ class WorkflowManager extends Component
             return;
         }
 
-        $checkpoint = trim($this->copilotRewindCheckpoint);
+        $checkpoint = (int) $this->copilotRewindCheckpoint;
 
-        if ($checkpoint === '') {
+        if ($checkpoint < 1) {
             $this->addError('copilotRewindCheckpoint', 'Bitte einen Checkpoint auswaehlen oder eingeben.');
 
             return;
         }
 
-        app(WorkflowCopilotSessionService::class)->rewind($session, $checkpoint, 'Im Workflow Manager angefordert.');
+        $session = app(WorkflowCopilotSessionService::class)->rewind($session, $checkpoint, 'Im Workflow Manager angefordert.');
+        WorkflowCopilotSupervisorJob::dispatch((int) $session->getKey());
         $this->refreshCopilotSession();
     }
 
     public function stopCopilotOptimization(): void
     {
         if ($session = $this->activeCopilotSession()) {
+            $session->loadMissing('activeRun');
+
+            if ($session->activeRun) {
+                app(WorkflowExecutionService::class)->cancel(
+                    $session->activeRun,
+                    'Workflow-Test wurde mit der Copilot-Sitzung gestoppt.',
+                );
+            }
+
             app(WorkflowCopilotSessionService::class)->stop($session, 'Im Workflow Manager gestoppt.');
             $this->refreshCopilotSession();
+        }
+    }
+
+    public function openCopilotChat(): void
+    {
+        if ($session = $this->activeCopilotSession()) {
+            $this->dispatch('workflow-copilot-session-activated', sessionId: (int) $session->getKey());
         }
     }
 
     public function closeCopilotPreview(): void
     {
         $this->showCopilotPreviewModal = false;
+
+        $session = $this->activeCopilotSession();
+
+        if ($session && ! $session->retainsWorkflowLock()) {
+            $this->activeCopilotSessionId = null;
+            $this->copilotStatus = [];
+            $this->copilotEvents = [];
+            $this->copilotRewindCheckpoint = '';
+        }
     }
 
     public function closeRunPreview(): void
@@ -1431,6 +1474,243 @@ class WorkflowManager extends Component
         }
 
         return response()->download($export['path'], $export['filename'])->deleteFileAfterSend(true);
+    }
+
+    protected function loadCopilotDefaults(): void
+    {
+        $settings = Setting::getValue('ai_assistant', 'workflow_copilot');
+        $settings = is_array($settings) ? $settings : [];
+        $defaults = is_array($settings['optimization_defaults'] ?? null)
+            ? $settings['optimization_defaults']
+            : [];
+
+        $this->copilotMaxMinutes = max(5, min(1440, (int) ($defaults['max_minutes'] ?? 90)));
+        $this->copilotMaxRepairIterations = max(1, min(100, (int) ($defaults['max_repair_iterations'] ?? 15)));
+        $this->copilotMaxProbeActions = max(1, min(500, (int) ($defaults['max_probe_actions'] ?? 60)));
+        $this->copilotMaxSameStateRepeats = max(1, min(10, (int) ($defaults['max_same_state_repeats'] ?? 2)));
+        $this->copilotAutoExecute = filter_var(
+            $defaults['auto_execute_workflow_actions'] ?? true,
+            FILTER_VALIDATE_BOOL,
+        );
+    }
+
+    protected function copilotAutoExecutionAllowed(): bool
+    {
+        $settings = Setting::getValue('ai_assistant', 'workflow_copilot');
+        $defaults = is_array(data_get($settings, 'optimization_defaults'))
+            ? data_get($settings, 'optimization_defaults')
+            : [];
+
+        return filter_var(
+            $defaults['auto_execute_workflow_actions'] ?? true,
+            FILTER_VALIDATE_BOOL,
+        );
+    }
+
+    protected function restoreWorkflowCopilotSession(): void
+    {
+        if (! $this->selectedWorkflowId) {
+            return;
+        }
+
+        $session = WorkflowCopilotSession::query()
+            ->where('workflow_id', $this->selectedWorkflowId)
+            ->whereIn('status', WorkflowCopilotSession::LOCK_RETAINING_STATUSES)
+            ->latest('id')
+            ->first();
+
+        if (! $session) {
+            return;
+        }
+
+        $this->activeCopilotSessionId = (int) $session->getKey();
+        $this->refreshCopilotSession();
+    }
+
+    protected function activeCopilotSession(): ?WorkflowCopilotSession
+    {
+        if ($this->activeCopilotSessionId) {
+            $session = WorkflowCopilotSession::query()
+                ->where('workflow_id', $this->selectedWorkflowId)
+                ->find($this->activeCopilotSessionId);
+
+            if ($session) {
+                return $session;
+            }
+        }
+
+        if (! $this->selectedWorkflowId) {
+            return null;
+        }
+
+        return WorkflowCopilotSession::query()
+            ->where('workflow_id', $this->selectedWorkflowId)
+            ->whereIn('status', WorkflowCopilotSession::LOCK_RETAINING_STATUSES)
+            ->latest('id')
+            ->first();
+    }
+
+    protected function parseCopilotSuccessCriteria(string $criteria): array
+    {
+        $criteria = trim($criteria);
+        $decoded = json_decode($criteria, true);
+
+        if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+            return $decoded;
+        }
+
+        return [
+            'assertions' => collect(preg_split('/\r\n|\r|\n/', $criteria) ?: [])
+                ->map(fn (string $assertion): string => trim(ltrim($assertion, "- *\t")))
+                ->filter()
+                ->values()
+                ->all(),
+        ];
+    }
+
+    protected function copilotStatusPayload(WorkflowCopilotSession $session): array
+    {
+        $state = is_array($session->state_json) ? $session->state_json : [];
+        $budget = is_array($session->budget_json) ? $session->budget_json : [];
+        $usage = is_array($session->usage_json) ? $session->usage_json : [];
+        $maxMinutes = max(1, (int) ($budget['max_minutes'] ?? 90));
+        $elapsedMinutes = $session->started_at
+            ? max(0, (int) $session->started_at->diffInMinutes(now()))
+            : 0;
+        $screenshotUrl = $this->copilotScreenshotUrl($state);
+        $checkpoints = $session->checkpoints()
+            ->with(['workflowStep', 'screenshotArtifact'])
+            ->latest('sequence')
+            ->limit(20)
+            ->get()
+            ->map(function ($checkpoint): array {
+                $sideEffects = is_array($checkpoint->side_effect_ledger_json)
+                    ? $checkpoint->side_effect_ledger_json
+                    : [];
+
+                return [
+                    'id' => (int) $checkpoint->getKey(),
+                    'sequence' => (int) $checkpoint->sequence,
+                    'phase' => (string) ($checkpoint->phase ?? ''),
+                    'step_name' => (string) ($checkpoint->workflowStep?->name ?? data_get($checkpoint->cursor_json, 'step_name', '')),
+                    'task_key' => (string) ($checkpoint->task_key ?? data_get($checkpoint->cursor_json, 'task_key', '')),
+                    'is_reproducible' => (bool) $checkpoint->is_reproducible,
+                    'has_side_effects' => $sideEffects !== [],
+                    'screenshot_url' => $checkpoint->screenshotArtifact
+                        ? route('workflow-run-artifacts.show', [
+                            'run' => $checkpoint->screenshotArtifact->workflow_run_id,
+                            'artifact' => $checkpoint->screenshotArtifact->getKey(),
+                        ], false)
+                        : null,
+                ];
+            })
+            ->values()
+            ->all();
+        $revisions = $session->revisions()
+            ->latest('revision_number')
+            ->limit(10)
+            ->get()
+            ->map(fn ($revision): array => [
+                'id' => (int) $revision->getKey(),
+                'revision_number' => (int) $revision->revision_number,
+                'reason' => Str::limit(trim((string) ($revision->reason ?? '')), 500, ''),
+                'is_verified' => (bool) $revision->is_verified,
+                'diff' => is_array($revision->diff_json) ? $revision->diff_json : [],
+                'created_at' => optional($revision->created_at)->format('H:i:s'),
+            ])
+            ->values()
+            ->all();
+        $domElements = data_get($state, 'observation.interaction_map', data_get($state, 'dom_elements', []));
+        $domElements = collect(is_array($domElements) ? $domElements : [])
+            ->take(30)
+            ->map(fn (mixed $element): array => [
+                'ref' => (string) data_get($element, 'element_ref', data_get($element, 'ref', data_get($element, 'id', ''))),
+                'role' => (string) data_get($element, 'role', data_get($element, 'tag', 'Element')),
+                'text' => Str::limit(trim((string) data_get($element, 'text', data_get($element, 'label', ''))), 160, ''),
+                'selector' => Str::limit(trim((string) data_get($element, 'selector_candidates.0', data_get($element, 'selector', ''))), 220, ''),
+            ])
+            ->values()
+            ->all();
+
+        return [
+            'id' => (int) $session->getKey(),
+            'workflow_name' => (string) ($session->workflow?->name ?? 'Workflow'),
+            'status' => (string) $session->status,
+            'active' => $session->isActive(),
+            'paused' => (string) $session->status === WorkflowCopilotSession::STATUS_PAUSED,
+            'phase' => (string) ($session->phase ?: data_get($state, 'phase', 'executing')),
+            'goal' => (string) $session->goal,
+            'execution_target' => 'system',
+            'current_step_name' => (string) data_get($state, 'current_step_name', data_get($state, 'cursor.step_name', '')),
+            'current_task_key' => (string) data_get($state, 'current_task_key', data_get($state, 'cursor.task_key', '')),
+            'current_task_title' => (string) data_get($state, 'current_task_title', ''),
+            'latest_screenshot_url' => $screenshotUrl,
+            'page_state' => $this->copilotDisplayValue(data_get($state, 'page_state', data_get($state, 'observation.page_state'))),
+            'last_action' => $this->copilotDisplayValue(data_get($state, 'last_action')),
+            'current_result' => $this->copilotDisplayValue(data_get($state, 'last_result', data_get($state, 'current_result'))),
+            'next_action' => $this->copilotDisplayValue(data_get($state, 'next_action')),
+            'repair_iteration' => (int) ($session->repair_round ?? 0),
+            'max_repair_iterations' => max(1, (int) ($budget['max_repair_iterations'] ?? 15)),
+            'probe_actions' => (int) ($usage['probe_actions'] ?? 0),
+            'max_probe_actions' => max(1, (int) ($budget['max_probe_actions'] ?? 60)),
+            'elapsed_minutes' => $elapsedMinutes,
+            'remaining_minutes' => max(0, $maxMinutes - $elapsedMinutes),
+            'started_at' => optional($session->started_at)->format('d.m.Y H:i:s'),
+            'finished_at' => optional($session->finished_at)->format('d.m.Y H:i:s'),
+            'checkpoints' => $checkpoints,
+            'revisions' => $revisions,
+            'dom_elements' => $domElements,
+        ];
+    }
+
+    protected function copilotScreenshotUrl(array $state): ?string
+    {
+        $directUrl = trim((string) data_get($state, 'latest_screenshot_url', data_get($state, 'observation.screenshot_url', '')));
+
+        if ($directUrl !== '') {
+            return $directUrl;
+        }
+
+        $artifactId = (int) data_get($state, 'last_screenshot_artifact_id', 0);
+
+        if ($artifactId < 1) {
+            return null;
+        }
+
+        $artifact = \App\Models\WorkflowRunArtifact::query()->find($artifactId);
+
+        if (! $artifact || ! $artifact->workflow_run_id) {
+            return null;
+        }
+
+        return route('workflow-run-artifacts.show', [
+            'run' => $artifact->workflow_run_id,
+            'artifact' => $artifact->getKey(),
+        ], false);
+    }
+
+    protected function copilotDisplayValue(mixed $value): string
+    {
+        if ($value === null || $value === '') {
+            return '';
+        }
+
+        if (is_scalar($value)) {
+            return Str::limit((string) $value, 1000, '');
+        }
+
+        return Str::limit(json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?: '', 1000, '');
+    }
+
+    protected function isVisibleCopilotEvent(string $eventType): bool
+    {
+        return ! Str::contains(Str::lower(trim($eventType)), [
+            'reasoning',
+            'internal_analysis',
+            'chain_of_thought',
+            'chain-of-thought',
+            'thought',
+        ]);
     }
 
     protected function selectedWorkflow(): ?Workflow

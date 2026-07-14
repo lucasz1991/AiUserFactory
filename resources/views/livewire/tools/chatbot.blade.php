@@ -950,7 +950,7 @@
     }"
     x-on:assistant-ui-action.window="handleUiAction($event)"
     x-on:assistant-workflow-page-refresh.window="refreshWorkflowPage()"
-    x-on:workflow-copilot-session-activated.window="setOpen(true); callLivewire('attachCopilotSession', Number($event.detail.sessionId || $event.detail.session_id || 0))"
+    x-on:workflow-copilot-session-activated.window="const detail = normalizeEventDetail($event); const sessionId = Number(detail.sessionId || detail.session_id || 0); if (sessionId > 0) { setOpen(true); callLivewire('attachCopilotSession', sessionId); }"
     x-on:assistant-reapply-workflow-improvements.window="queueImprovementHighlights()"
     x-on:keydown.escape.window="if (showChat) closeChat()"
     class="workflow-copilot"
@@ -1225,7 +1225,7 @@
                                     </div>
                                     <div class="rounded-lg bg-slate-50 p-2.5">
                                         <dt class="font-semibold text-slate-500">Aktueller Task</dt>
-                                        <dd class="mt-1 break-words font-mono text-[11px] font-bold text-slate-900">{{ data_get($copilotStatus, 'current_task_key') ?: '-' }}</dd>
+                                        <dd class="mt-1 break-words text-[11px] font-bold text-slate-900">{{ data_get($copilotStatus, 'current_task_title') ?: data_get($copilotStatus, 'current_task_key', '-') }}</dd>
                                     </div>
                                 </dl>
 
@@ -1279,6 +1279,10 @@
                                             <button type="button" wire:click="pauseCopilotSession" wire:loading.attr="disabled" class="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-[11px] font-bold text-amber-800 hover:bg-amber-100 disabled:opacity-50">Pausieren</button>
                                         @endif
                                         <button type="button" wire:click="stopCopilotSession" wire:confirm="Autonome Workflow-Optimierung wirklich stoppen?" wire:loading.attr="disabled" class="rounded-lg border border-rose-300 bg-rose-50 px-3 py-1.5 text-[11px] font-bold text-rose-700 hover:bg-rose-100 disabled:opacity-50">Stoppen</button>
+                                    </div>
+                                @elseif(in_array(data_get($copilotStatus, 'status'), ['budget_exhausted', 'failed'], true))
+                                    <div class="border-t border-slate-100 pt-3">
+                                        <button type="button" wire:click="stopCopilotSession" wire:confirm="Sitzung beenden und Workflow-Lock freigeben?" wire:loading.attr="disabled" class="rounded-lg border border-rose-300 bg-rose-50 px-3 py-1.5 text-[11px] font-bold text-rose-700 hover:bg-rose-100 disabled:opacity-50">Sitzung beenden und Lock freigeben</button>
                                     </div>
                                 @endif
                             </div>

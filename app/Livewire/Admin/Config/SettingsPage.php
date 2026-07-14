@@ -49,6 +49,7 @@ class SettingsPage extends Component
     public int $assistantCopilotMaxRepairIterations = 15;
     public int $assistantCopilotMaxProbeActions = 60;
     public int $assistantCopilotMaxSameStateRepeats = 2;
+    public bool $assistantCopilotAutoExecute = true;
 
     // ClientController settings tab
     public string $ccServerDomain = '';
@@ -164,6 +165,7 @@ class SettingsPage extends Component
             'assistantCopilotMaxRepairIterations' => ['required', 'integer', 'min:1', 'max:100'],
             'assistantCopilotMaxProbeActions' => ['required', 'integer', 'min:1', 'max:500'],
             'assistantCopilotMaxSameStateRepeats' => ['required', 'integer', 'min:1', 'max:10'],
+            'assistantCopilotAutoExecute' => ['boolean'],
         ]);
 
         $visionFallbackModels = collect(preg_split('/[\r\n,]+/', (string) ($validated['assistantVisionFallbackModels'] ?? '')) ?: [])
@@ -191,6 +193,7 @@ class SettingsPage extends Component
                 'max_repair_iterations' => (int) $validated['assistantCopilotMaxRepairIterations'],
                 'max_probe_actions' => (int) $validated['assistantCopilotMaxProbeActions'],
                 'max_same_state_repeats' => (int) $validated['assistantCopilotMaxSameStateRepeats'],
+                'auto_execute_workflow_actions' => (bool) $validated['assistantCopilotAutoExecute'],
             ],
         ]);
 
@@ -309,6 +312,10 @@ class SettingsPage extends Component
         $this->assistantCopilotMaxRepairIterations = max(1, min(100, (int) ($optimizationDefaults['max_repair_iterations'] ?? 15)));
         $this->assistantCopilotMaxProbeActions = max(1, min(500, (int) ($optimizationDefaults['max_probe_actions'] ?? 60)));
         $this->assistantCopilotMaxSameStateRepeats = max(1, min(10, (int) ($optimizationDefaults['max_same_state_repeats'] ?? 2)));
+        $this->assistantCopilotAutoExecute = filter_var(
+            $optimizationDefaults['auto_execute_workflow_actions'] ?? true,
+            FILTER_VALIDATE_BOOL,
+        );
     }
 
     protected function loadClientControllerSettings(): void

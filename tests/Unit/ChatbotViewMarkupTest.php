@@ -54,5 +54,13 @@ class ChatbotViewMarkupTest extends TestCase
         $this->assertStringContainsString('assistant-improvement-warning', $source);
         $this->assertStringContainsString('assistant-improvement-info', $source);
         $this->assertStringContainsString("\$item['improvements']", $source);
+        $this->assertStringContainsString('workflow-copilot-session-activated', $source);
+        $this->assertStringContainsString('normalizeEventDetail($event)', $source);
+        $this->assertStringContainsString('wire:poll.2s="pollCopilotSession"', $source);
+        $this->assertStringContainsString('System-Ausfuehrung', $source);
+        $this->assertStringContainsString('Aktuelle Arbeitsschritte', $source);
+        $this->assertStringContainsString('wire:click="pauseCopilotSession"', $source);
+        $this->assertStringContainsString('wire:click="resumeCopilotSession"', $source);
+        $this->assertStringContainsString('wire:click="stopCopilotSession"', $source);
     }
 }

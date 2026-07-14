@@ -125,6 +125,10 @@
                             </button>
                             <div x-cloak x-show="open" x-transition x-on:click.outside="open = false" class="absolute right-0 z-50 mt-2 w-56 rounded-lg border border-slate-200 bg-white p-1.5 shadow-xl">
                                 <button type="button" wire:click="$set('showRunModal', true)" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-100">Neuen Test starten</button>
+                                <button type="button" wire:click="openCopilotOptimization" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-cyan-800 hover:bg-cyan-50">
+                                    {{ $activeCopilotSession ? 'Copilot-Sitzung oeffnen' : 'Mit Copilot optimieren' }}
+                                    <span class="mt-0.5 block text-xs font-medium text-cyan-600">Autonome System-Ausfuehrung</span>
+                                </button>
                                 <button type="button" wire:click="openLatestRunPreview" x-on:click="open = false" @disabled(! $quickPreviewRun) class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-indigo-700 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-40">
                                     {{ $quickPreviewRun && in_array($quickPreviewRun->status, ['queued', 'running', 'waiting'], true) ? 'Laufenden Test öffnen' : 'Letzten Test öffnen' }}
                                     @if($quickPreviewDurationLabel)
@@ -792,6 +796,235 @@
             <x-slot name="footer">
                 <button type="button" x-on:click="$dispatch('close')" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">Abbrechen</button>
                 <button type="button" wire:click="runWorkflow" wire:loading.attr="disabled" class="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 disabled:opacity-60">Testen</button>
+            </x-slot>
+        </x-dialog-modal>
+
+        <x-dialog-modal wire:model="showCopilotModal" maxWidth="3xl">
+            <x-slot name="title">Workflow mit Copilot optimieren</x-slot>
+            <x-slot name="content">
+                <div class="space-y-5">
+                    <div class="rounded-xl border border-cyan-200 bg-cyan-50 p-4 text-sm text-cyan-950">
+                        <p class="font-bold">Ausschliesslich System-Ausfuehrung</p>
+                        <p class="mt-1 leading-5">Der Copilot beobachtet den normalen System-Test mit Screenshot und bereinigter DOM-Ausgabe, probiert ausschliesslich vorhandene Workflow-Tasks aus und speichert nachvollziehbare Revisionen. Eine ClientController-Ausfuehrung ist fuer Reparaturen ausgeschlossen.</p>
+                    </div>
+
+                    <div class="rounded-xl border p-4 text-sm {{ $copilotAutoExecute ? 'border-emerald-200 bg-emerald-50 text-emerald-950' : 'border-rose-200 bg-rose-50 text-rose-950' }}">
+                        <p class="font-bold">{{ $copilotAutoExecute ? 'Autonome Aktionen sind freigegeben' : 'Autonome Aktionen sind deaktiviert' }}</p>
+                        <p class="mt-1 leading-5">
+                            {{ $copilotAutoExecute
+                                ? 'Mit dem bewussten Start darf der Copilot vorhandene Workflow-Tasks im System-Test ausfuehren und Konfigurationen versioniert anpassen.'
+                                : 'Aktiviere zuerst in den AI-Workflow-Chatbot-Einstellungen die Freigabe fuer autonome Workflow-Aktionen. Ohne diese Freigabe wird serverseitig keine Reparatursitzung gestartet.' }}
+                        </p>
+                        @error('copilotAutoExecute') <p class="mt-2 font-semibold text-rose-700">{{ $message }}</p> @enderror
+                    </div>
+
+                    <div>
+                        <label for="copilot-goal" class="block text-sm font-medium text-gray-700">Ziel der Optimierung</label>
+                        <textarea id="copilot-goal" rows="4" wire:model.defer="copilotGoal" placeholder="Beispiel: Der komplette Registrierungsablauf soll bis zur sichtbaren Erfolgsseite durchlaufen." class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-cyan-500 focus:ring-cyan-500"></textarea>
+                        <p class="mt-1 text-xs text-gray-500">Dieses Ziel bleibt waehrend der Sitzung unveraendert.</p>
+                        @error('copilotGoal') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                    </div>
+
+                    <div>
+                        <label for="copilot-success-criteria" class="block text-sm font-medium text-gray-700">Feste Erfolgskriterien</label>
+                        <textarea id="copilot-success-criteria" rows="5" wire:model.defer="copilotSuccessCriteria" placeholder="Finale URL enthaelt /success&#10;Text Registrierung abgeschlossen ist sichtbar&#10;workflow_return ist success" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-cyan-500 focus:ring-cyan-500"></textarea>
+                        <p class="mt-1 text-xs text-gray-500">Ein Kriterium pro Zeile oder ein strukturiertes JSON-Objekt. Der Copilot darf diese Kriterien nicht abschwaechen.</p>
+                        @error('copilotSuccessCriteria') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                    </div>
+
+                    <div class="grid gap-5 md:grid-cols-2">
+                        <div>
+                            <label for="copilot-person" class="block text-sm font-medium text-gray-700">Person / Kontext</label>
+                            <select id="copilot-person" wire:model.defer="copilotPersonId" class="mt-1 block w-full rounded-md border border-gray-300 p-2.5 text-sm shadow-sm focus:border-cyan-500 focus:ring-cyan-500">
+                                <option value="">System (Haupt-Verifikationskonto)</option>
+                                @foreach($persons as $person)
+                                    <option value="{{ $person->id }}">{{ $person->display_name }} - {{ $person->profile_key }}</option>
+                                @endforeach
+                            </select>
+                            @error('copilotPersonId') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                        </div>
+
+                        <div class="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
+                            <p class="font-semibold text-slate-700">Ausfuehrungsziel</p>
+                            <p class="mt-1 font-bold text-slate-950">Server / System</p>
+                            <p class="mt-1 text-xs text-slate-500">Fest vorgegeben; keine Client- oder Node-Auswahl.</p>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label for="copilot-workflow-inputs" class="block text-sm font-medium text-gray-700">Workflow-Eingaben (JSON)</label>
+                        <textarea id="copilot-workflow-inputs" rows="5" wire:model.defer="copilotWorkflowInputs" placeholder='{"browser_window":"main"}' class="mt-1 block w-full rounded-md border border-gray-300 p-3 font-mono text-sm shadow-sm focus:border-cyan-500 focus:ring-cyan-500"></textarea>
+                        @error('copilotWorkflowInputs') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                    </div>
+
+                    <fieldset>
+                        <legend class="text-sm font-semibold text-slate-800">Sicherheits- und Arbeitsbudgets</legend>
+                        <div class="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                            <div>
+                                <label for="copilot-max-minutes" class="block text-xs font-medium text-gray-600">Laufzeit (Min.)</label>
+                                <input id="copilot-max-minutes" type="number" min="5" max="1440" wire:model.defer="copilotMaxMinutes" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm">
+                                @error('copilotMaxMinutes') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
+                            </div>
+                            <div>
+                                <label for="copilot-max-repairs" class="block text-xs font-medium text-gray-600">Reparaturrunden</label>
+                                <input id="copilot-max-repairs" type="number" min="1" max="100" wire:model.defer="copilotMaxRepairIterations" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm">
+                                @error('copilotMaxRepairIterations') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
+                            </div>
+                            <div>
+                                <label for="copilot-max-probes" class="block text-xs font-medium text-gray-600">Probeaktionen</label>
+                                <input id="copilot-max-probes" type="number" min="1" max="500" wire:model.defer="copilotMaxProbeActions" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm">
+                                @error('copilotMaxProbeActions') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
+                            </div>
+                            <div>
+                                <label for="copilot-max-same-state" class="block text-xs font-medium text-gray-600">Gleicher Zustand</label>
+                                <input id="copilot-max-same-state" type="number" min="1" max="10" wire:model.defer="copilotMaxSameStateRepeats" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm">
+                                @error('copilotMaxSameStateRepeats') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
+                            </div>
+                        </div>
+                    </fieldset>
+
+                    <div class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900">
+                        Webseitenaktionen koennen externe Wirkungen ausloesen. Ein Zurueckspulen setzt den Workflowcursor und internen Kontext zurueck, kann bereits versendete Formulare, Nachrichten oder Registrierungen aber nicht rueckgaengig machen.
+                    </div>
+                </div>
+            </x-slot>
+            <x-slot name="footer">
+                <button type="button" x-on:click="$dispatch('close')" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">Abbrechen</button>
+                <button type="button" wire:click="startCopilotOptimization" wire:loading.attr="disabled" wire:target="startCopilotOptimization" @disabled(! $copilotAutoExecute) class="rounded-md bg-cyan-700 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-40">System-Optimierung starten</button>
+            </x-slot>
+        </x-dialog-modal>
+
+        <x-dialog-modal wire:model="showCopilotPreviewModal" maxWidth="7xl">
+            <x-slot name="title">Workflow-Copilot · Live-Optimierung</x-slot>
+            <x-slot name="content">
+                <div @if($showCopilotPreviewModal && data_get($copilotStatus, 'active')) wire:poll.2s="refreshCopilotSession" @endif class="space-y-5">
+                    @if($copilotStatus !== [])
+                        <div class="grid gap-4 xl:grid-cols-[minmax(0,1.3fr)_minmax(320px,.7fr)]">
+                            <div class="space-y-4">
+                                <div class="overflow-hidden rounded-xl border border-cyan-200 bg-white">
+                                    <div class="flex flex-wrap items-start justify-between gap-3 bg-gradient-to-r from-slate-950 via-cyan-900 to-emerald-800 px-4 py-3 text-white">
+                                        <div>
+                                            <p class="font-bold">{{ data_get($copilotStatus, 'workflow_name') }}</p>
+                                            <p class="mt-0.5 text-xs text-cyan-100">System-Ausfuehrung · {{ data_get($copilotStatus, 'phase') }}</p>
+                                        </div>
+                                        <span class="rounded-full bg-white/15 px-3 py-1 text-xs font-bold">{{ data_get($copilotStatus, 'status') }}</span>
+                                    </div>
+
+                                    @if(data_get($copilotStatus, 'latest_screenshot_url'))
+                                        <a href="{{ data_get($copilotStatus, 'latest_screenshot_url') }}" target="_blank" rel="noopener noreferrer" class="block bg-slate-100 p-2">
+                                            <img src="{{ data_get($copilotStatus, 'latest_screenshot_url') }}" alt="Aktueller Workflow-Copilot-Bildschirm" class="mx-auto max-h-[440px] w-full object-contain" loading="lazy">
+                                        </a>
+                                    @else
+                                        <div class="flex min-h-48 items-center justify-center bg-slate-100 px-4 text-sm text-slate-500">Der erste Bildschirm wird beim naechsten Checkpoint erfasst.</div>
+                                    @endif
+
+                                    <div class="grid gap-3 p-4 sm:grid-cols-2">
+                                        <div class="rounded-lg bg-slate-50 p-3 text-sm"><span class="block text-xs font-semibold text-slate-500">Step</span><strong>{{ data_get($copilotStatus, 'current_step_name') ?: 'Wird vorbereitet' }}</strong></div>
+                                        <div class="rounded-lg bg-slate-50 p-3 text-sm"><span class="block text-xs font-semibold text-slate-500">Task</span><strong>{{ data_get($copilotStatus, 'current_task_title') ?: data_get($copilotStatus, 'current_task_key', '-') }}</strong></div>
+                                        @foreach(['page_state' => 'Erkannter Bildschirm', 'last_action' => 'Letzte Aktion', 'current_result' => 'Ergebnis', 'next_action' => 'Naechster Schritt'] as $key => $label)
+                                            <div class="rounded-lg border border-slate-200 p-3 text-sm">
+                                                <span class="block text-xs font-semibold text-slate-500">{{ $label }}</span>
+                                                <span class="mt-1 block break-words text-slate-800">{{ data_get($copilotStatus, $key) ?: '-' }}</span>
+                                            </div>
+                                        @endforeach
+                                    </div>
+                                </div>
+
+                                <div class="rounded-xl border border-slate-200 bg-white p-4">
+                                    <div class="flex items-center justify-between gap-3">
+                                        <h3 class="text-sm font-bold text-slate-900">Live-Ereignisse</h3>
+                                        <span class="text-xs text-slate-500">Aktualisierung alle 2 Sekunden</span>
+                                    </div>
+                                    <div class="mt-3 max-h-72 space-y-2 overflow-y-auto">
+                                        @forelse($copilotEvents as $event)
+                                            <div wire:key="manager-copilot-event-{{ $event['id'] }}" class="flex items-start gap-3 rounded-lg border px-3 py-2 text-sm {{ in_array($event['level'], ['error', 'critical'], true) ? 'border-rose-200 bg-rose-50' : ($event['level'] === 'success' ? 'border-emerald-200 bg-emerald-50' : 'border-slate-200 bg-slate-50') }}">
+                                                <span class="mt-1.5 h-2 w-2 shrink-0 rounded-full {{ in_array($event['level'], ['error', 'critical'], true) ? 'bg-rose-500' : ($event['level'] === 'success' ? 'bg-emerald-500' : 'bg-cyan-500') }}"></span>
+                                                <div class="min-w-0 flex-1">
+                                                    <div class="flex items-center justify-between gap-2"><span class="text-xs font-bold uppercase text-slate-500">{{ $event['phase'] ?: 'Status' }}</span><time class="text-xs text-slate-400">{{ $event['time'] }}</time></div>
+                                                    <p class="mt-1 break-words text-slate-800">{{ $event['message'] }}</p>
+                                                </div>
+                                            </div>
+                                        @empty
+                                            <p class="rounded-lg border border-dashed border-slate-300 p-4 text-sm text-slate-500">Noch keine sichtbaren Arbeitsschritte vorhanden.</p>
+                                        @endforelse
+                                    </div>
+                                </div>
+                            </div>
+
+                            <aside class="space-y-4">
+                                <div class="rounded-xl border border-slate-200 bg-white p-4">
+                                    <h3 class="text-sm font-bold text-slate-900">Fortschritt und Budget</h3>
+                                    <div class="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
+                                        <div class="rounded-lg bg-slate-50 p-2"><strong class="block text-base">{{ data_get($copilotStatus, 'repair_iteration', 0) }}/{{ data_get($copilotStatus, 'max_repair_iterations', 15) }}</strong>Runden</div>
+                                        <div class="rounded-lg bg-slate-50 p-2"><strong class="block text-base">{{ data_get($copilotStatus, 'probe_actions', 0) }}/{{ data_get($copilotStatus, 'max_probe_actions', 60) }}</strong>Proben</div>
+                                        <div class="rounded-lg bg-slate-50 p-2"><strong class="block text-base">{{ data_get($copilotStatus, 'remaining_minutes', 0) }}m</strong>Restzeit</div>
+                                    </div>
+                                    <p class="mt-3 text-xs leading-5 text-slate-500">Ziel: {{ data_get($copilotStatus, 'goal') }}</p>
+                                </div>
+
+                                <div class="rounded-xl border border-slate-200 bg-white p-4">
+                                    <h3 class="text-sm font-bold text-slate-900">Checkpoints</h3>
+                                    <div class="mt-3 max-h-48 space-y-2 overflow-y-auto">
+                                        @forelse(data_get($copilotStatus, 'checkpoints', []) as $checkpoint)
+                                            <label class="flex items-start gap-2 rounded-lg border border-slate-200 p-2 text-xs {{ $checkpoint['is_reproducible'] ? 'cursor-pointer hover:bg-cyan-50' : 'cursor-not-allowed opacity-50' }}">
+                                                <input type="radio" wire:model.live="copilotRewindCheckpoint" value="{{ $checkpoint['id'] }}" @disabled(! $checkpoint['is_reproducible']) class="mt-0.5 border-slate-300 text-cyan-700 focus:ring-cyan-600">
+                                                <span class="min-w-0"><strong>#{{ $checkpoint['sequence'] }} · {{ $checkpoint['step_name'] ?: $checkpoint['phase'] }}</strong><span class="mt-0.5 block break-words text-slate-500">{{ $checkpoint['task_key'] ?: 'vor dem Step' }}{{ $checkpoint['has_side_effects'] ? ' · externe Wirkung protokolliert' : '' }}</span></span>
+                                            </label>
+                                        @empty
+                                            <p class="text-xs text-slate-500">Noch kein reproduzierbarer Checkpoint vorhanden.</p>
+                                        @endforelse
+                                    </div>
+                                    @error('copilotRewindCheckpoint') <p class="mt-2 text-xs text-red-600">{{ $message }}</p> @enderror
+                                    <button type="button" wire:click="rewindCopilotOptimization" wire:confirm="Zum ausgewaehlten Checkpoint zurueckspringen? Externe Wirkungen werden nicht rueckgaengig gemacht." @disabled(blank($copilotRewindCheckpoint)) class="mt-3 w-full rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-40">Zum Checkpoint zurueckspulen</button>
+                                </div>
+
+                                <div class="rounded-xl border border-slate-200 bg-white p-4">
+                                    <h3 class="text-sm font-bold text-slate-900">Workflow-Revisionen</h3>
+                                    <div class="mt-3 max-h-48 space-y-2 overflow-y-auto">
+                                        @forelse(data_get($copilotStatus, 'revisions', []) as $revision)
+                                            <details class="rounded-lg border border-slate-200 p-2 text-xs">
+                                                <summary class="cursor-pointer font-bold text-slate-800">Revision {{ $revision['revision_number'] }}{{ $revision['is_verified'] ? ' · verifiziert' : '' }}</summary>
+                                                <p class="mt-2 text-slate-600">{{ $revision['reason'] ?: 'Automatische Workflow-Anpassung' }}</p>
+                                                @if($revision['diff'] !== [])
+                                                    <pre class="mt-2 max-h-32 overflow-auto rounded bg-slate-950 p-2 text-[10px] text-slate-100">{{ json_encode($revision['diff'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) }}</pre>
+                                                @endif
+                                            </details>
+                                        @empty
+                                            <p class="text-xs text-slate-500">Noch keine Workflow-Aenderung gespeichert.</p>
+                                        @endforelse
+                                    </div>
+                                </div>
+
+                                <div class="rounded-xl border border-slate-200 bg-white p-4">
+                                    <h3 class="text-sm font-bold text-slate-900">Bereinigte DOM-Elementkarte</h3>
+                                    <div class="mt-3 max-h-48 space-y-1.5 overflow-y-auto text-xs">
+                                        @forelse(data_get($copilotStatus, 'dom_elements', []) as $element)
+                                            <div class="rounded-lg bg-slate-50 p-2"><strong>[{{ $element['ref'] ?: '?' }}] {{ $element['role'] }}</strong><span class="mt-0.5 block break-words text-slate-600">{{ $element['text'] ?: $element['selector'] }}</span></div>
+                                        @empty
+                                            <p class="text-slate-500">Die DOM-Karte erscheint nach der ersten Beobachtung.</p>
+                                        @endforelse
+                                    </div>
+                                </div>
+                            </aside>
+                        </div>
+                    @else
+                        <div class="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-6 text-sm text-slate-500">Die Copilot-Sitzung konnte nicht geladen werden.</div>
+                    @endif
+                </div>
+            </x-slot>
+            <x-slot name="footer">
+                <button type="button" wire:click="openCopilotChat" class="rounded-md bg-cyan-700 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-800">Copilot-Chat oeffnen</button>
+                @if(data_get($copilotStatus, 'active'))
+                    @if(data_get($copilotStatus, 'paused'))
+                        <button type="button" wire:click="resumeCopilotOptimization" class="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700">Fortsetzen</button>
+                    @else
+                        <button type="button" wire:click="pauseCopilotOptimization" class="rounded-md border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-800 hover:bg-amber-100">Pausieren</button>
+                    @endif
+                    <button type="button" wire:click="stopCopilotOptimization" wire:confirm="Autonome Workflow-Optimierung wirklich stoppen?" class="rounded-md border border-rose-300 bg-white px-4 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50">Stoppen</button>
+                @elseif(in_array(data_get($copilotStatus, 'status'), ['budget_exhausted', 'failed'], true))
+                    <button type="button" wire:click="stopCopilotOptimization" wire:confirm="Sitzung beenden und Workflow-Lock freigeben? Die letzte Revision bleibt unverifiziert gespeichert." class="rounded-md border border-rose-300 bg-white px-4 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50">Sitzung beenden und Lock freigeben</button>
+                @endif
+                <button type="button" wire:click="closeCopilotPreview" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">Schliessen</button>
             </x-slot>
         </x-dialog-modal>
 

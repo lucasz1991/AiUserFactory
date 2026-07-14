@@ -356,6 +356,17 @@
                     </p>
 
                     <div class="mt-5 grid gap-6 md:grid-cols-2 xl:grid-cols-4">
+                        <div class="md:col-span-2 xl:col-span-4 rounded-lg border border-cyan-200 bg-cyan-50 p-4">
+                            <label class="flex items-start gap-3 text-sm text-cyan-950">
+                                <input type="checkbox" wire:model.defer="assistantCopilotAutoExecute" class="mt-0.5 rounded border-cyan-300 text-cyan-700 shadow-sm focus:ring-cyan-600">
+                                <span>
+                                    <strong class="block">Autonome Workflow-Aktionen nach bewusstem Start erlauben</strong>
+                                    <span class="mt-1 block text-xs leading-5 text-cyan-800">Die Freigabe gilt nur fuer eine vom Benutzer bewusst gestartete Copilot-Reparatur und ausschliesslich fuer die System-Ausfuehrung, nie ClientController.</span>
+                                </span>
+                            </label>
+                            @error('assistantCopilotAutoExecute') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                        </div>
+
                         <div class="md:col-span-2 xl:col-span-4">
                             <label for="assistant-vision-fallback-models" class="block text-sm font-medium text-gray-700">Vision-Fallback-Modelle</label>
                             <textarea id="assistant-vision-fallback-models" rows="4" wire:model.defer="assistantVisionFallbackModels" placeholder="google/gemini-2.5-flash\nanthropic/claude-sonnet-4" class="mt-1 block w-full rounded-md border border-gray-300 p-3 font-mono text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"></textarea>

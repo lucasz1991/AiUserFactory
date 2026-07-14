@@ -2,11 +2,13 @@
 
 namespace App\Livewire\Tools;
 
+use App\Jobs\WorkflowCopilotSupervisorJob;
 use App\Models\Setting;
 use App\Models\WorkflowCopilotSession;
 use App\Services\Ai\AiConnectionService;
 use App\Services\Ai\WorkflowAssistantToolService;
 use App\Services\Workflows\WorkflowCopilotSessionService;
+use App\Services\Workflows\WorkflowExecutionService;
 use App\Services\Workflows\WorkflowTransferService;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
@@ -145,6 +147,7 @@ class Chatbot extends Component
                     'user_id' => Auth::id(),
                     'source' => 'workflow-copilot-chat',
                 ]);
+                WorkflowCopilotSupervisorJob::dispatch((int) $copilotSession->getKey());
                 $this->appendDisplayMessage(
                     'assistant',
                     'Die Anweisung wurde gespeichert und wird am naechsten sicheren Checkpoint beruecksichtigt.',
@@ -242,7 +245,7 @@ class Chatbot extends Component
         }
 
         $this->activeCopilotSessionId = (int) $session->getKey();
-        $this->copilotLastEventSequence = 0;
+        $this->copilotLastEventSequence = max(0, (int) ($session->last_event_sequence ?? 0) - 100);
         $this->copilotEventFeed = [];
         Session::put(self::COPILOT_SESSION_KEY, $this->activeCopilotSessionId);
         $this->pollCopilotSession();
@@ -317,7 +320,8 @@ class Chatbot extends Component
     public function resumeCopilotSession(): void
     {
         if ($session = $this->activeCopilotSession()) {
-            app(WorkflowCopilotSessionService::class)->resume($session);
+            $session = app(WorkflowCopilotSessionService::class)->resume($session);
+            WorkflowCopilotSupervisorJob::dispatch((int) $session->getKey());
             $this->pollCopilotSession();
         }
     }
@@ -325,6 +329,15 @@ class Chatbot extends Component
     public function stopCopilotSession(): void
     {
         if ($session = $this->activeCopilotSession()) {
+            $session->loadMissing('activeRun');
+
+            if ($session->activeRun) {
+                app(WorkflowExecutionService::class)->cancel(
+                    $session->activeRun,
+                    'Workflow-Test wurde mit der Copilot-Sitzung gestoppt.',
+                );
+            }
+
             app(WorkflowCopilotSessionService::class)->stop($session, 'Im Workflow-Copilot-Chat gestoppt.');
             $this->pollCopilotSession();
         }
@@ -638,6 +651,13 @@ class Chatbot extends Component
             'update_list_import' => 'Listen werden importiert.',
             'update_task_import' => 'Tasks werden importiert.',
             'workflow_test_run' => 'Workflow-Testlauf wird gestartet.',
+            'workflow_optimize_start' => 'Autonome System-Optimierung wird gestartet.',
+            'workflow_optimize_status' => 'Aktueller Optimierungsstatus wird geladen.',
+            'workflow_optimize_instruction' => 'Anweisung wird fuer den naechsten sicheren Checkpoint gespeichert.',
+            'workflow_optimize_pause' => 'Workflow-Optimierung wird pausiert.',
+            'workflow_optimize_resume' => 'Workflow-Optimierung wird fortgesetzt.',
+            'workflow_optimize_rewind' => 'Workflow wird zum ausgewaehlten Checkpoint zurueckgespult.',
+            'workflow_optimize_stop' => 'Workflow-Optimierung und aktiver Testlauf werden gestoppt.',
             'navigate' => 'Ansicht wird vorbereitet.',
             'highlight_workflow_element' => 'Workflow-Element wird markiert.',
             'present_workflow_improvements' => 'Verbesserungen werden im Workflow zugeordnet.',
@@ -692,14 +712,13 @@ class Chatbot extends Component
     {
         $eventType = Str::lower(trim($eventType));
 
-        return ! in_array($eventType, [
+        return ! Str::contains($eventType, [
             'reasoning',
-            'model_reasoning',
-            'internal_reasoning',
             'internal_analysis',
             'chain_of_thought',
+            'chain-of-thought',
             'thought',
-        ], true);
+        ]);
     }
 
     private function hasCopilotMilestone(mixed $eventId): bool
@@ -739,11 +758,12 @@ class Chatbot extends Component
             'phase' => (string) ($session->phase ?? data_get($state, 'phase', 'vorbereiten')),
             'current_step_name' => (string) data_get($state, 'current_step_name', data_get($state, 'cursor.step_name', '')),
             'current_task_key' => (string) data_get($state, 'current_task_key', data_get($state, 'cursor.task_key', '')),
-            'latest_screenshot_url' => (string) data_get($state, 'latest_screenshot_url', data_get($state, 'observation.screenshot_url', '')),
-            'page_state' => (string) data_get($state, 'page_state', data_get($state, 'observation.page_state', '')),
-            'last_action' => (string) data_get($state, 'last_action', ''),
-            'current_result' => (string) data_get($state, 'current_result', ''),
-            'next_action' => (string) data_get($state, 'next_action', ''),
+            'current_task_title' => (string) data_get($state, 'current_task_title', ''),
+            'latest_screenshot_url' => $this->copilotScreenshotUrl($state),
+            'page_state' => $this->copilotDisplayValue(data_get($state, 'page_state', data_get($state, 'observation.page_state'))),
+            'last_action' => $this->copilotDisplayValue(data_get($state, 'last_action')),
+            'current_result' => $this->copilotDisplayValue(data_get($state, 'last_result', data_get($state, 'current_result'))),
+            'next_action' => $this->copilotDisplayValue(data_get($state, 'next_action')),
             'repair_iteration' => (int) ($session->repair_round ?? 0),
             'max_repair_iterations' => max(1, (int) ($budget['max_repair_iterations'] ?? 15)),
             'probe_actions' => (int) ($usage['probe_actions'] ?? 0),
@@ -753,6 +773,45 @@ class Chatbot extends Component
             'started_at' => optional($session->started_at)->format('d.m.Y H:i:s'),
             'finished_at' => optional($session->finished_at)->format('d.m.Y H:i:s'),
         ];
+    }
+
+    private function copilotScreenshotUrl(array $state): ?string
+    {
+        $directUrl = trim((string) data_get($state, 'latest_screenshot_url', data_get($state, 'observation.screenshot_url', '')));
+
+        if ($directUrl !== '') {
+            return $directUrl;
+        }
+
+        $artifactId = (int) data_get($state, 'last_screenshot_artifact_id', 0);
+
+        if ($artifactId < 1) {
+            return null;
+        }
+
+        $artifact = \App\Models\WorkflowRunArtifact::query()->find($artifactId);
+
+        if (! $artifact || ! $artifact->workflow_run_id) {
+            return null;
+        }
+
+        return route('workflow-run-artifacts.show', [
+            'run' => $artifact->workflow_run_id,
+            'artifact' => $artifact->getKey(),
+        ], false);
+    }
+
+    private function copilotDisplayValue(mixed $value): string
+    {
+        if ($value === null || $value === '') {
+            return '';
+        }
+
+        if (is_scalar($value)) {
+            return Str::limit((string) $value, 1000, '');
+        }
+
+        return Str::limit(json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?: '', 1000, '');
     }
 
     private function initialPageContext(): array
