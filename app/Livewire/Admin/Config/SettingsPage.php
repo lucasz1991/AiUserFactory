@@ -3,11 +3,16 @@
 namespace App\Livewire\Admin\Config;
 
 use App\Models\Setting;
+use App\Services\Ai\AiConnectionService;
 use App\Services\Ai\LocalAssistantVoiceService;
 use Livewire\Component;
+use Livewire\WithFileUploads;
+use Throwable;
 
 class SettingsPage extends Component
 {
+    use WithFileUploads;
+
     public string $activeTab = 'scraper-transfer';
 
     public string $baseApiUrl = '';
@@ -24,9 +29,11 @@ class SettingsPage extends Component
     public string $openRouterImageUnderstandingModel = '';
     public string $openRouterSpeechToTextModel = '';
     public string $openRouterTextToSpeechModel = '';
-    public string $openRouterAudioOutputApiUrl = '';
-    public string $openRouterAudioOutputVoice = 'Eve';
-    public string $openRouterAudioOutputFormat = 'mp3';
+
+    /** @var array<string, array{state:string, output:string, images:array, duration_ms:int}> */
+    public array $openRouterModelTests = [];
+    public $openRouterVisionTestImage = null;
+    public $openRouterSpeechTestAudio = null;
 
     public int $openRouterTimeout = 120;
     public float $openRouterTemperature = 0.4;
@@ -111,9 +118,6 @@ class SettingsPage extends Component
             'openRouterImageUnderstandingModel' => ['required', 'string', 'max:255'],
             'openRouterSpeechToTextModel' => ['required', 'string', 'max:255'],
             'openRouterTextToSpeechModel' => ['required', 'string', 'max:255'],
-            'openRouterAudioOutputApiUrl' => ['nullable', 'url', 'max:2048'],
-            'openRouterAudioOutputVoice' => ['nullable', 'string', 'max:80'],
-            'openRouterAudioOutputFormat' => ['required', 'string', 'in:mp3,wav,opus,pcm'],
 
             'openRouterTimeout' => ['required', 'integer', 'min:5', 'max:600'],
             'openRouterTemperature' => ['required', 'numeric', 'min:0', 'max:2'],
@@ -121,7 +125,15 @@ class SettingsPage extends Component
             'openRouterStreamEnabled' => ['boolean'],
         ]);
 
+        $existing = Setting::getValue('services', 'openrouter');
+        $existing = is_array($existing) ? $existing : [];
+
+        // Audioausgabe-Detailwerte (audio_output_api_url/voice/format) werden hier
+        // bewusst nicht mehr editiert oder ueberschrieben: Sie gehoeren zur
+        // Assistant-Sprachverarbeitung (AssistantAudioOutputStreamController) und
+        // bleiben ueber den Merge mit dem Bestand erhalten.
         Setting::setValue('services', 'openrouter', [
+            ...$existing,
             'api_url' => trim($validated['openRouterApiUrl']),
             'api_key' => trim($validated['openRouterApiKey']),
             'referer_url' => trim((string) ($validated['openRouterRefererUrl'] ?? '')),
@@ -133,10 +145,7 @@ class SettingsPage extends Component
             'image_understanding_model' => trim($validated['openRouterImageUnderstandingModel']),
             'speech_to_text_model' => trim($validated['openRouterSpeechToTextModel']),
             'text_to_speech_model' => trim($validated['openRouterTextToSpeechModel']),
-            'audio_output_api_url' => trim((string) ($validated['openRouterAudioOutputApiUrl'] ?? '')),
             'audio_output_model' => trim($validated['openRouterTextToSpeechModel']),
-            'audio_output_voice' => trim((string) ($validated['openRouterAudioOutputVoice'] ?? config('services.openrouter.audio_output_voice', 'Eve'))) ?: config('services.openrouter.audio_output_voice', 'Eve'),
-            'audio_output_format' => trim($validated['openRouterAudioOutputFormat']),
 
             'timeout' => (int) $validated['openRouterTimeout'],
             'temperature' => (float) $validated['openRouterTemperature'],
@@ -146,6 +155,134 @@ class SettingsPage extends Component
 
         session()->flash('success', 'OpenRouter-Einstellungen wurden gespeichert.');
         $this->dispatch('showAlert', 'OpenRouter gespeichert.', 'success');
+    }
+
+    public function testOpenRouterTextModel(): void
+    {
+        $this->runOpenRouterModelTest('text', $this->openRouterTextModel, function (AiConnectionService $ai, string $model): array {
+            $output = $ai->text(
+                'Antworte mit genau einem kurzen deutschen Satz, dass die Testverbindung funktioniert.',
+                null,
+                ['model' => $model, '_timeout' => 60],
+            );
+
+            if (trim($output) === '') {
+                throw new \RuntimeException('Das Modell hat eine leere Antwort geliefert.');
+            }
+
+            return ['output' => trim($output)];
+        });
+    }
+
+    public function testOpenRouterDataModel(): void
+    {
+        $this->runOpenRouterModelTest('data', $this->openRouterDataModel, function (AiConnectionService $ai, string $model): array {
+            $decoded = $ai->json(
+                'Gib ein JSON-Objekt mit den Schluesseln "status" (Wert "ok") und "hinweis" (ein kurzer deutscher Satz) zurueck.',
+                null,
+                ['model' => $model, '_timeout' => 60],
+            );
+
+            return ['output' => json_encode($decoded, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT) ?: ''];
+        });
+    }
+
+    public function testOpenRouterImageGenerationModel(): void
+    {
+        $this->runOpenRouterModelTest('image_generation', $this->openRouterImageGenerationModel, function (AiConnectionService $ai, string $model): array {
+            $response = $ai->imageGeneration(
+                'Erzeuge ein einfaches Testbild: ein blauer Kreis auf weissem Hintergrund.',
+                ['model' => $model, '_timeout' => 180],
+            );
+            $images = $ai->generatedImageUrls($response);
+
+            if ($images === []) {
+                throw new \RuntimeException('Das Modell hat kein Bild zurueckgegeben.');
+            }
+
+            return ['output' => 'Bild wurde erzeugt.', 'images' => array_slice($images, 0, 2)];
+        });
+    }
+
+    public function testOpenRouterImageUnderstandingModel(): void
+    {
+        $validated = $this->validate([
+            'openRouterVisionTestImage' => ['required', 'image', 'mimes:jpg,jpeg,png,webp,gif', 'max:8192'],
+        ]);
+        $image = $validated['openRouterVisionTestImage'];
+        $mime = $image->getMimeType() ?: 'image/png';
+        $dataUrl = 'data:'.$mime.';base64,'.base64_encode((string) $image->get());
+
+        $this->runOpenRouterModelTest('image_understanding', $this->openRouterImageUnderstandingModel, function (AiConnectionService $ai, string $model) use ($dataUrl): array {
+            $response = $ai->imageUnderstanding(
+                'Beschreibe kurz auf Deutsch, was auf dem Bild zu sehen ist.',
+                $dataUrl,
+                ['model' => $model, '_timeout' => 120],
+            );
+            $output = trim((string) data_get($response, 'choices.0.message.content', ''));
+
+            if ($output === '') {
+                throw new \RuntimeException('Das Modell hat keine Bildbeschreibung geliefert.');
+            }
+
+            return ['output' => $output];
+        });
+    }
+
+    public function testOpenRouterSpeechToTextModel(): void
+    {
+        $validated = $this->validate([
+            'openRouterSpeechTestAudio' => ['required', 'file', 'mimes:mp3,wav,m4a,ogg,webm,mpga', 'max:15360'],
+        ]);
+        $audio = $validated['openRouterSpeechTestAudio'];
+        $format = strtolower((string) $audio->getClientOriginalExtension()) ?: 'mp3';
+        $dataUrl = 'data:audio/'.$format.';base64,'.base64_encode((string) $audio->get());
+
+        $this->runOpenRouterModelTest('speech_to_text', $this->openRouterSpeechToTextModel, function (AiConnectionService $ai, string $model) use ($dataUrl): array {
+            $response = $ai->speechToText($dataUrl, ['model' => $model, '_timeout' => 120]);
+            $output = trim((string) data_get($response, 'choices.0.message.content', ''));
+
+            if ($output === '') {
+                throw new \RuntimeException('Das Modell hat kein Transkript geliefert.');
+            }
+
+            return ['output' => $output];
+        });
+    }
+
+    protected function runOpenRouterModelTest(string $profile, string $model, callable $runner): void
+    {
+        $model = trim($model);
+
+        if ($model === '') {
+            $this->openRouterModelTests[$profile] = [
+                'state' => 'error',
+                'output' => 'Bitte zuerst ein Modell eintragen.',
+                'images' => [],
+                'duration_ms' => 0,
+            ];
+
+            return;
+        }
+
+        $startedAt = microtime(true);
+
+        try {
+            $result = $runner(app(AiConnectionService::class), $model);
+            $this->openRouterModelTests[$profile] = [
+                'state' => 'success',
+                'output' => (string) ($result['output'] ?? ''),
+                'images' => is_array($result['images'] ?? null) ? $result['images'] : [],
+                'duration_ms' => (int) round((microtime(true) - $startedAt) * 1000),
+            ];
+        } catch (Throwable $exception) {
+            $this->openRouterModelTests[$profile] = [
+                'state' => 'error',
+                'output' => $exception->getMessage(),
+                'images' => [],
+                'duration_ms' => (int) round((microtime(true) - $startedAt) * 1000),
+            ];
+        }
     }
 
     public function saveAssistant(): void
@@ -300,12 +437,6 @@ class SettingsPage extends Component
         if (in_array(strtolower($this->openRouterTextToSpeechModel), ['openai/tts-1', 'openai/tts-1-hd'], true)) {
             $this->openRouterTextToSpeechModel = (string) config('services.openrouter.text_to_speech_model', 'x-ai/grok-voice-tts-1.0');
         }
-        $this->openRouterAudioOutputApiUrl = trim((string) ($settings['audio_output_api_url'] ?? config('services.openrouter.audio_output_api_url', 'https://openrouter.ai/api/v1/audio/speech')));
-        $this->openRouterAudioOutputVoice = trim((string) ($settings['audio_output_voice'] ?? config('services.openrouter.audio_output_voice', 'Eve'))) ?: config('services.openrouter.audio_output_voice', 'Eve');
-        if (str_starts_with(strtolower($this->openRouterTextToSpeechModel), 'x-ai/') && in_array(strtolower($this->openRouterAudioOutputVoice), ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer', 'kore'], true)) {
-            $this->openRouterAudioOutputVoice = (string) config('services.openrouter.audio_output_voice', 'Eve');
-        }
-        $this->openRouterAudioOutputFormat = trim((string) ($settings['audio_output_format'] ?? config('services.openrouter.audio_output_format', 'mp3'))) ?: 'mp3';
 
         $this->openRouterTimeout = (int) ($settings['timeout'] ?? config('services.openrouter.timeout', 120));
         $this->openRouterTemperature = (float) ($settings['temperature'] ?? config('services.openrouter.temperature', 0.4));

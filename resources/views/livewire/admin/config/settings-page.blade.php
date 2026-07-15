@@ -123,67 +123,91 @@
                 </div>
 
                 <div class="rounded-lg border border-gray-200 bg-white p-5">
-                    <h3 class="text-sm font-semibold text-gray-900">Modell-Profile</h3>
+                    <div class="flex flex-wrap items-baseline justify-between gap-2">
+                        <h3 class="text-sm font-semibold text-gray-900">Modell-Profile</h3>
+                        <p class="text-xs text-gray-500">Tests nutzen die gespeicherte API-Verbindung und das aktuell eingetragene Modell.</p>
+                    </div>
 
                     <div class="mt-5 grid gap-6 md:grid-cols-2 xl:grid-cols-3">
-                        <div>
+                        <div class="flex flex-col rounded-lg border border-gray-200 p-4">
                             <label for="openrouter-text-model" class="block text-sm font-medium text-gray-700">Textausgabe Modell</label>
                             <input id="openrouter-text-model" type="text" wire:model.defer="openRouterTextModel" placeholder="openai/gpt-4o-mini" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500" />
                             @error('openRouterTextModel') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                            <div class="mt-3">
+                                <button type="button" wire:click="testOpenRouterTextModel" wire:loading.attr="disabled" wire:target="testOpenRouterTextModel" class="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50">
+                                    <span wire:loading.remove wire:target="testOpenRouterTextModel">Testen</span>
+                                    <span wire:loading wire:target="testOpenRouterTextModel">Test laeuft ...</span>
+                                </button>
+                            </div>
+                            <x-settings.openrouter-test-result :result="$openRouterModelTests['text'] ?? null" />
                         </div>
 
-                        <div>
+                        <div class="flex flex-col rounded-lg border border-gray-200 p-4">
                             <label for="openrouter-data-model" class="block text-sm font-medium text-gray-700">Datenanalyse Modell</label>
                             <input id="openrouter-data-model" type="text" wire:model.defer="openRouterDataModel" placeholder="openai/gpt-4o" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500" />
                             @error('openRouterDataModel') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                            <div class="mt-3">
+                                <button type="button" wire:click="testOpenRouterDataModel" wire:loading.attr="disabled" wire:target="testOpenRouterDataModel" class="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50">
+                                    <span wire:loading.remove wire:target="testOpenRouterDataModel">Testen</span>
+                                    <span wire:loading wire:target="testOpenRouterDataModel">Test laeuft ...</span>
+                                </button>
+                            </div>
+                            <x-settings.openrouter-test-result :result="$openRouterModelTests['data'] ?? null" />
                         </div>
 
-                        <div>
+                        <div class="flex flex-col rounded-lg border border-gray-200 p-4">
                             <label for="openrouter-image-generation-model" class="block text-sm font-medium text-gray-700">Bilderstellung Modell</label>
                             <input id="openrouter-image-generation-model" type="text" wire:model.defer="openRouterImageGenerationModel" placeholder="openai/gpt-image-1" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500" />
                             <p class="mt-1 text-xs text-gray-500">Fuer Personenbilder mit Referenzfotos muss das Modell Bild-Eingabe und Bild-Ausgabe unterstuetzen.</p>
                             @error('openRouterImageGenerationModel') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                            <div class="mt-3">
+                                <button type="button" wire:click="testOpenRouterImageGenerationModel" wire:loading.attr="disabled" wire:target="testOpenRouterImageGenerationModel" class="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50">
+                                    <span wire:loading.remove wire:target="testOpenRouterImageGenerationModel">Testbild erzeugen</span>
+                                    <span wire:loading wire:target="testOpenRouterImageGenerationModel">Test laeuft ...</span>
+                                </button>
+                            </div>
+                            <x-settings.openrouter-test-result :result="$openRouterModelTests['image_generation'] ?? null" />
                         </div>
 
-                        <div>
+                        <div class="flex flex-col rounded-lg border border-gray-200 p-4">
                             <label for="openrouter-image-understanding-model" class="block text-sm font-medium text-gray-700">Bildverstehen Modell</label>
                             <input id="openrouter-image-understanding-model" type="text" wire:model.defer="openRouterImageUnderstandingModel" placeholder="openai/gpt-4o" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500" />
                             @error('openRouterImageUnderstandingModel') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                            <label for="openrouter-vision-test-image" class="mt-3 block text-xs font-medium text-gray-600">Testbild hochladen (das Modell beschreibt es)</label>
+                            <input id="openrouter-vision-test-image" type="file" accept="image/*" wire:model="openRouterVisionTestImage" class="mt-1 block w-full text-xs text-gray-600 file:mr-3 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-slate-700 hover:file:bg-slate-200" />
+                            @error('openRouterVisionTestImage') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                            <div class="mt-3">
+                                <button type="button" wire:click="testOpenRouterImageUnderstandingModel" wire:loading.attr="disabled" wire:target="testOpenRouterImageUnderstandingModel, openRouterVisionTestImage" @if(! $openRouterVisionTestImage) disabled @endif class="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50">
+                                    <span wire:loading.remove wire:target="testOpenRouterImageUnderstandingModel">Bild beschreiben lassen</span>
+                                    <span wire:loading wire:target="testOpenRouterImageUnderstandingModel">Test laeuft ...</span>
+                                </button>
+                            </div>
+                            <x-settings.openrouter-test-result :result="$openRouterModelTests['image_understanding'] ?? null" />
                         </div>
 
-                        <div>
+                        <div class="flex flex-col rounded-lg border border-gray-200 p-4">
                             <label for="openrouter-stt-model" class="block text-sm font-medium text-gray-700">Speech-to-Text Modell</label>
                             <input id="openrouter-stt-model" type="text" wire:model.defer="openRouterSpeechToTextModel" placeholder="openai/whisper-1" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500" />
                             @error('openRouterSpeechToTextModel') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                            <label for="openrouter-stt-test-audio" class="mt-3 block text-xs font-medium text-gray-600">Audiodatei hochladen (das Modell transkribiert sie)</label>
+                            <input id="openrouter-stt-test-audio" type="file" accept="audio/*" wire:model="openRouterSpeechTestAudio" class="mt-1 block w-full text-xs text-gray-600 file:mr-3 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-slate-700 hover:file:bg-slate-200" />
+                            @error('openRouterSpeechTestAudio') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                            <div class="mt-3">
+                                <button type="button" wire:click="testOpenRouterSpeechToTextModel" wire:loading.attr="disabled" wire:target="testOpenRouterSpeechToTextModel, openRouterSpeechTestAudio" @if(! $openRouterSpeechTestAudio) disabled @endif class="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50">
+                                    <span wire:loading.remove wire:target="testOpenRouterSpeechToTextModel">Transkribieren</span>
+                                    <span wire:loading wire:target="testOpenRouterSpeechToTextModel">Test laeuft ...</span>
+                                </button>
+                            </div>
+                            <x-settings.openrouter-test-result :result="$openRouterModelTests['speech_to_text'] ?? null" />
                         </div>
 
-                        <div>
+                        <div class="flex flex-col rounded-lg border border-gray-200 p-4">
                             <label for="openrouter-tts-model" class="block text-sm font-medium text-gray-700">Text-to-Speech Modell</label>
                             <input id="openrouter-tts-model" type="text" wire:model.defer="openRouterTextToSpeechModel" placeholder="x-ai/grok-voice-tts-1.0" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500" />
                             @error('openRouterTextToSpeechModel') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
-                        </div>
-
-                        <div>
-                            <label for="openrouter-audio-output-api-url" class="block text-sm font-medium text-gray-700">Audioausgabe API URL</label>
-                            <input id="openrouter-audio-output-api-url" type="url" wire:model.defer="openRouterAudioOutputApiUrl" placeholder="https://openrouter.ai/api/v1/audio/speech" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500" />
-                            @error('openRouterAudioOutputApiUrl') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
-                        </div>
-
-                        <div>
-                            <label for="openrouter-audio-output-voice" class="block text-sm font-medium text-gray-700">Audioausgabe Stimme</label>
-                            <input id="openrouter-audio-output-voice" type="text" wire:model.defer="openRouterAudioOutputVoice" placeholder="Eve" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500" />
-                            @error('openRouterAudioOutputVoice') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
-                        </div>
-
-                        <div>
-                            <label for="openrouter-audio-output-format" class="block text-sm font-medium text-gray-700">Audioformat</label>
-                            <select id="openrouter-audio-output-format" wire:model.defer="openRouterAudioOutputFormat" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
-                                <option value="mp3">mp3</option>
-                                <option value="wav">wav</option>
-                                <option value="opus">opus</option>
-                                <option value="pcm">pcm</option>
-                            </select>
-                            @error('openRouterAudioOutputFormat') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                            <p class="mt-3 rounded-md bg-slate-50 p-2 text-xs text-slate-500">
+                                Kein Test auf dieser Seite: Die Audioausgabe (Stimme, Format, Ausgabe-Endpunkt) wird ueber die Sprachverarbeitung im Tab "AI Chatbot" gesteuert und ist hier bewusst nicht ausfuehrbar.
+                            </p>
                         </div>
                     </div>
                 </div>
@@ -228,7 +252,8 @@
                     <p class="mt-1">
                         Gruppe: <code>services</code>, Key: <code>openrouter</code>.
                         Enthalten sind <code>api_url</code>, <code>api_key</code>, <code>referer_url</code>, <code>model_title</code>,
-                        alle Modell-Profile, Audioausgabe sowie <code>timeout</code>, <code>temperature</code>, <code>max_completion_tokens</code> und <code>stream_enabled</code>.
+                        alle Modell-Profile sowie <code>timeout</code>, <code>temperature</code>, <code>max_completion_tokens</code> und <code>stream_enabled</code>.
+                        Die Audioausgabe-Werte (<code>audio_output_api_url</code>, <code>audio_output_voice</code>, <code>audio_output_format</code>) bleiben gespeichert, werden hier aber nicht mehr bearbeitet.
                     </p>
                 </div>
 

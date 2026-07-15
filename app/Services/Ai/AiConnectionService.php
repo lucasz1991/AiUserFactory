@@ -370,16 +370,28 @@ class AiConnectionService
 
     public function speechToText(string $audioUrl, array $options = []): array
     {
+        // Das Chat-Completions-Schema erwartet input_audio als {data, format};
+        // data-URLs werden entsprechend zerlegt, alles andere als url durchgereicht.
+        $inputAudio = ['url' => $audioUrl];
+
+        if (preg_match('/^data:audio\/([a-z0-9.+-]+);base64,(.+)$/is', $audioUrl, $matches) === 1) {
+            $inputAudio = [
+                'data' => $matches[2],
+                'format' => strtolower($options['format'] ?? $matches[1]),
+            ];
+        }
+
+        unset($options['format']);
+
         return $this->request([
             'messages' => [
                 [
                     'role' => 'user',
                     'content' => [
+                        ['type' => 'text', 'text' => 'Transkribiere die Audiodatei wortgetreu.'],
                         [
                             'type' => 'input_audio',
-                            'input_audio' => [
-                                'url' => $audioUrl,
-                            ],
+                            'input_audio' => $inputAudio,
                         ],
                     ],
                 ],
