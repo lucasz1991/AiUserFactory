@@ -685,6 +685,7 @@ class WorkflowExecutionService
                 $context['copilot_current_task_key'] = $nextTaskKey;
                 $run->forceFill([
                     'status' => 'running',
+                    'current_workflow_step_id' => (int) $stepRun->workflow_step_id,
                     'context_json' => $context,
                 ])->save();
                 $stepRun->forceFill([
@@ -1791,6 +1792,19 @@ class WorkflowExecutionService
             $this->clearRouteCursor($run, true);
 
             return $target;
+        }
+
+        $nextTaskKey = trim((string) data_get($run->context_json, 'next_task_key', ''));
+        $currentStepId = (int) $run->current_workflow_step_id;
+
+        if ($nextTaskKey !== '' && $currentStepId > 0) {
+            $checkpointStep = $steps->first(
+                fn (WorkflowStep $step): bool => (int) $step->id === $currentStepId,
+            );
+
+            if ($checkpointStep) {
+                return $checkpointStep;
+            }
         }
 
         foreach ($steps as $step) {

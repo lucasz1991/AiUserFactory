@@ -59,6 +59,24 @@ test('IF variable task checks validated inputs and open browser windows', async 
   assert.equal(missing.branchOutcome, 'failed');
 });
 
+test('IF variable task routes supplied and missing workflow inputs on different outcomes', async () => {
+  const supplied = await variableCondition.run({
+    input: { variable_path: 'google_search_url', operator: 'exists' },
+    workflow_variables: { google_search_url: 'https://www.google.com/search?q=workflow' },
+  });
+  const missing = await variableCondition.run({
+    input: { variable_path: 'google_search_url', operator: 'exists' },
+    workflow_variables: { search_count: 3 },
+  });
+
+  assert.equal(supplied.conditionMatched, true);
+  assert.equal(supplied.status, 'success');
+  assert.equal(supplied.actual, 'https://www.google.com/search?q=workflow');
+  assert.equal(missing.conditionMatched, false);
+  assert.equal(missing.status, 'condition_not_met');
+  assert.equal(missing.branchOutcome, 'failed');
+});
+
 test('mail action loop accepts an ordered JSON click sequence with trailing comma', () => {
   const steps = mailActionLoop.parseActionSteps(`[
     {"selector":"button.delete","wait_ms":200},

@@ -207,6 +207,68 @@ class WorkflowCopilotExecutionInvariantTest extends TestCase
         Queue::assertPushed(RunWorkflowJob::class, fn (RunWorkflowJob $job): bool => $job->workflowRunId === $resumeRun->id);
     }
 
+    public function test_resumed_task_cursor_keeps_its_checkpoint_step_when_an_earlier_step_was_skipped(): void
+    {
+        Queue::fake();
+        [$workflow, $checkpointStep] = $this->workflow();
+        $checkpointStep->forceFill(['position' => 30])->save();
+        $completedStep = $workflow->steps()->create([
+            'name' => 'Completed entry step',
+            'type' => WorkflowStep::TYPE_DATA_TASK,
+            'action_key' => 'completed-entry-step',
+            'position' => 10,
+            'is_enabled' => true,
+            'config_json' => ['tasks' => []],
+        ]);
+        $skippedStep = $workflow->steps()->create([
+            'name' => 'Skipped linear step',
+            'type' => WorkflowStep::TYPE_DATA_TASK,
+            'action_key' => 'skipped-linear-step',
+            'position' => 20,
+            'is_enabled' => true,
+            'config_json' => ['tasks' => [[
+                'key' => 'unrelated-task',
+                'task_key' => 'wait.seconds',
+                'title' => 'Unrelated task',
+                'value' => 0,
+            ]]],
+        ]);
+        $session = app(WorkflowCopilotSessionService::class)->start($workflow->fresh());
+        $execution = app(WorkflowExecutionService::class);
+        $run = $execution->start($workflow->fresh(), [
+            'workflow_copilot_session_id' => $session->id,
+            'copilot_supervised' => true,
+        ], 'workflow-copilot');
+        WorkflowStepRun::query()->create([
+            'workflow_run_id' => $run->id,
+            'workflow_step_id' => $completedStep->id,
+            'status' => 'completed',
+            'result_json' => ['ok' => true],
+        ]);
+        $checkpointStepRun = $this->putRunAtCheckpoint($run, $checkpointStep, 'first-task');
+        Queue::fake();
+
+        $execution->resumeCopilotCheckpoint($run);
+
+        $run->refresh();
+        $resolver = new ReflectionMethod($execution, 'nextStepForRun');
+        $resolver->setAccessible(true);
+        $resolvedStep = $resolver->invoke($execution, $run);
+        $runtimeTasks = new ReflectionMethod(WorkflowTaskRunner::class, 'runtimeTasks');
+        $runtimeTasks->setAccessible(true);
+        $tasks = $runtimeTasks->invoke(app(WorkflowTaskRunner::class), $resolvedStep, 'second-task', true);
+
+        $this->assertSame($checkpointStep->id, $resolvedStep->id);
+        $this->assertNotSame($skippedStep->id, $resolvedStep->id);
+        $this->assertSame($checkpointStep->id, $run->current_workflow_step_id);
+        $this->assertSame('queued', $checkpointStepRun->fresh()->status);
+        $this->assertSame('second-task', $tasks[0]['key']);
+        $this->assertDatabaseMissing('workflow_step_runs', [
+            'workflow_run_id' => $run->id,
+            'workflow_step_id' => $skippedStep->id,
+        ]);
+    }
+
     public function test_repeated_monitoring_reuses_the_runtime_checkpoint_uuid(): void
     {
         Queue::fake();
