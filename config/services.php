@@ -93,6 +93,16 @@ return [
             'mode' => env('LOCAL_ASSISTANT_PIPER_MODE', 'cli'),
             'timeout' => env('LOCAL_ASSISTANT_PIPER_TIMEOUT', 120),
         ],
+        'install' => [
+            'php_binary' => env('LOCAL_ASSISTANT_VOICE_INSTALL_PHP_BINARY'),
+            'bash_binary' => env('LOCAL_ASSISTANT_VOICE_INSTALL_BASH_BINARY', 'bash'),
+            'script' => env('LOCAL_ASSISTANT_VOICE_INSTALL_SCRIPT', base_path('scripts/bootstrap-local-assistant-voice.sh')),
+            'state_path' => env('LOCAL_ASSISTANT_VOICE_INSTALL_STATE_PATH', storage_path('app/voice-runtime/install-state.json')),
+            'lock_path' => env('LOCAL_ASSISTANT_VOICE_INSTALL_LOCK_PATH', storage_path('app/voice-runtime/install.lock')),
+            'log_path' => env('LOCAL_ASSISTANT_VOICE_INSTALL_LOG_PATH', storage_path('logs/local-assistant-voice-install.log')),
+            'timeout' => env('LOCAL_ASSISTANT_VOICE_INSTALL_TIMEOUT', 7200),
+            'idle_timeout' => env('LOCAL_ASSISTANT_VOICE_INSTALL_IDLE_TIMEOUT', 900),
+        ],
     ],
 
 ];

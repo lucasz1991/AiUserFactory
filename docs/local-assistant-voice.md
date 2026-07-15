@@ -103,6 +103,30 @@ PHP_BINARY=/opt/plesk/php/8.3/bin/php \
   bash scripts/bootstrap-local-assistant-voice.sh
 ```
 
+Wenn der separate Plesk-SSH-Terminal-Port nicht erreichbar ist, kann derselbe
+gepruefte Ablauf direkt im **Laravel Toolkit > Artisan** gestartet werden. Der
+Befehl startet einen entkoppelten Worker, damit der Plesk-Request nicht waehrend
+des Downloads und Builds offen bleiben muss:
+
+```text
+assistant:voice:install --build-jobs=2
+```
+
+Den Fortschritt im selben Artisan-Feld wiederholt abfragen:
+
+```text
+assistant:voice:install --status
+```
+
+Die Statusausgabe enthaelt Worker-PID, Komponentenstatus und die letzten
+80 Logzeilen. Das vollstaendige Log liegt standardmaessig unter
+`storage/logs/local-assistant-voice-install.log`, der maschinenlesbare Zustand
+unter `storage/app/voice-runtime/install-state.json`. Eine Dateisperre verhindert
+parallele Installationen. Der Hintergrundworker fuehrt ausschliesslich das im
+Repository enthaltene `scripts/bootstrap-local-assistant-voice.sh` als
+Domain-Benutzer aus; Root-Rechte oder ein zusaetzlicher Netzwerk-Port werden
+nicht verwendet.
+
 Das Script darf aus einem beliebigen Arbeitsverzeichnis aufgerufen werden; den
 Laravel-Root ermittelt es relativ zu seinem eigenen Pfad. Es akzeptiert keine
 Positionsargumente.
