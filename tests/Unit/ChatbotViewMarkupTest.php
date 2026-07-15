@@ -28,6 +28,8 @@ class ChatbotViewMarkupTest extends TestCase
         $this->assertStringContainsString('audio.onplaying = () => {', $definition);
         $this->assertStringContainsString('voiceProviderSupported()', $definition);
         $this->assertStringContainsString('toggleVoskVoice()', $definition);
+        $this->assertStringContainsString('observeMessages()', $definition);
+        $this->assertStringContainsString('new MutationObserver(() => this.scrollMessages(false))', $definition);
         $this->assertStringContainsString('transcribeVoskBlob(blob)', $definition);
         $this->assertStringContainsString('setWorkflowImprovements(improvements = [])', $definition);
         $this->assertStringContainsString('applyImprovementHighlights()', $definition);
@@ -55,6 +57,7 @@ class ChatbotViewMarkupTest extends TestCase
         $this->assertStringContainsString('assistant-improvement-info', $source);
         $this->assertStringContainsString("\$item['improvements']", $source);
         $this->assertStringContainsString('workflow-copilot-session-activated', $source);
+        $this->assertStringContainsString('assistant-open-workflow-run-preview', $source);
         $this->assertStringContainsString('normalizeEventDetail($event)', $source);
         $this->assertStringContainsString('wire:poll.2s="pollCopilotSession"', $source);
         $this->assertStringContainsString('System-Ausfuehrung', $source);

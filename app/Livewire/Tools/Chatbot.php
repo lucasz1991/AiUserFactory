@@ -145,14 +145,30 @@ class Chatbot extends Component
             $copilotSession = $this->activeCopilotSession();
 
             if ($copilotSession && $this->isCopilotSessionActive($copilotSession)) {
-                app(WorkflowCopilotSessionService::class)->instruction($copilotSession, $userMessage, [
+                $sessionService = app(WorkflowCopilotSessionService::class);
+                $sessionService->appendEvent(
+                    $copilotSession,
+                    'chat.user',
+                    'Benutzer hat eine Nachricht im Workflow-Copilot-Chat gesendet.',
+                    ['content' => $userMessage, 'user_id' => Auth::id(), 'source' => 'workflow-copilot-chat'],
+                    'conversation',
+                );
+                $sessionService->instruction($copilotSession, $userMessage, [
                     'user_id' => Auth::id(),
                     'source' => 'workflow-copilot-chat',
                 ]);
                 WorkflowCopilotSupervisorJob::dispatch((int) $copilotSession->getKey());
+                $acknowledgement = 'Die Anweisung wurde gespeichert und wird am naechsten sicheren Checkpoint beruecksichtigt.';
+                $sessionService->appendEvent(
+                    $copilotSession,
+                    'chat.assistant',
+                    'Workflow-Copilot hat die Benutzeranweisung bestaetigt.',
+                    ['content' => $acknowledgement],
+                    'conversation',
+                );
                 $this->appendDisplayMessage(
                     'assistant',
-                    'Die Anweisung wurde gespeichert und wird am naechsten sicheren Checkpoint beruecksichtigt.',
+                    $acknowledgement,
                     'success',
                 );
                 $this->pollCopilotSession();
@@ -402,6 +418,12 @@ class Chatbot extends Component
         $forceImprovementTool = false;
         $improvementRetryUsed = false;
         $roundLimit = $toolRounds;
+        $auditSession = null;
+        $auditTrail = [[
+            'event_type' => 'chat.user',
+            'message' => 'Benutzer hat die autonome Workflow-Anfrage gesendet.',
+            'payload' => ['content' => $userMessage, 'user_id' => Auth::id(), 'page_context' => $this->pageContext],
+        ]];
 
         $this->stream('assistant-response-stream', '', true);
         $this->stream('assistant-status-stream', 'Kontext wird geprueft und die Anfrage vorbereitet.', true);
@@ -430,6 +452,14 @@ class Chatbot extends Component
             $assistantMessage = data_get($response, 'choices.0.message', []);
             $content = trim((string) data_get($assistantMessage, 'content', ''));
             $toolCalls = $this->normalizeToolCalls(data_get($assistantMessage, 'tool_calls', data_get($assistantMessage, 'toolCalls', [])));
+
+            if ($content !== '') {
+                $auditTrail[] = [
+                    'event_type' => 'assistant.response',
+                    'message' => 'Workflow-Copilot hat eine Antwort fuer Toolrunde '.($round + 1).' erzeugt.',
+                    'payload' => ['round' => $round + 1, 'content' => $content],
+                ];
+            }
 
             if ($toolCalls === []) {
                 if ($analyzedRunContext && $improvements === null && ! $improvementRetryUsed) {
@@ -469,8 +499,35 @@ class Chatbot extends Component
 
             foreach ($toolCalls as $toolCall) {
                 $this->stream('assistant-status-stream', $this->assistantToolStatus($toolCall['name']), true);
+                $auditTrail[] = [
+                    'event_type' => 'tool.called',
+                    'message' => 'Assistant-Tool `'.$toolCall['name'].'` wurde aufgerufen.',
+                    'payload' => [
+                        'round' => $round + 1,
+                        'tool_call_id' => $toolCall['id'],
+                        'tool' => $toolCall['name'],
+                        'arguments' => $this->sanitizeAuditPayload($toolCall['arguments']),
+                    ],
+                ];
 
                 $result = $toolService->execute($toolCall['name'], $toolCall['arguments'], Auth::user());
+                $auditTrail[] = [
+                    'event_type' => 'tool.completed',
+                    'message' => 'Assistant-Tool `'.$toolCall['name'].'` wurde '.(($result['ok'] ?? false) ? 'erfolgreich' : 'mit Fehler').' abgeschlossen.',
+                    'payload' => [
+                        'round' => $round + 1,
+                        'tool_call_id' => $toolCall['id'],
+                        'tool' => $toolCall['name'],
+                        'result' => $this->sanitizeAuditPayload($result),
+                    ],
+                    'level' => ($result['ok'] ?? false) ? 'success' : 'error',
+                ];
+
+                if ($toolCall['name'] === 'workflow_optimize_start' && ($result['ok'] ?? false)) {
+                    $auditSession = WorkflowCopilotSession::query()->find((int) data_get($result, 'session.id'));
+                }
+
+                $this->flushCopilotAuditTrail($auditSession, $auditTrail);
 
                 $this->appendToolEvent($toolCall['name'], $toolCall['arguments'], $result);
                 $refreshPage = true;
@@ -493,7 +550,16 @@ class Chatbot extends Component
                 }
 
                 if (($result['ok'] ?? false) && is_array($result['ui_action'] ?? null)) {
-                    $uiAction = $result['ui_action'];
+                    $candidateUiAction = $result['ui_action'];
+                    $currentType = (string) ($uiAction['type'] ?? '');
+                    $candidateType = (string) ($candidateUiAction['type'] ?? '');
+                    $previewTypes = ['workflow_copilot_session', 'open_workflow_run_preview'];
+
+                    if ($uiAction === null
+                        || in_array($candidateType, $previewTypes, true)
+                        || ! in_array($currentType, $previewTypes, true)) {
+                        $uiAction = $candidateUiAction;
+                    }
                 }
 
                 $messages[] = [
@@ -530,6 +596,16 @@ class Chatbot extends Component
                 'content' => $finalMessage,
             ];
         }
+
+        if ($finalMessage !== '') {
+            $auditTrail[] = [
+                'event_type' => 'chat.assistant',
+                'message' => 'Workflow-Copilot hat die sichtbare Abschlussantwort gesendet.',
+                'payload' => ['content' => $this->sanitizeAssistantText($finalMessage)],
+            ];
+        }
+
+        $this->flushCopilotAuditTrail($auditSession, $auditTrail);
 
         Session::put(self::TRANSCRIPT_KEY, $this->trimTranscript($messages));
 
@@ -649,6 +725,62 @@ class Chatbot extends Component
         ];
 
         $this->toolEvents = array_slice($this->toolEvents, -24);
+    }
+
+    private function flushCopilotAuditTrail(?WorkflowCopilotSession $session, array &$events): void
+    {
+        if (! $session || $events === []) {
+            return;
+        }
+
+        $service = app(WorkflowCopilotSessionService::class);
+
+        foreach ($events as $event) {
+            try {
+                $service->appendEvent(
+                    $session,
+                    (string) ($event['event_type'] ?? 'assistant.event'),
+                    (string) ($event['message'] ?? 'Workflow-Copilot-Ereignis.'),
+                    is_array($event['payload'] ?? null) ? $event['payload'] : [],
+                    'conversation',
+                    (string) ($event['level'] ?? 'info'),
+                );
+            } catch (\Throwable $exception) {
+                Log::warning('Workflow-Copilot-Auditereignis konnte nicht gespeichert werden.', [
+                    'session_id' => $session->id,
+                    'event_type' => $event['event_type'] ?? null,
+                    'error' => $exception->getMessage(),
+                ]);
+            }
+        }
+
+        $events = [];
+    }
+
+    private function sanitizeAuditPayload(mixed $payload): mixed
+    {
+        if (! is_array($payload)) {
+            return $payload;
+        }
+
+        $sanitized = [];
+
+        foreach ($payload as $key => $value) {
+            $normalizedKey = Str::lower(str_replace(['-', '_', ' '], '', (string) $key));
+            $sensitive = str_contains($normalizedKey, 'password')
+                || str_contains($normalizedKey, 'secret')
+                || str_contains($normalizedKey, 'token')
+                || str_contains($normalizedKey, 'cookie')
+                || str_contains($normalizedKey, 'sessionpayload')
+                || str_contains($normalizedKey, 'payloadencrypted')
+                || str_contains($normalizedKey, 'browserwsendpoint')
+                || str_contains($normalizedKey, 'websocketendpoint')
+                || $normalizedKey === 'wsendpoint';
+
+            $sanitized[$key] = $sensitive ? '[redacted]' : $this->sanitizeAuditPayload($value);
+        }
+
+        return $sanitized;
     }
 
     private function assistantToolStatus(string $toolName): string

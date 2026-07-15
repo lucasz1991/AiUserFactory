@@ -39,6 +39,8 @@
         lastAssistantMessageKey: null,
         toolAlertTimers: {},
         refreshTimer: null,
+        messageObserver: null,
+        messageScrollTimer: null,
         workflowImprovements: [],
         improvementRefreshTimer: null,
         livewireComponent() {
@@ -95,6 +97,7 @@
             this.scheduleToolAlerts(this.toolEvents);
             this.$nextTick(() => {
                 window.setTimeout(() => this.syncContext(), 0);
+                this.observeMessages();
                 this.scrollMessages(false);
                 this.queueImprovementHighlights();
             });
@@ -103,6 +106,9 @@
             document.removeEventListener('livewire:updated', this._reapplyImprovementHighlights);
             document.removeEventListener('livewire:navigated', this._reapplyImprovementHighlights);
             window.clearTimeout(this.improvementRefreshTimer);
+            window.clearTimeout(this.messageScrollTimer);
+            this.messageObserver?.disconnect();
+            this.messageObserver = null;
         },
         readBool(key, fallback) {
             const stored = localStorage.getItem(key);
@@ -153,10 +159,27 @@
             await this.callLivewire('updatePageContext', this.collectContext(extra));
         },
         scrollMessages(smooth = true) {
+            window.clearTimeout(this.messageScrollTimer);
             this.$nextTick(() => {
                 const messages = this.$refs.messages;
                 if (!messages) return;
                 messages.scrollTo({ top: messages.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
+                this.messageScrollTimer = window.setTimeout(() => {
+                    const current = this.$refs.messages;
+                    if (current) current.scrollTop = current.scrollHeight;
+                }, 80);
+            });
+        },
+        observeMessages() {
+            const messages = this.$refs.messages;
+            if (!messages || !window.MutationObserver) return;
+
+            this.messageObserver?.disconnect();
+            this.messageObserver = new MutationObserver(() => this.scrollMessages(false));
+            this.messageObserver.observe(messages, {
+                childList: true,
+                subtree: true,
+                characterData: true,
             });
         },
         resizeComposer() {
@@ -786,6 +809,38 @@
                     : [];
 
                 this.setWorkflowImprovements(improvements);
+
+                return;
+            }
+
+            if (action?.type === 'open_workflow_run_preview' || action?.type === 'workflow_copilot_session') {
+                const sessionId = Number(action.session_id || 0);
+                const workflowId = Number(action.workflow_id || 0);
+                const manager = document.querySelector('[data-workflow-manager-root]');
+                const managerWorkflowId = Number(manager?.dataset?.workflowId || 0);
+
+                if (sessionId > 0) {
+                    this.setOpen(true);
+                    this.callLivewire('attachCopilotSession', sessionId);
+                }
+
+                if ((!manager || (workflowId > 0 && managerWorkflowId !== workflowId)) && action.url) {
+                    if (window.Livewire?.navigate) {
+                        window.Livewire.navigate(action.url);
+                    } else {
+                        window.location.assign(action.url);
+                    }
+
+                    return;
+                }
+
+                window.dispatchEvent(new CustomEvent('assistant-open-workflow-run-preview', {
+                    detail: {
+                        workflow_id: workflowId,
+                        run_id: Number(action.run_id || 0),
+                        session_id: sessionId,
+                    },
+                }));
             }
         },
         setWorkflowImprovements(improvements = []) {

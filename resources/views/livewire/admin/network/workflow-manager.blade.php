@@ -91,6 +91,13 @@
             $wire.openAssistantImprovement(workflowId, stepId, detail.task_card_key || null);
         }
     "
+    x-on:assistant-open-workflow-run-preview.window="
+        const detail = Array.isArray($event.detail) ? ($event.detail[0] || {}) : ($event.detail || {});
+        const workflowId = Number(detail.workflow_id || 0);
+        if (!workflowId || workflowId === {{ (int) ($selectedWorkflow?->id ?? 0) }}) {
+            $wire.openRunPreviewFromAssistant(Number(detail.run_id || 0), Number(detail.session_id || 0));
+        }
+    "
 >
     <div class="p-box shadow-box bg-box border border-box rounded-box">
         <div class="flex flex-wrap items-start justify-between gap-2">
@@ -805,7 +812,7 @@
                 <div class="space-y-5">
                     <div class="rounded-xl border border-cyan-200 bg-cyan-50 p-4 text-sm text-cyan-950">
                         <p class="font-bold">Ausschliesslich System-Ausfuehrung</p>
-                        <p class="mt-1 leading-5">Der Copilot beobachtet den normalen System-Test mit Screenshot und bereinigter DOM-Ausgabe, probiert ausschliesslich vorhandene Workflow-Tasks aus und speichert nachvollziehbare Revisionen. Eine ClientController-Ausfuehrung ist fuer Reparaturen ausgeschlossen.</p>
+                        <p class="mt-1 leading-5">Der Copilot verwendet dieselbe Workflow-Vorschau wie ein normaler System-Test, einschliesslich Workflow-Karte, Tasks, Browserfenstern und Logs. Ist der Workflow leer, plant er aus Ziel, Erfolgskriterien und Eingaben zuerst eine katalogkonforme Erstdefinition. Eine ClientController-Ausfuehrung ist fuer Reparaturen ausgeschlossen.</p>
                     </div>
 
                     <div class="rounded-xl border p-4 text-sm {{ $copilotAutoExecute ? 'border-emerald-200 bg-emerald-50 text-emerald-950' : 'border-rose-200 bg-rose-50 text-rose-950' }}">
@@ -894,11 +901,23 @@
             </x-slot>
         </x-dialog-modal>
 
-        <x-dialog-modal wire:model="showCopilotPreviewModal" maxWidth="7xl">
-            <x-slot name="title">Workflow-Copilot · Live-Optimierung</x-slot>
+        <x-dialog-modal wire:model="showRunPreviewModal" maxWidth="7xl">
+            <x-slot name="title">{{ $activeCopilotSession ? 'Workflow-Vorschau / Copilot-Live-Optimierung' : 'Workflow-Vorschau' }}</x-slot>
             <x-slot name="content">
-                <div @if($showCopilotPreviewModal && data_get($copilotStatus, 'active')) wire:poll.2s="refreshCopilotSession" @endif class="space-y-5">
-                    @if($copilotStatus !== [])
+                <div @if($showRunPreviewModal) wire:poll.2s="refreshRunPreview" @endif class="space-y-5">
+                    @if($previewWorkflowRun)
+                        <x-workflows.run-preview :workflow-run="$previewWorkflowRun" />
+                    @elseif($activeCopilotSession)
+                        <div class="rounded-md border border-dashed border-cyan-300 bg-cyan-50 p-4 text-sm text-cyan-900">
+                            Der Copilot plant den Workflow und bereitet den ersten gemeinsamen Vorschau-Test vor.
+                        </div>
+                    @else
+                        <div class="rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
+                            Dieser Workflow-Lauf wurde noch nicht geladen.
+                        </div>
+                    @endif
+
+                    @if($activeCopilotSession && $copilotStatus !== [])
                         <div class="grid gap-4 xl:grid-cols-[minmax(0,1.3fr)_minmax(320px,.7fr)]">
                             <div class="space-y-4">
                                 <div class="overflow-hidden rounded-xl border border-cyan-200 bg-white">
@@ -1037,41 +1056,24 @@
                                 </div>
                             </aside>
                         </div>
-                    @else
-                        <div class="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-6 text-sm text-slate-500">Die Copilot-Sitzung konnte nicht geladen werden.</div>
                     @endif
                 </div>
             </x-slot>
             <x-slot name="footer">
-                <button type="button" wire:click="openCopilotChat" class="rounded-md bg-cyan-700 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-800">Copilot-Chat oeffnen</button>
-                @if(data_get($copilotStatus, 'active'))
-                    @if(data_get($copilotStatus, 'paused'))
-                        <button type="button" wire:click="resumeCopilotOptimization" class="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700">Fortsetzen</button>
-                    @else
-                        <button type="button" wire:click="pauseCopilotOptimization" class="rounded-md border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-800 hover:bg-amber-100">Pausieren</button>
+                @if($activeCopilotSession)
+                    <button type="button" wire:click="downloadCopilotOptimizationLog" wire:loading.attr="disabled" wire:target="downloadCopilotOptimizationLog" class="rounded-md border border-cyan-300 bg-white px-4 py-2 text-sm font-semibold text-cyan-800 hover:bg-cyan-50 disabled:opacity-50">Komplettes Optimierungslog exportieren</button>
+                    <button type="button" wire:click="openCopilotChat" class="rounded-md bg-cyan-700 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-800">Copilot-Chat oeffnen</button>
+                    @if(data_get($copilotStatus, 'active'))
+                        @if(data_get($copilotStatus, 'paused'))
+                            <button type="button" wire:click="resumeCopilotOptimization" class="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700">Fortsetzen</button>
+                        @else
+                            <button type="button" wire:click="pauseCopilotOptimization" class="rounded-md border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-800 hover:bg-amber-100">Pausieren</button>
+                        @endif
+                        <button type="button" wire:click="stopCopilotOptimization" wire:confirm="Autonome Workflow-Optimierung wirklich stoppen?" class="rounded-md border border-rose-300 bg-white px-4 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50">Stoppen</button>
+                    @elseif(in_array(data_get($copilotStatus, 'status'), ['budget_exhausted', 'failed'], true))
+                        <button type="button" wire:click="stopCopilotOptimization" wire:confirm="Sitzung beenden und Workflow-Lock freigeben? Die letzte Revision bleibt unverifiziert gespeichert." class="rounded-md border border-rose-300 bg-white px-4 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50">Sitzung beenden und Lock freigeben</button>
                     @endif
-                    <button type="button" wire:click="stopCopilotOptimization" wire:confirm="Autonome Workflow-Optimierung wirklich stoppen?" class="rounded-md border border-rose-300 bg-white px-4 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50">Stoppen</button>
-                @elseif(in_array(data_get($copilotStatus, 'status'), ['budget_exhausted', 'failed'], true))
-                    <button type="button" wire:click="stopCopilotOptimization" wire:confirm="Sitzung beenden und Workflow-Lock freigeben? Die letzte Revision bleibt unverifiziert gespeichert." class="rounded-md border border-rose-300 bg-white px-4 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50">Sitzung beenden und Lock freigeben</button>
                 @endif
-                <button type="button" wire:click="closeCopilotPreview" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">Schliessen</button>
-            </x-slot>
-        </x-dialog-modal>
-
-        <x-dialog-modal wire:model="showRunPreviewModal" maxWidth="7xl">
-            <x-slot name="title">Workflow-Vorschau</x-slot>
-            <x-slot name="content">
-                <div @if($showRunPreviewModal) wire:poll.3s="refreshRunPreview" @endif>
-                    @if($previewWorkflowRun)
-                        <x-workflows.run-preview :workflow-run="$previewWorkflowRun" />
-                    @else
-                        <div class="rounded-md border border-dashed border-slate-300 bg-slate-50 container text-sm text-slate-500">
-                            Dieser Workflow-Lauf wurde noch nicht geladen.
-                        </div>
-                    @endif
-                </div>
-            </x-slot>
-            <x-slot name="footer">
                 @if($previewWorkflowRun && $previewWorkflowRun->status === 'queued')
                     <button type="button" wire:click="deleteQueuedPreviewWorkflowRun" wire:confirm="Eingeplanten Workflow-Test wirklich loeschen?" class="rounded-md border border-red-300 bg-white px-4 py-2 text-sm font-semibold text-red-700 shadow-sm hover:bg-red-50">
                         Loeschen

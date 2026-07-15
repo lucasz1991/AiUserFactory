@@ -9,6 +9,7 @@ use App\Models\WorkflowCopilotSession;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowStep;
 use App\Services\Workflows\WorkflowCopilotSessionService;
+use App\Services\Workflows\WorkflowCopilotPlanningService;
 use App\Services\Workflows\WorkflowExecutionService;
 use App\Services\Workflows\WorkflowTaskCatalog;
 use App\Services\Workflows\WorkflowTaskOrderingService;
@@ -37,6 +38,9 @@ class WorkflowAssistantToolService
             'Wenn du dem Nutzer mehrere klare Optionen anbietest, nutze present_chat_options, damit klickbare Auswahlbuttons erscheinen.',
             'Wenn du ein sichtbares Workflow-Element besprichst, nutze highlight_workflow_element fuer workflow_row, workflow_list, workflow_task oder workflow_task_catalog.',
             'Fuer autonome Reparaturtests nutze workflow_optimize_start und danach die workflow_optimize_*-Steuerungen. Diese Sitzungen laufen ausnahmslos auf execution_target=system und niemals auf einem ClientController.',
+            'Wenn der ausgewaehlte Workflow leer ist und Ziel, Ablauf und Eingaben ausreichend beschrieben sind, rufe workflow_optimize_start direkt auf. Die serverseitige Erstplanung baut ihn katalogkonform auf; frage nicht erneut nach bereits gelieferten Angaben. apply_workflow_definition nutzt du nur, wenn der Nutzer eine konkrete Struktur vorgibt oder noch keinen Optimierungslauf starten will.',
+            'Arbeite bei Erstellung und Optimierung in kurzen kontrollierten Zyklen. Pruefe nach hoechstens zwei aendernden Toolaufrufen erneut den Workflow-Kontext oder Optimierungsstatus und starte bzw. analysiere einen Vorschau-Test, bevor du weitere Aenderungen stapelst.',
+            'workflow_test_run und workflow_optimize_start oeffnen dieselbe Workflow-Vorschau mit Workflow-Karte, Tasks, Browserfenstern und Logs. Nutze die Optimierungssteuerungen, um den laufenden Test zu pausieren, fortzusetzen, anzuweisen oder zu stoppen.',
             'Lege keine Loeschoperationen an. Fuer gefaehrliche Aenderungen erst eine kurze Zusammenfassung geben und dann eine konkrete Aktualisierungsfunktion nutzen, wenn der Nutzer es beauftragt.',
             trim($extraInstructions),
         ])));
@@ -307,6 +311,7 @@ class WorkflowAssistantToolService
                     'workflow_slug' => ['type' => 'string'],
                     'workflow_query' => ['type' => 'string'],
                     'context' => ['type' => 'object'],
+                    'open_preview' => ['type' => 'boolean'],
                     'open_process_monitor' => ['type' => 'boolean'],
                 ],
             ]),
@@ -1547,10 +1552,19 @@ class WorkflowAssistantToolService
             'run' => $this->runSummary($run->fresh(['workflow', 'stepRuns.workflowStep']), false),
             'process_monitor_url' => $url,
             'refresh_page' => true,
-            'ui_action' => (bool) ($arguments['open_process_monitor'] ?? false) ? [
-                'type' => 'navigate',
-                'url' => $url,
-            ] : null,
+            'ui_action' => (bool) ($arguments['open_process_monitor'] ?? false)
+                ? ['type' => 'navigate', 'url' => $url]
+                : ((bool) ($arguments['open_preview'] ?? true)
+                    ? [
+                        'type' => 'open_workflow_run_preview',
+                        'workflow_id' => (int) $workflow->id,
+                        'run_id' => (int) $run->id,
+                        'url' => route('network.workflows.manage', [
+                            'workflow' => $workflow->id,
+                            'runPreview' => $run->id,
+                        ]),
+                    ]
+                    : null),
         ];
     }
 
@@ -1585,17 +1599,28 @@ class WorkflowAssistantToolService
         }
 
         try {
+            $successCriteria = collect(is_array($arguments['success_criteria'] ?? null) ? $arguments['success_criteria'] : [])
+                ->map(fn (mixed $criterion): string => trim((string) $criterion))
+                ->filter()
+                ->take(50)
+                ->values()
+                ->all();
+            $workflowInputs = is_array($arguments['workflow_inputs'] ?? null) ? $arguments['workflow_inputs'] : [];
+            $initialPlan = null;
+            $planner = app(WorkflowCopilotPlanningService::class);
+
+            if ($planner->needsInitialPlan($workflow)) {
+                $initialPlan = $planner->planAndApply($workflow, $goal, $successCriteria, $workflowInputs);
+                $workflow = $workflow->fresh(['steps']) ?? $workflow;
+            }
+
             $session = app(WorkflowCopilotSessionService::class)->start($workflow, [
                 'person_id' => $this->positiveInteger($arguments['person_id'] ?? null),
                 'execution_target' => WorkflowCopilotSession::EXECUTION_TARGET_SYSTEM,
                 'goal' => $goal,
-                'success_criteria' => collect(is_array($arguments['success_criteria'] ?? null) ? $arguments['success_criteria'] : [])
-                    ->map(fn (mixed $criterion): string => trim((string) $criterion))
-                    ->filter()
-                    ->take(50)
-                    ->values()
-                    ->all(),
-                'workflow_inputs' => is_array($arguments['workflow_inputs'] ?? null) ? $arguments['workflow_inputs'] : [],
+                'success_criteria' => $successCriteria,
+                'workflow_inputs' => $workflowInputs,
+                'state' => $initialPlan ? ['initial_plan' => $initialPlan] : [],
                 'budget' => [
                     'max_minutes' => max(5, min(1440, (int) ($arguments['max_minutes'] ?? $optimizationDefaults['max_minutes'] ?? 90))),
                     'max_repair_iterations' => max(1, min(100, (int) ($arguments['max_repair_iterations'] ?? $optimizationDefaults['max_repair_iterations'] ?? 15))),
@@ -1604,6 +1629,19 @@ class WorkflowAssistantToolService
                     'auto_execute_workflow_actions' => true,
                 ],
             ]);
+
+            if ($initialPlan) {
+                app(WorkflowCopilotSessionService::class)->appendEvent(
+                    $session,
+                    'plan.applied',
+                    'Der leere Workflow wurde aus Zielbeschreibung und Katalogdaten geplant und aufgebaut.',
+                    ['plan' => $initialPlan],
+                    'planning',
+                    'success',
+                    true,
+                );
+            }
+
             WorkflowCopilotSupervisorJob::dispatch($session->id);
         } catch (\Throwable $exception) {
             return $this->error('WORKFLOW_OPTIMIZE_START_FAILED', $exception->getMessage());
@@ -1618,6 +1656,12 @@ class WorkflowAssistantToolService
                 'type' => 'workflow_copilot_session',
                 'session_id' => (int) $session->id,
                 'workflow_id' => (int) $workflow->id,
+                'run_id' => $session->active_workflow_run_id ? (int) $session->active_workflow_run_id : null,
+                'url' => route('network.workflows.manage', [
+                    'workflow' => $workflow->id,
+                    'copilotSession' => $session->id,
+                    'openPreview' => 1,
+                ]),
             ],
         ];
     }

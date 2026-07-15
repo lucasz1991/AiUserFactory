@@ -10,6 +10,7 @@ use App\Models\Workflow;
 use App\Models\WorkflowCopilotSession;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowStep;
+use App\Services\Ai\AiConnectionService;
 use App\Services\Workflows\WorkflowCopilotSessionService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
@@ -31,6 +32,22 @@ class WorkflowCopilotLiveUiTest extends TestCase
     {
         Queue::fake();
         $workflow = $this->workflow('copilot-system-start');
+        $ai = \Mockery::mock(AiConnectionService::class);
+        $ai->shouldReceive('json')->once()->andReturn([
+            'summary' => 'Ein kurzer, ausfuehrbarer Startplan.',
+            'assumptions' => ['Der Test darf kurz warten.'],
+            'steps' => [[
+                'name' => 'Start vorbereiten',
+                'type' => WorkflowStep::TYPE_WAIT,
+                'description' => 'Initialer, katalogkonformer Testschritt.',
+                'tasks' => [[
+                    'task_key' => 'wait.seconds',
+                    'title' => 'Kurz warten',
+                    'parameters' => ['value' => 1],
+                ]],
+            ]],
+        ]);
+        $this->app->instance(AiConnectionService::class, $ai);
 
         $component = Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
             ->call('openCopilotOptimization')
@@ -45,7 +62,8 @@ class WorkflowCopilotLiveUiTest extends TestCase
             ->call('startCopilotOptimization')
             ->assertHasNoErrors()
             ->assertSet('showCopilotModal', false)
-            ->assertSet('showCopilotPreviewModal', true)
+            ->assertSet('showCopilotPreviewModal', false)
+            ->assertSet('showRunPreviewModal', true)
             ->assertDispatched('workflow-copilot-session-activated');
 
         $session = WorkflowCopilotSession::query()->sole();
@@ -54,6 +72,11 @@ class WorkflowCopilotLiveUiTest extends TestCase
         $this->assertSame(45, $session->budget_json['max_minutes']);
         $this->assertSame(['Finale URL enthaelt /success', 'Text Fertig ist sichtbar'], $session->success_criteria_json['assertions']);
         $this->assertSame($session->id, $workflow->fresh()->active_workflow_copilot_session_id);
+        $this->assertSame('wait.seconds', data_get($workflow->fresh()->steps()->first()?->task_cards, '0.task_key'));
+        $this->assertDatabaseHas('workflow_copilot_events', [
+            'workflow_copilot_session_id' => $session->id,
+            'event_type' => 'plan.applied',
+        ]);
         Queue::assertPushed(
             WorkflowCopilotSupervisorJob::class,
             fn (WorkflowCopilotSupervisorJob $job): bool => $job->workflowCopilotSessionId === $session->id,
@@ -144,6 +167,14 @@ class WorkflowCopilotLiveUiTest extends TestCase
             'workflow_copilot_session_id' => $session->id,
             'event_type' => 'instruction.received',
         ]);
+        $this->assertDatabaseHas('workflow_copilot_events', [
+            'workflow_copilot_session_id' => $session->id,
+            'event_type' => 'chat.user',
+        ]);
+        $this->assertDatabaseHas('workflow_copilot_events', [
+            'workflow_copilot_session_id' => $session->id,
+            'event_type' => 'chat.assistant',
+        ]);
         Queue::assertPushed(
             WorkflowCopilotSupervisorJob::class,
             fn (WorkflowCopilotSupervisorJob $job): bool => $job->workflowCopilotSessionId === $session->id,
@@ -222,7 +253,8 @@ class WorkflowCopilotLiveUiTest extends TestCase
             ->assertSet('activeCopilotSessionId', $session->id)
             ->assertSet('copilotStatus.verification_report.pass', true)
             ->call('openCopilotOptimization')
-            ->assertSet('showCopilotPreviewModal', true)
+            ->assertSet('showCopilotPreviewModal', false)
+            ->assertSet('showRunPreviewModal', true)
             ->assertSee('Finaler Verifikationsbericht')
             ->assertDontSee('wire:poll.2s="refreshCopilotSession"', false)
             ->call('closeCopilotPreview')

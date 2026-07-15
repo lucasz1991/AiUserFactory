@@ -196,6 +196,21 @@ class WorkflowCopilotSupervisorService
             $vision,
         );
         $this->markCheckpointObserved($session, $checkpoint, $storedCheckpoint, $observation, $vision);
+        $this->sessions->appendEvent(
+            $session,
+            'checkpoint.review_pause',
+            'Der Vorschau-Test ist am sicheren Task-Checkpoint angehalten; aktueller Bildschirm, DOM und Ergebnis werden vor der Fortsetzung geprueft.',
+            [
+                'workflow_run_id' => (int) $run->id,
+                'checkpoint_id' => (int) $storedCheckpoint->id,
+                'task_key' => $checkpoint['task_key'] ?? null,
+                'successful' => (bool) ($checkpoint['successful'] ?? false),
+                'state_signature' => $observation['state_signature'] ?? null,
+                'screenshot_changed' => (bool) ($observation['screenshot_changed'] ?? false),
+                'vision_analyzed' => $vision !== [],
+            ],
+            'observing',
+        );
 
         if ($isVerificationCheckpoint) {
             $this->processVerificationCheckpoint($session, $run, $checkpoint, $attempt->id, $storedCheckpoint->id, $vision);

@@ -16,16 +16,21 @@ class WorkflowCopilotUiMarkupTest extends TestCase
         $this->assertStringContainsString('Mit Copilot optimieren', $view);
         $this->assertStringContainsString('Ausschliesslich System-Ausfuehrung', $view);
         $this->assertStringContainsString('System-Optimierung starten', $view);
-        $this->assertStringContainsString('wire:poll.2s="refreshCopilotSession"', $view);
+        $this->assertStringContainsString('wire:poll.2s="refreshRunPreview"', $view);
+        $this->assertStringContainsString('<x-workflows.run-preview :workflow-run="$previewWorkflowRun" />', $view);
+        $this->assertStringContainsString('wire:model="showRunPreviewModal"', $view);
+        $this->assertStringNotContainsString('wire:model="showCopilotPreviewModal"', $view);
         $this->assertStringContainsString('Bereinigte DOM-Elementkarte', $view);
         $this->assertStringContainsString('Workflow-Revisionen', $view);
         $this->assertStringContainsString('Zum Checkpoint zurueckspulen', $view);
         $this->assertStringContainsString('wire:click="openCopilotChat"', $view);
+        $this->assertStringContainsString('wire:click="downloadCopilotOptimizationLog"', $view);
         $this->assertStringContainsString('Autonome Aktionen sind freigegeben', $view);
         $this->assertStringContainsString('@disabled(! $copilotAutoExecute)', $view);
         $this->assertStringNotContainsString('copilotExecutionTarget', $view);
         $this->assertStringNotContainsString('copilotNetworkNode', $view);
         $this->assertStringContainsString("'execution_target' => 'system'", $component);
+        $this->assertStringContainsString('WorkflowCopilotPlanningService::class', $component);
         $this->assertStringNotContainsString("'execution_target' => \$validated['copilot", $component);
     }
 
