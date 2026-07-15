@@ -188,11 +188,13 @@ class WorkflowCopilotExecutionInvariantTest extends TestCase
         $this->assertSame('queued', $retryStepRun->fresh()->status);
         Queue::assertPushed(RunWorkflowJob::class, fn (RunWorkflowJob $job): bool => $job->workflowRunId === $retryRun->id);
 
-        $resumeRun = $execution->start($workflow, [
-            'workflow_copilot_session_id' => $session->id,
+        [$resumeWorkflow, $resumeStep] = $this->workflow();
+        $resumeSession = app(WorkflowCopilotSessionService::class)->start($resumeWorkflow);
+        $resumeRun = $execution->start($resumeWorkflow, [
+            'workflow_copilot_session_id' => $resumeSession->id,
             'copilot_supervised' => true,
         ], 'workflow-copilot');
-        $resumeStepRun = $this->putRunAtCheckpoint($resumeRun, $step, 'first-task');
+        $resumeStepRun = $this->putRunAtCheckpoint($resumeRun, $resumeStep, 'first-task');
         Queue::fake();
 
         $execution->resumeCopilotCheckpoint($resumeRun);

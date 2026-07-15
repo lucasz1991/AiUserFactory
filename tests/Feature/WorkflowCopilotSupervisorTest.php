@@ -32,7 +32,7 @@ class WorkflowCopilotSupervisorTest extends TestCase
         config(['app.key' => 'base64:MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTI=']);
     }
 
-    public function test_failed_task_is_observed_probed_versioned_and_retried(): void
+    public function test_failed_task_is_observed_probed_versioned_and_continued_without_duplicate_retry(): void
     {
         [$workflow, $step] = $this->workflowWithBrokenSelector();
         $sessions = app(WorkflowCopilotSessionService::class);
@@ -139,12 +139,11 @@ class WorkflowCopilotSupervisorTest extends TestCase
         $visionService = Mockery::mock(WorkflowCopilotVisionService::class);
         $visionService->shouldReceive('analyze')->once()->andReturn($vision);
         $execution = Mockery::mock(WorkflowExecutionService::class);
-        $execution->shouldReceive('retryCopilotTask')
+        $execution->shouldNotReceive('retryCopilotTask');
+        $execution->shouldReceive('resumeCopilotCheckpoint')
             ->once()
-            ->withArgs(fn (mixed $runArgument, string $taskKey, ?array $transient, array $repairPlan): bool => $runArgument instanceof WorkflowRun
-                && $taskKey === 'login-click'
-                && $transient === null
-                && $repairPlan === []);
+            ->withArgs(fn (mixed $runArgument): bool => $runArgument instanceof WorkflowRun
+                && (int) $runArgument->getKey() === (int) $run->getKey());
         $this->app->instance(WorkflowCopilotObservationService::class, $observations);
         $this->app->instance(WorkflowCopilotVisionService::class, $visionService);
         $this->app->instance(WorkflowExecutionService::class, $execution);

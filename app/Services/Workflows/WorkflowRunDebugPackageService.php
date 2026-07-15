@@ -526,7 +526,7 @@ class WorkflowRunDebugPackageService
     protected function sanitize(mixed $payload): mixed
     {
         if (! is_array($payload)) {
-            return $payload;
+            return is_string($payload) ? $this->sanitizeText($payload) : $payload;
         }
 
         $sanitized = [];
@@ -542,6 +542,23 @@ class WorkflowRunDebugPackageService
         }
 
         return $sanitized;
+    }
+
+    protected function sanitizeText(string $value): string
+    {
+        return preg_replace([
+            '#\b(?:wss?|cdp)://[^\s"\']+#i',
+            '/\bBearer\s+[A-Za-z0-9._~+\/-]+=*/i',
+            '/\b(password|passwd|pwd|secret|token|cookie|authorization|signature|credential|session(?:_?id)?|api[_-]?key)\s*[:=]\s*[^\s,;]+/i',
+            '/\beyJ[A-Za-z0-9_-]{2,}\.[A-Za-z0-9_-]{3,}\.[A-Za-z0-9_-]{3,}\b/',
+            '/\b[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/',
+        ], [
+            '[websocket redacted]',
+            'Bearer [redacted]',
+            '$1=[redacted]',
+            '[token redacted]',
+            '[token redacted]',
+        ], $value) ?? $value;
     }
 
     protected function isSensitiveKey(string $key): bool

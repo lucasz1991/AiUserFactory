@@ -467,14 +467,10 @@ class WorkflowCopilotRepairServiceTest extends TestCase
         $session = $sessions->updateState($session, [
             'active_instructions' => ['Rufe +49 171 12345678 an; ws://127.0.0.1/private'],
         ]);
+        $plannerPrompt = null;
         $ai = Mockery::mock(AiConnectionService::class);
-        $ai->shouldReceive('json')->once()->withArgs(function (string $prompt): bool {
-            $this->assertStringNotContainsString('secret.person@example.test', $prompt);
-            $this->assertStringNotContainsString('goal-secret', $prompt);
-            $this->assertStringNotContainsString('session-secret', $prompt);
-            $this->assertStringNotContainsString('171 12345678', $prompt);
-            $this->assertStringNotContainsString('ws://', $prompt);
-            $this->assertStringNotContainsString('eyJhbGciOiJIUzI1NiJ9.secret.signature', $prompt);
+        $ai->shouldReceive('json')->once()->withArgs(function (string $prompt) use (&$plannerPrompt): bool {
+            $plannerPrompt = $prompt;
 
             return true;
         })->andReturn([
@@ -500,6 +496,13 @@ class WorkflowCopilotRepairServiceTest extends TestCase
         );
         $serialized = json_encode($plan, JSON_UNESCAPED_SLASHES);
 
+        $this->assertIsString($plannerPrompt);
+        $this->assertStringNotContainsString('secret.person@example.test', $plannerPrompt);
+        $this->assertStringNotContainsString('goal-secret', $plannerPrompt);
+        $this->assertStringNotContainsString('session-secret', $plannerPrompt);
+        $this->assertStringNotContainsString('171 12345678', $plannerPrompt);
+        $this->assertStringNotContainsString('ws://', $plannerPrompt);
+        $this->assertStringNotContainsString('eyJhbGciOiJIUzI1NiJ9.secret.signature', $plannerPrompt);
         $this->assertSame('pause', $plan['action']);
         $this->assertStringNotContainsString('secret.person@example.test', $serialized);
         $this->assertStringNotContainsString('answer-secret', $serialized);

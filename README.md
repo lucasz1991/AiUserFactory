@@ -1,79 +1,3 @@
-
-
-Installation
-
-Voraussetzungen
-
-PHP 8.x
-
-Composer
-
-Node.js & npm
-
-MySQL oder eine kompatible Datenbank
-
-Laravel 10
-
-Livewire 3
-
-Setup
-
-Repository klonen
-
-git clone https://github.com/dein-repository/minifinds-admin.git
-cd minifinds-admin
-
-Abhängigkeiten installieren
-
-composer install
-npm install && npm run build
-
-Umgebungsvariablen konfigurieren
-
-cp .env.example .env
-php artisan key:generate
-
-Passe die .env-Datei an (Datenbankverbindung, API-Keys etc.).
-
-Datenbank migrieren & seeden
-
-php artisan migrate --seed
-
-Lokalen Server starten
-
-php artisan serve
-
-Deployment
-
-Für das Deployment auf einem Live-Server:
-
-php artisan config:cache
-php artisan route:cache
-php artisan view:cache
-php artisan migrate --force
-
-Stelle sicher, dass der Server Supervisor oder einen ähnlichen Prozessmanager für Queues nutzt.
-
-Admin-Zugang
-
-Nach der Installation existiert ein Standard-Admin-Konto:
-
-E-Mail: admin@minifinds.de
-
-Passwort: password
-
-Ändere das Passwort nach dem ersten Login!
-
-Befehle & Cronjobs
-
-Wichtige Artisan-Befehle:
-
-Queues verarbeiten:
-
-php artisan queue:work
-
-Production deployment for ClientController workflows:
-
 ```bash
 php artisan migrate --force
 php artisan storage:link
@@ -112,7 +36,6 @@ Support & Weiterentwicklung
 
 Feature-Wünsche und Fehlerberichte können über GitHub Issues eingereicht werden. Updates werden regelmäßig implementiert, insbesondere Sicherheits- und Performance-Optimierungen.
 
-© 2025 MiniFinds GbR | Entwickelt von LMZ Media
 # AiUserFactory
 
 ## Agenten-Uebergabe: Workflow Manager und Workflow Copilot
@@ -171,6 +94,14 @@ Arbeitsprotokoll aktualisieren.
 7. Workflow-Runtime-Aenderungen unter `node/workflows` anschliessend in den
    ClientController synchronisieren. Reine Laravel-/Blade-Aenderungen brauchen
    diesen Sync nicht.
+8. Die README ist das laufende Teamprotokoll. Vor Beginn den neuesten Eintrag
+   lesen, das eigene Arbeitspaket mit Agent und Status `in_arbeit` kenntlich
+   machen und nach jedem abgeschlossenen Arbeitspaket Ergebnis, Tests, Risiken
+   und den naechsten Schritt nachtragen. Reine Such- oder Leseschritte brauchen
+   keinen eigenen Eintrag.
+9. Parallel arbeitende Agents bearbeiten nicht still denselben Bereich. Im
+   Arbeitsprotokoll zuerst Dateibereich und Ziel beanspruchen; bei Ueberschneidung
+   den vorhandenen Stand uebernehmen und die eigene Abgrenzung dokumentieren.
 
 ### Arbeitsprotokoll
 
@@ -179,6 +110,10 @@ Statuswerte: `geplant`, `in_arbeit`, `verifiziert`, `blockiert`.
 | Datum | Agent | Status | Aenderung | Verifikation | Naechster Schritt |
 | --- | --- | --- | --- | --- | --- |
 | 2026-07-15 | Codex | verifiziert | Gemeinsame Vorschau, autonome Erstplanung, Checkpoint-Pruefpausen, Chat-Autoscroll und kompletter Audit-ZIP-Export. | PHP-Syntaxpruefung; gezielte Unit-/Featuretests mit SQLite in-memory. | Visuellen End-to-End-Test mit real konfigurierter AI-Verbindung und einer echten Browserseite durchfuehren. |
+| 2026-07-15 | Codex | verifiziert | Teamprotokoll-Regeln ergaenzt, drei veraltete Testannahmen an bestehende Run-/Probe-Invarianten angepasst und eine gefundene JWT-Luecke in Modellprompt, Gesamtlog und Run-Debugpaket geschlossen. | 36 Unit-/Featuretests mit SQLite in-memory, 271 Assertions; alle fachlichen Tests bestanden, zwei bekannte lokale Env-Datei-Warnungen. | Gesamte Copilot-Testsuite, Blade-Kompilierung und Diff-Pruefung ausfuehren. |
+| 2026-07-15 | Codex | verifiziert | Abschlussverifikation fuer den gemeinsamen Workflow-Manager-/Copilot-Stand abgeschlossen. | Gesamte Copilot-Suite: 67 Tests/526 Assertions; zusaetzliche UI-/Toolauswahl: 13 Tests/177 Assertions; echter verschachtelter Audit-/Run-Debug-ZIP-Test: 1 Test/20 Assertions; Blade-Cache erfolgreich; `git diff --check` ohne Inhaltsfehler; Pint fuer sieben unmittelbar geaenderte Dateien gruen. Zwei lokale Warnungen betreffen fehlende Env-Dateien. Der bestehende grosse `WorkflowRunDebugPackageService` ist als Gesamtdatei nicht Pint-sauber und wurde nicht unnoetig komplett umformatiert. | Realen End-to-End-Lauf mit konfigurierter AI-Verbindung und sichtbarer Browserseite durchfuehren; Ergebnis als neuen Eintrag anhaengen. |
+| 2026-07-15 | Claude | verifiziert | Analyse der beiden geplanten Detailfixes ergab Korrekturen am Plan: (1) Die Budget-Vergleiche sind KEIN Off-by-one, sondern bewusstes Design (Gate `>=` vor neuer Aktion vs. Sicherheitsnetz `>` im Steady-State); statt Logikaenderung wurde die Semantik als Docblock an `budgetExceeded` dokumentiert. (2) Die beiden bekannten Testwarnungen stammen NICHT aus dem `WorkflowCopilotObservationService` (dessen Lesestellen sind bereits mit `is_file` abgesichert), sondern aus Dotenv `safeLoad` beim App-Boot wegen fehlender lokaler `.env`; behoben durch lokale `.env.testing` (nur Kommentare, phpunit.xml behaelt Vorrang) plus `.gitignore`-Eintrag. | Gesamte Copilot-Suite mit SQLite in-memory: 69 Tests/532 Assertions gruen, 0 Warnungen (vorher 2). Ursache der Warnung per Stacktrace verifiziert (vlucas/phpdotenv Reader). | Realer End-to-End-Lauf mit konfigurierter AI-Verbindung bleibt der wichtigste offene Punkt (siehe Codex-Eintraege). |
+| 2026-07-15 | Codex | in_arbeit | Kostenfreie serverlokale Sprachein- und -ausgabe fuer den Workflow-Chatbot nach dem Luczor-Muster. Bereich: Audio-Controller, neue lokale Voice-Services, Assistant-Einstellungen/-UI, Voice-Deployment und eigene Speech-Tests. Keine Aenderungen an Claudes Copilot-Supervisor-/Observation-Arbeitsbereich. | Produktiver Port `factory.follow-flow.de:2701` ist von aussen nicht erreichbar; bestehender Code delegiert TTS an diesen eSpeak-HTTP-Dienst und STT an einen separaten Vosk-HTTP-Dienst. | Luczor-Whisper-/Piper-Pfad gegen aktuellen Code abgleichen, serverlokalen Whisper/Piper-Prozesspfad implementieren und Endpunkte testen. |
 
 Neue Eintraege immer unten anhaengen. Ein Eintrag gilt erst als `verifiziert`,
 wenn die ausgefuehrten Testkommandos und verbleibende Risiken genannt sind.

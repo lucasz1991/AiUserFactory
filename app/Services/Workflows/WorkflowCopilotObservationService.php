@@ -860,6 +860,7 @@ class WorkflowCopilotObservationService
             '#\b(?:wss?|cdp)://[^\s"\']+#i' => '[WEBSOCKET REDACTED]',
             '/\bBearer\s+[A-Za-z0-9._~+\/-]+=*/i' => 'Bearer [REDACTED]',
             '/\b(password|passwd|pwd|secret|token|cookie|authorization|signature|credential|session(?:_?id)?|api[_-]?key)\s*[:=]\s*[^\s,;]+/i' => '$1=[REDACTED]',
+            '/\beyJ[A-Za-z0-9_-]{2,}\.[A-Za-z0-9_-]{3,}\.[A-Za-z0-9_-]{3,}\b/' => '[TOKEN REDACTED]',
             '/\b[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/' => '[TOKEN REDACTED]',
             '/\b[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}\b/i' => '[EMAIL REDACTED]',
             '/(?<!\d)(?:\+?\d[\s().-]*){8,}(?!\d)/' => '[PHONE REDACTED]',

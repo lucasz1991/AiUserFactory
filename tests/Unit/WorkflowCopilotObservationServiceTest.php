@@ -144,6 +144,7 @@ HTML);
                 'browserWsEndpoint' => 'ws://localhost/private',
                 'html' => '<html><body>private source</body></html>',
                 'visible_text' => 'Kontakt: person@example.test',
+                'blocker' => 'eyJhbGciOiJIUzI1NiJ9.secret.signature',
             ],
         ]);
         $serialized = json_encode($safe, JSON_UNESCAPED_SLASHES);
@@ -154,6 +155,7 @@ HTML);
         $this->assertSame('[REDACTED]', data_get($safe, 'nested.browserWsEndpoint'));
         $this->assertSame('[REDACTED]', data_get($safe, 'nested.html'));
         $this->assertStringContainsString('[EMAIL REDACTED]', data_get($safe, 'nested.visible_text'));
+        $this->assertSame('[TOKEN REDACTED]', data_get($safe, 'nested.blocker'));
         $this->assertStringNotContainsString('secret', $serialized);
         $this->assertStringNotContainsString('ws://', $serialized);
         $this->assertStringNotContainsString('<html', $serialized);

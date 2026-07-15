@@ -1990,6 +1990,13 @@ class WorkflowCopilotSupervisorService
         );
     }
 
+    /**
+     * Sicherheitsnetz im Steady-State: greift bewusst erst OBERHALB des Limits
+     * (`>`), damit eine Sitzung nach der letzten erlaubten Iteration noch ihre
+     * Verifikation abschliessen kann. Das eigentliche Gate vor einer neuen
+     * Aktion sind repairBudgetReachedBeforeAction/probeBudgetReachedBeforeAction
+     * mit `>=`.
+     */
     protected function budgetExceeded(WorkflowCopilotSession $session): bool
     {
         $budget = is_array($session->budget_json) ? $session->budget_json : [];

@@ -166,9 +166,7 @@ class WorkflowCopilotLogExportService
     protected function sanitize(mixed $payload): mixed
     {
         if (! is_array($payload)) {
-            return is_string($payload) && $this->sensitiveValues !== []
-                ? str_replace($this->sensitiveValues, '[redacted]', $payload)
-                : $payload;
+            return is_string($payload) ? $this->sanitizeText($payload) : $payload;
         }
 
         $sanitized = [];
@@ -184,6 +182,27 @@ class WorkflowCopilotLogExportService
         }
 
         return $sanitized;
+    }
+
+    protected function sanitizeText(string $value): string
+    {
+        if ($this->sensitiveValues !== []) {
+            $value = str_replace($this->sensitiveValues, '[redacted]', $value);
+        }
+
+        return preg_replace([
+            '#\b(?:wss?|cdp)://[^\s"\']+#i',
+            '/\bBearer\s+[A-Za-z0-9._~+\/-]+=*/i',
+            '/\b(password|passwd|pwd|secret|token|cookie|authorization|signature|credential|session(?:_?id)?|api[_-]?key)\s*[:=]\s*[^\s,;]+/i',
+            '/\beyJ[A-Za-z0-9_-]{2,}\.[A-Za-z0-9_-]{3,}\.[A-Za-z0-9_-]{3,}\b/',
+            '/\b[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/',
+        ], [
+            '[websocket redacted]',
+            'Bearer [redacted]',
+            '$1=[redacted]',
+            '[token redacted]',
+            '[token redacted]',
+        ], $value) ?? $value;
     }
 
     /** @return array<int, string> */
