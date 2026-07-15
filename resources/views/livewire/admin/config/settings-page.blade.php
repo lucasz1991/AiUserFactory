@@ -292,15 +292,42 @@
                 <div class="rounded-lg border border-gray-200 bg-white p-5">
                     <h3 class="text-sm font-semibold text-gray-900">Sprachverarbeitung</h3>
                     <p class="mt-1 text-sm text-gray-500">
-                        Die bestehende AI/OpenRouter-Sprachausgabe bleibt der Standard. Vosk und eSpeak NG koennen alternativ als HTTP-Services angebunden werden.
+                        Whisper und Piper laufen direkt auf dem Laravel-Server, ohne externen Sprachdienst oder offenen Netzwerk-Port. Browser, OpenRouter, Vosk und eSpeak NG bleiben als Alternativen erhalten.
                     </p>
+
+                    @php
+                        $localVoiceEnabled = (bool) ($assistantLocalVoiceStatus['enabled'] ?? false);
+                        $localWhisperReady = (bool) ($assistantLocalVoiceStatus['transcription_ready'] ?? false);
+                        $localPiperReady = (bool) ($assistantLocalVoiceStatus['synthesis_ready'] ?? false);
+                        $localVoiceMissing = $assistantLocalVoiceStatus['missing'] ?? [];
+                    @endphp
+
+                    <div class="mt-4 flex flex-wrap items-center gap-2 rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-xs">
+                        <span class="font-semibold text-gray-700">Serverlokale Runtime</span>
+                        <span class="rounded px-2 py-1 font-medium {{ $localVoiceEnabled ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800' }}">
+                            {{ $localVoiceEnabled ? 'aktiviert' : 'deaktiviert' }}
+                        </span>
+                        <span class="rounded px-2 py-1 font-medium {{ $localWhisperReady ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800' }}">
+                            Whisper {{ $localWhisperReady ? 'bereit' : 'nicht bereit' }}
+                        </span>
+                        <span class="rounded px-2 py-1 font-medium {{ $localPiperReady ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800' }}">
+                            Piper {{ $localPiperReady ? 'bereit' : 'nicht bereit' }}
+                        </span>
+                        <button type="button" wire:click="refreshAssistantLocalVoiceStatus" class="ml-auto rounded border border-gray-300 bg-white px-2 py-1 font-semibold text-gray-700 hover:bg-gray-100">
+                            Status pruefen
+                        </button>
+                        @if($localVoiceMissing !== [])
+                            <span class="basis-full text-gray-500">Fehlt: {{ implode(', ', $localVoiceMissing) }}</span>
+                        @endif
+                    </div>
 
                     <div class="mt-5 grid gap-6 md:grid-cols-2">
                         <div>
                             <label for="assistant-speech-input-provider" class="block text-sm font-medium text-gray-700">Spracheingabe</label>
                             <select id="assistant-speech-input-provider" wire:model.live="assistantSpeechInputProvider" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                                <option value="whisper_local">Whisper (serverlokal, empfohlen)</option>
                                 <option value="browser">Browser Spracheingabe</option>
-                                <option value="vosk">Vosk Service</option>
+                                <option value="vosk">Vosk HTTP-Service (Legacy)</option>
                             </select>
                             @error('assistantSpeechInputProvider') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
                         </div>
@@ -308,8 +335,9 @@
                         <div>
                             <label for="assistant-speech-output-provider" class="block text-sm font-medium text-gray-700">Sprachausgabe</label>
                             <select id="assistant-speech-output-provider" wire:model.live="assistantSpeechOutputProvider" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                                <option value="piper_local">Piper (serverlokal, empfohlen)</option>
                                 <option value="ai">AI/OpenRouter Audio</option>
-                                <option value="espeak_ng">eSpeak NG Service</option>
+                                <option value="espeak_ng">eSpeak NG HTTP-Service (Legacy)</option>
                             </select>
                             @error('assistantSpeechOutputProvider') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
                         </div>

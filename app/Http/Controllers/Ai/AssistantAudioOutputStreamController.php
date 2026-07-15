@@ -4,6 +4,8 @@ namespace App\Http\Controllers\Ai;
 
 use App\Http\Controllers\Controller;
 use App\Models\Setting;
+use App\Services\Ai\LocalAssistantVoiceException;
+use App\Services\Ai\LocalAssistantVoiceService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -13,7 +15,7 @@ class AssistantAudioOutputStreamController extends Controller
 {
     private const OPENROUTER_AUDIO_SPEECH_URL = 'https://openrouter.ai/api/v1/audio/speech';
 
-    public function __invoke(Request $request)
+    public function __invoke(Request $request, LocalAssistantVoiceService $localVoice)
     {
         $connectionId = (string) Str::uuid();
         $startedAt = microtime(true);
@@ -25,7 +27,13 @@ class AssistantAudioOutputStreamController extends Controller
             'speed' => ['nullable', 'numeric', 'min:0.5', 'max:2'],
         ]);
 
-        if ($this->assistantSetting('speech_output_provider', 'ai') === 'espeak_ng') {
+        $speechOutputProvider = $this->assistantSetting('speech_output_provider', 'ai');
+
+        if ($speechOutputProvider === 'piper_local') {
+            return $this->streamLocalPiperAudio($validated, $localVoice, $connectionId, $startedAt);
+        }
+
+        if ($speechOutputProvider === 'espeak_ng') {
             return $this->streamEspeakNgAudio($validated, $connectionId, $startedAt);
         }
 
@@ -170,6 +178,59 @@ class AssistantAudioOutputStreamController extends Controller
             'X-Accel-Buffering' => 'no',
             'X-Content-Type-Options' => 'nosniff',
             'X-AI-Connection-ID' => $connectionId,
+        ]);
+    }
+
+    private function streamLocalPiperAudio(
+        array $validated,
+        LocalAssistantVoiceService $localVoice,
+        string $connectionId,
+        float $startedAt,
+    ) {
+        try {
+            $audio = $localVoice->synthesize(
+                trim((string) $validated['text']),
+                (float) ($validated['speed'] ?? 1),
+                $connectionId,
+            );
+        } catch (LocalAssistantVoiceException $exception) {
+            Log::warning('Assistant local Piper TTS failed.', [
+                'connection_id' => $connectionId,
+                'reason_code' => $exception->reasonCode,
+                'duration_ms' => (int) round((microtime(true) - $startedAt) * 1000),
+            ]);
+
+            return response()->json([
+                'message' => $exception->getMessage(),
+                'reason_code' => $exception->reasonCode,
+                'connection_id' => $connectionId,
+            ], 503, [
+                'X-AI-Connection-ID' => $connectionId,
+            ]);
+        } catch (\Throwable $exception) {
+            Log::error('Assistant local Piper TTS failed unexpectedly.', [
+                'connection_id' => $connectionId,
+                'error' => $exception->getMessage(),
+                'duration_ms' => (int) round((microtime(true) - $startedAt) * 1000),
+            ]);
+
+            return response()->json([
+                'message' => 'Die serverlokale Piper-Sprachausgabe ist unerwartet fehlgeschlagen.',
+                'reason_code' => 'piper_unexpected_error',
+                'connection_id' => $connectionId,
+            ], 503, [
+                'X-AI-Connection-ID' => $connectionId,
+            ]);
+        }
+
+        return response($audio, 200, [
+            'Content-Type' => 'audio/wav',
+            'Content-Length' => (string) strlen($audio),
+            'Cache-Control' => 'no-store, no-cache, must-revalidate, max-age=0',
+            'Pragma' => 'no-cache',
+            'X-Content-Type-Options' => 'nosniff',
+            'X-AI-Connection-ID' => $connectionId,
+            'X-AI-Speech-Provider' => 'piper_local',
         ]);
     }
 

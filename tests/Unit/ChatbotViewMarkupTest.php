@@ -27,10 +27,12 @@ class ChatbotViewMarkupTest extends TestCase
         $this->assertStringContainsString('refreshWorkflowPage()', $definition);
         $this->assertStringContainsString('audio.onplaying = () => {', $definition);
         $this->assertStringContainsString('voiceProviderSupported()', $definition);
-        $this->assertStringContainsString('toggleVoskVoice()', $definition);
+        $this->assertStringContainsString('toggleRecordedVoice()', $definition);
         $this->assertStringContainsString('observeMessages()', $definition);
         $this->assertStringContainsString('new MutationObserver(() => this.scrollMessages(false))', $definition);
-        $this->assertStringContainsString('transcribeVoskBlob(blob)', $definition);
+        $this->assertStringContainsString('transcribeRecordedBlob(blob)', $definition);
+        $this->assertStringContainsString("['whisper_local', 'vosk'].includes(this.speechInputProvider)", $definition);
+        $this->assertStringContainsString('[80, 250, 600].map((delay)', $definition);
         $this->assertStringContainsString('setWorkflowImprovements(improvements = [])', $definition);
         $this->assertStringContainsString('applyImprovementHighlights()', $definition);
         $this->assertStringContainsString('openWorkflowImprovement(improvement = {})', $definition);
@@ -49,6 +51,7 @@ class ChatbotViewMarkupTest extends TestCase
         $this->assertStringContainsString("route('assistant.audio-input.transcribe'", $source);
         $this->assertStringContainsString('speechInputProvider: @js($assistantSpeechInputProvider)', $source);
         $this->assertStringContainsString('speechOutputProvider: @js($assistantSpeechOutputProvider)', $source);
+        $this->assertStringContainsString("speechOutputProvider === 'piper_local'", $source);
         $this->assertStringContainsString('window.MediaRecorder', $source);
         $this->assertStringContainsString('speechRate: @js($assistantSpeechRate)', $source);
         $this->assertStringContainsString('speed: Number(this.speechRate || 1)', $definition);

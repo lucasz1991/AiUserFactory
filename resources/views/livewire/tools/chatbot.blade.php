@@ -40,7 +40,7 @@
         toolAlertTimers: {},
         refreshTimer: null,
         messageObserver: null,
-        messageScrollTimer: null,
+        messageScrollTimers: [],
         workflowImprovements: [],
         improvementRefreshTimer: null,
         livewireComponent() {
@@ -106,7 +106,8 @@
             document.removeEventListener('livewire:updated', this._reapplyImprovementHighlights);
             document.removeEventListener('livewire:navigated', this._reapplyImprovementHighlights);
             window.clearTimeout(this.improvementRefreshTimer);
-            window.clearTimeout(this.messageScrollTimer);
+            this.messageScrollTimers.forEach((timer) => window.clearTimeout(timer));
+            this.messageScrollTimers = [];
             this.messageObserver?.disconnect();
             this.messageObserver = null;
         },
@@ -159,15 +160,16 @@
             await this.callLivewire('updatePageContext', this.collectContext(extra));
         },
         scrollMessages(smooth = true) {
-            window.clearTimeout(this.messageScrollTimer);
+            this.messageScrollTimers.forEach((timer) => window.clearTimeout(timer));
+            this.messageScrollTimers = [];
             this.$nextTick(() => {
                 const messages = this.$refs.messages;
                 if (!messages) return;
                 messages.scrollTo({ top: messages.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
-                this.messageScrollTimer = window.setTimeout(() => {
+                this.messageScrollTimers = [80, 250, 600].map((delay) => window.setTimeout(() => {
                     const current = this.$refs.messages;
                     if (current) current.scrollTop = current.scrollHeight;
-                }, 80);
+                }, delay));
             });
         },
         observeMessages() {
@@ -498,8 +500,33 @@
         voiceApi() {
             return window.SpeechRecognition || window.webkitSpeechRecognition || null;
         },
+        usesRecordedSpeechInput() {
+            return ['whisper_local', 'vosk'].includes(this.speechInputProvider);
+        },
+        speechInputName() {
+            if (this.speechInputProvider === 'whisper_local') return 'Serverlokale Whisper-Spracheingabe';
+            if (this.speechInputProvider === 'vosk') return 'Vosk-Spracheingabe';
+
+            return 'Browser-Spracheingabe';
+        },
+        speechOutputDescription() {
+            if (this.speechOutputProvider === 'piper_local') {
+                return 'Serverlokaler Piper-Audiostream ohne externen Sprachdienst.';
+            }
+            if (this.speechOutputProvider === 'espeak_ng') {
+                return 'eSpeak NG-Audiostream mit gespeicherter Legacy-Service-URL.';
+            }
+
+            return 'AI-TTS-Audiostream mit gespeicherten OpenRouter-Audioeinstellungen.';
+        },
+        speechOutputTestText() {
+            if (this.speechOutputProvider === 'piper_local') return 'Die serverlokale Piper Audioausgabe ist einsatzbereit.';
+            if (this.speechOutputProvider === 'espeak_ng') return 'Die eSpeak NG Audioausgabe ist einsatzbereit.';
+
+            return 'Die AI Audioausgabe ist einsatzbereit.';
+        },
         voiceProviderSupported() {
-            if (this.speechInputProvider === 'vosk') {
+            if (this.usesRecordedSpeechInput()) {
                 return Boolean(
                     this.sttEndpoint
                     && window.fetch
@@ -515,8 +542,8 @@
         toggleVoice() {
             if (this.busy()) return;
 
-            if (this.speechInputProvider === 'vosk') {
-                this.toggleVoskVoice();
+            if (this.usesRecordedSpeechInput()) {
+                this.toggleRecordedVoice();
                 return;
             }
 
@@ -585,15 +612,15 @@
                 this.ttsError = `Spracheingabe: ${error?.message || 'Start fehlgeschlagen.'}`;
             }
         },
-        async toggleVoskVoice() {
+        async toggleRecordedVoice() {
             this.voiceSupported = this.voiceProviderSupported();
 
             if (!this.voiceSupported) {
                 this.clearVoiceCaptureState();
-                this.releaseVoskMediaStream();
+                this.releaseRecordedMediaStream();
                 this.ttsError = this.sttEndpoint
-                    ? 'Vosk-Spracheingabe benoetigt Mikrofonzugriff und MediaRecorder-Unterstuetzung.'
-                    : 'Der Vosk Audio-Endpunkt assistant.audio-input.transcribe ist nicht erreichbar.';
+                    ? `${this.speechInputName()} benoetigt Mikrofonzugriff und MediaRecorder-Unterstuetzung.`
+                    : 'Der Audio-Endpunkt assistant.audio-input.transcribe ist nicht erreichbar.';
                 return;
             }
 
@@ -607,7 +634,7 @@
 
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                const mimeType = this.supportedVoskMimeType();
+                const mimeType = this.supportedRecordedMimeType();
                 const options = mimeType ? { mimeType } : {};
 
                 this.mediaStream = stream;
@@ -619,12 +646,12 @@
                     }
                 };
                 this.mediaRecorder.onstop = () => {
-                    this.finishVoskCapture();
+                    this.finishRecordedCapture();
                 };
                 this.mediaRecorder.onerror = (event) => {
                     this.ttsError = `Spracheingabe: ${event?.error?.message || 'Aufnahme fehlgeschlagen.'}`;
                     this.clearVoiceCaptureState();
-                    this.releaseVoskMediaStream();
+                    this.releaseRecordedMediaStream();
                 };
 
                 this.mediaRecorder.start();
@@ -634,11 +661,11 @@
                 this.voiceCaptureTimer = window.setTimeout(() => this.stopListening(), 45000);
             } catch (error) {
                 this.clearVoiceCaptureState();
-                this.releaseVoskMediaStream();
+                this.releaseRecordedMediaStream();
                 this.ttsError = `Spracheingabe: ${error?.message || 'Mikrofonstart fehlgeschlagen.'}`;
             }
         },
-        supportedVoskMimeType() {
+        supportedRecordedMimeType() {
             const candidates = [
                 'audio/webm;codecs=opus',
                 'audio/webm',
@@ -649,7 +676,7 @@
 
             return candidates.find((type) => window.MediaRecorder && MediaRecorder.isTypeSupported(type)) || '';
         },
-        voskAudioExtension(mimeType) {
+        recordedAudioExtension(mimeType) {
             const type = String(mimeType || '').toLowerCase();
 
             if (type.includes('ogg')) return 'ogg';
@@ -658,7 +685,7 @@
 
             return 'webm';
         },
-        async finishVoskCapture() {
+        async finishRecordedCapture() {
             const recorder = this.mediaRecorder;
             const chunks = this.voiceChunks;
             const mimeType = recorder?.mimeType || 'audio/webm';
@@ -666,18 +693,18 @@
             this.mediaRecorder = null;
             this.voiceChunks = [];
             this.clearVoiceCaptureState();
-            this.releaseVoskMediaStream();
+            this.releaseRecordedMediaStream();
 
             if (!chunks.length) {
                 return;
             }
 
             const blob = new Blob(chunks, { type: mimeType });
-            await this.transcribeVoskBlob(blob);
+            await this.transcribeRecordedBlob(blob);
         },
-        async transcribeVoskBlob(blob) {
+        async transcribeRecordedBlob(blob) {
             if (!this.sttEndpoint) {
-                this.ttsError = 'Der Vosk Audio-Endpunkt assistant.audio-input.transcribe ist nicht erreichbar.';
+                this.ttsError = 'Der Audio-Endpunkt assistant.audio-input.transcribe ist nicht erreichbar.';
                 return;
             }
 
@@ -686,7 +713,7 @@
 
             try {
                 const formData = new FormData();
-                const extension = this.voskAudioExtension(blob.type);
+                const extension = this.recordedAudioExtension(blob.type);
 
                 formData.append('audio', blob, `workflow-copilot-audio.${extension}`);
 
@@ -709,7 +736,7 @@
                 const transcript = String(payload?.text || '').trim();
 
                 if (!transcript) {
-                    throw new Error('Vosk hat keinen Text erkannt.');
+                    throw new Error(`${this.speechInputName()} hat keinen Text erkannt.`);
                 }
 
                 const baseDraft = String(this.draft || '').trim();
@@ -721,7 +748,7 @@
                 this.voiceUploading = false;
             }
         },
-        releaseVoskMediaStream() {
+        releaseRecordedMediaStream() {
             if (!this.mediaStream) return;
 
             this.mediaStream.getTracks().forEach((track) => track.stop());
@@ -740,7 +767,7 @@
             this.resizeComposer();
         },
         stopListening() {
-            if (this.speechInputProvider === 'vosk') {
+            if (this.usesRecordedSpeechInput()) {
                 const recorder = this.mediaRecorder;
 
                 this.clearVoiceCaptureState();
@@ -749,7 +776,7 @@
                     try {
                         recorder.stop();
                     } catch (error) {
-                        this.releaseVoskMediaStream();
+                        this.releaseRecordedMediaStream();
                         this.mediaRecorder = null;
                         this.ttsError = `Spracheingabe: ${error?.message || 'Stop fehlgeschlagen.'}`;
                     }
@@ -757,7 +784,7 @@
                     return;
                 }
 
-                this.releaseVoskMediaStream();
+                this.releaseRecordedMediaStream();
                 this.mediaRecorder = null;
                 return;
             }
@@ -1115,9 +1142,7 @@
                                         <p class="text-xs font-black uppercase tracking-[.14em] text-slate-500">Sprachausgabe</p>
                                         <p
                                             class="mt-1 text-xs leading-5 text-slate-500"
-                                            x-text="speechOutputProvider === 'espeak_ng'
-                                                ? 'eSpeak NG-Audiostream mit gespeicherter Service-URL.'
-                                                : 'AI-TTS-Audiostream mit gespeicherten OpenRouter-Audioeinstellungen.'"
+                                            x-text="speechOutputDescription()"
                                         ></p>
                                     </div>
 
@@ -1135,7 +1160,7 @@
                                     <div class="flex gap-2">
                                         <button
                                             type="button"
-                                            x-on:click="speak(speechOutputProvider === 'espeak_ng' ? 'Die eSpeak NG Audioausgabe ist einsatzbereit.' : 'Die AI Audioausgabe ist einsatzbereit.')"
+                                            x-on:click="speak(speechOutputTestText())"
                                             x-bind:disabled="!speechSupported"
                                             class="inline-flex flex-1 items-center justify-center rounded-lg border border-slate-300 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
                                         >
@@ -1672,7 +1697,7 @@
                                     x-bind:disabled="busy() || !voiceSupported"
                                     class="inline-flex h-8 w-8 items-center justify-center rounded-xl transition disabled:cursor-not-allowed disabled:opacity-30"
                                     :class="voiceSupported && (voiceCaptureActive || voiceUploading) ? 'bg-rose-100 text-rose-700' : (voiceSupported ? 'text-slate-400 hover:bg-slate-100 hover:text-cyan-700' : 'text-slate-300')"
-                                    :title="voiceSupported ? (speechInputProvider === 'vosk' ? 'Vosk Spracheingabe' : 'Spracheingabe') : (speechInputProvider === 'vosk' ? 'Vosk Spracheingabe ist nicht verfuegbar' : 'Spracheingabe wird von diesem Browser nicht unterstuetzt')"
+                                    :title="voiceSupported ? speechInputName() : (usesRecordedSpeechInput() ? `${speechInputName()} ist nicht verfuegbar` : 'Spracheingabe wird von diesem Browser nicht unterstuetzt')"
                                 >
                                     <svg x-show="voiceSupported" class="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                                         <path d="M12 14a3 3 0 0 0 3-3V7a3 3 0 0 0-6 0v4a3 3 0 0 0 3 3Z" stroke="currentColor" stroke-width="2"/>

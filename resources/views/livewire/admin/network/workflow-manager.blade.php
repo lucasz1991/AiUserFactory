@@ -80,7 +80,24 @@
 <div
     class="space-y-5"
     wire:loading.class="opacity-60 pointer-events-none"
-    x-data="{}"
+    x-data="{
+        taskInsertTarget: null,
+        armTaskInsert(stepId, position, stepName) {
+            this.taskInsertTarget = { stepId: Number(stepId), position: Number(position), stepName: String(stepName || '') };
+            $wire.set('showTaskPanel', true);
+        },
+        clearTaskInsert() {
+            this.taskInsertTarget = null;
+        },
+        insertCatalogTask(taskKey) {
+            if (! this.taskInsertTarget) {
+                return;
+            }
+            const target = this.taskInsertTarget;
+            this.taskInsertTarget = null;
+            $wire.prepareTaskFromCatalog(target.stepId, taskKey, target.position);
+        },
+    }"
     data-workflow-manager-root
     data-workflow-id="{{ $selectedWorkflow?->id ?? '' }}"
     x-on:assistant-open-workflow-improvement.window="
@@ -676,13 +693,25 @@
         @endif
 
         @if($showTaskPanel)
-            <div x-data="{}" class="fixed inset-y-0 right-0 z-[70] flex w-full max-w-md flex-col border-l border-slate-200 bg-white shadow-2xl">
+            <div
+                x-data="{}"
+                x-on:keydown.escape.window="clearTaskInsert()"
+                class="fixed inset-y-0 right-0 z-[70] flex w-full max-w-md flex-col border-l border-slate-200 bg-white shadow-2xl"
+            >
                 <div class="flex items-start justify-between gap-3 border-b border-slate-200 bg-slate-50/80 p-5">
-                    <div>
+                    <div class="min-w-0">
                         <h2 class="text-base font-semibold text-slate-900">Task-Bibliothek</h2>
-                        <p class="mt-1 text-xs text-slate-500">Task auf eine Liste ziehen, danach oeffnet sich das Formular.</p>
+                        <p class="mt-1 text-xs text-slate-500" x-show="! taskInsertTarget">Task anklicken oder auf eine Liste ziehen, danach oeffnet sich das Formular.</p>
+                        <div x-cloak x-show="taskInsertTarget" class="mt-1 flex flex-wrap items-center gap-2">
+                            <p class="text-xs text-emerald-700">
+                                Klick fuegt den Task am Ende von
+                                <span class="font-semibold" x-text="taskInsertTarget ? taskInsertTarget.stepName : ''"></span>
+                                ein.
+                            </p>
+                            <button type="button" x-on:click="clearTaskInsert()" class="rounded border border-slate-300 px-1.5 py-0.5 text-[11px] font-semibold text-slate-600 hover:bg-slate-100 hover:text-slate-900">Abbrechen</button>
+                        </div>
                     </div>
-                    <button type="button" wire:click="$set('showTaskPanel', false)" class="flex h-8 w-8 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-900">
+                    <button type="button" x-on:click="clearTaskInsert()" wire:click="$set('showTaskPanel', false)" class="flex h-8 w-8 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-900">
                         x
                     </button>
                 </div>
@@ -709,7 +738,12 @@
                             data-assistant-highlight-key="{{ $taskDefinition['key'] }}"
                             draggable="true"
                             x-on:dragstart.stop="$event.dataTransfer.setData('application/x-workflow-task-catalog', @js($taskDefinition['key'])); $event.dataTransfer.setData('text/plain', @js($taskDefinition['key'])); $event.dataTransfer.effectAllowed = 'copy'"
-                            class="cursor-grab rounded-xl border border-slate-200 bg-white container shadow-sm transition hover:border-slate-400 hover:shadow-md active:cursor-grabbing"
+                            x-on:click="insertCatalogTask(@js($taskDefinition['key']))"
+                            x-on:keydown.enter.prevent="insertCatalogTask(@js($taskDefinition['key']))"
+                            x-bind:tabindex="taskInsertTarget ? 0 : -1"
+                            x-bind:role="taskInsertTarget ? 'button' : null"
+                            x-bind:class="taskInsertTarget ? 'cursor-pointer ring-1 ring-emerald-300 hover:ring-emerald-500' : 'cursor-grab active:cursor-grabbing'"
+                            class="rounded-xl border border-slate-200 bg-white container shadow-sm transition hover:border-slate-400 hover:shadow-md"
                         >
                             <div class="flex items-start justify-between gap-3">
                                 <p class="text-sm font-semibold text-slate-900">{{ $taskDefinition['label'] }}</p>

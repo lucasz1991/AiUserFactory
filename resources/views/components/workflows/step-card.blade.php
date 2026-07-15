@@ -51,7 +51,7 @@
     data-assistant-highlight-key="{{ $step->action_key }}"
     data-step-route-success="{{ $stepSuccessTarget }}"
     data-step-route-failed="{{ $stepFailedTarget }}"
-    {{ $attributes->merge(['class' => 'relative flex min-h-[300px] w-[296px] min-w-[296px] max-w-[296px] shrink-0 flex-col rounded-xl border '.$enabledClass]) }}
+    {{ $attributes->merge(['class' => 'group/step relative flex min-h-[300px] w-[296px] min-w-[296px] max-w-[296px] shrink-0 flex-col rounded-xl border '.$enabledClass]) }}
 >
     <div class="relative z-30 rounded-xl border border-sky-200 bg-sky-100 px-4 py-3 mb-4">
         <div class="flex items-start justify-between gap-3">
@@ -245,7 +245,11 @@
         ></div>
 
         @if(! $locked)
-            <button type="button" wire:click="$set('showTaskPanel', true)" class="block w-full rounded-lg border border-dashed border-slate-300 bg-slate-50/70 px-3 py-2.5 text-left text-sm font-semibold text-slate-600 transition hover:border-slate-400 hover:bg-slate-100 hover:text-slate-900">+ Task am Listenende</button>
+            <button
+                type="button"
+                x-on:click="armTaskInsert({{ $step->id }}, {{ count($step->task_cards) }}, @js($step->name))"
+                class="block w-full rounded-lg border border-dashed border-slate-300 bg-slate-50/70 px-3 py-2.5 text-left text-sm font-semibold text-slate-600 opacity-0 transition hover:border-slate-400 hover:bg-slate-100 hover:text-slate-900 focus-visible:opacity-100 group-hover/step:opacity-100 group-focus-within/step:opacity-100"
+            >+ Task am Listenende</button>
         @endif
     </div>
 </div>

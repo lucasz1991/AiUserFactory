@@ -3,6 +3,7 @@
 namespace App\Livewire\Admin\Config;
 
 use App\Models\Setting;
+use App\Services\Ai\LocalAssistantVoiceService;
 use Livewire\Component;
 
 class SettingsPage extends Component
@@ -44,6 +45,7 @@ class SettingsPage extends Component
     public string $assistantVoskTranscriptionUrl = '';
     public string $assistantEspeakNgSpeechUrl = '';
     public string $assistantEspeakNgVoice = 'de';
+    public array $assistantLocalVoiceStatus = [];
     public string $assistantVisionFallbackModels = '';
     public int $assistantCopilotMaxMinutes = 90;
     public int $assistantCopilotMaxRepairIterations = 15;
@@ -155,8 +157,8 @@ class SettingsPage extends Component
             'assistantMaxToolRounds' => ['required', 'integer', 'min:1', 'max:8'],
             'assistantAutoReadDefault' => ['boolean'],
             'assistantSpeechRate' => ['required', 'numeric', 'min:0.5', 'max:2'],
-            'assistantSpeechInputProvider' => ['required', 'string', 'in:browser,vosk'],
-            'assistantSpeechOutputProvider' => ['required', 'string', 'in:ai,espeak_ng'],
+            'assistantSpeechInputProvider' => ['required', 'string', 'in:browser,whisper_local,vosk'],
+            'assistantSpeechOutputProvider' => ['required', 'string', 'in:piper_local,ai,espeak_ng'],
             'assistantVoskTranscriptionUrl' => ['nullable', 'required_if:assistantSpeechInputProvider,vosk', 'url', 'max:2048'],
             'assistantEspeakNgSpeechUrl' => ['nullable', 'required_if:assistantSpeechOutputProvider,espeak_ng', 'url', 'max:2048'],
             'assistantEspeakNgVoice' => ['nullable', 'string', 'max:80'],
@@ -167,6 +169,31 @@ class SettingsPage extends Component
             'assistantCopilotMaxSameStateRepeats' => ['required', 'integer', 'min:1', 'max:10'],
             'assistantCopilotAutoExecute' => ['boolean'],
         ]);
+
+        $this->refreshAssistantLocalVoiceStatus();
+        $localVoiceInvalid = false;
+
+        if ($validated['assistantSpeechInputProvider'] === 'whisper_local'
+            && ! ($this->assistantLocalVoiceStatus['transcription_ready'] ?? false)) {
+            $localVoiceInvalid = true;
+            $this->addError(
+                'assistantSpeechInputProvider',
+                'Whisper kann erst aktiviert werden, wenn ffmpeg, Whisper CLI und das Modell serverlokal bereit sind.',
+            );
+        }
+
+        if ($validated['assistantSpeechOutputProvider'] === 'piper_local'
+            && ! ($this->assistantLocalVoiceStatus['synthesis_ready'] ?? false)) {
+            $localVoiceInvalid = true;
+            $this->addError(
+                'assistantSpeechOutputProvider',
+                'Piper kann erst aktiviert werden, wenn Piper CLI, Modell und Konfiguration serverlokal bereit sind.',
+            );
+        }
+
+        if ($localVoiceInvalid) {
+            return;
+        }
 
         $visionFallbackModels = collect(preg_split('/[\r\n,]+/', (string) ($validated['assistantVisionFallbackModels'] ?? '')) ?: [])
             ->map(fn (string $model): string => trim($model))
@@ -235,6 +262,11 @@ class SettingsPage extends Component
         return view('livewire.admin.config.settings-page')->layout('layouts.master');
     }
 
+    public function refreshAssistantLocalVoiceStatus(): void
+    {
+        $this->assistantLocalVoiceStatus = app(LocalAssistantVoiceService::class)->status();
+    }
+
     protected function loadScraperSettings(): void
     {
         $settings = Setting::getValue('services', 'webaidetective_base');
@@ -297,6 +329,7 @@ class SettingsPage extends Component
         $this->assistantVoskTranscriptionUrl = trim((string) ($settings['vosk_transcription_url'] ?? ''));
         $this->assistantEspeakNgSpeechUrl = trim((string) ($settings['espeak_ng_speech_url'] ?? ''));
         $this->assistantEspeakNgVoice = trim((string) ($settings['espeak_ng_voice'] ?? 'de')) ?: 'de';
+        $this->refreshAssistantLocalVoiceStatus();
         $visionFallbackModels = is_array($settings['vision_fallback_models'] ?? null)
             ? $settings['vision_fallback_models']
             : preg_split('/[\r\n,]+/', (string) ($settings['vision_fallback_models'] ?? ''));
@@ -346,13 +379,13 @@ class SettingsPage extends Component
     {
         $provider = trim((string) $provider);
 
-        return in_array($provider, ['browser', 'vosk'], true) ? $provider : 'browser';
+        return in_array($provider, ['browser', 'whisper_local', 'vosk'], true) ? $provider : 'browser';
     }
 
     protected function normalizeAssistantSpeechOutputProvider(mixed $provider): string
     {
         $provider = trim((string) $provider);
 
-        return in_array($provider, ['ai', 'espeak_ng'], true) ? $provider : 'ai';
+        return in_array($provider, ['piper_local', 'ai', 'espeak_ng'], true) ? $provider : 'ai';
     }
 }

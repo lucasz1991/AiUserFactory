@@ -4,14 +4,17 @@ namespace App\Http\Controllers\Ai;
 
 use App\Http\Controllers\Controller;
 use App\Models\Setting;
+use App\Services\Ai\LocalAssistantVoiceException;
+use App\Services\Ai\LocalAssistantVoiceService;
 use Illuminate\Http\Request;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 class AssistantAudioInputTranscriptionController extends Controller
 {
-    public function __invoke(Request $request)
+    public function __invoke(Request $request, LocalAssistantVoiceService $localVoice)
     {
         $connectionId = (string) Str::uuid();
         $startedAt = microtime(true);
@@ -19,6 +22,15 @@ class AssistantAudioInputTranscriptionController extends Controller
         $validated = $request->validate([
             'audio' => ['required', 'file', 'max:20480'],
         ]);
+
+        if ($this->assistantSetting('speech_input_provider', 'browser') === 'whisper_local') {
+            return $this->transcribeWithLocalWhisper(
+                $validated['audio'],
+                $localVoice,
+                $connectionId,
+                $startedAt,
+            );
+        }
 
         $serviceUrl = $this->assistantSetting('vosk_transcription_url');
 
@@ -106,6 +118,52 @@ class AssistantAudioInputTranscriptionController extends Controller
             'text' => Str::limit($text, 8000, ''),
         ], 200, [
             'X-AI-Connection-ID' => $connectionId,
+        ]);
+    }
+
+    private function transcribeWithLocalWhisper(
+        UploadedFile $audio,
+        LocalAssistantVoiceService $localVoice,
+        string $connectionId,
+        float $startedAt,
+    ) {
+        try {
+            $text = $localVoice->transcribe($audio, $connectionId);
+        } catch (LocalAssistantVoiceException $exception) {
+            Log::warning('Assistant local Whisper STT failed.', [
+                'connection_id' => $connectionId,
+                'reason_code' => $exception->reasonCode,
+                'duration_ms' => (int) round((microtime(true) - $startedAt) * 1000),
+            ]);
+
+            return response()->json([
+                'message' => $exception->getMessage(),
+                'reason_code' => $exception->reasonCode,
+                'connection_id' => $connectionId,
+            ], 503, [
+                'X-AI-Connection-ID' => $connectionId,
+            ]);
+        } catch (\Throwable $exception) {
+            Log::error('Assistant local Whisper STT failed unexpectedly.', [
+                'connection_id' => $connectionId,
+                'error' => $exception->getMessage(),
+                'duration_ms' => (int) round((microtime(true) - $startedAt) * 1000),
+            ]);
+
+            return response()->json([
+                'message' => 'Die serverlokale Whisper-Spracheingabe ist unerwartet fehlgeschlagen.',
+                'reason_code' => 'whisper_unexpected_error',
+                'connection_id' => $connectionId,
+            ], 503, [
+                'X-AI-Connection-ID' => $connectionId,
+            ]);
+        }
+
+        return response()->json([
+            'text' => Str::limit($text, 8000, ''),
+        ], 200, [
+            'X-AI-Connection-ID' => $connectionId,
+            'X-AI-Speech-Provider' => 'whisper_local',
         ]);
     }
 

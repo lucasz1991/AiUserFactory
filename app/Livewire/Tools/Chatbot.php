@@ -1253,13 +1253,13 @@ class Chatbot extends Component
     {
         $provider = trim((string) $provider);
 
-        return in_array($provider, ['browser', 'vosk'], true) ? $provider : 'browser';
+        return in_array($provider, ['browser', 'whisper_local', 'vosk'], true) ? $provider : 'browser';
     }
 
     private function normalizeSpeechOutputProvider(mixed $provider): string
     {
         $provider = trim((string) $provider);
 
-        return in_array($provider, ['ai', 'espeak_ng'], true) ? $provider : 'ai';
+        return in_array($provider, ['piper_local', 'ai', 'espeak_ng'], true) ? $provider : 'ai';
     }
 }
