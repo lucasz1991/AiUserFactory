@@ -524,6 +524,75 @@ class WorkflowCopilotSupervisorTest extends TestCase
         ]);
     }
 
+    public function test_repeated_technical_run_failure_aborts_with_diagnosis_instead_of_looping(): void
+    {
+        Queue::fake();
+        [$workflow, $step] = $this->workflowWithBrokenSelector();
+        $sessions = app(WorkflowCopilotSessionService::class);
+        $session = $sessions->start($workflow, ['budget' => ['max_same_state_repeats' => 1]]);
+
+        $error = 'Die Ziel-Task fuer den Ruecksprung wurde nicht gefunden: if-eingabevariable-pruefen';
+        $run = $this->failedRun($session, $step, $error);
+        $session = $sessions->attachRun($session, $run);
+
+        // Ein vorheriger, identischer technischer Fehllauf ist bereits vermerkt.
+        $state = is_array($session->state_json) ? $session->state_json : [];
+        $state['last_technical_failure_signature'] = $error;
+        $state['technical_failure_repeats'] = 0;
+        $session->forceFill([
+            'status' => WorkflowCopilotSession::STATUS_RUNNING,
+            'state_json' => $state,
+        ])->save();
+
+        $execution = Mockery::mock(WorkflowExecutionService::class);
+        $execution->shouldNotReceive('start');
+        $execution->shouldNotReceive('cancel');
+        $this->app->instance(WorkflowExecutionService::class, $execution);
+
+        app(WorkflowCopilotSupervisorService::class)->supervise($session->id);
+
+        $session->refresh();
+        $this->assertSame(WorkflowCopilotSession::STATUS_BUDGET_EXHAUSTED, $session->status);
+        $this->assertSame(1, data_get($session->usage_json, 'repair_iterations'));
+
+        $event = $session->events()->where('event_type', 'run.unrepairable')->firstOrFail();
+        $this->assertSame('if-eingabevariable-pruefen', data_get($event->payload_json, 'unresolved_route_target'));
+        $this->assertSame(1, data_get($event->payload_json, 'repeats'));
+    }
+
+    public function test_first_technical_run_failure_restarts_once_and_records_signature(): void
+    {
+        [$workflow, $step] = $this->workflowWithBrokenSelector();
+        $sessions = app(WorkflowCopilotSessionService::class);
+        $session = $sessions->start($workflow);
+
+        $error = 'Die Ziel-Task fuer den Ruecksprung wurde nicht gefunden: if-eingabevariable-pruefen';
+        $run = $this->failedRun($session, $step, $error);
+        $session = $sessions->attachRun($session, $run);
+        $session->forceFill(['status' => WorkflowCopilotSession::STATUS_RUNNING])->save();
+
+        $newRun = WorkflowRun::query()->create([
+            'run_uuid' => (string) str()->uuid(),
+            'workflow_id' => $workflow->id,
+            'workflow_revision' => 0,
+            'status' => 'queued',
+            'context_json' => ['execution_target' => 'system'],
+            'result_json' => [],
+        ]);
+        $execution = Mockery::mock(WorkflowExecutionService::class);
+        $execution->shouldReceive('start')->once()->andReturn($newRun);
+        $this->app->instance(WorkflowExecutionService::class, $execution);
+
+        app(WorkflowCopilotSupervisorService::class)->supervise($session->id);
+
+        $session->refresh();
+        $this->assertSame(WorkflowCopilotSession::STATUS_RUNNING, $session->status);
+        $this->assertSame(1, data_get($session->usage_json, 'repair_iterations'));
+        $this->assertSame(0, data_get($session->state_json, 'technical_failure_repeats'));
+        $this->assertSame($error, data_get($session->state_json, 'last_technical_failure_signature'));
+        $this->assertSame($newRun->id, (int) $session->active_workflow_run_id);
+    }
+
     public function test_same_page_signature_does_not_consume_retry_budget_for_a_different_task(): void
     {
         [$workflow, $step] = $this->workflowWithBrokenSelector();
@@ -640,6 +709,25 @@ class WorkflowCopilotSupervisorTest extends TestCase
         ]);
 
         return [$run, $stepRun];
+    }
+
+    private function failedRun(WorkflowCopilotSession $session, WorkflowStep $step, string $error): WorkflowRun
+    {
+        return WorkflowRun::query()->create([
+            'run_uuid' => (string) str()->uuid(),
+            'workflow_id' => $session->workflow_id,
+            'workflow_copilot_session_id' => $session->id,
+            'workflow_revision' => 0,
+            'current_workflow_step_id' => $step->id,
+            'status' => 'failed',
+            'error_message' => $error,
+            'context_json' => [
+                'workflow_copilot_session_id' => $session->id,
+                'copilot_supervised' => true,
+                'execution_target' => 'system',
+            ],
+            'result_json' => ['ok' => false],
+        ]);
     }
 
     private function verificationRun(WorkflowCopilotSession $session, WorkflowStep $step, array $criteria): WorkflowRun

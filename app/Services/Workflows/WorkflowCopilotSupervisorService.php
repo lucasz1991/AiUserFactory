@@ -139,6 +139,67 @@ class WorkflowCopilotSupervisorService
             'error',
             true,
         );
+        $this->handleTechnicalRunFailure($session, $run);
+    }
+
+    /**
+     * Ein technischer Fehllauf (harter Fehler mitten im Lauf, ohne reparierbaren
+     * Task-Checkpoint) kann durch blindes Neustarten nicht selbst heilen. Ohne
+     * Zaehler liefe der Copilot bis zum Zeitbudget in einer Endlosschleife
+     * identischer Laeufe. Deshalb wird hier die Fehlersignatur verglichen, jede
+     * Iteration auf das Reparaturbudget angerechnet und bei wiederholtem oder
+     * ausgeschoepftem Fehlschlag mit klarer Diagnose abgebrochen.
+     */
+    protected function handleTechnicalRunFailure(WorkflowCopilotSession $session, WorkflowRun $run): void
+    {
+        $state = is_array($session->state_json) ? $session->state_json : [];
+        $usage = is_array($session->usage_json) ? $session->usage_json : [];
+        $budget = is_array($session->budget_json) ? $session->budget_json : [];
+
+        $signature = $this->technicalRunFailureSignature($run);
+        $previousSignature = trim((string) ($state['last_technical_failure_signature'] ?? ''));
+        $repeats = $signature !== '' && $signature === $previousSignature
+            ? max(0, (int) ($state['technical_failure_repeats'] ?? 0)) + 1
+            : 0;
+        $repairIterations = max(0, (int) ($usage['repair_iterations'] ?? 0)) + 1;
+
+        $usage['repair_iterations'] = $repairIterations;
+        $state['last_technical_failure_signature'] = $signature;
+        $state['technical_failure_repeats'] = $repeats;
+        $state['last_failed_run_id'] = (int) $run->id;
+        $session->forceFill(['usage_json' => $usage, 'state_json' => $state, 'last_activity_at' => now()])->save();
+
+        $maxSameState = max(1, (int) ($budget['max_same_state_repeats'] ?? 2));
+        $maxRepairIterations = max(1, (int) ($budget['max_repair_iterations'] ?? 15));
+        $sameFailureExhausted = $repeats >= $maxSameState;
+        $iterationBudgetReached = $repairIterations >= $maxRepairIterations;
+
+        if ($sameFailureExhausted || $iterationBudgetReached || $this->timeBudgetExceeded($session)) {
+            $target = $this->unresolvedRouteTargetFromError((string) $run->error_message);
+            $this->sessions->appendEvent(
+                $session,
+                'run.unrepairable',
+                $sameFailureExhausted
+                    ? 'Der Lauf scheitert technisch wiederholt an derselben Stelle und kann autonom nicht behoben werden.'
+                    : 'Das Reparaturbudget wurde durch technische Fehllaeufe erreicht, bevor ein sicherer Checkpoint zur Reparatur entstand.',
+                [
+                    'workflow_run_id' => (int) $run->id,
+                    'status' => $run->status,
+                    'error' => $run->error_message,
+                    'repeats' => $repeats,
+                    'repair_iterations' => $repairIterations,
+                    'unresolved_route_target' => $target,
+                ],
+                'repairing',
+                'error',
+                true,
+            );
+
+            $this->exhaustBudget($session->fresh() ?? $session);
+
+            return;
+        }
+
         $this->sessions->transition(
             $session,
             WorkflowCopilotSession::STATUS_REPAIRING,
@@ -147,6 +208,28 @@ class WorkflowCopilotSupervisorService
             'Der fehlgeschlagene Lauf wird ab dem letzten reproduzierbaren Zustand neu aufgebaut.',
         );
         $this->startRepairRun($session->fresh() ?? $session);
+    }
+
+    protected function technicalRunFailureSignature(WorkflowRun $run): string
+    {
+        $error = trim((string) $run->error_message);
+
+        if ($error === '') {
+            return trim((string) $run->status);
+        }
+
+        // Volatile Zahlen (Lauf-/Schritt-IDs) normalisieren, damit derselbe
+        // strukturelle Fehler ueber mehrere Laeufe hinweg als identisch gilt.
+        return trim((string) preg_replace('/\d+/', '#', $error));
+    }
+
+    protected function unresolvedRouteTargetFromError(string $error): ?string
+    {
+        if (preg_match('/nicht gefunden:\s*(.+)$/u', trim($error), $matches) === 1) {
+            return trim($matches[1]) ?: null;
+        }
+
+        return null;
     }
 
     protected function processCheckpoint(
