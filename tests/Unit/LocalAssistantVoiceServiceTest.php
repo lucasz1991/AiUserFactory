@@ -139,6 +139,21 @@ PHP);
         $this->assertRequestDirectoryIsEmpty();
     }
 
+    public function test_legacy_piper_mode_uses_underscore_compatible_options(): void
+    {
+        config(['services.local_assistant_voice.piper.mode' => 'legacy']);
+
+        $audio = app(LocalAssistantVoiceService::class)->synthesize('Legacy Test', 1.0);
+
+        $this->assertStringStartsWith('RIFF', $audio);
+        $arguments = json_decode((string) file_get_contents($this->piperLogPath), true, flags: JSON_THROW_ON_ERROR);
+        $this->assertContains('--length_scale', $arguments);
+        $this->assertContains('--output_file', $arguments);
+        $this->assertNotContains('--length-scale', $arguments);
+        $this->assertNotContains('--input-file', $arguments);
+        $this->assertRequestDirectoryIsEmpty();
+    }
+
     public function test_disabled_runtime_fails_with_stable_reason_code(): void
     {
         config(['services.local_assistant_voice.enabled' => false]);

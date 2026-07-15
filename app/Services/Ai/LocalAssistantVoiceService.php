@@ -10,9 +10,9 @@ use Illuminate\Support\Str;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use SplFileInfo;
-use Symfony\Component\Process\ExecutableFinder;
 use Symfony\Component\Process\Exception\ProcessFailedException;
 use Symfony\Component\Process\Exception\ProcessTimedOutException;
+use Symfony\Component\Process\ExecutableFinder;
 use Symfony\Component\Process\Process;
 use Throwable;
 
@@ -78,6 +78,9 @@ class LocalAssistantVoiceService
     public function transcribe(UploadedFile $audio, string $connectionId = ''): string
     {
         $this->assertReady('transcription');
+        $this->extendExecutionTime(
+            $this->timeout('ffmpeg', 60) + $this->timeout('whisper', 240) + 30,
+        );
         $directory = $this->createRequestDirectory();
 
         try {
@@ -159,6 +162,7 @@ class LocalAssistantVoiceService
     public function synthesize(string $text, float $speed = 1.0, string $connectionId = ''): string
     {
         $this->assertReady('synthesis');
+        $this->extendExecutionTime($this->timeout('piper', 120) + 30);
         $text = trim((string) preg_replace('/\s+/u', ' ', $text));
 
         if ($text === '') {
@@ -190,16 +194,22 @@ class LocalAssistantVoiceService
                 $this->piperModel(),
                 '--config',
                 $this->piperConfig(),
-                '--length-scale',
-                $lengthScale,
             ];
             $input = null;
 
             if ($mode === 'legacy') {
-                array_push($command, '--output_file', $outputPath);
+                array_push($command, '--length_scale', $lengthScale, '--output_file', $outputPath);
                 $input = $text.PHP_EOL;
             } else {
-                array_push($command, '--input-file', $textPath, '--output-file', $outputPath);
+                array_push(
+                    $command,
+                    '--length-scale',
+                    $lengthScale,
+                    '--input-file',
+                    $textPath,
+                    '--output-file',
+                    $outputPath,
+                );
             }
 
             $this->withEngineLock('piper', fn (): string => $this->runProcess(
@@ -421,6 +431,13 @@ class LocalAssistantVoiceService
     private function timeout(string $component, int $default): int
     {
         return max(5, min(900, (int) config("services.local_assistant_voice.{$component}.timeout", $default)));
+    }
+
+    private function extendExecutionTime(int $seconds): void
+    {
+        if (function_exists('set_time_limit')) {
+            @set_time_limit(max(30, $seconds));
+        }
     }
 
     private function fileIsAvailable(string $path): bool
