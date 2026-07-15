@@ -247,8 +247,8 @@
         @if(! $locked)
             <button
                 type="button"
-                x-on:click="armTaskInsert({{ $step->id }}, {{ count($step->task_cards) }}, @js($step->name))"
-                class="block w-full rounded-lg border border-dashed border-slate-300 bg-slate-50/70 px-3 py-2.5 text-left text-sm font-semibold text-slate-600 opacity-0 transition hover:border-slate-400 hover:bg-slate-100 hover:text-slate-900 focus-visible:opacity-100 group-hover/step:opacity-100 group-focus-within/step:opacity-100"
+                x-on:click="armTaskInsert({{ $step->id }}, @js($step->name))"
+                class="block w-full rounded-lg border border-dashed border-slate-300 bg-slate-50/70 px-3 py-2.5 text-left text-sm font-semibold text-slate-600 opacity-0 transition hover:border-slate-400 hover:bg-slate-100 hover:text-slate-900 focus-visible:opacity-100 group-hover/step:opacity-100 group-focus-within/step:opacity-100 [@media(hover:none)]:opacity-100"
             >+ Task am Listenende</button>
         @endif
     </div>

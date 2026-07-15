@@ -82,9 +82,11 @@
     wire:loading.class="opacity-60 pointer-events-none"
     x-data="{
         taskInsertTarget: null,
-        armTaskInsert(stepId, position, stepName) {
-            this.taskInsertTarget = { stepId: Number(stepId), position: Number(position), stepName: String(stepName || '') };
-            $wire.set('showTaskPanel', true);
+        armTaskInsert(stepId, stepName) {
+            this.taskInsertTarget = { stepId: Number(stepId), stepName: String(stepName || '') };
+            if (! $wire.showTaskPanel) {
+                $wire.set('showTaskPanel', true);
+            }
         },
         clearTaskInsert() {
             this.taskInsertTarget = null;
@@ -95,9 +97,10 @@
             }
             const target = this.taskInsertTarget;
             this.taskInsertTarget = null;
-            $wire.prepareTaskFromCatalog(target.stepId, taskKey, target.position);
+            $wire.prepareTaskFromCatalog(target.stepId, taskKey, null);
         },
     }"
+    x-init="$wire.$watch('showTaskPanel', open => { if (! open) clearTaskInsert() })"
     data-workflow-manager-root
     data-workflow-id="{{ $selectedWorkflow?->id ?? '' }}"
     x-on:assistant-open-workflow-improvement.window="
@@ -679,6 +682,7 @@
         @if(! $showTaskPanel)
             <button
                 type="button"
+                x-on:click="clearTaskInsert()"
                 wire:click="$set('showTaskPanel', true)"
                 class="fixed right-0 top-1/2 z-[65] flex -translate-y-1/2 items-center gap-2 rounded-l-xl border border-r-0 border-slate-700 bg-slate-900 px-3 py-3 text-sm font-semibold text-white shadow-xl transition hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:ring-offset-2"
                 aria-label="Task-Bibliothek oeffnen"
@@ -701,8 +705,8 @@
                 <div class="flex items-start justify-between gap-3 border-b border-slate-200 bg-slate-50/80 p-5">
                     <div class="min-w-0">
                         <h2 class="text-base font-semibold text-slate-900">Task-Bibliothek</h2>
-                        <p class="mt-1 text-xs text-slate-500" x-show="! taskInsertTarget">Task anklicken oder auf eine Liste ziehen, danach oeffnet sich das Formular.</p>
-                        <div x-cloak x-show="taskInsertTarget" class="mt-1 flex flex-wrap items-center gap-2">
+                        <p class="mt-1 text-xs text-slate-500" x-show="! taskInsertTarget">Task auf eine Liste ziehen, danach oeffnet sich das Formular.</p>
+                        <div x-cloak x-show="taskInsertTarget" role="status" class="mt-1 flex flex-wrap items-center gap-2">
                             <p class="text-xs text-emerald-700">
                                 Klick fuegt den Task am Ende von
                                 <span class="font-semibold" x-text="taskInsertTarget ? taskInsertTarget.stepName : ''"></span>
@@ -740,6 +744,7 @@
                             x-on:dragstart.stop="$event.dataTransfer.setData('application/x-workflow-task-catalog', @js($taskDefinition['key'])); $event.dataTransfer.setData('text/plain', @js($taskDefinition['key'])); $event.dataTransfer.effectAllowed = 'copy'"
                             x-on:click="insertCatalogTask(@js($taskDefinition['key']))"
                             x-on:keydown.enter.prevent="insertCatalogTask(@js($taskDefinition['key']))"
+                            x-on:keydown.space.prevent="insertCatalogTask(@js($taskDefinition['key']))"
                             x-bind:tabindex="taskInsertTarget ? 0 : -1"
                             x-bind:role="taskInsertTarget ? 'button' : null"
                             x-bind:class="taskInsertTarget ? 'cursor-pointer ring-1 ring-emerald-300 hover:ring-emerald-500' : 'cursor-grab active:cursor-grabbing'"
