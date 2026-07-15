@@ -83,6 +83,22 @@ class LocalAssistantVoiceInstallerTest extends TestCase
         $this->assertFalse($status['can_start']);
     }
 
+    public function test_installer_preflight_requires_ensurepip(): void
+    {
+        $source = File::get(app_path('Services/Ai/LocalAssistantVoiceInstaller.php'));
+
+        $this->assertStringContainsString('import ensurepip, sys, venv', $source);
+    }
+
+    public function test_bootstrap_recreates_an_incomplete_piper_environment(): void
+    {
+        $source = File::get(base_path('scripts/bootstrap-local-assistant-voice.sh'));
+
+        $this->assertStringContainsString('! "$PIPER_PYTHON" -m pip --version', $source);
+        $this->assertStringContainsString('rm -rf -- "$PIPER_VENV"', $source);
+        $this->assertStringContainsString('import ensurepip, venv', $source);
+    }
+
     /** @param array<string, mixed> $voiceStatus */
     private function installer(array $voiceStatus, int $spawnedPid = 2468): LocalAssistantVoiceInstaller
     {

@@ -222,6 +222,13 @@ install_piper() {
         die "Der Piper-Venv-Pfad ist kein Verzeichnis: ${PIPER_VENV}"
     fi
 
+    if [[ -d "$PIPER_VENV" ]]; then
+        if [[ ! -x "$PIPER_PYTHON" ]] || ! "$PIPER_PYTHON" -m pip --version >/dev/null 2>&1; then
+            warn "Das vorhandene Piper-Venv ist unvollstaendig und wird neu erstellt: ${PIPER_VENV}"
+            rm -rf -- "$PIPER_VENV"
+        fi
+    fi
+
     if [[ ! -x "$PIPER_PYTHON" ]]; then
         log "Erzeuge Python-Venv fuer Piper ${PIPER_VERSION}."
         "$SYSTEM_PYTHON" -m venv "$PIPER_VENV"
@@ -420,8 +427,8 @@ FFMPEG_PATH="$(resolve_executable "${FFMPEG_BINARY:-ffmpeg}" "ffmpeg")"
     die "PHP 8.1 oder neuer ist erforderlich: $("$PHP_PATH" -r 'echo PHP_VERSION;')"
 "$SYSTEM_PYTHON" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' || \
     die "Python 3.9 oder neuer ist fuer piper-tts==${PIPER_VERSION} erforderlich."
-"$SYSTEM_PYTHON" -c 'import venv' >/dev/null 2>&1 || \
-    die "Das Python-venv-Modul fehlt. Installiere das Distributionspaket python3-venv."
+"$SYSTEM_PYTHON" -c 'import ensurepip, venv' >/dev/null 2>&1 || \
+    die "Python venv inklusive ensurepip fehlt. Installiere das zur Python-Version passende Distributionspaket python3-venv."
 "$FFMPEG_PATH" -version >/dev/null 2>&1 || die "ffmpeg kann nicht ausgefuehrt werden: ${FFMPEG_PATH}"
 
 BUILD_JOBS="${BUILD_JOBS:-}"

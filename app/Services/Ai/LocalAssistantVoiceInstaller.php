@@ -334,13 +334,13 @@ class LocalAssistantVoiceInstaller
             $pythonCheck = new Process([
                 $python,
                 '-c',
-                'import sys, venv; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)',
+                'import ensurepip, sys, venv; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)',
             ]);
             $pythonCheck->setTimeout(10);
             $pythonCheck->run();
 
             if (! $pythonCheck->isSuccessful()) {
-                $errors[] = 'Python 3.9 oder neuer inklusive venv ist fuer Piper erforderlich.';
+                $errors[] = 'Python 3.9 oder neuer inklusive venv und ensurepip ist fuer Piper erforderlich (Ubuntu: python3-venv).';
             }
         } catch (Throwable $exception) {
             $errors[] = $exception->getMessage();
