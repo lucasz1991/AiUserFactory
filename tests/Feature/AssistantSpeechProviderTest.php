@@ -238,6 +238,36 @@ class AssistantSpeechProviderTest extends TestCase
         $this->assertSame('piper_local', $settings['speech_output_provider']);
     }
 
+    public function test_voice_status_command_runs_a_piper_to_whisper_smoke_test(): void
+    {
+        $wave = 'RIFF'.pack('V', 132).'WAVE'.str_repeat("\0", 128);
+
+        $this->mock(LocalAssistantVoiceService::class, function (MockInterface $mock) use ($wave): void {
+            $mock->shouldReceive('status')
+                ->once()
+                ->andReturn($this->readyLocalVoiceStatus());
+            $mock->shouldReceive('synthesize')
+                ->once()
+                ->with(
+                    'Hallo. Dies ist ein produktiver Test der lokalen Sprachverarbeitung.',
+                    1.0,
+                    'assistant-voice-smoke-tts',
+                )
+                ->andReturn($wave);
+            $mock->shouldReceive('transcribe')
+                ->once()
+                ->withArgs(fn (UploadedFile $audio, string $connectionId): bool => $connectionId === 'assistant-voice-smoke-stt'
+                    && $audio->getClientOriginalName() === 'assistant-voice-smoke.wav'
+                    && $audio->getSize() === strlen($wave))
+                ->andReturn('Hallo, dies ist ein produktiver Test der lokalen Sprachverarbeitung.');
+        });
+
+        $this->artisan('assistant:voice:status', ['--smoke' => true])
+            ->expectsOutputToContain('Piper/TTS-Smoke: gueltige WAV-Datei')
+            ->expectsOutputToContain('Whisper/STT-Smoke: Hallo, dies ist ein produktiver Test')
+            ->assertExitCode(0);
+    }
+
     public function test_ai_output_provider_remains_the_default(): void
     {
         config(['services.openrouter.api_key' => '']);
