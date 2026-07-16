@@ -23,6 +23,21 @@ async function run(context = {}) {
   }
 
   if (value === '') {
+    if (input.valueResolutionStatus === 'missing_workflow_variable' || input.value_resolution_status === 'missing_workflow_variable') {
+      const variableName = String(input.workflowVariable || input.workflow_variable || '').trim();
+
+      return {
+        ok: false,
+        status: 'failed',
+        statusMessage: variableName
+          ? `Workflow-Variable "${variableName}" ist nicht gesetzt und es ist kein Fallback-Wert konfiguriert.`
+          : 'Die konfigurierte Workflow-Variable ist nicht gesetzt und es ist kein Fallback-Wert konfiguriert.',
+        valueSource: 'workflow_variable',
+        workflowVariable: variableName || null,
+        fallbackUsed: false,
+      };
+    }
+
     return { ok: false, status: 'failed', statusMessage: 'Kein Wert zum Fuellen uebergeben.' };
   }
 
@@ -41,6 +56,9 @@ async function run(context = {}) {
       cachedElement: fillResult.cachedElement === true,
       hoverPreservedDuringFill: fillResult.hoverPreservedDuringFill === true,
       frameUrl: fillResult.frameUrl,
+      valueSource: input.valueSource || input.value_source || 'legacy_auto',
+      workflowVariable: input.workflowVariable || input.workflow_variable || null,
+      fallbackUsed: input.valueFallbackUsed === true || input.value_fallback_used === true,
     });
   }
 

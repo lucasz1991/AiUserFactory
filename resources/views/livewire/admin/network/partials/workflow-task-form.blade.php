@@ -15,8 +15,10 @@
         'selector_placeholder' => 'button[type=submit], button:has(span:has-text("Login"))',
         'value' => false,
         'value_required' => true,
+        'value_source_control' => false,
         'value_label' => 'Wert',
         'value_placeholder' => 'person.email oder fester Wert',
+        'value_help' => '',
         'url' => false,
         'url_label' => 'URL',
         'url_placeholder' => 'https://example.test',
@@ -206,7 +208,13 @@
     $browserWindowDatalistId = 'workflow-'.$prefix.'-browser-windows';
 @endphp
 
-<div class="space-y-4" x-data="{ failedTarget: @entangle($prefix.'FailedTarget').live }">
+<div
+    class="space-y-4"
+    x-data="{
+        failedTarget: @entangle($prefix.'FailedTarget').live,
+        valueSource: @entangle($prefix.'Extra.value_source').live,
+    }"
+>
     <div class="grid gap-4 md:grid-cols-2">
         @if(! $isEdit)
             <div>
@@ -313,9 +321,17 @@
                             @endif
 
                             @if($form['url'] || $form['value'])
-                                <div>
+                                <div
+                                    @if($form['value_source_control'] ?? false)
+                                        x-cloak
+                                        x-show="String(valueSource || 'fixed') === 'fixed'"
+                                    @endif
+                                >
                                     <label class="block text-sm font-medium text-gray-700">{{ $form['url'] ? $form['url_label'] : $form['value_label'] }}</label>
                                     <input type="text" wire:model.defer="{{ $prefix }}InputValue" placeholder="{{ $form['url'] ? $form['url_placeholder'] : $form['value_placeholder'] }}" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                                    @if(! $form['url'] && ($form['value_help'] ?? '') !== '')
+                                        <p class="mt-1 text-xs text-slate-500">{{ $form['value_help'] }}</p>
+                                    @endif
                                     @error($prefix.'InputValue') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
                                 </div>
                             @endif
@@ -387,9 +403,19 @@
                                     $fieldHelp = (string) ($field['help'] ?? '');
                                     $fieldRows = max(2, (int) ($field['rows'] ?? 2));
                                     $fieldClass = ($field['span'] ?? '') === 'full' ? 'md:col-span-2' : '';
+                                    $fieldOptions = is_array($field['options'] ?? null) ? $field['options'] : [];
+                                    $visibleWhen = is_array($field['visible_when'] ?? null) ? $field['visible_when'] : [];
+                                    $visibleWhenField = trim((string) ($visibleWhen['field'] ?? ''));
+                                    $visibleWhenValue = (string) ($visibleWhen['equals'] ?? '');
                                 @endphp
                                 @if($fieldName !== '')
-                                    <div class="{{ $fieldClass }}">
+                                    <div
+                                        class="{{ $fieldClass }}"
+                                        @if($visibleWhenField === 'value_source')
+                                            x-cloak
+                                            x-show="String(valueSource || 'fixed') === @js($visibleWhenValue)"
+                                        @endif
+                                    >
                                         <label class="block text-sm font-medium text-gray-700">{{ $fieldLabel }}</label>
                                         @if($fieldType === 'textarea')
                                             <textarea
@@ -399,6 +425,16 @@
                                                 placeholder="{{ $fieldPlaceholder }}"
                                                 class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"
                                             ></textarea>
+                                        @elseif($fieldType === 'select')
+                                            <select
+                                                wire:key="{{ $prefix }}-extra-{{ $catalogKey }}-{{ $fieldName }}"
+                                                wire:model.live="{{ $prefix }}Extra.{{ $fieldName }}"
+                                                class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                                            >
+                                                @foreach($fieldOptions as $optionValue => $optionLabel)
+                                                    <option value="{{ $optionValue }}">{{ $optionLabel }}</option>
+                                                @endforeach
+                                            </select>
                                         @else
                                             <input
                                                 type="{{ $fieldType === 'number' ? 'number' : 'text' }}"

@@ -627,12 +627,88 @@ function resolveString(value, context = {}) {
   return resolved;
 }
 
+function configuredInputValue(task, context, rawValue) {
+  const configuredSource = String(task.value_source || task.valueSource || '').trim().toLowerCase();
+
+  if (!['fixed', 'workflow_variable'].includes(configuredSource)) {
+    return {
+      value: resolveString(rawValue, context),
+      source: 'legacy_auto',
+      workflowVariable: '',
+      status: 'legacy_resolved',
+      fallbackUsed: false,
+    };
+  }
+
+  if (configuredSource === 'fixed') {
+    return {
+      value: rawValue,
+      source: 'fixed',
+      workflowVariable: '',
+      status: 'fixed',
+      fallbackUsed: false,
+    };
+  }
+
+  const workflowVariable = String(
+    task.workflow_variable
+    || task.workflowVariable
+    || task.variable_name
+    || task.variableName
+    || '',
+  ).trim();
+  const workflowVariables = workflowVariablesFromContext({
+    workflow: runtime.workflow || {},
+    ...context,
+  });
+  let resolved = valueFromWorkflowVariables(workflowVariables, workflowVariable);
+
+  if (resolved === undefined && workflowVariable !== '') {
+    const contextualValue = resolveString(workflowVariable, context);
+
+    if (contextualValue !== workflowVariable) {
+      resolved = contextualValue;
+    }
+  }
+
+  if (resolved !== undefined && resolved !== null && resolved !== '') {
+    return {
+      value: resolved,
+      source: 'workflow_variable',
+      workflowVariable,
+      status: 'variable_resolved',
+      fallbackUsed: false,
+    };
+  }
+
+  const fallback = task.value_fallback ?? task.valueFallback;
+
+  if (fallback !== undefined && fallback !== null && String(fallback) !== '') {
+    return {
+      value: fallback,
+      source: 'workflow_variable',
+      workflowVariable,
+      status: 'fallback_used',
+      fallbackUsed: true,
+    };
+  }
+
+  return {
+    value: '',
+    source: 'workflow_variable',
+    workflowVariable,
+    status: 'missing_workflow_variable',
+    fallbackUsed: false,
+  };
+}
+
 function taskInput(task, context = {}) {
   const mailboxSource = normalizeMailboxSource(task.script_person_source || task.scriptPersonSource || task.mailbox_source || task.mailboxSource || 'person');
   const valueContext = scopedWorkflowContext(context, mailboxSource);
   const rawValue = firstConfiguredValue(task.value, task.input);
   const rawInput = firstConfiguredValue(task.input, task.value);
   const rawUrl = firstConfiguredValue(task.url, task.value, task.input);
+  const configuredValue = configuredInputValue(task, valueContext, rawValue);
   const browserWindow = normalizeBrowserWindowName(
     task.browser_window_name
     || task.browser_window
@@ -651,9 +727,21 @@ function taskInput(task, context = {}) {
     mailbox_source: mailboxSource,
     scriptPersonSource: mailboxSource,
     script_person_source: mailboxSource,
-    value: resolveString(rawValue, valueContext),
-    inputValue: resolveString(rawInput, valueContext),
-    input_value: resolveString(rawInput, valueContext),
+    value: configuredValue.value,
+    inputValue: ['fixed', 'workflow_variable'].includes(configuredValue.source)
+      ? configuredValue.value
+      : resolveString(rawInput, valueContext),
+    input_value: ['fixed', 'workflow_variable'].includes(configuredValue.source)
+      ? configuredValue.value
+      : resolveString(rawInput, valueContext),
+    valueSource: configuredValue.source,
+    value_source: configuredValue.source,
+    workflowVariable: configuredValue.workflowVariable,
+    workflow_variable: configuredValue.workflowVariable,
+    valueResolutionStatus: configuredValue.status,
+    value_resolution_status: configuredValue.status,
+    valueFallbackUsed: configuredValue.fallbackUsed,
+    value_fallback_used: configuredValue.fallbackUsed,
     url: resolveString(rawUrl, valueContext),
     selector: task.selector || task.element_selector || task.input_selector || '',
     elementSelector: task.element_selector || task.selector || '',

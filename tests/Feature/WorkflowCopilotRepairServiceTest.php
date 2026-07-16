@@ -263,6 +263,58 @@ class WorkflowCopilotRepairServiceTest extends TestCase
         $this->assertSame('button[type="submit"]', data_get($plan, 'changes.selector'));
     }
 
+    public function test_vision_value_reference_updates_existing_fill_task_to_explicit_workflow_variable(): void
+    {
+        [$workflow, $step] = $this->workflowWithTasks([[
+            'key' => 'fill-search',
+            'task_key' => 'input.fill_field',
+            'title' => 'Suche fuellen',
+            'selector' => '#search',
+            'value' => 'google_search_url',
+            'input' => 'google_search_url',
+        ]]);
+        $session = app(WorkflowCopilotSessionService::class)->start($workflow, [
+            'goal' => 'Google-Suche aus Workflow-Variable ausfuehren.',
+        ]);
+
+        $plan = app(WorkflowCopilotRepairService::class)->plan(
+            $session,
+            $step,
+            ['task_key' => 'fill-search', 'outcome' => 'failed'],
+            ['interaction_map' => [[
+                'element_ref' => 'el_search',
+                'visible' => true,
+                'enabled' => true,
+                'selector_candidates' => ['#search'],
+            ]]],
+            [
+                'confidence' => 0.92,
+                'verdict' => 'continue',
+                'safe_pause' => false,
+                'relevant_elements' => [[
+                    'element_ref' => 'el_search',
+                    'confidence' => 0.94,
+                ]],
+                'suggested_task_actions' => [[
+                    'task_key' => 'input.fill_field',
+                    'card_key' => 'fill-search',
+                    'element_ref' => 'el_search',
+                    'confidence' => 0.94,
+                    'parameters' => [
+                        'value_reference' => 'google_search_url',
+                        'fallback_value' => 'fallback search',
+                    ],
+                ]],
+            ],
+        );
+
+        $this->assertSame('probe_update', $plan['action']);
+        $this->assertSame('workflow_variable', data_get($plan, 'changes.value_source'));
+        $this->assertSame('google_search_url', data_get($plan, 'changes.workflow_variable'));
+        $this->assertSame('fallback search', data_get($plan, 'changes.value_fallback'));
+        $this->assertArrayNotHasKey('value_reference', $plan['changes']);
+    }
+
     public function test_user_instruction_can_prioritize_the_second_visible_selector_candidate(): void
     {
         [$workflow, $step] = $this->workflowWithTasks([[
@@ -1129,8 +1181,10 @@ class WorkflowCopilotRepairServiceTest extends TestCase
         $this->assertSame('restart_with_workflow_changes', $plan['action']);
         $this->assertCount(2, $plan['operations']);
         $this->assertSame('#APjFqb', data_get($plan, 'operations.0.parameters.selector'));
-        $this->assertSame('google_search_url', data_get($plan, 'operations.0.parameters.value'));
-        $this->assertSame('google_search_url', data_get($plan, 'operations.0.parameters.input'));
+        $this->assertSame('workflow_variable', data_get($plan, 'operations.0.parameters.value_source'));
+        $this->assertSame('google_search_url', data_get($plan, 'operations.0.parameters.workflow_variable'));
+        $this->assertArrayNotHasKey('value', data_get($plan, 'operations.0.parameters'));
+        $this->assertArrayNotHasKey('input', data_get($plan, 'operations.0.parameters'));
         $this->assertSame('input[aria-label="Google Suche"]', data_get($plan, 'operations.1.parameters.selector'));
         $this->assertSame(2, data_get($plan, 'decision_trace.accepted_operation_count'));
         $this->assertSame(0, data_get($plan, 'decision_trace.rejected_operation_count'));
@@ -1145,7 +1199,10 @@ class WorkflowCopilotRepairServiceTest extends TestCase
         $tasks = $step->fresh()->task_cards;
         $this->assertSame('input.fill_field', data_get($tasks, '0.task_key'));
         $this->assertSame('#APjFqb', data_get($tasks, '0.selector'));
-        $this->assertSame('google_search_url', data_get($tasks, '0.value'));
+        $this->assertSame('workflow_variable', data_get($tasks, '0.value_source'));
+        $this->assertSame('google_search_url', data_get($tasks, '0.workflow_variable'));
+        $this->assertSame('', data_get($tasks, '0.value'));
+        $this->assertSame('', data_get($tasks, '0.input'));
         $this->assertSame('input.submit', data_get($tasks, '1.task_key'));
         $this->assertSame('input[aria-label="Google Suche"]', data_get($tasks, '1.selector'));
         $this->assertSame('data.append_to_array', data_get($tasks, '2.task_key'));
@@ -1267,6 +1324,88 @@ class WorkflowCopilotRepairServiceTest extends TestCase
         $this->assertSame(data_get($tasks, '3.key'), data_get($tasks, '0.empty_target'));
         $this->assertSame('current_result', data_get($tasks, '0.store_current_element_as'));
         $this->assertSame(3, data_get($tasks, '0.limit'));
+    }
+
+    public function test_collection_dependency_is_repaired_from_existing_result_selector_without_model_pause(): void
+    {
+        [$workflow, $step] = $this->workflowWithTasks([[
+            'key' => 'append-result',
+            'task_key' => 'data.append_to_array',
+            'title' => 'Ergebnis anhaengen',
+            'array_name' => 'top_results',
+            'value_from_variable' => 'current_result',
+            'max_items' => '0',
+        ], [
+            'key' => 'read-result',
+            'task_key' => 'browser.read_searchengine_result',
+            'title' => 'Suchtreffer lesen',
+            'scope_variable' => 'current_result',
+            'output_variable' => 'current_result',
+            'browser_window' => 'main',
+            'browser_window_name' => 'main',
+        ]]);
+        $workflow->steps()->create([
+            'name' => 'Ergebnisbereich pruefen',
+            'type' => WorkflowStep::TYPE_BROWSER_TASK,
+            'action_key' => 'ergebnisbereich-pruefen',
+            'position' => 5,
+            'is_enabled' => true,
+            'config_json' => ['tasks' => [[
+                'key' => 'auf-suchergebnisbereich-warten',
+                'task_key' => 'wait.selector',
+                'title' => 'Auf Suchergebnisse warten',
+                'selector' => 'div#search a:has(div[data-rpos])',
+                'browser_window' => 'main',
+                'browser_window_name' => 'main',
+            ]]],
+        ]);
+        $session = app(WorkflowCopilotSessionService::class)->start($workflow, [
+            'goal' => 'Die Top 3 Suchtreffer strukturiert sammeln.',
+        ]);
+        $ai = Mockery::mock(AiConnectionService::class);
+        $ai->shouldNotReceive('json');
+        $this->app->instance(AiConnectionService::class, $ai);
+        $service = app(WorkflowCopilotRepairService::class);
+
+        $plan = $service->plan(
+            $session,
+            $step->fresh(),
+            [
+                'task_key' => 'append-result',
+                'successful' => false,
+                'outcome' => 'failed',
+                'result' => ['ok' => false, 'statusMessage' => 'Kein Wert zum Anhaengen gefunden.'],
+            ],
+            [
+                'page' => ['url' => 'https://www.google.com/search?q=test', 'window' => 'main'],
+                'evidence_sufficient' => true,
+            ],
+            [],
+        );
+
+        $this->assertSame('restart_with_workflow_changes', $plan['action']);
+        $this->assertSame('deterministic_collection_dependency', data_get($plan, 'decision_trace.source'));
+        $this->assertCount(3, $plan['operations']);
+        $this->assertSame('collection_dependency', data_get($plan, 'operations.0.purpose'));
+        $this->assertSame('div#search a:has(div[data-rpos])', data_get($plan, 'operations.0.parameters.selector'));
+        $this->assertSame(3, data_get($plan, 'operations.0.parameters.limit'));
+        $this->assertSame('read-result', data_get($plan, 'operations.1.task_key'));
+        $this->assertSame('append-result', data_get($plan, 'operations.2.task_key'));
+
+        $service->applyStructuralOperations(
+            $workflow->fresh(),
+            $plan['operations'],
+            $session->fresh(),
+        );
+
+        $tasks = $step->fresh()->task_cards;
+        $this->assertSame('loop.for_each_element', data_get($tasks, '0.task_key'));
+        $this->assertSame('browser.read_searchengine_result', data_get($tasks, '1.task_key'));
+        $this->assertSame('data.append_to_array', data_get($tasks, '2.task_key'));
+        $this->assertSame('loop.end', data_get($tasks, '3.task_key'));
+        $this->assertSame('div#search a:has(div[data-rpos])', data_get($tasks, '0.selector'));
+        $this->assertSame(3, data_get($tasks, '0.limit'));
+        $this->assertSame(data_get($tasks, '0.loop_pair_id'), data_get($tasks, '3.loop_pair_id'));
     }
 
     public function test_url_repairs_block_private_metadata_and_cross_workflow_hosts(): void

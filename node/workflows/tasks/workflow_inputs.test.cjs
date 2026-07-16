@@ -6,6 +6,7 @@ const test = require('node:test');
 const validateInputs = require('./data/validate_inputs.cjs');
 const variableCondition = require('./decision/variable.cjs');
 const mailActionLoop = require('./mail/list_action_loop.cjs');
+const fillField = require('./input/fill_field.cjs');
 
 test('workflow input definitions accept trailing comma and create mail scan overrides', async () => {
   const definitions = `[
@@ -77,6 +78,24 @@ test('IF variable task routes supplied and missing workflow inputs on different 
   assert.equal(missing.branchOutcome, 'failed');
 });
 
+test('declared optional workflow inputs remain known when their value is missing', async () => {
+  const result = await validateInputs.run({
+    input: {
+      input_definitions: '[{"name":"google_search_url","required":false},{"name":"search_count","required":false,"default":3}]',
+    },
+    workflow_variables: {},
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(Object.prototype.hasOwnProperty.call(result.workflow_variables, 'google_search_url'), true);
+  assert.equal(result.workflow_variables.google_search_url, null);
+  assert.equal(result.workflow_variables.search_count, 3);
+  assert.deepEqual(result.workflow_variables.workflow_inputs, {
+    google_search_url: null,
+    search_count: 3,
+  });
+});
+
 test('mail action loop accepts an ordered JSON click sequence with trailing comma', () => {
   const steps = mailActionLoop.parseActionSteps(`[
     {"selector":"button.delete","wait_ms":200},
@@ -86,4 +105,21 @@ test('mail action loop accepts an ordered JSON click sequence with trailing comm
   assert.equal(steps.length, 2);
   assert.equal(steps[0].selector, 'button.delete');
   assert.equal(steps[1].selector, 'button.confirm');
+});
+
+test('input fill reports a missing configured workflow variable without typing its name', async () => {
+  const result = await fillField.run({
+    page: {},
+    input: {
+      value: '',
+      value_source: 'workflow_variable',
+      workflow_variable: 'google_search_url',
+      value_resolution_status: 'missing_workflow_variable',
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 'failed');
+  assert.equal(result.workflowVariable, 'google_search_url');
+  assert.match(result.statusMessage, /kein Fallback-Wert/);
 });

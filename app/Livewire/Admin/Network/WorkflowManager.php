@@ -2248,8 +2248,10 @@ class WorkflowManager extends Component
             'selector_placeholder' => 'button[type=submit], button:has(span:has-text("Login"))',
             'value' => false,
             'value_required' => true,
+            'value_source_control' => false,
             'value_label' => 'Wert',
             'value_placeholder' => 'person.email oder fester Wert',
+            'value_help' => '',
             'url' => false,
             'url_label' => 'URL',
             'url_placeholder' => 'https://example.test',
@@ -2287,7 +2289,7 @@ class WorkflowManager extends Component
     {
         return collect($this->taskExtraFields($formConfig))
             ->mapWithKeys(fn (array $field): array => [
-                $field['name'] => (string) ($field['default'] ?? ''),
+                $field['name'] => $this->taskExtraFieldDefaultValue($field),
             ])
             ->all();
     }
@@ -2299,7 +2301,11 @@ class WorkflowManager extends Component
         return collect($this->taskExtraFields($formConfig))
             ->mapWithKeys(function (array $field) use ($task, $legacyPayload): array {
                 $name = $field['name'];
-                $value = data_get($task, $name, data_get($legacyPayload, $name, $field['default'] ?? ''));
+                $value = data_get(
+                    $task,
+                    $name,
+                    data_get($legacyPayload, $name, $this->taskExtraFieldDefaultValue($field)),
+                );
 
                 if (is_array($value) || is_object($value)) {
                     $value = json_encode($value, JSON_UNESCAPED_SLASHES);
@@ -2308,6 +2314,15 @@ class WorkflowManager extends Component
                 return [$name => (string) $value];
             })
             ->all();
+    }
+
+    protected function taskExtraFieldDefaultValue(array $field): string
+    {
+        if (($field['name'] ?? null) === 'value_source') {
+            return 'fixed';
+        }
+
+        return (string) ($field['default'] ?? '');
     }
 
     protected function arrayPayloadFromTaskValue(mixed $value): array
@@ -2342,6 +2357,19 @@ class WorkflowManager extends Component
             }
 
             $task[$name] = $value;
+        }
+
+        if (($task['task_key'] ?? null) === 'input.fill_field') {
+            $valueSource = ($task['value_source'] ?? 'fixed') === 'workflow_variable'
+                ? 'workflow_variable'
+                : 'fixed';
+            $task['value_source'] = $valueSource;
+
+            if ($valueSource === 'workflow_variable') {
+                unset($task['value'], $task['input']);
+            } else {
+                unset($task['workflow_variable'], $task['value_fallback']);
+            }
         }
 
         return $task;
@@ -2672,6 +2700,22 @@ class WorkflowManager extends Component
             $valid = false;
         }
 
+        if ($formConfig['value_source_control'] ?? false) {
+            $valueSource = trim((string) (($this->{$extraProperty} ?? [])['value_source'] ?? 'fixed'));
+            $workflowVariable = trim((string) (($this->{$extraProperty} ?? [])['workflow_variable'] ?? ''));
+
+            if (! in_array($valueSource, ['fixed', 'workflow_variable'], true)) {
+                $this->addError($extraProperty.'.value_source', 'Bitte eine gueltige Wertquelle auswaehlen.');
+                $valid = false;
+            } elseif ($valueSource === 'fixed' && trim((string) $this->{$valueProperty}) === '') {
+                $this->addError($valueProperty, 'Bitte einen festen Wert angeben.');
+                $valid = false;
+            } elseif ($valueSource === 'workflow_variable' && $workflowVariable === '') {
+                $this->addError($extraProperty.'.workflow_variable', 'Bitte den Namen der Workflow-Variable angeben.');
+                $valid = false;
+            }
+        }
+
         if (($formConfig['mailbox_source'] ?? false) && ! in_array($this->normalizeMailboxSource((string) $this->{$mailboxSourceProperty}), ['person', 'verification'], true)) {
             $this->addError($mailboxSourceProperty, 'Bitte eine Script-Bezugsperson auswaehlen.');
             $valid = false;
@@ -2687,8 +2731,35 @@ class WorkflowManager extends Component
                 $valid = false;
             }
 
+            $requiredWhen = is_array($field['required_when'] ?? null) ? $field['required_when'] : [];
+            $requiredWhenField = trim((string) ($requiredWhen['field'] ?? ''));
+            $requiredWhenValue = (string) ($requiredWhen['equals'] ?? '');
+
+            if ($requiredWhenField !== ''
+                && (string) (($this->{$extraProperty} ?? [])[$requiredWhenField] ?? '') === $requiredWhenValue
+                && $fieldValue === '') {
+                $this->addError($extraProperty.'.'.$name, 'Bitte '.$fieldLabel.' angeben.');
+                $valid = false;
+            }
+
+            if (($field['type'] ?? 'text') === 'select') {
+                $options = is_array($field['options'] ?? null) ? array_keys($field['options']) : [];
+
+                if ($fieldValue !== '' && ! in_array($fieldValue, $options, true)) {
+                    $this->addError($extraProperty.'.'.$name, 'Bitte eine gueltige Option fuer '.$fieldLabel.' auswaehlen.');
+                    $valid = false;
+                }
+            }
+
             if (($field['type'] ?? 'text') === 'number' && $fieldValue !== '' && ! is_numeric($fieldValue)) {
                 $this->addError($extraProperty.'.'.$name, $fieldLabel.' muss eine Zahl sein.');
+                $valid = false;
+            }
+
+            if (($field['format'] ?? null) === 'variable_path'
+                && $fieldValue !== ''
+                && preg_match('/^[A-Za-z0-9_.-]+$/', $fieldValue) !== 1) {
+                $this->addError($extraProperty.'.'.$name, $fieldLabel.' darf nur Buchstaben, Zahlen, Punkt, Unterstrich und Bindestrich enthalten.');
                 $valid = false;
             }
 

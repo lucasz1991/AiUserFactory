@@ -13,6 +13,7 @@ const returnScript = 'node/workflows/tasks/data/workflow_return.cjs';
 const waitScript = 'node/workflows/tasks/wait/seconds.cjs';
 const closeBrowserScript = 'node/workflows/tasks/browser/close.cjs';
 const branchScript = 'tests/Fixtures/Workflows/branch_result.cjs';
+const captureInputScript = 'tests/Fixtures/Workflows/capture_input.cjs';
 
 function returnTask(key, value, frameKey = null) {
   return {
@@ -51,6 +52,18 @@ function branchTask(key, onError, frameKey = null, extra = {}) {
     node_script: branchScript,
     on_error: onError,
     ...(frameKey ? { embedded_workflow_frame_key: frameKey } : {}),
+    ...extra,
+  };
+}
+
+function captureInputTask(key, extra = {}) {
+  return {
+    key,
+    task_key: 'test.capture_input',
+    title: key,
+    kind: 'data',
+    runner: 'node',
+    node_script: captureInputScript,
     ...extra,
   };
 }
@@ -143,6 +156,57 @@ test('browser close without a persisted browser does not launch a replacement', 
   assert.equal(result.ok, true);
   assert.equal(result.tasks[0].statusMessage, 'Kein Browser-Handle zum Schliessen vorhanden.');
   assert.equal(result.browserWsEndpoint, '');
+});
+
+test('explicit task value sources resolve variables, fallbacks and fixed values deterministically', () => {
+  const workflow = {
+    workflow_variables: {
+      google_search_url: 'https://www.google.com/search?q=workflow',
+    },
+  };
+  const variableResult = executeTasks([captureInputTask('variable-value', {
+    value_source: 'workflow_variable',
+    workflow_variable: 'google_search_url',
+    value_fallback: 'fallback-query',
+  })], workflow);
+  const fallbackResult = executeTasks([captureInputTask('fallback-value', {
+    value_source: 'workflow_variable',
+    workflow_variable: 'missing_query',
+    value_fallback: 'fallback-query',
+  })], workflow);
+  const missingResult = executeTasks([captureInputTask('missing-value', {
+    value_source: 'workflow_variable',
+    workflow_variable: 'missing_query',
+  })], workflow);
+  const fixedResult = executeTasks([captureInputTask('fixed-value', {
+    value_source: 'fixed',
+    value: 'google_search_url',
+  })], workflow);
+  const legacyDeclaredMissingResult = executeTasks([captureInputTask('legacy-declared-missing', {
+    value: 'google_search_url',
+  })], {
+    workflow_variables: {
+      google_search_url: null,
+    },
+  });
+
+  assert.deepEqual(variableResult.tasks[0].capturedInput, {
+    value: 'https://www.google.com/search?q=workflow',
+    inputValue: 'https://www.google.com/search?q=workflow',
+    valueSource: 'workflow_variable',
+    workflowVariable: 'google_search_url',
+    valueResolutionStatus: 'variable_resolved',
+    valueFallbackUsed: false,
+  });
+  assert.equal(fallbackResult.tasks[0].capturedInput.value, 'fallback-query');
+  assert.equal(fallbackResult.tasks[0].capturedInput.valueResolutionStatus, 'fallback_used');
+  assert.equal(fallbackResult.tasks[0].capturedInput.valueFallbackUsed, true);
+  assert.equal(missingResult.tasks[0].capturedInput.value, '');
+  assert.equal(missingResult.tasks[0].capturedInput.valueResolutionStatus, 'missing_workflow_variable');
+  assert.equal(fixedResult.tasks[0].capturedInput.value, 'google_search_url');
+  assert.equal(fixedResult.tasks[0].capturedInput.valueSource, 'fixed');
+  assert.equal(legacyDeclaredMissingResult.tasks[0].capturedInput.value, '');
+  assert.equal(legacyDeclaredMissingResult.tasks[0].capturedInput.valueSource, 'legacy_auto');
 });
 
 test('embedded workflow boundary preserves browser windows for parent workflow', () => {

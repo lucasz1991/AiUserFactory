@@ -562,6 +562,71 @@ class WorkflowCompositionTest extends TestCase
         $this->assertSame([], $step->fresh()->task_cards);
     }
 
+    public function test_fill_field_editor_persists_workflow_variable_source_and_fallback(): void
+    {
+        $workflow = $this->workflow('fill-field-variable-source');
+        $step = $this->step($workflow, 'Search input', []);
+
+        Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
+            ->call('prepareTaskFromCatalog', $step->id, 'input.fill_field', 0)
+            ->assertSee('Wertquelle')
+            ->assertSee('Workflow-Variable')
+            ->assertSee('Fallback-Wert')
+            ->set('newTaskElementSelector', '#search')
+            ->set('newTaskBrowserWindow', 'main')
+            ->set('newTaskExtra.value_source', 'workflow_variable')
+            ->set('newTaskExtra.workflow_variable', 'google_search_url')
+            ->set('newTaskExtra.value_fallback', 'fallback search')
+            ->call('addTaskCard')
+            ->assertHasNoErrors();
+
+        $task = $step->fresh()->task_cards[0];
+        $this->assertSame('workflow_variable', $task['value_source']);
+        $this->assertSame('google_search_url', $task['workflow_variable']);
+        $this->assertSame('fallback search', $task['value_fallback']);
+        $this->assertSame('', $task['value']);
+        $this->assertSame('', $task['input']);
+
+        Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
+            ->call('openEditTaskCard', $step->id, $task['key'])
+            ->assertSet('editingTaskExtra.value_source', 'workflow_variable')
+            ->assertSet('editingTaskExtra.workflow_variable', 'google_search_url')
+            ->assertSet('editingTaskExtra.value_fallback', 'fallback search')
+            ->set('editingTaskExtra.value_source', 'fixed')
+            ->set('editingTaskInputValue', 'literal search')
+            ->call('saveEditTaskCard')
+            ->assertHasNoErrors();
+
+        $fixedTask = $step->fresh()->task_cards[0];
+        $this->assertSame('fixed', $fixedTask['value_source']);
+        $this->assertSame('literal search', $fixedTask['value']);
+        $this->assertSame('literal search', $fixedTask['input']);
+        $this->assertArrayNotHasKey('workflow_variable', $fixedTask);
+        $this->assertArrayNotHasKey('value_fallback', $fixedTask);
+    }
+
+    public function test_fill_field_editor_requires_the_selected_value_source_configuration(): void
+    {
+        $workflow = $this->workflow('fill-field-value-source-validation');
+        $step = $this->step($workflow, 'Search input', []);
+
+        Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
+            ->call('prepareTaskFromCatalog', $step->id, 'input.fill_field', 0)
+            ->set('newTaskElementSelector', '#search')
+            ->set('newTaskBrowserWindow', 'main')
+            ->set('newTaskExtra.value_source', 'workflow_variable')
+            ->call('addTaskCard')
+            ->assertHasErrors(['newTaskExtra.workflow_variable']);
+
+        Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
+            ->call('prepareTaskFromCatalog', $step->id, 'input.fill_field', 0)
+            ->set('newTaskElementSelector', '#search')
+            ->set('newTaskBrowserWindow', 'main')
+            ->set('newTaskExtra.value_source', 'fixed')
+            ->call('addTaskCard')
+            ->assertHasErrors(['newTaskInputValue']);
+    }
+
     protected function workflow(string $slug): Workflow
     {
         return Workflow::query()->create([

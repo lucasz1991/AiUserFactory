@@ -45,4 +45,22 @@ class WorkflowCollectionTaskCatalogTest extends TestCase
         $this->assertSame('top_results', $append['array_name']);
         $this->assertSame('current_result', $append['value_from_variable']);
     }
+
+    public function test_fill_field_exposes_explicit_fixed_or_workflow_variable_sources(): void
+    {
+        $definition = (new WorkflowTaskCatalog)->task('input.fill_field');
+        $fields = collect(data_get($definition, 'form.extra_fields'))->keyBy('name');
+
+        $this->assertTrue((bool) data_get($definition, 'form.value_source_control'));
+        $this->assertFalse((bool) data_get($definition, 'form.value_required'));
+        $this->assertSame([
+            'fixed' => 'Fester Wert',
+            'workflow_variable' => 'Workflow-Variable',
+        ], data_get($fields->get('value_source'), 'options'));
+        $this->assertSame(
+            'workflow_variable',
+            data_get($fields->get('workflow_variable'), 'required_when.equals'),
+        );
+        $this->assertNotNull($fields->get('value_fallback'));
+    }
 }

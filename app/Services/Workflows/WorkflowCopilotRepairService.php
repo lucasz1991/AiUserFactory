@@ -129,6 +129,12 @@ class WorkflowCopilotRepairService
             return $configuredFailureRoute;
         }
 
+        $collectionDependencyPlan = $this->collectionDependencyPlan($session, $step, $task, $checkpoint);
+
+        if ($collectionDependencyPlan !== []) {
+            return $collectionDependencyPlan;
+        }
+
         $requiresVisualTarget = $this->taskRequiresVisualTarget($taskCatalogKey);
         $trustedElementRefs = $this->trustedVisionElementRefs($vision, $observation);
         $contextDomains = $this->observationDomains($observation);
@@ -421,16 +427,27 @@ class WorkflowCopilotRepairService
             $parameters = is_array($operation['parameters'] ?? null) ? $operation['parameters'] : [];
 
             if ($requiresVisualTarget) {
-                $elementRef = trim((string) ($operation['element_ref'] ?? ''));
-                $visualTarget = $this->visualTargetFromObservation($elementRef, $observation);
-                $evidenceSelector = trim((string) ($operation['evidence_selector'] ?? ''));
+                $configuredEvidence = $this->configuredCollectionSelectorEvidence($workflow, $step, $operation);
 
-                if ($visualTarget === []
-                    || $evidenceSelector === ''
-                    || ! hash_equals((string) $visualTarget['selector'], $evidenceSelector)
-                    || trim((string) ($parameters['selector'] ?? '')) !== $evidenceSelector
-                    || trim((string) ($parameters['element_selector'] ?? '')) !== $evidenceSelector) {
-                    throw new \DomainException('Der visuell zielgebundene Task ist nicht durch die aktuelle DOM-Evidenz abgesichert.');
+                if ($configuredEvidence !== []) {
+                    $evidenceSelector = (string) $configuredEvidence['selector'];
+
+                    if (trim((string) ($parameters['selector'] ?? '')) !== $evidenceSelector
+                        || trim((string) ($parameters['element_selector'] ?? '')) !== $evidenceSelector) {
+                        throw new \DomainException('Der Collection-Loop stimmt nicht mit dem bereits konfigurierten Ergebnis-Selector ueberein.');
+                    }
+                } else {
+                    $elementRef = trim((string) ($operation['element_ref'] ?? ''));
+                    $visualTarget = $this->visualTargetFromObservation($elementRef, $observation);
+                    $evidenceSelector = trim((string) ($operation['evidence_selector'] ?? ''));
+
+                    if ($visualTarget === []
+                        || $evidenceSelector === ''
+                        || ! hash_equals((string) $visualTarget['selector'], $evidenceSelector)
+                        || trim((string) ($parameters['selector'] ?? '')) !== $evidenceSelector
+                        || trim((string) ($parameters['element_selector'] ?? '')) !== $evidenceSelector) {
+                        throw new \DomainException('Der visuell zielgebundene Task ist nicht durch die aktuelle DOM-Evidenz abgesichert.');
+                    }
                 }
             }
 
@@ -566,6 +583,364 @@ class WorkflowCopilotRepairService
         $step->forceFill(['config_json' => $config])->save();
 
         return collect($tasks)->firstWhere('key', $taskKey) ?? [];
+    }
+
+    /**
+     * Repair the exact collection dependency instead of asking the planner to
+     * restate an already observable producer/consumer ordering problem.
+     *
+     * @param  array<string, mixed>  $task
+     * @param  array<string, mixed>  $checkpoint
+     * @return array<string, mixed>
+     */
+    protected function collectionDependencyPlan(
+        WorkflowCopilotSession $session,
+        WorkflowStep $step,
+        array $task,
+        array $checkpoint,
+    ): array {
+        if (($task['task_key'] ?? null) !== 'data.append_to_array'
+            || (bool) ($checkpoint['successful'] ?? false)
+            || ! in_array(Str::lower(trim((string) ($checkpoint['outcome'] ?? 'failed'))), ['failed', 'timeout'], true)) {
+            return [];
+        }
+
+        $sourceVariable = trim((string) ($task['value_from_variable'] ?? ''));
+
+        if ($sourceVariable === '') {
+            return [];
+        }
+
+        $tasks = collect($step->task_cards)->values();
+        $consumerIndex = $tasks->search(
+            fn (array $candidate): bool => (string) ($candidate['key'] ?? '') === (string) ($task['key'] ?? ''),
+        );
+        $producerIndex = $tasks->search(function (array $candidate) use ($sourceVariable): bool {
+            return in_array((string) ($candidate['task_key'] ?? ''), [
+                'browser.read_searchengine_result',
+                'browser.read_element_fields',
+            ], true)
+                && trim((string) ($candidate['output_variable'] ?? '')) === $sourceVariable;
+        });
+
+        if ($consumerIndex === false || $producerIndex === false) {
+            return [];
+        }
+
+        $producer = $tasks->get($producerIndex);
+
+        if (! is_array($producer)) {
+            return [];
+        }
+
+        $scopeVariable = trim((string) ($producer['scope_variable'] ?? $sourceVariable)) ?: $sourceVariable;
+        $loopIndex = $tasks->search(function (array $candidate) use ($scopeVariable): bool {
+            return ($candidate['task_key'] ?? null) === 'loop.for_each_element'
+                && trim((string) ($candidate['store_current_element_as'] ?? 'current_result')) === $scopeVariable;
+        });
+        $loopEndIndex = false;
+
+        if ($loopIndex !== false) {
+            $loop = $tasks->get($loopIndex);
+            $pairId = is_array($loop) ? trim((string) ($loop['loop_pair_id'] ?? '')) : '';
+
+            if ($pairId === '') {
+                return [];
+            }
+
+            $loopEndIndex = $tasks->search(
+                fn (array $candidate): bool => ($candidate['task_key'] ?? null) === 'loop.end'
+                    && trim((string) ($candidate['loop_pair_id'] ?? '')) === $pairId,
+            );
+
+            if ($loopEndIndex === false) {
+                return [];
+            }
+
+            if ($producerIndex > $loopIndex
+                && $consumerIndex > $producerIndex
+                && $consumerIndex < $loopEndIndex) {
+                return [];
+            }
+        }
+
+        $workflow = Workflow::query()
+            ->with(['steps' => fn ($query) => $query->ordered()])
+            ->find($step->workflow_id);
+
+        if (! $workflow) {
+            return [];
+        }
+
+        $operations = [];
+        $insertPosition = $loopIndex !== false ? (int) $loopIndex + 1 : (int) $consumerIndex;
+        $selectorEvidence = [];
+
+        if ($loopIndex === false) {
+            $selectorEvidence = $this->collectionSelectorEvidenceForPlan($workflow, $step, $producer);
+
+            if ($selectorEvidence === []) {
+                return [];
+            }
+
+            $selector = (string) $selectorEvidence['selector'];
+            $browserWindow = trim((string) (
+                $producer['browser_window_name']
+                ?? $producer['browser_window']
+                ?? $selectorEvidence['browser_window']
+                ?? 'main'
+            )) ?: 'main';
+            $limit = $this->collectionLimit($session, $task, $producer);
+            $parameters = [
+                'selector' => $selector,
+                'element_selector' => $selector,
+                'browser_window' => $browserWindow,
+                'browser_window_name' => $browserWindow,
+                'limit' => $limit,
+                'only_visible' => 'true',
+                'store_current_element_as' => $scopeVariable,
+                'store_index_as' => 'result_index',
+            ];
+            $operations[] = [
+                'type' => 'insert_task',
+                'purpose' => 'collection_dependency',
+                'step_action_key' => (string) $step->action_key,
+                'task_catalog_key' => 'loop.for_each_element',
+                'card_key' => $this->uniqueStructuralTaskKey($step, 'Copilot Ergebnis-Loop'),
+                'title' => 'Ergebnisse durchlaufen',
+                'description' => 'Durchlaeuft den bereits konfigurierten Ergebnisbereich, bevor Reader und Array-Append ausgefuehrt werden.',
+                'parameters' => $parameters,
+                'insert_position' => $insertPosition,
+                'selector_source_step_action_key' => $selectorEvidence['step_action_key'],
+                'selector_source_task_key' => $selectorEvidence['task_key'],
+                'evidence_selector' => $selector,
+                'evidence_window' => $browserWindow,
+            ];
+        }
+
+        $operations[] = [
+            'type' => 'move_task',
+            'step_action_key' => (string) $step->action_key,
+            'task_key' => (string) ($producer['key'] ?? ''),
+            'insert_position' => $insertPosition + 1,
+        ];
+        $operations[] = [
+            'type' => 'move_task',
+            'step_action_key' => (string) $step->action_key,
+            'task_key' => (string) ($task['key'] ?? ''),
+            'insert_position' => $insertPosition + 2,
+        ];
+
+        return [
+            'action' => 'restart_with_workflow_changes',
+            'task_key' => (string) ($task['key'] ?? ''),
+            'operations' => $operations,
+            'reason' => $loopIndex === false
+                ? 'Die Array-Task lief vor ihrem Datenproduzenten und der Reader hatte keinen aktiven DOM-Loop. Der vorhandene Ergebnis-Selector wird als Loop verwendet; Reader und Append werden in ausfuehrbare Reihenfolge gebracht.'
+                : 'Reader und Array-Append lagen ausserhalb oder in falscher Reihenfolge innerhalb des bereits konfigurierten DOM-Loops. Beide Tasks werden in den Loop und in Producer-vor-Consumer-Reihenfolge verschoben.',
+            'planning_handoff' => [
+                'planner_profile' => 'deterministic_collection_dependency',
+                'source_variable' => $sourceVariable,
+                'producer_task_key' => $producer['key'] ?? null,
+                'consumer_task_key' => $task['key'] ?? null,
+                'selector_source_step' => $selectorEvidence['step_action_key'] ?? null,
+                'selector_source_task' => $selectorEvidence['task_key'] ?? null,
+            ],
+            'decision_trace' => [
+                'source' => 'deterministic_collection_dependency',
+                'requested_action' => 'structural_update',
+                'requested_operation_count' => count($operations),
+                'accepted_operation_count' => count($operations),
+                'rejected_operation_count' => 0,
+                'rejected_operations' => [],
+                'dependency' => [
+                    'variable' => $sourceVariable,
+                    'producer_index' => (int) $producerIndex,
+                    'consumer_index' => (int) $consumerIndex,
+                    'loop_index' => $loopIndex === false ? null : (int) $loopIndex,
+                ],
+            ],
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $producer
+     * @return array<string, mixed>
+     */
+    protected function collectionSelectorEvidenceForPlan(
+        Workflow $workflow,
+        WorkflowStep $targetStep,
+        array $producer,
+    ): array {
+        $targetPosition = (int) $targetStep->position;
+        $targetWindow = trim((string) ($producer['browser_window_name'] ?? $producer['browser_window'] ?? 'main')) ?: 'main';
+        $candidates = [];
+
+        foreach ($workflow->steps as $sourceStep) {
+            if (! $sourceStep->is_enabled) {
+                continue;
+            }
+
+            foreach ($sourceStep->task_cards as $sourceTask) {
+                if (($sourceTask['task_key'] ?? null) !== 'wait.selector') {
+                    continue;
+                }
+
+                $selector = trim((string) ($sourceTask['selector'] ?? $sourceTask['element_selector'] ?? ''));
+                $score = $this->collectionSelectorScore($sourceStep, $sourceTask, $targetStep, $targetWindow);
+
+                if (! $this->isSafeSelector($selector) || $score < 5) {
+                    continue;
+                }
+
+                $candidates[] = [
+                    'selector' => $selector,
+                    'step_action_key' => (string) $sourceStep->action_key,
+                    'task_key' => (string) ($sourceTask['key'] ?? ''),
+                    'browser_window' => trim((string) ($sourceTask['browser_window_name'] ?? $sourceTask['browser_window'] ?? $targetWindow)) ?: $targetWindow,
+                    'score' => $score,
+                    'distance' => abs($targetPosition - (int) $sourceStep->position),
+                ];
+            }
+        }
+
+        usort($candidates, static function (array $left, array $right): int {
+            return ((int) $right['score'] <=> (int) $left['score'])
+                ?: ((int) $left['distance'] <=> (int) $right['distance']);
+        });
+
+        return $candidates[0] ?? [];
+    }
+
+    /**
+     * @param  array<string, mixed>  $sourceTask
+     */
+    protected function collectionSelectorScore(
+        WorkflowStep $sourceStep,
+        array $sourceTask,
+        WorkflowStep $targetStep,
+        string $targetWindow,
+    ): int {
+        $selector = Str::lower(trim((string) ($sourceTask['selector'] ?? $sourceTask['element_selector'] ?? '')));
+        $text = Str::lower(implode(' ', array_filter([
+            $sourceStep->name,
+            $sourceStep->action_key,
+            $sourceTask['title'] ?? null,
+            $sourceTask['description'] ?? null,
+            $selector,
+        ], static fn (mixed $value): bool => is_scalar($value))));
+        $sourceWindow = trim((string) ($sourceTask['browser_window_name'] ?? $sourceTask['browser_window'] ?? 'main')) ?: 'main';
+        $score = 0;
+
+        if (preg_match('/(?:suchergebnis|ergebnis|treffer|result|product|produkt)/u', $text)) {
+            $score += 8;
+        }
+
+        if (preg_match('/(?:search|suche)/u', $text)) {
+            $score += 3;
+        }
+
+        if (preg_match('/(?:#search|data-rpos|result|product|item|\\.g(?:\\b|[.#:\\[]))/u', $selector)) {
+            $score += 5;
+        }
+
+        if (preg_match('/(?:textarea|input|button|cookie|consent|\\bbody\\b)/u', $selector)) {
+            $score -= 8;
+        }
+
+        if ((int) $sourceStep->position <= (int) $targetStep->position) {
+            $score += 2;
+        } else {
+            $score -= 4;
+        }
+
+        if ($sourceWindow === $targetWindow) {
+            $score += 2;
+        }
+
+        return $score;
+    }
+
+    /**
+     * Revalidates deterministic selector provenance while the locked workflow
+     * revision is being changed.
+     *
+     * @param  array<string, mixed>  $operation
+     * @return array<string, mixed>
+     */
+    protected function configuredCollectionSelectorEvidence(
+        Workflow $workflow,
+        WorkflowStep $targetStep,
+        array $operation,
+    ): array {
+        if (($operation['purpose'] ?? null) !== 'collection_dependency'
+            || ($operation['task_catalog_key'] ?? null) !== 'loop.for_each_element') {
+            return [];
+        }
+
+        $sourceStep = $workflow->steps()
+            ->where('action_key', trim((string) ($operation['selector_source_step_action_key'] ?? '')))
+            ->where('is_enabled', true)
+            ->first();
+        $sourceTaskKey = trim((string) ($operation['selector_source_task_key'] ?? ''));
+        $sourceTask = $sourceStep
+            ? collect($sourceStep->task_cards)->firstWhere('key', $sourceTaskKey)
+            : null;
+        $targetWindow = trim((string) data_get($operation, 'parameters.browser_window', 'main')) ?: 'main';
+        $selector = is_array($sourceTask)
+            ? trim((string) ($sourceTask['selector'] ?? $sourceTask['element_selector'] ?? ''))
+            : '';
+
+        if (! $sourceStep
+            || ! is_array($sourceTask)
+            || ($sourceTask['task_key'] ?? null) !== 'wait.selector'
+            || ! $this->isSafeSelector($selector)
+            || $this->collectionSelectorScore($sourceStep, $sourceTask, $targetStep, $targetWindow) < 5
+            || ! hash_equals($selector, trim((string) ($operation['evidence_selector'] ?? '')))) {
+            throw new \DomainException('Der konfigurierte Ergebnis-Selector der Collection-Reparatur ist nicht mehr gueltig oder eindeutig.');
+        }
+
+        return [
+            'selector' => $selector,
+            'browser_window' => trim((string) ($sourceTask['browser_window_name'] ?? $sourceTask['browser_window'] ?? $targetWindow)) ?: $targetWindow,
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $consumer
+     * @param  array<string, mixed>  $producer
+     */
+    protected function collectionLimit(
+        WorkflowCopilotSession $session,
+        array $consumer,
+        array $producer,
+    ): int {
+        foreach ([
+            $consumer['max_items'] ?? null,
+            $producer['max_items'] ?? null,
+            data_get($session->workflow_inputs_json, 'search_count'),
+            data_get($session->workflow_inputs_json, 'result_count'),
+        ] as $candidate) {
+            if (is_numeric($candidate) && (int) $candidate > 0) {
+                return min(10000, (int) $candidate);
+            }
+        }
+
+        $instructions = implode(' ', array_filter([
+            $session->goal,
+            json_encode($session->success_criteria_json, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+        ], static fn (mixed $value): bool => is_scalar($value)));
+
+        foreach ([
+            '/\b(?:top|erste[nrsm]*|maximal)\s*[-:]?\s*(\d{1,4})\b/ui',
+            '/\b(\d{1,4})\s*(?:such)?(?:treffer|ergebnisse|results)\b/ui',
+        ] as $pattern) {
+            if (preg_match($pattern, $instructions, $matches) === 1) {
+                return min(10000, max(0, (int) $matches[1]));
+            }
+        }
+
+        return 0;
     }
 
     /**
@@ -823,6 +1198,23 @@ class WorkflowCopilotRepairService
             }
         }
 
+        if ($taskCatalogKey === 'input.fill_field') {
+            $valueReference = $parameters['value_reference'] ?? null;
+
+            if (is_scalar($valueReference) && trim((string) $valueReference) !== '') {
+                $parameters['value_source'] = 'workflow_variable';
+                $parameters['workflow_variable'] = trim((string) $valueReference);
+            }
+
+            $fallbackValue = $parameters['fallback_value'] ?? null;
+
+            if (is_scalar($fallbackValue) && trim((string) $fallbackValue) !== '') {
+                $parameters['value_fallback'] = trim((string) $fallbackValue);
+            }
+
+            unset($parameters['value_reference'], $parameters['fallback_value']);
+        }
+
         return $parameters;
     }
 
@@ -851,6 +1243,30 @@ class WorkflowCopilotRepairService
         $normalized = [];
 
         foreach ($changes as $key => $value) {
+            if ($key === 'value_source') {
+                $value = Str::lower(trim((string) $value));
+
+                if (! in_array($value, ['fixed', 'workflow_variable'], true)) {
+                    continue;
+                }
+            }
+
+            if ($key === 'workflow_variable') {
+                $value = trim((string) $value);
+
+                if ($value === '' || preg_match('/^[A-Za-z0-9_.-]+$/', $value) !== 1) {
+                    continue;
+                }
+            }
+
+            if ($key === 'value_fallback') {
+                if (! is_scalar($value)) {
+                    continue;
+                }
+
+                $value = (string) $value;
+            }
+
             if ($this->isSelectorField($key, $definition)) {
                 $value = trim((string) $value);
 
@@ -1417,7 +1833,7 @@ class WorkflowCopilotRepairService
             'structural_operations' => [
                 'insert_task' => [
                     'fields' => ['type', 'step_action_key', 'task_catalog_key', 'title', 'description', 'parameters', 'insert_position', 'element_ref'],
-                    'constraint' => 'Kataloggebundene Tasks nicht duplizieren. Fuer Tasks mit sichtbarem Ziel ist eine von Vision vorgeschlagene trusted element_ref Pflicht; Selector und Browserfenster werden serverseitig aus DOM-Evidenz abgeleitet. loop.for_each_element erzeugt sein Loop-Ende automatisch. Fuer input.fill_field kann parameters.value_reference den Variablennamen angeben.',
+                    'constraint' => 'Kataloggebundene Tasks nicht duplizieren. Fuer Tasks mit sichtbarem Ziel ist eine von Vision vorgeschlagene trusted element_ref Pflicht; Selector und Browserfenster werden serverseitig aus DOM-Evidenz abgeleitet. loop.for_each_element erzeugt sein Loop-Ende automatisch. Fuer input.fill_field setzt parameters.value_reference eine Workflow-Variable; optional definiert parameters.fallback_value den festen Ersatzwert.',
                 ],
                 'move_task' => [
                     'fields' => ['type', 'step_action_key', 'task_key', 'insert_position'],
@@ -1439,7 +1855,7 @@ class WorkflowCopilotRepairService
             ),
         ]);
 
-        return 'Waehle die kleinste sichere Reparatur, die den Workflow autonom weiter zum Ziel bringt. Als configured_but_not_executed markierte Tasks sind vorhanden und wurden nur noch nicht ausgefuehrt; fuege sie nicht doppelt ein, sondern repariere zuerst Fortsetzung, Reihenfolge oder Routen. Wenn der aktuelle Bildschirm Folge fehlender oder falsch gerouteter Workflow-Logik ist, verwende structural_update statt pause. Schema: {"action":"retry|update_task|continue_route|structural_update|pause","element_ref":"el_... oder leer","changes":{},"operations":[],"reason":"konkreter Befund"}. Nach structural_update wird der Workflow revisioniert von Anfang an getestet. Zustandsveraendernde Tasks und entsprechende insert_task-Operationen duerfen nur eine passende trusted_vision_element_ref verwenden; deren Selector wird nicht vom Modell uebernommen. Daten: '.json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        return 'Waehle die kleinste sichere Reparatur, die den Workflow autonom weiter zum Ziel bringt. Als configured_but_not_executed markierte Tasks sind vorhanden und wurden nur noch nicht ausgefuehrt; fuege sie nicht doppelt ein, sondern repariere zuerst Fortsetzung, Reihenfolge oder Routen. Wenn der aktuelle Bildschirm Folge fehlender oder falsch gerouteter Workflow-Logik ist, verwende structural_update statt pause. Fuer input.fill_field setzt eine Workflow-Variable immer gemeinsam changes.value_source=workflow_variable und changes.workflow_variable; ein fester Wert setzt changes.value_source=fixed sowie changes.value und changes.input. Schema: {"action":"retry|update_task|continue_route|structural_update|pause","element_ref":"el_... oder leer","changes":{},"operations":[],"reason":"konkreter Befund"}. Nach structural_update wird der Workflow revisioniert von Anfang an getestet. Zustandsveraendernde Tasks und entsprechende insert_task-Operationen duerfen nur eine passende trusted_vision_element_ref verwenden; deren Selector wird nicht vom Modell uebernommen. Daten: '.json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
     }
 
     protected function normalizeStructuralOperations(
@@ -1715,9 +2131,18 @@ class WorkflowCopilotRepairService
                         ?? data_get($visualTarget, 'suggested_parameters.value_reference');
 
                     if (is_scalar($valueReference) && trim((string) $valueReference) !== '') {
-                        $parameters['value'] = trim((string) $valueReference);
-                        $parameters['input'] = trim((string) $valueReference);
+                        $parameters['value_source'] = 'workflow_variable';
+                        $parameters['workflow_variable'] = trim((string) $valueReference);
                     }
+
+                    $fallbackValue = data_get($parameters, 'fallback_value')
+                        ?? data_get($visualTarget, 'suggested_parameters.fallback_value');
+
+                    if (is_scalar($fallbackValue) && trim((string) $fallbackValue) !== '') {
+                        $parameters['value_fallback'] = trim((string) $fallbackValue);
+                    }
+
+                    unset($parameters['value_reference'], $parameters['fallback_value']);
                 }
             }
 

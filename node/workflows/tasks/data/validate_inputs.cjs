@@ -575,10 +575,19 @@ async function run(context = {}) {
   }
 
   const groupName = outputGroupName(input);
+  const declaredValues = Object.fromEntries(definitions.map((definition) => {
+    const outputName = outputVariableName(definition.name);
+
+    return [
+      outputName,
+      Object.prototype.hasOwnProperty.call(values, outputName) ? values[outputName] : null,
+    ];
+  }));
   const workflowVariables = {
     ...(context.workflow_variables || {}),
+    ...declaredValues,
     ...values,
-    [groupName]: values,
+    [groupName]: declaredValues,
   };
 
   context.workflow_variables = workflowVariables;
