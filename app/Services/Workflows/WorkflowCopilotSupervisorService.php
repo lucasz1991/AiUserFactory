@@ -11,6 +11,7 @@ use App\Models\WorkflowRevision;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowRunCheckpoint;
 use App\Models\WorkflowStep;
+use App\Models\WorkflowStepRun;
 use App\Models\WorkflowTaskAttempt;
 use App\Services\Ai\WorkflowCopilotAiUsageTracker;
 use App\Services\Ai\WorkflowCopilotVisionService;
@@ -104,6 +105,14 @@ class WorkflowCopilotSupervisorService
         $context = is_array($run->context_json) ? $run->context_json : [];
         $checkpoint = is_array($context['copilot_checkpoint'] ?? null) ? $context['copilot_checkpoint'] : [];
 
+        if ($checkpoint !== []
+            && ! $this->checkpointProcessed($session, $run, $checkpoint)
+            && $this->checkpointAlreadyObserved($session, $run, $checkpoint)) {
+            $this->recoverObservedSuccessfulCheckpoint($session, $run, $checkpoint);
+
+            return;
+        }
+
         if ($checkpoint !== [] && ! $this->checkpointProcessed($session, $run, $checkpoint)) {
             $this->processCheckpoint($session, $run, $checkpoint);
 
@@ -150,6 +159,74 @@ class WorkflowCopilotSupervisorService
             true,
         );
         $this->handleTechnicalRunFailure($session, $run);
+    }
+
+    /**
+     * A successful checkpoint with a recorded continuation failure must be
+     * resumed, not sent through another screenshot and model analysis.
+     *
+     * @param  array<string, mixed>  $checkpoint
+     */
+    protected function checkpointAlreadyObserved(
+        WorkflowCopilotSession $session,
+        WorkflowRun $run,
+        array $checkpoint,
+    ): bool {
+        if (! (bool) ($checkpoint['successful'] ?? false)
+            || ($checkpoint['kind'] ?? 'regular') !== 'regular'
+            || trim((string) data_get($session->state_json, 'observed_checkpoint_id', '')) !== $this->runtimeCheckpointId($run, $checkpoint)) {
+            return false;
+        }
+
+        $runtimeCheckpointId = $this->runtimeCheckpointId($run, $checkpoint);
+
+        return $session->events()
+            ->where('event_type', 'checkpoint.continuation_deferred')
+            ->latest('sequence')
+            ->limit(50)
+            ->get()
+            ->contains(fn ($event): bool => data_get($event->payload_json, 'runtime_checkpoint_id') === $runtimeCheckpointId);
+    }
+
+    /**
+     * @param  array<string, mixed>  $checkpoint
+     */
+    protected function recoverObservedSuccessfulCheckpoint(
+        WorkflowCopilotSession $session,
+        WorkflowRun $run,
+        array $checkpoint,
+    ): void {
+        if (! $this->execution->resumeCopilotCheckpoint($run)) {
+            $freshSession = $session->fresh();
+
+            if (! $freshSession
+                || $freshSession->status === WorkflowCopilotSession::STATUS_PAUSED
+                || in_array($freshSession->status, WorkflowCopilotSession::TERMINAL_STATUSES, true)) {
+                return;
+            }
+
+            $this->appendContinuationDeferredEvent($freshSession, $run, $checkpoint);
+
+            return;
+        }
+
+        $this->markContinuationApplied($session, $checkpoint, 'resume_recovered_after_observation');
+        $this->sessions->appendEvent(
+            $session->fresh() ?? $session,
+            'checkpoint.continuation_recovered',
+            'Der bereits analysierte erfolgreiche Checkpoint wurde ohne weitere Bildanalyse fortgesetzt.',
+            [
+                'workflow_run_id' => (int) $run->id,
+                'checkpoint_id' => $this->runtimeCheckpointId($run, $checkpoint),
+                'checkpoint_kind' => $checkpoint['kind'] ?? 'regular',
+                'task_key' => $checkpoint['task_key'] ?? null,
+                'next_action' => $checkpoint['next_action'] ?? null,
+                'next_task_key' => $checkpoint['next_task_key'] ?? null,
+            ],
+            'executing',
+            'warning',
+            true,
+        );
     }
 
     /**
@@ -465,6 +542,19 @@ class WorkflowCopilotSupervisorService
             $vision,
         );
         $this->markCheckpointObserved($session, $checkpoint, $storedCheckpoint, $observation, $vision);
+
+        if ($vision !== []) {
+            $this->appendVisionAnalysisCompletedEvent(
+                $session->fresh() ?? $session,
+                $run,
+                $stepRun,
+                $checkpoint,
+                $storedCheckpoint,
+                $observation,
+                $vision,
+            );
+        }
+
         $this->sessions->appendEvent(
             $session,
             'checkpoint.review_pause',
@@ -547,7 +637,20 @@ class WorkflowCopilotSupervisorService
                 return;
             }
 
-            $message = 'Task `'.($checkpoint['task_title'] ?? $checkpoint['task_key'] ?? '').'` wurde erfolgreich ausgefuehrt.';
+            if (! $this->execution->resumeCopilotCheckpoint($run)) {
+                $freshSession = $session->fresh();
+
+                if ($freshSession
+                    && $freshSession->status !== WorkflowCopilotSession::STATUS_PAUSED
+                    && ! in_array($freshSession->status, WorkflowCopilotSession::TERMINAL_STATUSES, true)) {
+                    $this->appendContinuationDeferredEvent($freshSession, $run, $checkpoint, $storedCheckpoint->id);
+                }
+
+                return;
+            }
+
+            $this->markContinuationApplied($session, $checkpoint, 'resume');
+            $message = $this->checkpointContinuationMessage($checkpoint);
             $this->sessions->appendEvent(
                 $session,
                 'checkpoint.continue',
@@ -571,17 +674,6 @@ class WorkflowCopilotSupervisorService
                     ['task_key' => $checkpoint['next_task_key'] ?? null],
                     'executing',
                 );
-            }
-
-            $this->sessions->transition(
-                $session,
-                WorkflowCopilotSession::STATUS_RUNNING,
-                'executing',
-                ['next_action' => (string) ($checkpoint['next_action'] ?? '')],
-                'Der Workflow wird am sicheren Task-Checkpoint fortgesetzt.',
-            );
-            if ($this->execution->resumeCopilotCheckpoint($run)) {
-                $this->markContinuationApplied($session, $checkpoint, 'resume');
             }
 
             return;
@@ -2756,6 +2848,214 @@ class WorkflowCopilotSupervisorService
                 $this->sessions->recordAiUsage($session, $records, $source);
             }
         }
+    }
+
+    protected function appendVisionAnalysisCompletedEvent(
+        WorkflowCopilotSession $session,
+        WorkflowRun $run,
+        WorkflowStepRun $stepRun,
+        array $checkpoint,
+        WorkflowRunCheckpoint $storedCheckpoint,
+        array $observation,
+        array $vision,
+    ): void {
+        $runtimeCheckpointId = $this->runtimeCheckpointId($run, $checkpoint);
+        $elements = collect(is_array($vision['relevant_elements'] ?? null) ? $vision['relevant_elements'] : [])
+            ->take(8)
+            ->map(fn (mixed $element): array => [
+                'element_ref' => Str::limit(trim((string) data_get($element, 'element_ref', '')), 191, ''),
+                'reason' => Str::limit(trim((string) data_get($element, 'reason', '')), 300, ''),
+                'confidence' => is_numeric(data_get($element, 'confidence'))
+                    ? round(max(0, min(1, (float) data_get($element, 'confidence'))), 3)
+                    : null,
+            ])
+            ->filter(fn (array $element): bool => $element['element_ref'] !== '')
+            ->values()
+            ->all();
+        $actions = collect(is_array($vision['suggested_task_actions'] ?? null) ? $vision['suggested_task_actions'] : [])
+            ->take(8)
+            ->map(fn (mixed $action): array => [
+                'task_key' => Str::limit(trim((string) data_get($action, 'task_key', '')), 191, ''),
+                'element_ref' => Str::limit(trim((string) data_get($action, 'element_ref', '')), 191, ''),
+                'reason' => Str::limit(trim((string) data_get($action, 'reason', '')), 300, ''),
+                'confidence' => is_numeric(data_get($action, 'confidence'))
+                    ? round(max(0, min(1, (float) data_get($action, 'confidence'))), 3)
+                    : null,
+            ])
+            ->filter(fn (array $action): bool => $action['task_key'] !== '')
+            ->values()
+            ->all();
+        $blockers = collect(is_array($vision['blockers'] ?? null) ? $vision['blockers'] : [])
+            ->map(fn (mixed $blocker): string => Str::limit(trim((string) $blocker), 300, ''))
+            ->filter()
+            ->take(8)
+            ->values()
+            ->all();
+        $payload = [
+            'runtime_checkpoint_id' => $runtimeCheckpointId,
+            'workflow_run_id' => (int) $run->id,
+            'workflow_step_run_id' => (int) $stepRun->id,
+            'checkpoint_id' => (int) $storedCheckpoint->id,
+            'task_key' => $checkpoint['task_key'] ?? null,
+            'page_type' => Str::limit(trim((string) ($vision['page_type'] ?? 'unknown')), 120, ''),
+            'ui_state' => Str::limit(trim((string) ($vision['ui_state'] ?? 'unknown_browser_state')), 160, ''),
+            'goal_progress' => $vision['goal_progress'] ?? null,
+            'confidence' => is_numeric($vision['confidence'] ?? null)
+                ? round(max(0, min(1, (float) $vision['confidence'])), 3)
+                : null,
+            'verdict' => Str::lower(trim((string) ($vision['verdict'] ?? 'pause'))),
+            'safe_pause' => (bool) ($vision['safe_pause'] ?? false),
+            'needs_screenshot' => (bool) ($vision['needs_screenshot'] ?? false),
+            'blockers' => $blockers,
+            'relevant_elements' => $elements,
+            'suggested_task_actions' => $actions,
+            'model' => Str::limit(trim((string) ($vision['model'] ?? '')), 200, ''),
+            'analysis_source' => Str::limit(trim((string) ($vision['analysis_source'] ?? '')), 80, ''),
+            'fallback_used' => (bool) ($vision['fallback_used'] ?? false),
+            'duration_ms' => max(0, (int) ($vision['duration_ms'] ?? 0)),
+            'state_signature' => Str::limit(trim((string) ($observation['state_signature'] ?? '')), 191, ''),
+        ];
+        $payload['analysis_signature'] = hash('sha256', (string) json_encode(
+            Arr::only($payload, [
+                'runtime_checkpoint_id',
+                'state_signature',
+                'page_type',
+                'ui_state',
+                'goal_progress',
+                'confidence',
+                'verdict',
+                'blockers',
+                'relevant_elements',
+                'suggested_task_actions',
+                'model',
+                'analysis_source',
+                'fallback_used',
+            ]),
+            JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE,
+        ));
+        $alreadyReported = $session->events()
+            ->where('event_type', 'vision.analysis_completed')
+            ->latest('sequence')
+            ->limit(100)
+            ->get()
+            ->contains(fn ($event): bool => hash_equals(
+                $payload['analysis_signature'],
+                (string) data_get($event->payload_json, 'analysis_signature', ''),
+            ));
+
+        if ($alreadyReported) {
+            return;
+        }
+
+        $this->sessions->appendEvent(
+            $session,
+            'vision.analysis_completed',
+            $this->visionAnalysisMessage($payload),
+            $payload,
+            'visual_analysis',
+            ($payload['verdict'] ?? null) === 'pause' ? 'warning' : 'success',
+            true,
+        );
+    }
+
+    protected function visionAnalysisMessage(array $analysis): string
+    {
+        $confidence = is_numeric($analysis['confidence'] ?? null)
+            ? number_format((float) $analysis['confidence'] * 100, 0, ',', '.').' %'
+            : 'ohne Konfidenzwert';
+        $verdict = match ($analysis['verdict'] ?? 'pause') {
+            'pass' => 'Ziel erreicht',
+            'continue' => 'Workflow fortsetzen',
+            default => 'vor weiterer Aktion pruefen',
+        };
+        $parts = [
+            'Bildanalyse abgeschlossen: '.($analysis['page_type'] ?: 'unbekannte Seite')
+                .' / '.($analysis['ui_state'] ?: 'unbekannter Zustand')
+                .' ('.$confidence.').',
+            'Entscheidung: '.$verdict.'.',
+        ];
+        $elements = collect($analysis['relevant_elements'] ?? [])
+            ->map(fn (array $element): string => trim((string) ($element['reason'] ?? '')) ?: '`'.$element['element_ref'].'`')
+            ->filter()
+            ->take(4)
+            ->implode('; ');
+
+        if ($elements !== '') {
+            $parts[] = 'Erkannt: '.$elements.'.';
+        }
+
+        $actions = collect($analysis['suggested_task_actions'] ?? [])
+            ->map(function (array $action): string {
+                $target = trim((string) ($action['element_ref'] ?? ''));
+
+                return '`'.$action['task_key'].'`'.($target !== '' ? ' an `'.$target.'`' : '');
+            })
+            ->filter()
+            ->take(4)
+            ->implode('; ');
+
+        if ($actions !== '') {
+            $parts[] = 'Vorgeschlagene Tasks: '.$actions.'.';
+        }
+
+        $blockers = collect($analysis['blockers'] ?? [])->filter()->take(3)->implode('; ');
+
+        if ($blockers !== '') {
+            $parts[] = 'Hinweise: '.$blockers.'.';
+        }
+
+        return Str::limit(implode(' ', $parts), 2000, '');
+    }
+
+    protected function checkpointContinuationMessage(array $checkpoint): string
+    {
+        $task = trim((string) ($checkpoint['task_title'] ?? $checkpoint['task_key'] ?? 'Task')) ?: 'Task';
+        $nextTask = trim((string) ($checkpoint['next_task_key'] ?? ''));
+
+        if (($checkpoint['next_action'] ?? null) === 'next_task' && $nextTask !== '') {
+            return 'Task `'.$task.'` war erfolgreich. Fortsetzung angewendet: Task `'.$nextTask.'` wird jetzt ausgefuehrt.';
+        }
+
+        return 'Task `'.$task.'` war erfolgreich. Fortsetzung angewendet: Der Step wird abgeschlossen und die konfigurierte Folgeroute gestartet.';
+    }
+
+    protected function appendContinuationDeferredEvent(
+        WorkflowCopilotSession $session,
+        WorkflowRun $run,
+        array $checkpoint,
+        ?int $storedCheckpointId = null,
+    ): void {
+        $runtimeCheckpointId = $this->runtimeCheckpointId($run, $checkpoint);
+        $alreadyReported = $session->events()
+            ->where('event_type', 'checkpoint.continuation_deferred')
+            ->latest('sequence')
+            ->limit(50)
+            ->get()
+            ->contains(fn ($event): bool => data_get($event->payload_json, 'runtime_checkpoint_id') === $runtimeCheckpointId);
+
+        if ($alreadyReported) {
+            return;
+        }
+
+        $this->sessions->appendEvent(
+            $session,
+            'checkpoint.continuation_deferred',
+            'Der erfolgreiche Checkpoint wurde analysiert, aber die Fortsetzung noch nicht angewendet. Die Queue-Ueberwachung versucht denselben Checkpoint ohne erneute Bildanalyse wiederaufzunehmen.',
+            [
+                'runtime_checkpoint_id' => $runtimeCheckpointId,
+                'workflow_run_id' => (int) $run->id,
+                'checkpoint_id' => $storedCheckpointId,
+                'task_key' => $checkpoint['task_key'] ?? null,
+                'next_action' => $checkpoint['next_action'] ?? null,
+                'next_task_key' => $checkpoint['next_task_key'] ?? null,
+                'run_status' => (string) ($run->fresh()?->status ?? $run->status),
+                'automatic_retry_after_seconds' => 2,
+            ],
+            'queue_recovery',
+            'warning',
+            true,
+        );
+        WorkflowCopilotSupervisorJob::dispatch((int) $session->id)->delay(now()->addSeconds(2));
     }
 
     /**

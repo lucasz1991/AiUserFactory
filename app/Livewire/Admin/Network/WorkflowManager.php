@@ -1394,7 +1394,7 @@ class WorkflowManager extends Component
         $afterSequence = max(0, (int) ($session->last_event_sequence ?? 0) - 50);
         $this->copilotEvents = app(WorkflowCopilotSessionService::class)
             ->eventsAfter($session, $afterSequence, 50)
-            ->filter(fn ($event): bool => $this->isVisibleCopilotEvent((string) ($event->event_type ?? '')))
+            ->filter(fn ($event): bool => $this->isVisibleCopilotEvent($event))
             ->map(fn ($event): array => [
                 'id' => (int) $event->getKey(),
                 'sequence' => (int) ($event->sequence ?? 0),
@@ -1870,10 +1870,75 @@ class WorkflowManager extends Component
             'remaining_minutes' => max(0, $maxMinutes - $elapsedMinutes),
             'started_at' => optional($session->started_at)->format('d.m.Y H:i:s'),
             'finished_at' => optional($session->finished_at)->format('d.m.Y H:i:s'),
+            'vision_analysis' => $this->copilotVisionAnalysis($state),
             'verification_report' => $this->copilotVerificationReport($session, $state),
             'checkpoints' => $checkpoints,
             'revisions' => $revisions,
             'dom_elements' => $domElements,
+        ];
+    }
+
+    protected function copilotVisionAnalysis(array $state): ?array
+    {
+        $vision = is_array($state['vision'] ?? null) ? $state['vision'] : [];
+
+        if ($vision === []) {
+            return null;
+        }
+
+        $confidence = is_numeric($vision['confidence'] ?? null)
+            ? round(max(0, min(1, (float) $vision['confidence'])), 3)
+            : null;
+        $verdict = Str::lower(trim((string) ($vision['verdict'] ?? 'pause')));
+        $progress = $vision['goal_progress'] ?? null;
+
+        return [
+            'page_type' => Str::limit(trim((string) ($vision['page_type'] ?? '')), 120, ''),
+            'ui_state' => Str::limit(trim((string) ($vision['ui_state'] ?? '')), 160, ''),
+            'goal_progress' => is_numeric($progress)
+                ? number_format(max(0, min(1, (float) $progress)) * 100, 0, ',', '.').' %'
+                : $this->copilotDisplayValue($progress),
+            'confidence' => $confidence,
+            'verdict' => $verdict,
+            'verdict_label' => match ($verdict) {
+                'pass' => 'Ziel erreicht',
+                'continue' => 'Fortsetzen',
+                default => 'Pruefen',
+            },
+            'blockers' => collect(is_array($vision['blockers'] ?? null) ? $vision['blockers'] : [])
+                ->map(fn (mixed $item): string => Str::limit(trim((string) $item), 300, ''))
+                ->filter()
+                ->take(5)
+                ->values()
+                ->all(),
+            'relevant_elements' => collect(is_array($vision['relevant_elements'] ?? null) ? $vision['relevant_elements'] : [])
+                ->map(fn (mixed $element): array => [
+                    'element_ref' => Str::limit(trim((string) data_get($element, 'element_ref', '')), 191, ''),
+                    'reason' => Str::limit(trim((string) data_get($element, 'reason', '')), 300, ''),
+                    'confidence' => is_numeric(data_get($element, 'confidence'))
+                        ? round(max(0, min(1, (float) data_get($element, 'confidence'))), 3)
+                        : null,
+                ])
+                ->filter(fn (array $element): bool => $element['element_ref'] !== '')
+                ->take(8)
+                ->values()
+                ->all(),
+            'suggested_task_actions' => collect(is_array($vision['suggested_task_actions'] ?? null) ? $vision['suggested_task_actions'] : [])
+                ->map(fn (mixed $action): array => [
+                    'task_key' => Str::limit(trim((string) data_get($action, 'task_key', '')), 191, ''),
+                    'element_ref' => Str::limit(trim((string) data_get($action, 'element_ref', '')), 191, ''),
+                    'reason' => Str::limit(trim((string) data_get($action, 'reason', '')), 300, ''),
+                    'confidence' => is_numeric(data_get($action, 'confidence'))
+                        ? round(max(0, min(1, (float) data_get($action, 'confidence'))), 3)
+                        : null,
+                ])
+                ->filter(fn (array $action): bool => $action['task_key'] !== '')
+                ->take(8)
+                ->values()
+                ->all(),
+            'model' => Str::limit(trim((string) ($vision['model'] ?? '')), 200, ''),
+            'analysis_source' => Str::limit(trim((string) ($vision['analysis_source'] ?? '')), 80, ''),
+            'duration_ms' => max(0, (int) ($vision['duration_ms'] ?? 0)),
         ];
     }
 
@@ -1958,15 +2023,35 @@ class WorkflowManager extends Component
         return Str::limit(json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?: '', 1000, '');
     }
 
-    protected function isVisibleCopilotEvent(string $eventType): bool
+    protected function isVisibleCopilotEvent(mixed $event): bool
     {
-        return ! Str::contains(Str::lower(trim($eventType)), [
+        $eventType = is_object($event)
+            ? (string) ($event->event_type ?? '')
+            : (string) $event;
+        $eventType = Str::lower(trim($eventType));
+
+        if (Str::contains($eventType, [
             'reasoning',
             'internal_analysis',
             'chain_of_thought',
             'chain-of-thought',
             'thought',
-        ]);
+        ])) {
+            return false;
+        }
+
+        return ! in_array($eventType, [
+            'ai.usage_recorded',
+            'checkpoint.created',
+            'checkpoint.review_pause',
+            'observation.captured',
+            'observation.started',
+            'queue.recovery_dispatched',
+            'session.status_changed',
+            'task.completed',
+            'task.scheduled',
+            'vision.analysis_started',
+        ], true);
     }
 
     protected function selectedWorkflow(): ?Workflow

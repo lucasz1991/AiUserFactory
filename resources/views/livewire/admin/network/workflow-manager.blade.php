@@ -1036,6 +1036,94 @@
                                     </div>
                                 </div>
 
+                                @if(is_array(data_get($copilotStatus, 'vision_analysis')))
+                                    @php
+                                        $visionAnalysis = data_get($copilotStatus, 'vision_analysis');
+                                        $visionVerdict = (string) data_get($visionAnalysis, 'verdict', 'pause');
+                                    @endphp
+                                    <section data-workflow-copilot-vision-analysis class="rounded-xl border border-slate-200 bg-white p-4 text-sm">
+                                        <div class="flex flex-wrap items-start justify-between gap-3">
+                                            <div>
+                                                <p class="text-xs font-black uppercase tracking-[.12em] text-slate-500">Letzte Bildanalyse</p>
+                                                <h3 class="mt-1 font-bold text-slate-950">
+                                                    {{ data_get($visionAnalysis, 'page_type') ?: 'Unbekannte Seite' }}
+                                                    · {{ data_get($visionAnalysis, 'ui_state') ?: 'Unbekannter Zustand' }}
+                                                </h3>
+                                            </div>
+                                            <span class="rounded-full px-3 py-1 text-xs font-black {{ $visionVerdict === 'pass' ? 'bg-emerald-100 text-emerald-800' : ($visionVerdict === 'continue' ? 'bg-cyan-100 text-cyan-800' : 'bg-amber-100 text-amber-800') }}">
+                                                {{ data_get($visionAnalysis, 'verdict_label') }}
+                                                @if(data_get($visionAnalysis, 'confidence') !== null)
+                                                    · {{ number_format((float) data_get($visionAnalysis, 'confidence') * 100, 0, ',', '.') }} %
+                                                @endif
+                                            </span>
+                                        </div>
+
+                                        <dl class="mt-3 grid gap-2 text-xs sm:grid-cols-3">
+                                            <div class="rounded-lg bg-slate-50 p-2"><dt class="font-semibold text-slate-500">Seitentyp</dt><dd class="mt-1 font-bold text-slate-900">{{ data_get($visionAnalysis, 'page_type') ?: '-' }}</dd></div>
+                                            <div class="rounded-lg bg-slate-50 p-2"><dt class="font-semibold text-slate-500">UI-Zustand</dt><dd class="mt-1 font-bold text-slate-900">{{ data_get($visionAnalysis, 'ui_state') ?: '-' }}</dd></div>
+                                            <div class="rounded-lg bg-slate-50 p-2"><dt class="font-semibold text-slate-500">Zielfortschritt</dt><dd class="mt-1 font-bold text-slate-900">{{ data_get($visionAnalysis, 'goal_progress') ?: '-' }}</dd></div>
+                                        </dl>
+
+                                        <div class="mt-4 grid gap-4 lg:grid-cols-2">
+                                            <div>
+                                                <h4 class="text-xs font-bold uppercase tracking-[.08em] text-slate-500">Erkannte Elemente</h4>
+                                                <div class="mt-2 space-y-2">
+                                                    @forelse(data_get($visionAnalysis, 'relevant_elements', []) as $element)
+                                                        <div class="break-words border-l-2 border-cyan-300 pl-2 text-xs text-slate-700">
+                                                            <code class="font-bold text-cyan-800">{{ $element['element_ref'] }}</code>
+                                                            · {{ $element['reason'] ?: 'Als relevant erkannt' }}
+                                                            @if($element['confidence'] !== null)
+                                                                ({{ number_format((float) $element['confidence'] * 100, 0, ',', '.') }} %)
+                                                            @endif
+                                                        </div>
+                                                    @empty
+                                                        <p class="text-xs text-slate-500">Keine sicher zugeordneten Elemente.</p>
+                                                    @endforelse
+                                                </div>
+                                            </div>
+
+                                            <div>
+                                                <h4 class="text-xs font-bold uppercase tracking-[.08em] text-slate-500">Vorgeschlagene Workflow-Aktionen</h4>
+                                                <div class="mt-2 space-y-2">
+                                                    @forelse(data_get($visionAnalysis, 'suggested_task_actions', []) as $action)
+                                                        <div class="break-words border-l-2 border-emerald-300 pl-2 text-xs text-slate-700">
+                                                            <code class="font-bold text-emerald-800">{{ $action['task_key'] }}</code>
+                                                            @if(filled($action['element_ref']))
+                                                                an <code>{{ $action['element_ref'] }}</code>
+                                                            @endif
+                                                            @if(filled($action['reason']))
+                                                                · {{ $action['reason'] }}
+                                                            @endif
+                                                        </div>
+                                                    @empty
+                                                        <p class="text-xs text-slate-500">Keine direkte Task-Aktion vorgeschlagen.</p>
+                                                    @endforelse
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        @if(data_get($visionAnalysis, 'blockers', []) !== [])
+                                            <div class="mt-4 border-t border-amber-100 pt-3">
+                                                <h4 class="text-xs font-bold uppercase tracking-[.08em] text-amber-800">Hinweise und Hindernisse</h4>
+                                                <ul class="mt-2 list-disc space-y-1 pl-5 text-xs text-amber-900">
+                                                    @foreach(data_get($visionAnalysis, 'blockers', []) as $blocker)
+                                                        <li class="break-words">{{ $blocker }}</li>
+                                                    @endforeach
+                                                </ul>
+                                            </div>
+                                        @endif
+
+                                        @if(filled(data_get($visionAnalysis, 'model')) || data_get($visionAnalysis, 'duration_ms', 0) > 0)
+                                            <p class="mt-3 text-xs text-slate-400">
+                                                {{ data_get($visionAnalysis, 'model') ?: data_get($visionAnalysis, 'analysis_source') }}
+                                                @if(data_get($visionAnalysis, 'duration_ms', 0) > 0)
+                                                    · {{ number_format((int) data_get($visionAnalysis, 'duration_ms') / 1000, 1, ',', '.') }} s
+                                                @endif
+                                            </p>
+                                        @endif
+                                    </section>
+                                @endif
+
                                 @if(is_array(data_get($copilotStatus, 'verification_report')))
                                     @php
                                         $verificationReport = data_get($copilotStatus, 'verification_report');

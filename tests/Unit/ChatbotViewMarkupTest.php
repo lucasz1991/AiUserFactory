@@ -86,6 +86,8 @@ class ChatbotViewMarkupTest extends TestCase
         $this->assertStringContainsString('xl:hidden', $source);
         $this->assertStringContainsString('xl:w-[30rem]', $source);
         $this->assertStringContainsString('data-workflow-copilot-completed-state', $source);
+        $this->assertStringContainsString('data-workflow-copilot-vision-analysis', $source);
+        $this->assertStringContainsString('Vorgeschlagene Workflow-Aktionen', $source);
         $this->assertStringContainsString('data-assistant-active-work', $source);
         $this->assertStringContainsString('data-assistant-activity-timer', $source);
         $this->assertStringContainsString('data-copilot-activity-timer', $source);

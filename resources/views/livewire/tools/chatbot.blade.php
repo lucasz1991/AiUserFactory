@@ -1534,6 +1534,90 @@
                                     @endif
                                 @endforeach
 
+                                @if(is_array(data_get($copilotStatus, 'vision_analysis')))
+                                    @php
+                                        $visionAnalysis = data_get($copilotStatus, 'vision_analysis');
+                                        $visionVerdict = (string) data_get($visionAnalysis, 'verdict', 'pause');
+                                    @endphp
+                                    <section data-workflow-copilot-vision-analysis class="space-y-2.5 border-t border-slate-100 pt-3 text-xs">
+                                        <div class="flex items-center justify-between gap-2">
+                                            <div>
+                                                <p class="font-black uppercase tracking-[.12em] text-slate-500">Letzte Bildanalyse</p>
+                                                <p class="mt-0.5 font-bold text-slate-900">
+                                                    {{ data_get($visionAnalysis, 'page_type') ?: 'Unbekannte Seite' }}
+                                                    · {{ data_get($visionAnalysis, 'ui_state') ?: 'Unbekannter Zustand' }}
+                                                </p>
+                                            </div>
+                                            <span class="shrink-0 rounded-full px-2 py-1 text-[10px] font-black {{ $visionVerdict === 'pass' ? 'bg-emerald-100 text-emerald-800' : ($visionVerdict === 'continue' ? 'bg-cyan-100 text-cyan-800' : 'bg-amber-100 text-amber-800') }}">
+                                                {{ data_get($visionAnalysis, 'verdict_label') }}
+                                                @if(data_get($visionAnalysis, 'confidence') !== null)
+                                                    · {{ number_format((float) data_get($visionAnalysis, 'confidence') * 100, 0, ',', '.') }} %
+                                                @endif
+                                            </span>
+                                        </div>
+
+                                        @if(filled(data_get($visionAnalysis, 'goal_progress')))
+                                            <p class="leading-5 text-slate-600"><strong class="text-slate-800">Zielfortschritt:</strong> {{ data_get($visionAnalysis, 'goal_progress') }}</p>
+                                        @endif
+
+                                        @if(data_get($visionAnalysis, 'relevant_elements', []) !== [])
+                                            <div>
+                                                <p class="font-bold text-slate-700">Erkannte Elemente</p>
+                                                <ul class="mt-1 space-y-1 text-slate-600">
+                                                    @foreach(data_get($visionAnalysis, 'relevant_elements', []) as $element)
+                                                        <li class="break-words">
+                                                            <code class="font-bold text-cyan-800">{{ $element['element_ref'] }}</code>
+                                                            · {{ $element['reason'] ?: 'Als relevant erkannt' }}
+                                                            @if($element['confidence'] !== null)
+                                                                ({{ number_format((float) $element['confidence'] * 100, 0, ',', '.') }} %)
+                                                            @endif
+                                                        </li>
+                                                    @endforeach
+                                                </ul>
+                                            </div>
+                                        @endif
+
+                                        @if(data_get($visionAnalysis, 'suggested_task_actions', []) !== [])
+                                            <div>
+                                                <p class="font-bold text-slate-700">Vorgeschlagene Workflow-Aktionen</p>
+                                                <ul class="mt-1 space-y-1 text-slate-600">
+                                                    @foreach(data_get($visionAnalysis, 'suggested_task_actions', []) as $action)
+                                                        <li class="break-words">
+                                                            <code class="font-bold text-emerald-800">{{ $action['task_key'] }}</code>
+                                                            @if(filled($action['element_ref']))
+                                                                an <code>{{ $action['element_ref'] }}</code>
+                                                            @endif
+                                                            @if(filled($action['reason']))
+                                                                · {{ $action['reason'] }}
+                                                            @endif
+                                                        </li>
+                                                    @endforeach
+                                                </ul>
+                                            </div>
+                                        @endif
+
+                                        @if(data_get($visionAnalysis, 'blockers', []) !== [])
+                                            <div>
+                                                <p class="font-bold text-amber-800">Hinweise und Hindernisse</p>
+                                                <ul class="mt-1 list-disc space-y-1 pl-4 text-amber-900">
+                                                    @foreach(data_get($visionAnalysis, 'blockers', []) as $blocker)
+                                                        <li class="break-words">{{ $blocker }}</li>
+                                                    @endforeach
+                                                </ul>
+                                            </div>
+                                        @endif
+
+                                        @if(filled(data_get($visionAnalysis, 'model')) || data_get($visionAnalysis, 'duration_ms', 0) > 0)
+                                            <p class="text-[10px] text-slate-400">
+                                                {{ data_get($visionAnalysis, 'model') ?: data_get($visionAnalysis, 'analysis_source') }}
+                                                @if(data_get($visionAnalysis, 'duration_ms', 0) > 0)
+                                                    · {{ number_format((int) data_get($visionAnalysis, 'duration_ms') / 1000, 1, ',', '.') }} s
+                                                @endif
+                                            </p>
+                                        @endif
+                                    </section>
+                                @endif
+
                                 <div class="grid grid-cols-2 gap-2 text-center text-[10px]">
                                     <div class="rounded-lg border border-slate-200 px-2 py-2">
                                         <strong class="block text-sm text-slate-900">{{ data_get($copilotStatus, 'repair_iteration', 0) }}/{{ data_get($copilotStatus, 'max_repair_iterations', 15) }}</strong>

@@ -289,6 +289,10 @@ class WorkflowExecutionService
 
         $run = $this->loadRun($run->id);
 
+        if ($this->preserveHeldCopilotCheckpoint($run)) {
+            return;
+        }
+
         if (! $run->started_at) {
             $run->forceFill([
                 'status' => 'running',
@@ -1847,6 +1851,52 @@ class WorkflowExecutionService
         return is_array($checkpoint)
             && trim((string) ($checkpoint['id'] ?? '')) !== ''
             && (int) ($checkpoint['workflow_step_id'] ?? 0) === (int) $stepRun->workflow_step_id;
+    }
+
+    protected function preserveHeldCopilotCheckpoint(WorkflowRun $run, bool $lockStepRun = false): bool
+    {
+        if (! $this->heldCopilotCheckpointStepRun($run, $lockStepRun)) {
+            return false;
+        }
+
+        if ($run->status !== 'waiting') {
+            $run->forceFill(['status' => 'waiting'])->save();
+        }
+
+        return true;
+    }
+
+    protected function heldCopilotCheckpointStepRun(
+        WorkflowRun $run,
+        bool $lockForUpdate = false,
+    ): ?WorkflowStepRun {
+        if (! $this->isCopilotSupervisedRun($run)) {
+            return null;
+        }
+
+        $checkpoint = data_get($run->context_json, 'copilot_checkpoint');
+
+        if (! is_array($checkpoint)
+            || trim((string) ($checkpoint['id'] ?? '')) === ''
+            || (int) ($checkpoint['workflow_step_id'] ?? 0) <= 0) {
+            return null;
+        }
+
+        $query = WorkflowStepRun::query()
+            ->where('workflow_run_id', $run->id)
+            ->where('workflow_step_id', (int) $checkpoint['workflow_step_id'])
+            ->where('status', 'waiting');
+        $stepRunId = (int) ($checkpoint['workflow_step_run_id'] ?? 0);
+
+        if ($stepRunId > 0) {
+            $query->whereKey($stepRunId);
+        }
+
+        if ($lockForUpdate) {
+            $query->lockForUpdate();
+        }
+
+        return $query->first();
     }
 
     protected function completeRun(WorkflowRun $run): void
@@ -3685,7 +3735,9 @@ class WorkflowExecutionService
             }
 
             if ($run->status !== 'waiting') {
-                return null;
+                if ($run->status !== 'running' || ! $this->preserveHeldCopilotCheckpoint($run, true)) {
+                    return null;
+                }
             }
 
             return $callback($run, $workflow, $session);

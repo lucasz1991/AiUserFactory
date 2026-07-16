@@ -31,6 +31,8 @@ class WorkflowCopilotUiMarkupTest extends TestCase
         $this->assertStringContainsString(':interactive-aside="true"', $view);
         $this->assertSame(4, substr_count($view, ':interactive-aside="true"'));
         $this->assertStringContainsString('data-workflow-copilot-completed-state', $view);
+        $this->assertStringContainsString('data-workflow-copilot-vision-analysis', $view);
+        $this->assertStringContainsString('Vorgeschlagene Workflow-Aktionen', $view);
         $this->assertStringContainsString('Autonome Aktionen sind freigegeben', $view);
         $this->assertStringContainsString('@disabled(! $copilotAutoExecute)', $view);
         $this->assertStringNotContainsString('copilotExecutionTarget', $view);

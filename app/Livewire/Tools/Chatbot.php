@@ -306,7 +306,7 @@ class Chatbot extends Component
             $sequence = (int) ($event->sequence ?? 0);
             $this->copilotLastEventSequence = max($this->copilotLastEventSequence, $sequence);
 
-            if (! $this->isVisibleCopilotEvent((string) ($event->event_type ?? ''))) {
+            if (! $this->isVisibleCopilotEvent($event)) {
                 continue;
             }
 
@@ -316,15 +316,7 @@ class Chatbot extends Component
                 continue;
             }
 
-            $feedItem = [
-                'id' => (int) $event->getKey(),
-                'sequence' => $sequence,
-                'event_type' => (string) ($event->event_type ?? 'status'),
-                'phase' => (string) ($event->phase ?? $session->phase ?? ''),
-                'tone' => $this->copilotTone((string) ($event->level ?? 'info')),
-                'message' => $message,
-                'time' => optional($event->occurred_at ?? $event->created_at)->format('H:i:s') ?? now()->format('H:i:s'),
-            ];
+            $feedItem = $this->copilotFeedItem($event, $session);
             $this->copilotEventFeed[] = $feedItem;
 
             if ((bool) ($event->is_milestone ?? false) && ! $this->hasCopilotMilestone($event->getKey())) {
@@ -941,7 +933,7 @@ class Chatbot extends Component
             ->values();
 
         $this->copilotEventFeed = $events
-            ->filter(fn ($event): bool => $this->isVisibleCopilotEvent((string) ($event->event_type ?? '')))
+            ->filter(fn ($event): bool => $this->isVisibleCopilotEvent($event))
             ->map(fn ($event): array => $this->copilotFeedItem($event, $session))
             ->take(-20)
             ->values()
@@ -956,7 +948,7 @@ class Chatbot extends Component
             ->sortBy('sequence');
 
         foreach ($milestones as $event) {
-            if (! $this->isVisibleCopilotEvent((string) ($event->event_type ?? ''))
+            if (! $this->isVisibleCopilotEvent($event)
                 || $this->hasCopilotMilestone($event->getKey())) {
                 continue;
             }
@@ -1027,17 +1019,35 @@ class Chatbot extends Component
         return in_array((string) $session->status, WorkflowCopilotSession::ACTIVE_STATUSES, true);
     }
 
-    private function isVisibleCopilotEvent(string $eventType): bool
+    private function isVisibleCopilotEvent(mixed $event): bool
     {
+        $eventType = is_object($event)
+            ? (string) ($event->event_type ?? '')
+            : (string) $event;
         $eventType = Str::lower(trim($eventType));
 
-        return ! Str::contains($eventType, [
+        if (Str::contains($eventType, [
             'reasoning',
             'internal_analysis',
             'chain_of_thought',
             'chain-of-thought',
             'thought',
-        ]);
+        ])) {
+            return false;
+        }
+
+        return ! in_array($eventType, [
+            'ai.usage_recorded',
+            'checkpoint.created',
+            'checkpoint.review_pause',
+            'observation.captured',
+            'observation.started',
+            'queue.recovery_dispatched',
+            'session.status_changed',
+            'task.completed',
+            'task.scheduled',
+            'vision.analysis_started',
+        ], true);
     }
 
     private function hasCopilotMilestone(mixed $eventId): bool
@@ -1096,7 +1106,72 @@ class Chatbot extends Component
             'started_at' => optional($session->started_at)->format('d.m.Y H:i:s'),
             'finished_at' => optional($session->finished_at)->format('d.m.Y H:i:s'),
             'activity' => $this->copilotActivityPayload($session, $state),
+            'vision_analysis' => $this->copilotVisionAnalysis($state),
             'verification_report' => $this->copilotVerificationReport($session, $state),
+        ];
+    }
+
+    private function copilotVisionAnalysis(array $state): ?array
+    {
+        $vision = is_array($state['vision'] ?? null) ? $state['vision'] : [];
+
+        if ($vision === []) {
+            return null;
+        }
+
+        $confidence = is_numeric($vision['confidence'] ?? null)
+            ? round(max(0, min(1, (float) $vision['confidence'])), 3)
+            : null;
+        $verdict = Str::lower(trim((string) ($vision['verdict'] ?? 'pause')));
+        $progress = $vision['goal_progress'] ?? null;
+
+        return [
+            'page_type' => Str::limit(trim((string) ($vision['page_type'] ?? '')), 120, ''),
+            'ui_state' => Str::limit(trim((string) ($vision['ui_state'] ?? '')), 160, ''),
+            'goal_progress' => is_numeric($progress)
+                ? number_format(max(0, min(1, (float) $progress)) * 100, 0, ',', '.').' %'
+                : $this->copilotDisplayValue($progress),
+            'confidence' => $confidence,
+            'verdict' => $verdict,
+            'verdict_label' => match ($verdict) {
+                'pass' => 'Ziel erreicht',
+                'continue' => 'Fortsetzen',
+                default => 'Pruefen',
+            },
+            'blockers' => collect(is_array($vision['blockers'] ?? null) ? $vision['blockers'] : [])
+                ->map(fn (mixed $item): string => Str::limit(trim((string) $item), 300, ''))
+                ->filter()
+                ->take(5)
+                ->values()
+                ->all(),
+            'relevant_elements' => collect(is_array($vision['relevant_elements'] ?? null) ? $vision['relevant_elements'] : [])
+                ->map(fn (mixed $element): array => [
+                    'element_ref' => Str::limit(trim((string) data_get($element, 'element_ref', '')), 191, ''),
+                    'reason' => Str::limit(trim((string) data_get($element, 'reason', '')), 300, ''),
+                    'confidence' => is_numeric(data_get($element, 'confidence'))
+                        ? round(max(0, min(1, (float) data_get($element, 'confidence'))), 3)
+                        : null,
+                ])
+                ->filter(fn (array $element): bool => $element['element_ref'] !== '')
+                ->take(8)
+                ->values()
+                ->all(),
+            'suggested_task_actions' => collect(is_array($vision['suggested_task_actions'] ?? null) ? $vision['suggested_task_actions'] : [])
+                ->map(fn (mixed $action): array => [
+                    'task_key' => Str::limit(trim((string) data_get($action, 'task_key', '')), 191, ''),
+                    'element_ref' => Str::limit(trim((string) data_get($action, 'element_ref', '')), 191, ''),
+                    'reason' => Str::limit(trim((string) data_get($action, 'reason', '')), 300, ''),
+                    'confidence' => is_numeric(data_get($action, 'confidence'))
+                        ? round(max(0, min(1, (float) data_get($action, 'confidence'))), 3)
+                        : null,
+                ])
+                ->filter(fn (array $action): bool => $action['task_key'] !== '')
+                ->take(8)
+                ->values()
+                ->all(),
+            'model' => Str::limit(trim((string) ($vision['model'] ?? '')), 200, ''),
+            'analysis_source' => Str::limit(trim((string) ($vision['analysis_source'] ?? '')), 80, ''),
+            'duration_ms' => max(0, (int) ($vision['duration_ms'] ?? 0)),
         ];
     }
 

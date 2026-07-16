@@ -521,6 +521,56 @@ class WorkflowCopilotExecutionInvariantTest extends TestCase
         $this->assertDatabaseCount('workflow_run_checkpoints', 0);
     }
 
+    public function test_delayed_run_job_does_not_change_or_monitor_a_held_copilot_checkpoint(): void
+    {
+        Queue::fake();
+        [$workflow, $step] = $this->workflow();
+        $session = app(WorkflowCopilotSessionService::class)->start($workflow);
+        $execution = app(WorkflowExecutionService::class);
+        $run = $execution->start($workflow, [
+            'workflow_copilot_session_id' => $session->id,
+            'copilot_supervised' => true,
+        ], 'workflow-copilot');
+        $stepRun = $this->putRunAtCheckpoint($run, $step, 'first-task');
+        Queue::fake();
+
+        (new RunWorkflowJob($run->id))->handle($execution);
+
+        $this->assertSame('waiting', $run->fresh()->status);
+        $this->assertSame('waiting', $stepRun->fresh()->status);
+        $this->assertSame('checkpoint-first-task', data_get($run->fresh()->context_json, 'copilot_checkpoint.id'));
+        Queue::assertNothingPushed();
+    }
+
+    public function test_resume_recovers_a_held_checkpoint_whose_run_was_incorrectly_marked_running(): void
+    {
+        Queue::fake();
+        [$workflow, $step] = $this->workflow();
+        $session = app(WorkflowCopilotSessionService::class)->start($workflow);
+        $execution = app(WorkflowExecutionService::class);
+        $run = $execution->start($workflow, [
+            'workflow_copilot_session_id' => $session->id,
+            'copilot_supervised' => true,
+        ], 'workflow-copilot');
+        $stepRun = $this->putRunAtCheckpoint($run, $step, 'first-task');
+        $run->forceFill([
+            'status' => 'running',
+            'current_workflow_step_id' => null,
+        ])->save();
+        Queue::fake();
+
+        $continued = $execution->resumeCopilotCheckpoint($run);
+
+        $run->refresh();
+        $this->assertTrue($continued);
+        $this->assertSame('running', $run->status);
+        $this->assertSame($step->id, $run->current_workflow_step_id);
+        $this->assertSame('second-task', data_get($run->context_json, 'next_task_key'));
+        $this->assertNull(data_get($run->context_json, 'copilot_checkpoint'));
+        $this->assertSame('queued', $stepRun->fresh()->status);
+        Queue::assertPushed(RunWorkflowJob::class, fn (RunWorkflowJob $job): bool => $job->workflowRunId === $run->id);
+    }
+
     public function test_system_copilot_run_always_captures_observation_artifacts_without_dev_mode(): void
     {
         Queue::fake();

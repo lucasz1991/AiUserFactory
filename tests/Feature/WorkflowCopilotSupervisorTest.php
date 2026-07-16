@@ -969,6 +969,157 @@ class WorkflowCopilotSupervisorTest extends TestCase
         $this->assertSame(0, data_get($session->fresh()->usage_json, 'same_state_repeats'));
     }
 
+    public function test_successful_checkpoint_reports_vision_once_and_recovers_without_reanalysis_when_resume_is_deferred(): void
+    {
+        Queue::fake();
+        [$workflow, $step] = $this->workflowWithBrokenSelector();
+        $sessions = app(WorkflowCopilotSessionService::class);
+        $session = $sessions->start($workflow, ['goal' => 'Loginseite sicher bedienen.']);
+        [$run] = $this->waitingRun($session, $step, [
+            'id' => 'runtime-vision-recovery',
+            'kind' => 'regular',
+            'workflow_step_id' => $step->id,
+            'workflow_step_name' => $step->name,
+            'task_key' => 'login-click',
+            'task_title' => 'Login klicken',
+            'successful' => true,
+            'outcome' => 'success',
+            'next_action' => 'complete_step',
+            'result' => ['ok' => true],
+        ]);
+        $session = $sessions->attachRun($session, $run);
+        $observation = $this->observation();
+        $observation['screenshot_changed'] = true;
+        $vision = $this->visionResult('continue');
+        $vision['relevant_elements'][0]['reason'] = 'Sichtbarer Login-Button';
+        $vision['suggested_task_actions'] = [[
+            'task_key' => 'browser.click',
+            'element_ref' => 'el_submit',
+            'reason' => 'Der sichtbare Button fuehrt den Login fort.',
+            'confidence' => 0.97,
+        ]];
+        $vision['analysis_source'] = 'vision';
+        $vision['duration_ms'] = 4200;
+        $observations = Mockery::mock(WorkflowCopilotObservationService::class);
+        $observations->shouldReceive('observe')->once()->andReturn($observation);
+        $visionService = Mockery::mock(WorkflowCopilotVisionService::class);
+        $visionService->shouldReceive('analyze')->once()->andReturn($vision);
+        $execution = Mockery::mock(WorkflowExecutionService::class);
+        $execution->shouldReceive('resumeCopilotCheckpoint')->once()->andReturn(false);
+        $this->app->instance(WorkflowCopilotObservationService::class, $observations);
+        $this->app->instance(WorkflowCopilotVisionService::class, $visionService);
+        $this->app->instance(WorkflowExecutionService::class, $execution);
+
+        app(WorkflowCopilotSupervisorService::class)->supervise($session->id);
+
+        $analysisEvent = $session->events()->where('event_type', 'vision.analysis_completed')->firstOrFail();
+        $this->assertTrue((bool) $analysisEvent->is_milestone);
+        $this->assertStringContainsString('Bildanalyse abgeschlossen', $analysisEvent->message);
+        $this->assertStringContainsString('Workflow fortsetzen', $analysisEvent->message);
+        $this->assertSame('login_form', data_get($analysisEvent->payload_json, 'ui_state'));
+        $this->assertSame('el_submit', data_get($analysisEvent->payload_json, 'relevant_elements.0.element_ref'));
+        $this->assertSame('browser.click', data_get($analysisEvent->payload_json, 'suggested_task_actions.0.task_key'));
+        $this->assertDatabaseHas('workflow_copilot_events', [
+            'workflow_copilot_session_id' => $session->id,
+            'event_type' => 'checkpoint.continuation_deferred',
+        ]);
+        Queue::assertPushed(
+            WorkflowCopilotSupervisorJob::class,
+            fn (WorkflowCopilotSupervisorJob $job): bool => $job->workflowCopilotSessionId === $session->id,
+        );
+        $this->assertDatabaseMissing('workflow_copilot_events', [
+            'workflow_copilot_session_id' => $session->id,
+            'event_type' => 'checkpoint.continue',
+        ]);
+        $this->assertNotSame(
+            'runtime-vision-recovery',
+            data_get($session->fresh()->state_json, 'continuation_applied_checkpoint_id'),
+        );
+
+        $observations = Mockery::mock(WorkflowCopilotObservationService::class);
+        $observations->shouldNotReceive('observe');
+        $visionService = Mockery::mock(WorkflowCopilotVisionService::class);
+        $visionService->shouldNotReceive('analyze');
+        $execution = Mockery::mock(WorkflowExecutionService::class);
+        $execution->shouldReceive('resumeCopilotCheckpoint')->once()->andReturn(true);
+        $this->app->instance(WorkflowCopilotObservationService::class, $observations);
+        $this->app->instance(WorkflowCopilotVisionService::class, $visionService);
+        $this->app->instance(WorkflowExecutionService::class, $execution);
+
+        app(WorkflowCopilotSupervisorService::class)->supervise($session->id);
+
+        $this->assertSame(1, $session->events()->where('event_type', 'vision.analysis_completed')->count());
+        $this->assertDatabaseHas('workflow_copilot_events', [
+            'workflow_copilot_session_id' => $session->id,
+            'event_type' => 'checkpoint.continuation_recovered',
+        ]);
+        $this->assertSame(
+            'runtime-vision-recovery',
+            data_get($session->fresh()->state_json, 'continuation_applied_checkpoint_id'),
+        );
+        $this->assertSame(
+            'resume_recovered_after_observation',
+            data_get($session->fresh()->state_json, 'continuation_applied_action'),
+        );
+        Queue::assertPushed(WorkflowCopilotSupervisorJob::class, 1);
+    }
+
+    public function test_supervisor_resumes_the_session_11_running_checkpoint_state_in_one_pass(): void
+    {
+        Queue::fake();
+        [$workflow, $step] = $this->workflowWithBrokenSelector();
+        $sessions = app(WorkflowCopilotSessionService::class);
+        $session = $sessions->start($workflow, ['goal' => 'Loginseite abschliessen.']);
+        [$run, $stepRun] = $this->waitingRun($session, $step, [
+            'id' => 'runtime-session-11-race',
+            'kind' => 'regular',
+            'workflow_step_id' => $step->id,
+            'workflow_step_name' => $step->name,
+            'task_key' => 'login-click',
+            'task_title' => 'Login klicken',
+            'successful' => true,
+            'outcome' => 'success',
+            'next_action' => 'complete_step',
+            'result' => ['ok' => true, 'status' => 'success'],
+        ]);
+        $run->forceFill([
+            'status' => 'running',
+            'current_workflow_step_id' => null,
+        ])->save();
+        $session = $sessions->attachRun($session, $run);
+        $observation = $this->observation();
+        $observation['screenshot_changed'] = true;
+        $observations = Mockery::mock(WorkflowCopilotObservationService::class);
+        $observations->shouldReceive('observe')->once()->andReturn($observation);
+        $visionService = Mockery::mock(WorkflowCopilotVisionService::class);
+        $visionService->shouldReceive('analyze')->once()->andReturn($this->visionResult('continue'));
+        $this->app->instance(WorkflowCopilotObservationService::class, $observations);
+        $this->app->instance(WorkflowCopilotVisionService::class, $visionService);
+
+        app(WorkflowCopilotSupervisorService::class)->supervise($session->id);
+
+        $run->refresh();
+        $this->assertSame('completed', $run->status);
+        $this->assertNull(data_get($run->context_json, 'copilot_checkpoint'));
+        $this->assertSame('completed', $stepRun->fresh()->status);
+        $this->assertSame(
+            'runtime-session-11-race',
+            data_get($session->fresh()->state_json, 'continuation_applied_checkpoint_id'),
+        );
+        $this->assertDatabaseHas('workflow_copilot_events', [
+            'workflow_copilot_session_id' => $session->id,
+            'event_type' => 'vision.analysis_completed',
+        ]);
+        $this->assertDatabaseHas('workflow_copilot_events', [
+            'workflow_copilot_session_id' => $session->id,
+            'event_type' => 'checkpoint.continue',
+        ]);
+        $this->assertDatabaseMissing('workflow_copilot_events', [
+            'workflow_copilot_session_id' => $session->id,
+            'event_type' => 'checkpoint.continuation_deferred',
+        ]);
+    }
+
     public function test_ai_cost_budget_is_recorded_and_stops_before_repair(): void
     {
         [$workflow, $step] = $this->workflowWithBrokenSelector();

@@ -150,10 +150,48 @@ class WorkflowCopilotLiveUiTest extends TestCase
             'goal' => 'Workflow erfolgreich abschliessen.',
             'success_criteria' => ['assertions' => ['Erfolgsseite sichtbar']],
         ]);
+        $session->forceFill(['state_json' => [
+            'vision' => [
+                'page_type' => 'search',
+                'ui_state' => 'search_input',
+                'goal_progress' => 0.5,
+                'confidence' => 0.91,
+                'verdict' => 'continue',
+                'blockers' => ['Suchbegriff fehlt noch.'],
+                'relevant_elements' => [[
+                    'element_ref' => 'el_search',
+                    'reason' => 'Sichtbares Suchfeld',
+                    'confidence' => 0.95,
+                ]],
+                'suggested_task_actions' => [[
+                    'task_key' => 'input.fill_field',
+                    'element_ref' => 'el_search',
+                    'reason' => 'Suchbegriff eingeben',
+                    'confidence' => 0.94,
+                ]],
+                'model' => 'test/vision',
+                'analysis_source' => 'vision',
+                'duration_ms' => 900,
+            ],
+        ]])->save();
         $service->appendEvent(
             $session,
             'model.reasoning',
             'Dieser interne Gedankengang darf nie sichtbar werden.',
+        );
+        $service->appendEvent(
+            $session,
+            'vision.analysis_started',
+            'Die Bildanalyse des aktuellen Browserzustands laeuft.',
+        );
+        $analysis = $service->appendEvent(
+            $session,
+            'vision.analysis_completed',
+            'Bildanalyse abgeschlossen: search / search_input (91 %). Entscheidung: Workflow fortsetzen.',
+            ['ui_state' => 'search_input'],
+            'visual_analysis',
+            'success',
+            true,
         );
         $milestone = $service->appendEvent(
             $session,
@@ -168,14 +206,19 @@ class WorkflowCopilotLiveUiTest extends TestCase
         $component = Livewire::test(Chatbot::class)
             ->call('attachCopilotSession', $session->id)
             ->assertSet('activeCopilotSessionId', $session->id)
-            ->assertSet('copilotLastEventSequence', $milestone->sequence);
+            ->assertSet('copilotLastEventSequence', $milestone->sequence)
+            ->assertSet('copilotStatus.vision_analysis.ui_state', 'search_input')
+            ->assertSet('copilotStatus.vision_analysis.suggested_task_actions.0.task_key', 'input.fill_field');
 
         $feed = $component->get('copilotEventFeed');
         $history = $component->get('chatHistory');
 
         $this->assertTrue(collect($feed)->contains(fn (array $event): bool => $event['message'] === 'Screenshot und DOM wurden erfasst.'));
+        $this->assertTrue(collect($feed)->contains(fn (array $event): bool => str_contains($event['message'], 'Bildanalyse abgeschlossen')));
+        $this->assertFalse(collect($feed)->contains(fn (array $event): bool => str_contains($event['message'], 'Bildanalyse des aktuellen Browserzustands laeuft')));
         $this->assertFalse(collect($feed)->contains(fn (array $event): bool => str_contains($event['message'], 'interne Gedankengang')));
         $this->assertCount(1, collect($history)->where('copilot_event_id', $milestone->id));
+        $this->assertCount(1, collect($history)->where('copilot_event_id', $analysis->id));
 
         $component
             ->call('pollCopilotSession')
@@ -200,6 +243,61 @@ class WorkflowCopilotLiveUiTest extends TestCase
             WorkflowCopilotSupervisorJob::class,
             fn (WorkflowCopilotSupervisorJob $job): bool => $job->workflowCopilotSessionId === $session->id,
         );
+    }
+
+    public function test_manager_shows_completed_vision_details_but_hides_operational_analysis_noise(): void
+    {
+        $workflow = $this->workflow('copilot-manager-vision');
+        $service = app(WorkflowCopilotSessionService::class);
+        $session = $service->start($workflow, ['goal' => 'Suchseite bedienen.']);
+        $session->forceFill(['state_json' => [
+            'vision' => [
+                'page_type' => 'search',
+                'ui_state' => 'search_input',
+                'goal_progress' => 0.5,
+                'confidence' => 0.9,
+                'verdict' => 'continue',
+                'blockers' => [],
+                'relevant_elements' => [[
+                    'element_ref' => 'el_search',
+                    'reason' => 'Suchfeld',
+                    'confidence' => 0.95,
+                ]],
+                'suggested_task_actions' => [[
+                    'task_key' => 'input.fill_field',
+                    'element_ref' => 'el_search',
+                    'reason' => 'Suchbegriff eingeben',
+                    'confidence' => 0.93,
+                ]],
+            ],
+        ]])->save();
+        $service->appendEvent(
+            $session,
+            'vision.analysis_started',
+            'Die Bildanalyse des aktuellen Browserzustands laeuft.',
+        );
+        $service->appendEvent(
+            $session,
+            'vision.analysis_completed',
+            'Bildanalyse abgeschlossen: search / search_input (90 %). Entscheidung: Workflow fortsetzen.',
+            ['ui_state' => 'search_input'],
+            'visual_analysis',
+            'success',
+            true,
+        );
+
+        $component = Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
+            ->assertSet('activeCopilotSessionId', $session->id)
+            ->assertSet('copilotStatus.vision_analysis.ui_state', 'search_input')
+            ->assertSet('copilotStatus.vision_analysis.relevant_elements.0.element_ref', 'el_search');
+        $events = $component->get('copilotEvents');
+
+        $this->assertTrue(collect($events)->contains(
+            fn (array $event): bool => str_contains($event['message'], 'Bildanalyse abgeschlossen'),
+        ));
+        $this->assertFalse(collect($events)->contains(
+            fn (array $event): bool => str_contains($event['message'], 'Bildanalyse des aktuellen Browserzustands laeuft'),
+        ));
     }
 
     public function test_chat_rebuilds_canonical_milestones_and_final_report_after_session_loss(): void
