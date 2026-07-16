@@ -96,6 +96,12 @@ class WorkflowCopilotSupervisorTest extends TestCase
         $this->assertDatabaseCount('workflow_task_attempts', 1);
         $this->assertDatabaseCount('workflow_run_checkpoints', 1);
         $this->assertDatabaseCount('workflow_revisions', 0);
+        $evidenceEvent = $session->events()->where('event_type', 'repair.evidence_evaluated')->firstOrFail();
+        $decisionEvent = $session->events()->where('event_type', 'repair.decision_planned')->firstOrFail();
+        $this->assertSame('login_form', data_get($evidenceEvent->payload_json, 'vision.ui_state'));
+        $this->assertSame('el_submit', data_get($evidenceEvent->payload_json, 'dom.relevant_elements.0.element_ref'));
+        $this->assertSame('probe_update', data_get($decisionEvent->payload_json, 'action'));
+        $this->assertStringContainsString('sichtbares DOM-Element', (string) data_get($decisionEvent->payload_json, 'reason'));
         $storedContext = $session->checkpoints()->firstOrFail()->context_json;
         $this->assertNotEmpty(data_get($storedContext, 'encrypted_runtime_context'));
         $this->assertStringNotContainsString('checkpoint@example.test', json_encode($storedContext));
@@ -952,6 +958,98 @@ class WorkflowCopilotSupervisorTest extends TestCase
         $this->assertDatabaseHas('workflow_copilot_events', [
             'workflow_copilot_session_id' => $session->id,
             'event_type' => 'ai.usage_recorded',
+        ]);
+    }
+
+    public function test_resolved_consent_obstacle_is_logged_and_continued_without_selector_repair(): void
+    {
+        [$workflow, $step] = $this->workflowWithBrokenSelector();
+        $config = $step->config_json;
+        $config['tasks'][0] = array_replace($config['tasks'][0], [
+            'key' => 'consent-ablehnen',
+            'task_key' => 'browser.click',
+            'title' => 'Consent: Alle ablehnen',
+            'selector' => '#W0wltc',
+        ]);
+        $step->forceFill(['config_json' => $config])->save();
+        $sessions = app(WorkflowCopilotSessionService::class);
+        $session = $sessions->start($workflow, [
+            'goal' => 'Google-Suche ohne Consent-Blockade ausfuehren.',
+        ]);
+        [$run] = $this->waitingRun($session, $step->fresh(), [
+            'id' => 'runtime-consent-gone-1',
+            'kind' => 'regular',
+            'workflow_step_id' => $step->id,
+            'workflow_step_name' => $step->name,
+            'task_key' => 'consent-ablehnen',
+            'task_title' => 'Consent: Alle ablehnen',
+            'successful' => false,
+            'outcome' => 'failed',
+            'next_action' => 'repair',
+            'result' => ['ok' => false, 'statusMessage' => 'Element nicht gefunden.'],
+        ]);
+        $session = $sessions->attachRun($session, $run);
+        $observation = [
+            'state_signature' => 'google-search-input-v1',
+            'page' => ['url' => 'https://www.google.com', 'title' => 'Google', 'state' => 'search_input'],
+            'dom' => ['ui_state' => 'search_input', 'visible_text_excerpt' => 'Google Suche'],
+            'interaction_map' => [[
+                'element_ref' => 'el_search',
+                'tag' => 'textarea',
+                'aria' => 'Suche',
+                'visible' => true,
+                'enabled' => true,
+                'selector_candidates' => ['#APjFqb'],
+            ]],
+            'screenshot' => ['available_for_vision' => true],
+            'evidence_sufficient' => true,
+        ];
+        $vision = [
+            'page_type' => 'search_page',
+            'ui_state' => 'search_input',
+            'confidence' => 0.9,
+            'verdict' => 'continue',
+            'safe_pause' => false,
+            'model' => 'test/vision',
+            'relevant_elements' => [['element_ref' => 'el_search', 'confidence' => 0.9]],
+            'suggested_task_actions' => [],
+        ];
+        $observations = Mockery::mock(WorkflowCopilotObservationService::class);
+        $observations->shouldReceive('observe')->once()->andReturn($observation);
+        $visionService = Mockery::mock(WorkflowCopilotVisionService::class);
+        $visionService->shouldReceive('analyze')->once()->andReturn($vision);
+        $repairs = Mockery::mock(WorkflowCopilotRepairService::class);
+        $repairs->shouldReceive('plan')->once()->andReturn([
+            'action' => 'skip_resolved_obstacle',
+            'task_key' => 'consent-ablehnen',
+            'reason' => 'Der Consent-Dialog ist nicht mehr vorhanden.',
+            'evidence' => ['vision_state' => 'search_input'],
+        ]);
+        $execution = Mockery::mock(WorkflowExecutionService::class);
+        $execution->shouldReceive('skipResolvedCopilotTask')
+            ->once()
+            ->withArgs(fn (WorkflowRun $candidateRun, string $taskKey): bool => $candidateRun->is($run)
+                && $taskKey === 'consent-ablehnen')
+            ->andReturn(true);
+        $execution->shouldNotReceive('retryCopilotTask');
+        $execution->shouldNotReceive('resumeCopilotCheckpoint');
+        $this->app->instance(WorkflowCopilotObservationService::class, $observations);
+        $this->app->instance(WorkflowCopilotVisionService::class, $visionService);
+        $this->app->instance(WorkflowCopilotRepairService::class, $repairs);
+        $this->app->instance(WorkflowExecutionService::class, $execution);
+
+        app(WorkflowCopilotSupervisorService::class)->supervise($session->id);
+
+        $session->refresh();
+        $this->assertSame(WorkflowCopilotSession::STATUS_RUNNING, $session->status);
+        $this->assertSame('skip_resolved_obstacle', data_get($session->state_json, 'continuation_applied_action'));
+        $this->assertDatabaseHas('workflow_copilot_events', [
+            'workflow_copilot_session_id' => $session->id,
+            'event_type' => 'repair.obstacle_resolved',
+        ]);
+        $this->assertDatabaseHas('workflow_copilot_events', [
+            'workflow_copilot_session_id' => $session->id,
+            'event_type' => 'repair.decision_planned',
         ]);
     }
 

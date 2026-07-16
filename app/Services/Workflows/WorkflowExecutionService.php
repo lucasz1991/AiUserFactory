@@ -760,6 +760,106 @@ class WorkflowExecutionService
         return $continued === true;
     }
 
+    public function skipResolvedCopilotTask(
+        int|WorkflowRun $workflowRun,
+        string $taskKey,
+    ): bool {
+        $taskKey = trim($taskKey);
+
+        if ($taskKey === '') {
+            throw new \InvalidArgumentException('Task-Key fuer das erledigte Copilot-Hindernis fehlt.');
+        }
+
+        $runId = $workflowRun instanceof WorkflowRun ? (int) $workflowRun->id : (int) $workflowRun;
+        $prepared = $this->withLockedCopilotRun($runId, function (WorkflowRun $run) use ($taskKey): bool {
+            $context = is_array($run->context_json) ? $run->context_json : [];
+            $checkpoint = is_array($context['copilot_checkpoint'] ?? null) ? $context['copilot_checkpoint'] : [];
+
+            if ($checkpoint === [] || trim((string) ($checkpoint['task_key'] ?? '')) !== $taskKey) {
+                throw new \RuntimeException('Der Copilot-Checkpoint passt nicht zum erledigten Hindernis.');
+            }
+
+            $stepRun = WorkflowStepRun::query()
+                ->where('workflow_run_id', $run->id)
+                ->where('workflow_step_id', (int) ($checkpoint['workflow_step_id'] ?? $run->current_workflow_step_id))
+                ->lockForUpdate()
+                ->first();
+
+            if (! $stepRun) {
+                throw new \RuntimeException('Der Workflow-Schritt des erledigten Hindernisses wurde nicht gefunden.');
+            }
+
+            $step = $stepRun->workflowStep;
+            $task = collect($step->task_cards)->firstWhere('key', $taskKey);
+
+            if (! is_array($task)) {
+                throw new \RuntimeException('Die Task des erledigten Hindernisses wurde nicht gefunden.');
+            }
+
+            $result = is_array($checkpoint['result'] ?? null) ? $checkpoint['result'] : [];
+            $result['tasks'] = collect(is_array($result['tasks'] ?? null) ? $result['tasks'] : [])
+                ->map(function (mixed $resultTask) use ($taskKey): mixed {
+                    if (! is_array($resultTask)
+                        || ! in_array($taskKey, [
+                            trim((string) ($resultTask['key'] ?? '')),
+                            trim((string) ($resultTask['parent_task_key'] ?? '')),
+                        ], true)) {
+                        return $resultTask;
+                    }
+
+                    return array_replace($resultTask, [
+                        'ok' => true,
+                        'status' => 'skipped',
+                        'statusMessage' => 'Optionales Hindernis ist laut aktueller Bild- und DOM-Evidenz nicht mehr vorhanden.',
+                        'error' => null,
+                    ]);
+                })
+                ->values()
+                ->all();
+            unset(
+                $result['failedTaskKey'],
+                $result['failed_task_key'],
+                $result['routeRequested'],
+                $result['route_requested'],
+                $result['routeOutcome'],
+                $result['route_outcome'],
+            );
+            $result = array_replace($result, [
+                'ok' => true,
+                'status' => 'skipped',
+                'technicalSuccess' => true,
+                'technical_success' => true,
+                'completedTaskKey' => $taskKey,
+                'completed_task_key' => $taskKey,
+                'statusMessage' => 'Optionales Hindernis ist laut aktueller Bild- und DOM-Evidenz nicht mehr vorhanden.',
+            ]);
+
+            if (is_array($task['next'] ?? null)) {
+                $result['routeRequested'] = true;
+                $result['route_requested'] = true;
+                $result['routeOutcome'] = 'success';
+                $result['route_outcome'] = 'success';
+            }
+
+            [$nextAction, $nextTaskKey] = $this->successfulCheckpointContinuation($step, $taskKey, $result);
+            $checkpoint = array_replace($checkpoint, [
+                'successful' => true,
+                'outcome' => 'success',
+                'next_action' => $nextAction,
+                'next_task_key' => $nextTaskKey,
+                'result' => $result,
+                'resolved_obstacle' => true,
+            ]);
+            $context['copilot_checkpoint'] = $checkpoint;
+            $stepRun->forceFill(['result_json' => $result])->save();
+            $run->forceFill(['context_json' => $context])->save();
+
+            return true;
+        });
+
+        return $prepared === true && $this->resumeCopilotCheckpoint($runId);
+    }
+
     public function retryCopilotTask(
         int|WorkflowRun $workflowRun,
         string $taskKey,
@@ -997,17 +1097,19 @@ class WorkflowExecutionService
         array $result,
     ): array {
         $route = $this->routeForResult($step, $this->resultOutcome($result), $result);
+        $taskRequestedRoute = trim((string) ($route['_source_card_key'] ?? '')) !== '';
         $routeType = trim((string) ($route['type'] ?? ''));
         $routeStep = trim((string) ($route['action_key'] ?? $route['step'] ?? ''));
         $routeTask = trim((string) ($route['card_key'] ?? $route['card'] ?? ''));
 
-        if ($routeType === 'card'
+        if ($taskRequestedRoute
+            && $routeType === 'card'
             && $routeTask !== ''
             && ($routeStep === '' || $routeStep === $step->action_key)) {
             return ['next_task', $routeTask];
         }
 
-        if ($route !== null) {
+        if ($taskRequestedRoute) {
             return ['complete_step', null];
         }
 
@@ -1015,7 +1117,28 @@ class WorkflowExecutionService
         $currentIndex = $tasks->search(
             fn (array $task): bool => (string) ($task['key'] ?? '') === $currentTaskKey,
         );
-        $nextTask = $currentIndex === false ? null : $tasks->get(((int) $currentIndex) + 1);
+        $nextIndex = $currentIndex === false ? null : ((int) $currentIndex) + 1;
+
+        if ($currentIndex !== false) {
+            $currentTask = $tasks->get((int) $currentIndex);
+
+            if (is_array($currentTask) && (string) ($currentTask['task_key'] ?? '') === 'loop.for_each_element') {
+                $endKey = trim((string) ($currentTask['loop_end_key'] ?? $currentTask['loopEndKey'] ?? ''));
+                $pairId = trim((string) ($currentTask['loop_pair_id'] ?? $currentTask['loopPairId'] ?? ''));
+                $endIndex = $tasks->search(function (array $task) use ($endKey, $pairId): bool {
+                    return ($endKey !== '' && trim((string) ($task['key'] ?? '')) === $endKey)
+                        || ($pairId !== ''
+                            && trim((string) ($task['loop_pair_id'] ?? $task['loopPairId'] ?? '')) === $pairId
+                            && (string) ($task['task_key'] ?? '') === 'loop.end');
+                });
+
+                if ($endIndex !== false && (int) $endIndex >= (int) $currentIndex) {
+                    $nextIndex = (int) $endIndex + 1;
+                }
+            }
+        }
+
+        $nextTask = $nextIndex === null ? null : $tasks->get($nextIndex);
         $nextTaskKey = is_array($nextTask) ? trim((string) ($nextTask['key'] ?? '')) : '';
 
         return $nextTaskKey !== ''

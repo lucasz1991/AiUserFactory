@@ -632,6 +632,16 @@ class WorkflowCopilotSupervisorService
                 'info',
                 true,
             );
+            $evidenceSummary = $this->repairEvidenceSummary($step, $checkpoint, $observation, $vision);
+            $this->sessions->appendEvent(
+                $session,
+                'repair.evidence_evaluated',
+                (string) $evidenceSummary['message'],
+                $evidenceSummary['payload'],
+                'visual_analysis',
+                'info',
+                true,
+            );
         }
 
         $rejectedSelectors = is_array($state['rejected_selectors'] ?? null) ? $state['rejected_selectors'] : [];
@@ -641,9 +651,38 @@ class WorkflowCopilotSupervisorService
             'repair_planning',
         );
         $session = $session->fresh() ?? $session;
+        $decisionSummary = $this->repairDecisionSummary($plan, $vision);
+        $this->sessions->appendEvent(
+            $session,
+            'repair.decision_planned',
+            (string) $decisionSummary['message'],
+            $decisionSummary['payload'],
+            'repairing',
+            ($plan['action'] ?? null) === 'pause' ? 'warning' : 'info',
+            true,
+        );
 
         if ($this->costBudgetReached($session)) {
             $this->exhaustBudget($session);
+
+            return;
+        }
+
+        if ($plan['action'] === 'skip_resolved_obstacle') {
+            $this->sessions->appendEvent(
+                $session,
+                'repair.obstacle_resolved',
+                (string) $plan['reason'],
+                $plan,
+                'repairing',
+                'success',
+                true,
+            );
+            $this->sessions->transition($session, WorkflowCopilotSession::STATUS_RUNNING, 'executing');
+
+            if ($this->execution->skipResolvedCopilotTask($run, (string) $plan['task_key'])) {
+                $this->markContinuationApplied($session, $checkpoint, 'skip_resolved_obstacle');
+            }
 
             return;
         }
@@ -779,7 +818,12 @@ class WorkflowCopilotSupervisorService
                 'warning',
                 true,
             );
-            $this->sessions->pause($session, 'Die Reparatur wurde pausiert, weil weder Vision noch DOM eine sichere Aktion liefern.');
+            $pauseReason = Str::limit(
+                trim((string) ($plan['reason'] ?? 'Keine sichere autonome Reparatur gefunden.')),
+                900,
+                '',
+            );
+            $this->sessions->pause($session, 'Copilot pausiert: '.$pauseReason);
 
             return;
         }
@@ -2410,6 +2454,208 @@ class WorkflowCopilotSupervisorService
             ['workflow_run_id' => (int) $run->id, 'resume_event_sequence' => (int) $resumeEvent->sequence],
             'executing',
         );
+    }
+
+    /** @return array{message:string, payload:array<string, mixed>} */
+    protected function repairEvidenceSummary(
+        WorkflowStep $step,
+        array $checkpoint,
+        array $observation,
+        array $vision,
+    ): array {
+        $configuredTasks = collect($step->task_cards)->values();
+        $resultTasks = collect(is_array(data_get($checkpoint, 'result.tasks'))
+            ? data_get($checkpoint, 'result.tasks')
+            : [])
+            ->filter(fn (mixed $task): bool => is_array($task))
+            ->values();
+        $executedKeys = $resultTasks
+            ->flatMap(fn (array $task): array => array_filter([
+                trim((string) ($task['key'] ?? '')),
+                trim((string) ($task['parent_task_key'] ?? '')),
+            ]))
+            ->push(trim((string) ($checkpoint['task_key'] ?? '')))
+            ->filter()
+            ->unique()
+            ->values();
+        $remaining = $configuredTasks
+            ->reject(fn (array $task): bool => $executedKeys->contains(trim((string) ($task['key'] ?? ''))))
+            ->map(fn (array $task): array => [
+                'key' => $task['key'] ?? null,
+                'task_key' => $task['task_key'] ?? null,
+                'title' => $task['title'] ?? null,
+                'scope_variable' => $task['scope_variable'] ?? null,
+                'output_variable' => $task['output_variable'] ?? null,
+                'value_from_variable' => $task['value_from_variable'] ?? null,
+                'array_name' => $task['array_name'] ?? null,
+                'store_current_element_as' => $task['store_current_element_as'] ?? null,
+                'loop_pair_segment' => $task['loop_pair_segment'] ?? null,
+            ])
+            ->values();
+        $relevantRefs = collect($vision['relevant_elements'] ?? [])
+            ->filter(fn (mixed $element): bool => is_array($element))
+            ->pluck('element_ref')
+            ->map(fn (mixed $ref): string => trim((string) $ref))
+            ->filter()
+            ->unique();
+        $interactionMap = collect($observation['interaction_map'] ?? [])
+            ->filter(fn (mixed $element): bool => is_array($element))
+            ->values();
+        $relevantElements = $interactionMap
+            ->filter(function (array $element) use ($relevantRefs): bool {
+                return $relevantRefs->isEmpty()
+                    || $relevantRefs->contains(trim((string) ($element['element_ref'] ?? '')));
+            })
+            ->take(8)
+            ->map(fn (array $element): array => array_filter([
+                'element_ref' => $element['element_ref'] ?? null,
+                'tag' => $element['tag'] ?? null,
+                'text' => Str::limit(trim((string) ($element['text'] ?? '')), 160, ''),
+                'aria' => Str::limit(trim((string) ($element['aria'] ?? '')), 160, ''),
+                'name' => Str::limit(trim((string) ($element['name'] ?? '')), 120, ''),
+                'visible' => $element['visible'] ?? null,
+                'enabled' => $element['enabled'] ?? null,
+                'selector_candidates' => array_slice(
+                    is_array($element['selector_candidates'] ?? null) ? $element['selector_candidates'] : [],
+                    0,
+                    4,
+                ),
+                'window' => $element['window'] ?? null,
+            ], static fn (mixed $value): bool => $value !== null && $value !== ''))
+            ->values();
+        $uiState = trim((string) (
+            $vision['ui_state']
+            ?? data_get($observation, 'dom.ui_state')
+            ?? data_get($observation, 'page.state')
+            ?? 'unbekannt'
+        ));
+        $confidence = is_numeric($vision['confidence'] ?? null) ? (float) $vision['confidence'] : null;
+        $confidenceLabel = $confidence === null ? 'ohne Konfidenzwert' : ((int) round($confidence * 100)).' %';
+        $remainingLabel = $remaining
+            ->pluck('key')
+            ->filter()
+            ->take(5)
+            ->implode(', ');
+        $message = 'Erkannt: '.$uiState.' ('.$confidenceLabel.'). DOM: '.$interactionMap->count()
+            .' interaktive Elemente. Liste: '.$configuredTasks->count().' Tasks konfiguriert, '
+            .$executedKeys->count().' im aktuellen Ergebnis erfasst';
+
+        if ($remainingLabel !== '') {
+            $message .= '; noch nicht ausgefuehrt: '.$remainingLabel;
+        }
+
+        return [
+            'message' => $message.'.',
+            'payload' => [
+                'workflow_step_id' => (int) $step->id,
+                'workflow_step_action_key' => (string) $step->action_key,
+                'current_task_key' => $checkpoint['task_key'] ?? null,
+                'page' => [
+                    'url' => data_get($observation, 'page.url'),
+                    'title' => data_get($observation, 'page.title'),
+                    'state' => data_get($observation, 'page.state'),
+                ],
+                'vision' => [
+                    'page_type' => $vision['page_type'] ?? null,
+                    'ui_state' => $vision['ui_state'] ?? null,
+                    'confidence' => $confidence,
+                    'verdict' => $vision['verdict'] ?? null,
+                    'safe_pause' => (bool) ($vision['safe_pause'] ?? false),
+                    'blockers' => array_slice(is_array($vision['blockers'] ?? null) ? $vision['blockers'] : [], 0, 8),
+                    'suggested_task_actions' => array_slice(
+                        is_array($vision['suggested_task_actions'] ?? null) ? $vision['suggested_task_actions'] : [],
+                        0,
+                        8,
+                    ),
+                ],
+                'dom' => [
+                    'ui_state' => data_get($observation, 'dom.ui_state'),
+                    'evidence_sufficient' => (bool) ($observation['evidence_sufficient'] ?? false),
+                    'interaction_count' => $interactionMap->count(),
+                    'relevant_elements' => $relevantElements->all(),
+                ],
+                'execution' => [
+                    'configured_task_count' => $configuredTasks->count(),
+                    'configured_task_sequence' => $configuredTasks
+                        ->map(fn (array $task, int $index): array => array_filter([
+                            'index' => $index,
+                            'key' => $task['key'] ?? null,
+                            'task_key' => $task['task_key'] ?? null,
+                            'title' => $task['title'] ?? null,
+                            'scope_variable' => $task['scope_variable'] ?? null,
+                            'output_variable' => $task['output_variable'] ?? null,
+                            'value_from_variable' => $task['value_from_variable'] ?? null,
+                            'array_name' => $task['array_name'] ?? null,
+                            'store_current_element_as' => $task['store_current_element_as'] ?? null,
+                            'loop_pair_segment' => $task['loop_pair_segment'] ?? null,
+                            'executed' => $executedKeys->contains(trim((string) ($task['key'] ?? ''))),
+                        ], static fn (mixed $value): bool => $value !== null && $value !== ''))
+                        ->all(),
+                    'executed_task_keys' => $executedKeys->all(),
+                    'configured_but_not_executed' => $remaining->all(),
+                    'result_tasks' => $resultTasks
+                        ->map(fn (array $task): array => Arr::only($task, [
+                            'key',
+                            'parent_task_key',
+                            'task_key',
+                            'status',
+                            'statusMessage',
+                        ]))
+                        ->all(),
+                ],
+            ],
+        ];
+    }
+
+    /** @return array{message:string, payload:array<string, mixed>} */
+    protected function repairDecisionSummary(array $plan, array $vision): array
+    {
+        $action = trim((string) ($plan['action'] ?? 'pause')) ?: 'pause';
+        $reason = Str::limit(
+            trim((string) ($plan['reason'] ?? 'Keine Begruendung geliefert.')),
+            1000,
+            '',
+        );
+        $trace = is_array($plan['decision_trace'] ?? null) ? $plan['decision_trace'] : [];
+        $accepted = max(0, (int) ($trace['accepted_operation_count'] ?? count(is_array($plan['operations'] ?? null) ? $plan['operations'] : [])));
+        $rejected = max(0, (int) ($trace['rejected_operation_count'] ?? 0));
+        $rejectionCodes = collect($trace['rejected_operations'] ?? [])
+            ->filter(fn (mixed $item): bool => is_array($item))
+            ->pluck('reason_code')
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+        $message = 'Entscheidung `'.$action.'`: '.$reason;
+
+        if ($accepted > 0 || $rejected > 0) {
+            $message .= ' Strukturvorschlaege: '.$accepted.' akzeptiert, '.$rejected.' verworfen';
+
+            if ($rejectionCodes !== []) {
+                $message .= ' ('.implode(', ', $rejectionCodes).')';
+            }
+        }
+
+        return [
+            'message' => $message,
+            'payload' => array_filter([
+                'action' => $action,
+                'task_key' => $plan['task_key'] ?? null,
+                'reason' => $reason,
+                'changes' => is_array($plan['changes'] ?? null) ? $plan['changes'] : null,
+                'selector_candidates' => is_array($plan['selector_candidates'] ?? null) ? $plan['selector_candidates'] : null,
+                'operations' => is_array($plan['operations'] ?? null) ? $plan['operations'] : null,
+                'evidence' => is_array($plan['evidence'] ?? null) ? $plan['evidence'] : null,
+                'decision_trace' => $trace !== [] ? $trace : null,
+                'planning_handoff' => is_array($plan['planning_handoff'] ?? null)
+                    ? $plan['planning_handoff']
+                    : [
+                        'vision_profile' => 'image_understanding',
+                        'vision_model' => $vision['model'] ?? null,
+                        'planner_profile' => 'deterministic_or_data_analysis',
+                    ],
+            ], static fn (mixed $value): bool => $value !== null && $value !== []),
+        ];
     }
 
     protected function captureCopilotAiUsage(

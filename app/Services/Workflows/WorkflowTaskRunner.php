@@ -441,7 +441,29 @@ class WorkflowTaskRunner
         }
 
         if ($singleTask) {
-            $tasks = array_slice($tasks, 0, 1);
+            $firstTask = $tasks[0] ?? null;
+
+            if (is_array($firstTask) && (string) ($firstTask['task_key'] ?? '') === 'loop.for_each_element') {
+                $endKey = trim((string) ($firstTask['loop_end_key'] ?? $firstTask['loopEndKey'] ?? ''));
+                $pairId = trim((string) ($firstTask['loop_pair_id'] ?? $firstTask['loopPairId'] ?? ''));
+                $endIndex = collect($tasks)->search(function (array $task) use ($endKey, $pairId): bool {
+                    $taskKey = trim((string) ($task['key'] ?? ''));
+                    $taskPairId = trim((string) ($task['loop_pair_id'] ?? $task['loopPairId'] ?? ''));
+
+                    return ($endKey !== '' && $taskKey === $endKey)
+                        || ($pairId !== ''
+                            && $taskPairId === $pairId
+                            && (string) ($task['task_key'] ?? '') === 'loop.end');
+                });
+
+                if ($endIndex === false) {
+                    throw new \RuntimeException('Das gekoppelte Loop-Ende fuer den Copilot-Task wurde nicht gefunden.');
+                }
+
+                $tasks = array_slice($tasks, 0, (int) $endIndex + 1);
+            } else {
+                $tasks = array_slice($tasks, 0, 1);
+            }
         }
 
         return $this->expandRuntimeTasks(

@@ -19,6 +19,7 @@ class WorkflowCopilotRepairService
         'browser.hover',
         'input.fill_field',
         'input.submit',
+        'loop.for_each_element',
         'mail.check_address_availability',
         'mail.fill_address',
         'mail.generate_address',
@@ -50,6 +51,7 @@ class WorkflowCopilotRepairService
     private const STRUCTURAL_OPERATION_TYPES = [
         'insert_step',
         'insert_task',
+        'move_task',
         'update_step_routes',
         'update_task_routes',
     ];
@@ -109,6 +111,12 @@ class WorkflowCopilotRepairService
             return $consentPlan;
         }
 
+        $resolvedConsentPlan = $this->resolvedConsentObstaclePlan($task, $checkpoint, $observation, $vision);
+
+        if ($resolvedConsentPlan !== []) {
+            return $resolvedConsentPlan;
+        }
+
         $blankPageRecovery = $this->blankPageRecoveryPlan($step, $checkpoint, $observation, $vision);
 
         if ($blankPageRecovery !== []) {
@@ -124,7 +132,7 @@ class WorkflowCopilotRepairService
         $requiresVisualTarget = $this->taskRequiresVisualTarget($taskCatalogKey);
         $trustedElementRefs = $this->trustedVisionElementRefs($vision, $observation);
         $contextDomains = $this->observationDomains($observation);
-        $selectors = $this->selectorCandidates($vision, $observation, $requiresVisualTarget)
+        $selectors = $this->selectorCandidates($vision, $observation, $task, $requiresVisualTarget)
             ->reject(fn (string $selector): bool => in_array($selector, $rejectedSelectors, true))
             ->reject(fn (string $selector): bool => $selector === trim((string) ($task['selector'] ?? $task['element_selector'] ?? '')))
             ->values();
@@ -201,6 +209,16 @@ class WorkflowCopilotRepairService
         $decisionElementRef = trim((string) ($decision['element_ref'] ?? ''));
         $hasSafePlannerTarget = ! $requiresVisualTarget
             || ($decisionElementRef !== '' && isset($trustedElementRefs[$decisionElementRef]));
+        $requestedOperations = is_array($decision['operations'] ?? null) ? $decision['operations'] : [];
+        $decisionTrace = [
+            'source' => 'data_analysis',
+            'requested_action' => $action,
+            'requested_operation_count' => count($requestedOperations),
+            'accepted_operation_count' => 0,
+            'rejected_operation_count' => 0,
+            'rejected_operations' => [],
+            'trusted_element_refs' => array_keys($trustedElementRefs),
+        ];
 
         if ($action === 'retry') {
             if (! $hasSafePlannerTarget) {
@@ -211,6 +229,7 @@ class WorkflowCopilotRepairService
                 'action' => 'retry',
                 'task_key' => $taskKey,
                 'reason' => $this->safeReason($decision['reason'] ?? 'Task erneut ausfuehren.'),
+                'decision_trace' => $decisionTrace,
             ];
         }
 
@@ -219,15 +238,22 @@ class WorkflowCopilotRepairService
                 'action' => 'continue_route',
                 'task_key' => $taskKey,
                 'reason' => $this->safeReason($decision['reason'] ?? 'Konfigurierte Fehlerroute fortsetzen.'),
+                'decision_trace' => $decisionTrace,
             ];
         }
 
         if ($action === 'structural_update') {
+            $rejectedOperations = [];
             $operations = $this->normalizeStructuralOperations(
                 $step,
-                is_array($decision['operations'] ?? null) ? $decision['operations'] : [],
+                $requestedOperations,
                 $observation,
+                $vision,
+                $rejectedOperations,
             );
+            $decisionTrace['accepted_operation_count'] = count($operations);
+            $decisionTrace['rejected_operation_count'] = count($rejectedOperations);
+            $decisionTrace['rejected_operations'] = $rejectedOperations;
 
             if ($operations !== []) {
                 return [
@@ -236,6 +262,7 @@ class WorkflowCopilotRepairService
                     'operations' => $operations,
                     'reason' => $this->safeReason($decision['reason'] ?? 'Fehlende Workflow-Logik wird kataloggebunden ergaenzt und von vorn getestet.'),
                     'planning_handoff' => $this->planningHandoff($vision),
+                    'decision_trace' => $decisionTrace,
                 ];
             }
         }
@@ -264,10 +291,23 @@ class WorkflowCopilotRepairService
                 ]),
                 'reason' => $this->safeReason($decision['reason'] ?? 'Katalogkonforme Task-Anpassung pruefen.'),
                 'original_task_key' => $taskKey,
+                'decision_trace' => $decisionTrace,
             ];
         }
 
-        return $this->pausePlan($taskKey, $this->safeReason($decision['reason'] ?? 'Keine sichere autonome Reparatur gefunden.'));
+        $reason = $this->safeReason($decision['reason'] ?? 'Keine sichere autonome Reparatur gefunden.');
+
+        if ($decisionTrace['rejected_operations'] !== []) {
+            $reason = $this->safeReason($reason.' Verworfen: '.collect($decisionTrace['rejected_operations'])
+                ->pluck('message')
+                ->filter()
+                ->implode(' '));
+        }
+
+        return array_replace(
+            $this->pausePlan($taskKey, $reason),
+            ['decision_trace' => $decisionTrace],
+        );
     }
 
     public function applyStructuralOperations(
@@ -307,6 +347,22 @@ class WorkflowCopilotRepairService
 
             if (! $step) {
                 throw new \DomainException('Die Ziel-Liste der strukturellen Reparatur wurde nicht gefunden.');
+            }
+
+            if ($operation['type'] === 'move_task') {
+                $taskKey = trim((string) ($operation['task_key'] ?? ''));
+
+                if ($taskKey === '' || ! $this->taskOrdering->moveTask(
+                    $workflow,
+                    $step,
+                    $taskKey,
+                    max(0, (int) ($operation['insert_position'] ?? 0)),
+                    (int) $step->id,
+                )) {
+                    throw new \DomainException('Die bestehende Task konnte nicht an die geplante Position verschoben werden.');
+                }
+
+                continue;
             }
 
             if ($operation['type'] === 'update_step_routes') {
@@ -353,13 +409,33 @@ class WorkflowCopilotRepairService
             $catalogKey = trim((string) ($operation['task_catalog_key'] ?? ''));
             $definition = $catalogKey !== '' ? $this->catalog->task($catalogKey) : null;
             $cardKey = trim((string) ($operation['card_key'] ?? ''));
+            $requiresVisualTarget = $this->taskRequiresVisualTarget($catalogKey);
 
             if (! $definition
-                || in_array($catalogKey, ['loop.for_each_element', 'loop.end'], true)
-                || $this->taskRequiresVisualTarget($catalogKey)
+                || $catalogKey === 'loop.end'
                 || $cardKey === ''
                 || collect($step->task_cards)->contains(fn (array $task): bool => (string) ($task['key'] ?? '') === $cardKey)) {
                 throw new \DomainException('Der einzufuegende Task ist nicht katalogkonform oder nicht eindeutig.');
+            }
+
+            $parameters = is_array($operation['parameters'] ?? null) ? $operation['parameters'] : [];
+
+            if ($requiresVisualTarget) {
+                $elementRef = trim((string) ($operation['element_ref'] ?? ''));
+                $visualTarget = $this->visualTargetFromObservation($elementRef, $observation);
+                $evidenceSelector = trim((string) ($operation['evidence_selector'] ?? ''));
+
+                if ($visualTarget === []
+                    || $evidenceSelector === ''
+                    || ! hash_equals((string) $visualTarget['selector'], $evidenceSelector)
+                    || trim((string) ($parameters['selector'] ?? '')) !== $evidenceSelector
+                    || trim((string) ($parameters['element_selector'] ?? '')) !== $evidenceSelector) {
+                    throw new \DomainException('Der visuell zielgebundene Task ist nicht durch die aktuelle DOM-Evidenz abgesichert.');
+                }
+            }
+
+            if ($this->structuralTaskAlreadyExists($step, $catalogKey, $parameters)) {
+                throw new \DomainException('Der einzufuegende Task ist bereits gleichartig in der Ziel-Liste konfiguriert.');
             }
 
             $baseCard = $this->catalog->cardFromDefinition($catalogKey, [
@@ -367,7 +443,6 @@ class WorkflowCopilotRepairService
                 'title' => Str::limit(trim((string) ($operation['title'] ?? $definition['label'] ?? $catalogKey)), 180, ''),
                 'description' => Str::limit(trim((string) ($operation['description'] ?? $definition['description'] ?? '')), 1000, ''),
             ]);
-            $parameters = is_array($operation['parameters'] ?? null) ? $operation['parameters'] : [];
             $normalized = $this->normalizeChanges(
                 $step,
                 $baseCard,
@@ -376,6 +451,38 @@ class WorkflowCopilotRepairService
                 $this->observationDomains($observation),
             );
             $card = array_replace($baseCard, $normalized);
+
+            if ($catalogKey === 'loop.for_each_element') {
+                $pairId = 'loop-'.(string) Str::uuid();
+                $endKey = $this->uniqueStructuralTaskKey($step, $cardKey.'-end');
+                $browserWindow = trim((string) ($card['browser_window_name'] ?? $card['browser_window'] ?? 'main')) ?: 'main';
+                $card = array_replace($card, [
+                    'loop_pair_id' => $pairId,
+                    'loop_pair_segment' => 'start',
+                    'loop_start_key' => $cardKey,
+                    'loop_end_key' => $endKey,
+                    'empty_target' => $endKey,
+                ]);
+                $endCard = $this->catalog->cardFromDefinition('loop.end', [
+                    'key' => $endKey,
+                    'title' => 'Loop-Ende: '.($card['title'] ?? $cardKey),
+                    'description' => 'Automatisches Endsegment fuer '.($card['title'] ?? $cardKey).'.',
+                    'browser_window' => $browserWindow,
+                    'browser_window_name' => $browserWindow,
+                    'loop_pair_id' => $pairId,
+                    'loop_pair_segment' => 'end',
+                    'loop_start_key' => $cardKey,
+                    'loop_end_key' => $endKey,
+                ]);
+                $this->taskOrdering->insertTasks(
+                    $step,
+                    [$card, $endCard],
+                    max(0, (int) ($operation['insert_position'] ?? count($step->task_cards))),
+                );
+
+                continue;
+            }
+
             $this->taskOrdering->insertTask(
                 $step,
                 $card,
@@ -513,6 +620,50 @@ class WorkflowCopilotRepairService
     }
 
     /**
+     * A consent click is optional once reliable screenshot/DOM evidence shows
+     * that the obstacle is no longer present. Retargeting that task to an
+     * unrelated visible control would change its meaning.
+     *
+     * @param  array<string, mixed>  $task
+     * @param  array<string, mixed>  $checkpoint
+     * @return array<string, mixed>
+     */
+    protected function resolvedConsentObstaclePlan(
+        array $task,
+        array $checkpoint,
+        array $observation,
+        array $vision,
+    ): array {
+        $confidence = $vision['confidence'] ?? null;
+        $outcome = Str::lower(trim((string) ($checkpoint['outcome'] ?? 'failed')));
+
+        if (! $this->taskLooksLikeConsentClick($task)
+            || (bool) ($checkpoint['successful'] ?? false)
+            || ! in_array($outcome, ['failed', 'timeout'], true)
+            || $this->consentBlocked($observation, $vision)
+            || ! is_numeric($confidence)
+            || (float) $confidence < self::MIN_VISUAL_CONFIDENCE
+            || (bool) ($vision['safe_pause'] ?? false)
+            || Str::lower(trim((string) ($vision['verdict'] ?? ''))) === 'pause'
+            || ! (bool) ($observation['evidence_sufficient'] ?? false)) {
+            return [];
+        }
+
+        return [
+            'action' => 'skip_resolved_obstacle',
+            'task_key' => (string) ($task['key'] ?? ''),
+            'reason' => 'Der Consent-Task schlug fehl, aber die aktuelle Bild- und DOM-Evidenz zeigt keinen aktiven Consent-Dialog mehr. Das bereits erledigte Hindernis wird uebersprungen, ohne den Task auf ein fachlich fremdes Element umzubiegen.',
+            'evidence' => [
+                'page_state' => data_get($observation, 'page.state'),
+                'dom_state' => data_get($observation, 'dom.ui_state'),
+                'vision_state' => $vision['ui_state'] ?? null,
+                'vision_confidence' => (float) $confidence,
+                'vision_verdict' => $vision['verdict'] ?? null,
+            ],
+        ];
+    }
+
+    /**
      * @param  array<string, mixed>  $task
      * @param  array<string, mixed>  $route
      */
@@ -541,13 +692,15 @@ class WorkflowCopilotRepairService
     protected function selectorCandidates(
         array $vision,
         array $observation,
+        array $task,
         bool $requiresVisualTarget,
     ): \Illuminate\Support\Collection {
         $references = collect(array_keys($this->trustedVisionElementRefs($vision, $observation)));
         $elements = collect($observation['interaction_map'] ?? $observation['elements'] ?? [])
             ->filter(fn (mixed $element): bool => is_array($element)
                 && ($element['visible'] ?? null) === true
-                && ($element['enabled'] ?? true) !== false)
+                && ($element['enabled'] ?? true) !== false
+                && $this->elementMatchesTaskIntent($task, $element))
             ->values();
 
         if ($requiresVisualTarget && $references->isEmpty()) {
@@ -584,6 +737,20 @@ class WorkflowCopilotRepairService
             ->filter(fn (string $selector): bool => $this->isSafeSelector($selector))
             ->unique()
             ->values();
+    }
+
+    protected function elementMatchesTaskIntent(array $task, array $element): bool
+    {
+        if (! $this->taskLooksLikeConsentClick($task)) {
+            return true;
+        }
+
+        return $this->canonicalConsentAction(implode(' ', array_filter([
+            $element['text'] ?? null,
+            $element['aria'] ?? null,
+            $element['name'] ?? null,
+            ...(is_array($element['selector_candidates'] ?? null) ? $element['selector_candidates'] : []),
+        ], static fn (mixed $value): bool => is_scalar($value)))) !== null;
     }
 
     protected function prioritizeSelectorsForInstructions(
@@ -1205,6 +1372,13 @@ class WorkflowCopilotRepairService
                     'title' => $candidate['title'] ?? null,
                     'url' => $candidate['url'] ?? null,
                     'selector' => $candidate['selector'] ?? $candidate['element_selector'] ?? null,
+                    'scope_variable' => $candidate['scope_variable'] ?? null,
+                    'output_variable' => $candidate['output_variable'] ?? null,
+                    'value_from_variable' => $candidate['value_from_variable'] ?? null,
+                    'array_name' => $candidate['array_name'] ?? null,
+                    'store_current_element_as' => $candidate['store_current_element_as'] ?? null,
+                    'loop_pair_id' => $candidate['loop_pair_id'] ?? null,
+                    'loop_pair_segment' => $candidate['loop_pair_segment'] ?? null,
                     'next' => $candidate['next'] ?? null,
                     'on_error' => $candidate['on_error'] ?? null,
                     'status_routes' => $candidate['status_routes'] ?? null,
@@ -1213,7 +1387,7 @@ class WorkflowCopilotRepairService
             ->values()
             ->all() ?? [];
         $catalog = collect($this->catalog->options())
-            ->reject(fn (array $definition): bool => in_array((string) ($definition['key'] ?? ''), ['loop.for_each_element', 'loop.end'], true))
+            ->reject(fn (array $definition): bool => (string) ($definition['key'] ?? '') === 'loop.end')
             ->map(fn (array $definition): array => [
                 'task_key' => $definition['key'] ?? null,
                 'label' => $definition['label'] ?? null,
@@ -1235,14 +1409,19 @@ class WorkflowCopilotRepairService
             'step' => ['id' => $step->id, 'name' => $step->name, 'action_key' => $step->action_key],
             'task' => Arr::except($task, ['value', 'input']),
             'workflow_structure' => $workflowStructure,
+            'current_step_execution' => $this->stepExecutionTrace($step, $checkpoint),
             'failure' => Arr::only($checkpoint, ['outcome', 'result', 'task_key']),
             'observation' => Arr::except($observation, ['screenshot_data_url', 'raw_dom', 'html']),
             'vision' => $vision,
             'allowed_actions' => ['retry', 'update_task', 'continue_route', 'structural_update', 'pause'],
             'structural_operations' => [
                 'insert_task' => [
-                    'fields' => ['type', 'step_action_key', 'task_catalog_key', 'title', 'description', 'parameters', 'insert_position'],
-                    'constraint' => 'Nur kataloggebundene Tasks ohne erforderliches sichtbares Ziel; fehlende Logik ergaenzen, nicht duplizieren.',
+                    'fields' => ['type', 'step_action_key', 'task_catalog_key', 'title', 'description', 'parameters', 'insert_position', 'element_ref'],
+                    'constraint' => 'Kataloggebundene Tasks nicht duplizieren. Fuer Tasks mit sichtbarem Ziel ist eine von Vision vorgeschlagene trusted element_ref Pflicht; Selector und Browserfenster werden serverseitig aus DOM-Evidenz abgeleitet. loop.for_each_element erzeugt sein Loop-Ende automatisch. Fuer input.fill_field kann parameters.value_reference den Variablennamen angeben.',
+                ],
+                'move_task' => [
+                    'fields' => ['type', 'step_action_key', 'task_key', 'insert_position'],
+                    'constraint' => 'Verschiebt eine bereits konfigurierte Task innerhalb derselben Liste. Loop-Paare bleiben atomar gekoppelt.',
                 ],
                 'update_step_routes' => [
                     'fields' => ['type', 'step_action_key', 'routes'],
@@ -1260,41 +1439,125 @@ class WorkflowCopilotRepairService
             ),
         ]);
 
-        return 'Waehle die kleinste sichere Reparatur, die den Workflow autonom weiter zum Ziel bringt. Wenn der aktuelle Bildschirm nur Folge fehlender oder falsch gerouteter Workflow-Logik ist, verwende structural_update statt pause. Schema: {"action":"retry|update_task|continue_route|structural_update|pause","element_ref":"el_... oder leer","changes":{},"operations":[],"reason":"konkreter Befund"}. Nach structural_update wird der Workflow revisioniert von Anfang an getestet. Zustandsveraendernde Tasks duerfen nur eine trusted_vision_element_ref verwenden; structural_update darf keine solchen Tasks neu einfuegen. Daten: '.json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        return 'Waehle die kleinste sichere Reparatur, die den Workflow autonom weiter zum Ziel bringt. Als configured_but_not_executed markierte Tasks sind vorhanden und wurden nur noch nicht ausgefuehrt; fuege sie nicht doppelt ein, sondern repariere zuerst Fortsetzung, Reihenfolge oder Routen. Wenn der aktuelle Bildschirm Folge fehlender oder falsch gerouteter Workflow-Logik ist, verwende structural_update statt pause. Schema: {"action":"retry|update_task|continue_route|structural_update|pause","element_ref":"el_... oder leer","changes":{},"operations":[],"reason":"konkreter Befund"}. Nach structural_update wird der Workflow revisioniert von Anfang an getestet. Zustandsveraendernde Tasks und entsprechende insert_task-Operationen duerfen nur eine passende trusted_vision_element_ref verwenden; deren Selector wird nicht vom Modell uebernommen. Daten: '.json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
     }
 
     protected function normalizeStructuralOperations(
         WorkflowStep $currentStep,
         array $operations,
         array $observation,
+        array $vision,
+        array &$rejections,
     ): array {
         $workflow = Workflow::query()
             ->with(['steps' => fn ($query) => $query->ordered()])
             ->find($currentStep->workflow_id);
 
         if (! $workflow) {
+            $this->recordStructuralRejection(
+                $rejections,
+                null,
+                '',
+                'workflow_not_found',
+                'Der Workflow fuer die vorgeschlagene Strukturaenderung wurde nicht gefunden.',
+            );
+
             return [];
         }
 
         $normalized = [];
         $contextDomains = $this->observationDomains($observation);
+        $operationList = collect($operations)->values();
 
-        foreach (collect($operations)->filter(fn (mixed $operation): bool => is_array($operation))->take(4) as $operation) {
-            $type = Str::lower(trim((string) ($operation['type'] ?? '')));
+        if ($operationList->count() > 4) {
+            $this->recordStructuralRejection(
+                $rejections,
+                4,
+                '',
+                'operation_limit',
+                'Mehr als vier Strukturaenderungen in einer Reparaturrunde sind nicht erlaubt.',
+            );
+        }
 
-            if (! in_array($type, self::STRUCTURAL_OPERATION_TYPES, true)) {
+        foreach ($operationList->take(4) as $index => $operation) {
+            if (! is_array($operation)) {
+                $this->recordStructuralRejection(
+                    $rejections,
+                    (int) $index,
+                    '',
+                    'invalid_operation',
+                    'Die vorgeschlagene Strukturaenderung ist kein gueltiges Objekt.',
+                );
+
                 continue;
             }
 
-            // New visual-target steps are emitted only by the deterministic
-            // consent repair below, never from model-provided operations.
+            $type = Str::lower(trim((string) ($operation['type'] ?? '')));
+
+            if (! in_array($type, self::STRUCTURAL_OPERATION_TYPES, true)) {
+                $this->recordStructuralRejection(
+                    $rejections,
+                    (int) $index,
+                    $type,
+                    'operation_type_not_allowed',
+                    'Der Operationstyp `'.($type ?: 'leer').'` ist nicht erlaubt.',
+                );
+
+                continue;
+            }
+
             if ($type === 'insert_step') {
+                $this->recordStructuralRejection(
+                    $rejections,
+                    (int) $index,
+                    $type,
+                    'model_step_insertion_blocked',
+                    'Neue Listen duerfen waehrend einer Reparatur nur durch eine deterministische, evidenzgebundene Spezialreparatur erzeugt werden.',
+                );
+
                 continue;
             }
 
             $targetStep = $this->structuralTargetStep($workflow, $operation);
 
             if (! $targetStep) {
+                $this->recordStructuralRejection(
+                    $rejections,
+                    (int) $index,
+                    $type,
+                    'target_step_not_found',
+                    'Die angegebene Ziel-Liste existiert im aktuellen Workflow nicht.',
+                );
+
+                continue;
+            }
+
+            if ($type === 'move_task') {
+                $taskKey = trim((string) ($operation['task_key'] ?? ''));
+                $task = collect($targetStep->task_cards)->firstWhere('key', $taskKey);
+
+                if (! is_array($task)) {
+                    $this->recordStructuralRejection(
+                        $rejections,
+                        (int) $index,
+                        $type,
+                        'target_task_not_found',
+                        'Die zu verschiebende Task existiert in der Ziel-Liste nicht.',
+                    );
+
+                    continue;
+                }
+
+                $normalized[] = [
+                    'type' => $type,
+                    'step_action_key' => (string) $targetStep->action_key,
+                    'task_key' => $taskKey,
+                    'insert_position' => min(
+                        max(0, (int) ($operation['insert_position'] ?? 0)),
+                        count($targetStep->task_cards),
+                    ),
+                ];
+
                 continue;
             }
 
@@ -1318,6 +1581,14 @@ class WorkflowCopilotRepairService
                         'step_action_key' => (string) $targetStep->action_key,
                         'routes' => $routes,
                     ];
+                } else {
+                    $this->recordStructuralRejection(
+                        $rejections,
+                        (int) $index,
+                        $type,
+                        'no_valid_route_change',
+                        'Die vorgeschlagenen Listen-Routen sind ungueltig, nicht aufloesbar oder bereits genauso konfiguriert.',
+                    );
                 }
 
                 continue;
@@ -1328,6 +1599,14 @@ class WorkflowCopilotRepairService
                 $task = collect($targetStep->task_cards)->firstWhere('key', $taskKey);
 
                 if (! is_array($task)) {
+                    $this->recordStructuralRejection(
+                        $rejections,
+                        (int) $index,
+                        $type,
+                        'target_task_not_found',
+                        'Die Task fuer die vorgeschlagene Routen-Aenderung existiert nicht.',
+                    );
+
                     continue;
                 }
 
@@ -1335,7 +1614,19 @@ class WorkflowCopilotRepairService
                     is_array($operation['changes'] ?? null) ? $operation['changes'] : [],
                     self::ROUTE_FIELDS,
                 );
-                $changes = $this->normalizeChanges($targetStep, $task, $changes, true, $contextDomains);
+                try {
+                    $changes = $this->normalizeChanges($targetStep, $task, $changes, true, $contextDomains);
+                } catch (\DomainException $exception) {
+                    $this->recordStructuralRejection(
+                        $rejections,
+                        (int) $index,
+                        $type,
+                        'invalid_task_route',
+                        $this->safeReason($exception->getMessage()),
+                    );
+
+                    continue;
+                }
                 $changes = Arr::only($changes, self::ROUTE_FIELDS);
 
                 if ($changes !== []) {
@@ -1345,6 +1636,14 @@ class WorkflowCopilotRepairService
                         'task_key' => $taskKey,
                         'changes' => $changes,
                     ];
+                } else {
+                    $this->recordStructuralRejection(
+                        $rejections,
+                        (int) $index,
+                        $type,
+                        'no_task_route_change',
+                        'Die vorgeschlagenen Task-Routen enthalten keine neue gueltige Aenderung.',
+                    );
                 }
 
                 continue;
@@ -1353,10 +1652,46 @@ class WorkflowCopilotRepairService
             $catalogKey = trim((string) ($operation['task_catalog_key'] ?? $operation['task_key'] ?? ''));
             $definition = $catalogKey !== '' ? $this->catalog->task($catalogKey) : null;
 
-            if (! $definition
-                || in_array($catalogKey, ['loop.for_each_element', 'loop.end'], true)
-                || $this->taskRequiresVisualTarget($catalogKey)) {
+            if (! $definition) {
+                $this->recordStructuralRejection(
+                    $rejections,
+                    (int) $index,
+                    $type,
+                    'catalog_task_not_found',
+                    'Der einzufuegende Task-Key `'.($catalogKey ?: 'leer').'` ist nicht im WorkflowTaskCatalog registriert.',
+                );
+
                 continue;
+            }
+
+            if ($catalogKey === 'loop.end') {
+                $this->recordStructuralRejection(
+                    $rejections,
+                    (int) $index,
+                    $type,
+                    'loop_pair_requires_atomic_repair',
+                    'Ein Loop-Ende darf nicht einzeln eingefuegt werden; es wird automatisch mit loop.for_each_element erzeugt.',
+                );
+
+                continue;
+            }
+
+            $visualTarget = [];
+
+            if ($this->taskRequiresVisualTarget($catalogKey)) {
+                $visualTarget = $this->trustedStructuralVisualTarget($catalogKey, $operation, $vision, $observation);
+
+                if ($visualTarget === []) {
+                    $this->recordStructuralRejection(
+                        $rejections,
+                        (int) $index,
+                        $type,
+                        'visual_target_not_trusted',
+                        'Der visuell zielgebundene Task `'.$catalogKey.'` besitzt keine passende, ausreichend sichere Vision- und DOM-Elementreferenz.',
+                    );
+
+                    continue;
+                }
             }
 
             $title = Str::limit(trim((string) ($operation['title'] ?? $definition['label'] ?? $catalogKey)), 180, '');
@@ -1368,6 +1703,28 @@ class WorkflowCopilotRepairService
             ]);
             $parameters = is_array($operation['parameters'] ?? null) ? $operation['parameters'] : [];
             $allowedFields = $this->mutableFieldsForDefinition($definition);
+
+            if ($visualTarget !== []) {
+                $parameters = Arr::except($parameters, ['selector', 'element_selector', 'input_selector', 'browser_window', 'browser_window_name']);
+                $parameters['selector'] = $visualTarget['selector'];
+                $parameters['element_selector'] = $visualTarget['selector'];
+                $parameters['input_selector'] = $visualTarget['selector'];
+
+                if ($catalogKey === 'input.fill_field') {
+                    $valueReference = data_get($parameters, 'value_reference')
+                        ?? data_get($visualTarget, 'suggested_parameters.value_reference');
+
+                    if (is_scalar($valueReference) && trim((string) $valueReference) !== '') {
+                        $parameters['value'] = trim((string) $valueReference);
+                        $parameters['input'] = trim((string) $valueReference);
+                    }
+                }
+            }
+
+            if ($catalogKey === 'loop.for_each_element') {
+                unset($parameters['success_target'], $parameters['empty_target']);
+            }
+
             $parameters = Arr::only($parameters, $allowedFields);
 
             $normalizedParameters = $this->normalizeChanges(
@@ -1382,10 +1739,30 @@ class WorkflowCopilotRepairService
             });
 
             if ($invalidParameter) {
+                $this->recordStructuralRejection(
+                    $rejections,
+                    (int) $index,
+                    $type,
+                    'invalid_task_parameters',
+                    'Mindestens ein vorgeschlagener Taskparameter ist fuer `'.$catalogKey.'` nicht erlaubt oder nicht sicher.',
+                );
+
                 continue;
             }
 
-            $normalized[] = [
+            if ($this->structuralTaskAlreadyExists($targetStep, $catalogKey, $normalizedParameters)) {
+                $this->recordStructuralRejection(
+                    $rejections,
+                    (int) $index,
+                    $type,
+                    'task_already_configured',
+                    'Ein gleichartiger Task `'.$catalogKey.'` mit demselben Ziel ist in der Ziel-Liste bereits konfiguriert.',
+                );
+
+                continue;
+            }
+
+            $normalizedOperation = [
                 'type' => $type,
                 'step_action_key' => (string) $targetStep->action_key,
                 'task_catalog_key' => $catalogKey,
@@ -1398,9 +1775,214 @@ class WorkflowCopilotRepairService
                     count($targetStep->task_cards),
                 ),
             ];
+
+            if ($visualTarget !== []) {
+                $normalizedOperation['element_ref'] = $visualTarget['element_ref'];
+                $normalizedOperation['evidence_selector'] = $visualTarget['selector'];
+                $normalizedOperation['evidence_window'] = $visualTarget['window'];
+            }
+
+            $normalized[] = $normalizedOperation;
         }
 
         return $normalized;
+    }
+
+    protected function recordStructuralRejection(
+        array &$rejections,
+        ?int $index,
+        string $type,
+        string $reasonCode,
+        string $message,
+    ): void {
+        $rejections[] = array_filter([
+            'index' => $index,
+            'type' => $type !== '' ? $type : null,
+            'reason_code' => $reasonCode,
+            'message' => $this->safeReason($message),
+        ], static fn (mixed $value): bool => $value !== null && $value !== '');
+    }
+
+    /** @return array<string, mixed> */
+    protected function trustedStructuralVisualTarget(
+        string $catalogKey,
+        array $operation,
+        array $vision,
+        array $observation,
+    ): array {
+        $elementRef = trim((string) ($operation['element_ref'] ?? $operation['elementRef'] ?? ''));
+        $trusted = $this->trustedVisionElementRefs($vision, $observation);
+        $observed = $elementRef !== '' ? ($trusted[$elementRef] ?? null) : null;
+
+        if (! is_array($observed)) {
+            return [];
+        }
+
+        $suggestion = collect($vision['suggested_task_actions'] ?? [])
+            ->first(function (mixed $candidate) use ($catalogKey, $elementRef): bool {
+                if (! is_array($candidate)) {
+                    return false;
+                }
+
+                $candidateCatalogKey = trim((string) ($candidate['task_catalog_key'] ?? $candidate['task_key'] ?? ''));
+                $candidateElementRef = trim((string) ($candidate['element_ref'] ?? $candidate['elementRef'] ?? ''));
+                $confidence = $candidate['confidence'] ?? null;
+
+                return $candidateCatalogKey === $catalogKey
+                    && $candidateElementRef === $elementRef
+                    && is_numeric($confidence)
+                    && (float) $confidence >= self::MIN_VISUAL_CONFIDENCE;
+            });
+
+        if (! is_array($suggestion)) {
+            return [];
+        }
+
+        $selector = collect([
+            ...(is_array($observed['selector_candidates'] ?? null) ? $observed['selector_candidates'] : []),
+            $observed['selector'] ?? null,
+        ])
+            ->map(fn (mixed $candidate): string => trim((string) $candidate))
+            ->first(fn (string $candidate): bool => $this->isSafeSelector($candidate));
+
+        if (! is_string($selector) || $selector === '') {
+            return [];
+        }
+
+        return [
+            'element_ref' => $elementRef,
+            'selector' => $selector,
+            'window' => trim((string) ($observed['window'] ?? data_get($observation, 'page.window', 'main'))) ?: 'main',
+            'suggested_parameters' => is_array($suggestion['parameters'] ?? null) ? $suggestion['parameters'] : [],
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    protected function visualTargetFromObservation(string $elementRef, array $observation): array
+    {
+        $element = collect($observation['interaction_map'] ?? $observation['elements'] ?? [])
+            ->first(function (mixed $candidate) use ($elementRef): bool {
+                return is_array($candidate)
+                    && trim((string) ($candidate['element_ref'] ?? $candidate['ref'] ?? '')) === $elementRef
+                    && ($candidate['visible'] ?? null) === true
+                    && ($candidate['enabled'] ?? true) !== false;
+            });
+
+        if (! is_array($element)) {
+            return [];
+        }
+
+        $selector = collect([
+            ...(is_array($element['selector_candidates'] ?? null) ? $element['selector_candidates'] : []),
+            $element['selector'] ?? null,
+        ])
+            ->map(fn (mixed $candidate): string => trim((string) $candidate))
+            ->first(fn (string $candidate): bool => $this->isSafeSelector($candidate));
+
+        return is_string($selector) && $selector !== ''
+            ? [
+                'element_ref' => $elementRef,
+                'selector' => $selector,
+                'window' => trim((string) ($element['window'] ?? data_get($observation, 'page.window', 'main'))) ?: 'main',
+            ]
+            : [];
+    }
+
+    protected function structuralTaskAlreadyExists(
+        WorkflowStep $step,
+        string $catalogKey,
+        array $parameters,
+    ): bool {
+        if ($parameters === []) {
+            return false;
+        }
+
+        return collect($step->task_cards)->contains(function (array $task) use ($catalogKey, $parameters): bool {
+            if (trim((string) ($task['task_key'] ?? '')) !== $catalogKey) {
+                return false;
+            }
+
+            $targetSelector = trim((string) (
+                $parameters['selector']
+                ?? $parameters['element_selector']
+                ?? $parameters['input_selector']
+                ?? ''
+            ));
+            $existingSelector = trim((string) (
+                $task['selector']
+                ?? $task['element_selector']
+                ?? $task['input_selector']
+                ?? ''
+            ));
+
+            if ($targetSelector !== '' && $existingSelector === $targetSelector) {
+                return true;
+            }
+
+            foreach ($parameters as $key => $value) {
+                if (($task[$key] ?? null) !== $value) {
+                    return false;
+                }
+            }
+
+            return true;
+        });
+    }
+
+    /** @return array<string, mixed> */
+    protected function stepExecutionTrace(WorkflowStep $step, array $checkpoint): array
+    {
+        $configuredTasks = collect($step->task_cards)->values();
+        $resultTasks = collect(is_array(data_get($checkpoint, 'result.tasks'))
+            ? data_get($checkpoint, 'result.tasks')
+            : []);
+        $executedTaskKeys = $resultTasks
+            ->filter(fn (mixed $task): bool => is_array($task))
+            ->flatMap(fn (array $task): array => array_filter([
+                trim((string) ($task['key'] ?? '')),
+                trim((string) ($task['parent_task_key'] ?? '')),
+            ]))
+            ->push(trim((string) data_get($checkpoint, 'result.completedTaskKey', '')))
+            ->push(trim((string) data_get($checkpoint, 'result.failedTaskKey', '')))
+            ->push(trim((string) ($checkpoint['task_key'] ?? '')))
+            ->filter()
+            ->unique()
+            ->values();
+        $currentTaskKey = trim((string) ($checkpoint['task_key'] ?? ''));
+        $currentIndex = $configuredTasks->search(
+            fn (array $task): bool => trim((string) ($task['key'] ?? '')) === $currentTaskKey,
+        );
+        $tasks = $configuredTasks
+            ->map(fn (array $task, int $index): array => [
+                'index' => $index,
+                'key' => $task['key'] ?? null,
+                'task_key' => $task['task_key'] ?? null,
+                'title' => $task['title'] ?? null,
+                'scope_variable' => $task['scope_variable'] ?? null,
+                'output_variable' => $task['output_variable'] ?? null,
+                'value_from_variable' => $task['value_from_variable'] ?? null,
+                'array_name' => $task['array_name'] ?? null,
+                'store_current_element_as' => $task['store_current_element_as'] ?? null,
+                'loop_pair_id' => $task['loop_pair_id'] ?? null,
+                'loop_pair_segment' => $task['loop_pair_segment'] ?? null,
+                'executed' => $executedTaskKeys->contains(trim((string) ($task['key'] ?? ''))),
+                'current' => trim((string) ($task['key'] ?? '')) === $currentTaskKey,
+            ])
+            ->values();
+
+        return [
+            'current_task_key' => $currentTaskKey,
+            'current_task_index' => $currentIndex === false ? null : (int) $currentIndex,
+            'configured_task_count' => $configuredTasks->count(),
+            'executed_task_keys' => $executedTaskKeys->all(),
+            'configured_but_not_executed' => $tasks
+                ->where('executed', false)
+                ->pluck('key')
+                ->filter()
+                ->values()
+                ->all(),
+            'tasks' => $tasks->all(),
+        ];
     }
 
     protected function structuralTargetStep(Workflow $workflow, array $operation): ?WorkflowStep

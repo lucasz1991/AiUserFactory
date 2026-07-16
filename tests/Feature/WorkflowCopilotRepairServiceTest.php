@@ -879,6 +879,64 @@ class WorkflowCopilotRepairServiceTest extends TestCase
         $this->assertCount(3, $workflow->steps()->get());
     }
 
+    public function test_failed_consent_click_is_skipped_when_vision_and_dom_show_the_obstacle_is_gone(): void
+    {
+        [, $step] = $this->workflowWithTasks([[
+            'key' => 'consent-ablehnen',
+            'task_key' => 'browser.click',
+            'title' => 'Consent: Alle ablehnen',
+            'selector' => '#W0wltc',
+        ]]);
+        $session = app(WorkflowCopilotSessionService::class)->start($step->workflow, [
+            'goal' => 'Google-Suche ohne Consent-Blockade ausfuehren.',
+        ]);
+        $ai = Mockery::mock(AiConnectionService::class);
+        $ai->shouldNotReceive('json');
+        $this->app->instance(AiConnectionService::class, $ai);
+
+        $plan = app(WorkflowCopilotRepairService::class)->plan(
+            $session,
+            $step->fresh(),
+            [
+                'task_key' => 'consent-ablehnen',
+                'successful' => false,
+                'outcome' => 'failed',
+                'result' => ['ok' => false, 'statusMessage' => 'Element nicht gefunden.'],
+            ],
+            [
+                'page' => ['url' => 'https://www.google.com', 'title' => 'Google', 'state' => 'search_input'],
+                'dom' => ['ui_state' => 'search_input', 'visible_text_excerpt' => 'Google Suche'],
+                'interaction_map' => [[
+                    'element_ref' => 'el_search_submit',
+                    'tag' => 'input',
+                    'text' => 'Google Suche',
+                    'aria' => 'Google Suche',
+                    'visible' => true,
+                    'enabled' => true,
+                    'selector_candidates' => ['input[aria-label="Google Suche"]'],
+                ]],
+                'evidence_sufficient' => true,
+            ],
+            [
+                'page_type' => 'search_page',
+                'ui_state' => 'search_input',
+                'confidence' => 0.9,
+                'verdict' => 'continue',
+                'safe_pause' => false,
+                'relevant_elements' => [[
+                    'element_ref' => 'el_search_submit',
+                    'confidence' => 0.9,
+                ]],
+                'suggested_task_actions' => [],
+            ],
+        );
+
+        $this->assertSame('skip_resolved_obstacle', $plan['action']);
+        $this->assertSame('consent-ablehnen', $plan['task_key']);
+        $this->assertStringContainsString('keinen aktiven Consent-Dialog', $plan['reason']);
+        $this->assertSame('#W0wltc', data_get($step->fresh()->task_cards, '0.selector'));
+    }
+
     public function test_structural_planner_can_insert_only_a_catalog_bound_non_visual_task(): void
     {
         [$workflow, $step] = $this->workflowWithTasks([[
@@ -949,6 +1007,9 @@ class WorkflowCopilotRepairServiceTest extends TestCase
         $this->assertSame('image_understanding', data_get($plan, 'planning_handoff.vision_profile'));
         $this->assertSame('vision/model-test', data_get($plan, 'planning_handoff.vision_model'));
         $this->assertSame('data_analysis', data_get($plan, 'planning_handoff.planner_profile'));
+        $this->assertSame(1, data_get($plan, 'decision_trace.accepted_operation_count'));
+        $this->assertSame(1, data_get($plan, 'decision_trace.rejected_operation_count'));
+        $this->assertSame('visual_target_not_trusted', data_get($plan, 'decision_trace.rejected_operations.0.reason_code'));
 
         $service->applyStructuralOperations($workflow->fresh(), $plan['operations'], $session->fresh(), [
             'page' => ['url' => 'https://www.google.com'],
@@ -959,6 +1020,253 @@ class WorkflowCopilotRepairServiceTest extends TestCase
         $this->assertSame('https://www.google.com', data_get($tasks, '0.url'));
         $this->assertSame('browser.find_element', data_get($tasks, '1.task_key'));
         $this->assertNotContains('browser.click', collect($tasks)->pluck('task_key')->all());
+    }
+
+    public function test_structural_planner_inserts_visual_tasks_only_from_matching_vision_and_dom_refs(): void
+    {
+        [$workflow, $step] = $this->workflowWithTasks([[
+            'key' => 'append-result',
+            'task_key' => 'data.append_to_array',
+            'title' => 'Ergebnis anhaengen',
+            'array_name' => 'top_results',
+            'value_from_variable' => 'current_result',
+        ]]);
+        $session = app(WorkflowCopilotSessionService::class)->start($workflow, [
+            'goal' => 'Google-Suchfeld fuellen und Suche absenden.',
+        ]);
+        $observation = [
+            'page' => ['url' => 'https://www.google.com', 'title' => 'Google', 'state' => 'search_input', 'window' => 'main'],
+            'dom' => ['ui_state' => 'search_input', 'visible_text_excerpt' => 'Google Suche'],
+            'interaction_map' => [[
+                'element_ref' => 'el_search_input',
+                'tag' => 'textarea',
+                'aria' => 'Suche',
+                'name' => 'q',
+                'visible' => true,
+                'enabled' => true,
+                'selector_candidates' => ['#APjFqb', 'textarea[aria-label="Suche"]'],
+                'window' => 'main',
+            ], [
+                'element_ref' => 'el_search_submit',
+                'tag' => 'input',
+                'aria' => 'Google Suche',
+                'name' => 'btnK',
+                'visible' => true,
+                'enabled' => true,
+                'selector_candidates' => ['input[aria-label="Google Suche"]', 'input[name="btnK"]'],
+                'window' => 'main',
+            ]],
+            'evidence_sufficient' => true,
+        ];
+        $vision = [
+            'page_type' => 'search_page',
+            'ui_state' => 'search_input',
+            'confidence' => 0.9,
+            'verdict' => 'continue',
+            'safe_pause' => false,
+            'model' => 'vision/model-test',
+            'relevant_elements' => [[
+                'element_ref' => 'el_search_input',
+                'confidence' => 0.94,
+            ], [
+                'element_ref' => 'el_search_submit',
+                'confidence' => 0.93,
+            ]],
+            'suggested_task_actions' => [[
+                'task_key' => 'input.fill_field',
+                'element_ref' => 'el_search_input',
+                'parameters' => ['value_reference' => 'google_search_url'],
+                'confidence' => 0.94,
+            ], [
+                'task_key' => 'input.submit',
+                'element_ref' => 'el_search_submit',
+                'parameters' => [],
+                'confidence' => 0.93,
+            ]],
+        ];
+        $ai = Mockery::mock(AiConnectionService::class);
+        $ai->shouldReceive('json')
+            ->once()
+            ->withArgs(fn (string $prompt): bool => str_contains($prompt, 'configured_but_not_executed')
+                && str_contains($prompt, 'trusted_vision_element_refs'))
+            ->andReturn([
+                'action' => 'structural_update',
+                'reason' => 'Die beobachtete Suchinteraktion fehlt in dieser Liste.',
+                'operations' => [[
+                    'type' => 'insert_task',
+                    'step_action_key' => 'start',
+                    'task_catalog_key' => 'input.fill_field',
+                    'title' => 'Suchfeld fuellen',
+                    'parameters' => ['value_reference' => 'google_search_url'],
+                    'element_ref' => 'el_search_input',
+                    'insert_position' => 0,
+                ], [
+                    'type' => 'insert_task',
+                    'step_action_key' => 'start',
+                    'task_catalog_key' => 'input.submit',
+                    'title' => 'Google-Suche absenden',
+                    'parameters' => ['selector' => '#vom-modell-nicht-uebernehmen'],
+                    'element_ref' => 'el_search_submit',
+                    'insert_position' => 1,
+                ]],
+            ]);
+        $this->app->instance(AiConnectionService::class, $ai);
+        $service = app(WorkflowCopilotRepairService::class);
+
+        $plan = $service->plan(
+            $session,
+            $step->fresh(),
+            [
+                'task_key' => 'append-result',
+                'successful' => false,
+                'outcome' => 'failed',
+                'result' => ['ok' => false, 'statusMessage' => 'Kein Wert gefunden.'],
+            ],
+            $observation,
+            $vision,
+        );
+
+        $this->assertSame('restart_with_workflow_changes', $plan['action']);
+        $this->assertCount(2, $plan['operations']);
+        $this->assertSame('#APjFqb', data_get($plan, 'operations.0.parameters.selector'));
+        $this->assertSame('google_search_url', data_get($plan, 'operations.0.parameters.value'));
+        $this->assertSame('google_search_url', data_get($plan, 'operations.0.parameters.input'));
+        $this->assertSame('input[aria-label="Google Suche"]', data_get($plan, 'operations.1.parameters.selector'));
+        $this->assertSame(2, data_get($plan, 'decision_trace.accepted_operation_count'));
+        $this->assertSame(0, data_get($plan, 'decision_trace.rejected_operation_count'));
+
+        $service->applyStructuralOperations(
+            $workflow->fresh(),
+            $plan['operations'],
+            $session->fresh(),
+            $observation,
+        );
+
+        $tasks = $step->fresh()->task_cards;
+        $this->assertSame('input.fill_field', data_get($tasks, '0.task_key'));
+        $this->assertSame('#APjFqb', data_get($tasks, '0.selector'));
+        $this->assertSame('google_search_url', data_get($tasks, '0.value'));
+        $this->assertSame('input.submit', data_get($tasks, '1.task_key'));
+        $this->assertSame('input[aria-label="Google Suche"]', data_get($tasks, '1.selector'));
+        $this->assertSame('data.append_to_array', data_get($tasks, '2.task_key'));
+    }
+
+    public function test_structural_planner_can_wrap_existing_collection_tasks_in_an_atomic_visual_loop(): void
+    {
+        [$workflow, $step] = $this->workflowWithTasks([[
+            'key' => 'append-result',
+            'task_key' => 'data.append_to_array',
+            'title' => 'Ergebnis anhaengen',
+            'array_name' => 'top_results',
+            'value_from_variable' => 'current_result',
+        ], [
+            'key' => 'read-result',
+            'task_key' => 'browser.read_searchengine_result',
+            'title' => 'Suchtreffer lesen',
+            'scope_variable' => 'current_result',
+            'output_variable' => 'current_result',
+        ]]);
+        $session = app(WorkflowCopilotSessionService::class)->start($workflow, [
+            'goal' => 'Die ersten drei Suchtreffer strukturiert sammeln.',
+        ]);
+        $observation = [
+            'page' => ['url' => 'https://www.google.com/search?q=test', 'title' => 'test - Google Suche', 'state' => 'search_results'],
+            'dom' => ['ui_state' => 'search_results', 'visible_text_excerpt' => 'Suchergebnisse'],
+            'interaction_map' => [[
+                'element_ref' => 'el_result_link',
+                'tag' => 'a',
+                'text' => 'Erster Suchtreffer',
+                'visible' => true,
+                'enabled' => true,
+                'selector_candidates' => ['a[data-result-link]'],
+                'window' => 'main',
+            ]],
+            'evidence_sufficient' => true,
+        ];
+        $vision = [
+            'page_type' => 'search_results',
+            'ui_state' => 'search_results',
+            'confidence' => 0.91,
+            'verdict' => 'continue',
+            'safe_pause' => false,
+            'model' => 'vision/model-test',
+            'relevant_elements' => [[
+                'element_ref' => 'el_result_link',
+                'confidence' => 0.91,
+            ]],
+            'suggested_task_actions' => [[
+                'task_key' => 'loop.for_each_element',
+                'element_ref' => 'el_result_link',
+                'parameters' => ['limit' => 3],
+                'confidence' => 0.91,
+            ]],
+        ];
+        $ai = Mockery::mock(AiConnectionService::class);
+        $ai->shouldReceive('json')->once()->andReturn([
+            'action' => 'structural_update',
+            'reason' => 'Der Consumer steht vor dem Producer und der Suchtreffer-Reader besitzt keinen Loop-Scope.',
+            'operations' => [[
+                'type' => 'insert_task',
+                'step_action_key' => 'start',
+                'task_catalog_key' => 'loop.for_each_element',
+                'title' => 'Top-Treffer durchlaufen',
+                'parameters' => [
+                    'limit' => 3,
+                    'store_current_element_as' => 'current_result',
+                    'store_index_as' => 'result_index',
+                ],
+                'element_ref' => 'el_result_link',
+                'insert_position' => 0,
+            ], [
+                'type' => 'move_task',
+                'step_action_key' => 'start',
+                'task_key' => 'read-result',
+                'insert_position' => 1,
+            ], [
+                'type' => 'move_task',
+                'step_action_key' => 'start',
+                'task_key' => 'append-result',
+                'insert_position' => 2,
+            ]],
+        ]);
+        $this->app->instance(AiConnectionService::class, $ai);
+        $service = app(WorkflowCopilotRepairService::class);
+
+        $plan = $service->plan(
+            $session,
+            $step->fresh(),
+            [
+                'task_key' => 'append-result',
+                'successful' => false,
+                'outcome' => 'failed',
+                'result' => ['ok' => false, 'statusMessage' => 'Kein Wert zum Anhaengen gefunden.'],
+            ],
+            $observation,
+            $vision,
+        );
+
+        $this->assertSame('restart_with_workflow_changes', $plan['action']);
+        $this->assertCount(3, $plan['operations']);
+        $this->assertSame('loop.for_each_element', data_get($plan, 'operations.0.task_catalog_key'));
+        $this->assertSame('move_task', data_get($plan, 'operations.1.type'));
+        $this->assertSame('move_task', data_get($plan, 'operations.2.type'));
+
+        $service->applyStructuralOperations(
+            $workflow->fresh(),
+            $plan['operations'],
+            $session->fresh(),
+            $observation,
+        );
+
+        $tasks = $step->fresh()->task_cards;
+        $this->assertSame('loop.for_each_element', data_get($tasks, '0.task_key'));
+        $this->assertSame('browser.read_searchengine_result', data_get($tasks, '1.task_key'));
+        $this->assertSame('data.append_to_array', data_get($tasks, '2.task_key'));
+        $this->assertSame('loop.end', data_get($tasks, '3.task_key'));
+        $this->assertSame(data_get($tasks, '0.loop_pair_id'), data_get($tasks, '3.loop_pair_id'));
+        $this->assertSame(data_get($tasks, '3.key'), data_get($tasks, '0.empty_target'));
+        $this->assertSame('current_result', data_get($tasks, '0.store_current_element_as'));
+        $this->assertSame(3, data_get($tasks, '0.limit'));
     }
 
     public function test_url_repairs_block_private_metadata_and_cross_workflow_hosts(): void

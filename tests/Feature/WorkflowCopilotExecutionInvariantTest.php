@@ -76,6 +76,72 @@ class WorkflowCopilotExecutionInvariantTest extends TestCase
         $this->assertSame('wait.seconds', $segment[0]['task_key']);
     }
 
+    public function test_supervised_runtime_keeps_a_paired_dom_loop_atomic_and_continues_after_its_end(): void
+    {
+        [, $step] = $this->workflow();
+        $config = $step->config_json;
+        $config['tasks'] = [[
+            'key' => 'result-loop',
+            'task_key' => 'loop.for_each_element',
+            'title' => 'Resultate durchlaufen',
+            'selector' => 'a[data-result-link]',
+            'loop_pair_id' => 'loop-results',
+            'loop_pair_segment' => 'start',
+            'loop_start_key' => 'result-loop',
+            'loop_end_key' => 'result-loop-end',
+            'empty_target' => 'result-loop-end',
+        ], [
+            'key' => 'read-result',
+            'task_key' => 'browser.read_searchengine_result',
+            'title' => 'Resultat lesen',
+            'scope_variable' => 'current_result',
+            'output_variable' => 'current_result',
+        ], [
+            'key' => 'append-result',
+            'task_key' => 'data.append_to_array',
+            'title' => 'Resultat anhaengen',
+            'array_name' => 'top_results',
+            'value_from_variable' => 'current_result',
+        ], [
+            'key' => 'result-loop-end',
+            'task_key' => 'loop.end',
+            'title' => 'Loop-Ende',
+            'loop_pair_id' => 'loop-results',
+            'loop_pair_segment' => 'end',
+            'loop_start_key' => 'result-loop',
+            'loop_end_key' => 'result-loop-end',
+        ], [
+            'key' => 'after-loop',
+            'task_key' => 'wait.seconds',
+            'title' => 'Nach dem Loop',
+            'value' => 0,
+        ]];
+        $step->forceFill(['config_json' => $config])->save();
+        $runtimeTasks = new ReflectionMethod(WorkflowTaskRunner::class, 'runtimeTasks');
+        $runtimeTasks->setAccessible(true);
+        $segment = $runtimeTasks->invoke(
+            app(WorkflowTaskRunner::class),
+            $step->fresh(),
+            'result-loop',
+            true,
+        );
+        $continuation = new ReflectionMethod(WorkflowExecutionService::class, 'successfulCheckpointContinuation');
+        $continuation->setAccessible(true);
+        [$nextAction, $nextTaskKey] = $continuation->invoke(
+            app(WorkflowExecutionService::class),
+            $step->fresh(),
+            'result-loop',
+            ['ok' => true, 'status' => 'success'],
+        );
+
+        $this->assertSame(
+            ['result-loop', 'read-result', 'append-result', 'result-loop-end'],
+            array_column($segment, 'key'),
+        );
+        $this->assertSame('next_task', $nextAction);
+        $this->assertSame('after-loop', $nextTaskKey);
+    }
+
     public function test_paused_session_cannot_start_or_resume_a_copilot_run(): void
     {
         Queue::fake();
@@ -256,6 +322,92 @@ class WorkflowCopilotExecutionInvariantTest extends TestCase
         $this->assertNull(data_get($run->context_json, 'copilot_transient_task'));
         $this->assertNull(data_get($run->context_json, 'copilot_repair_plan'));
         $this->assertSame('queued', $stepRun->fresh()->status);
+        Queue::assertPushed(RunWorkflowJob::class, fn (RunWorkflowJob $job): bool => $job->workflowRunId === $run->id);
+    }
+
+    public function test_step_success_route_does_not_skip_remaining_tasks_after_a_checkpoint(): void
+    {
+        [$workflow, $step] = $this->workflow();
+        $targetStep = $workflow->steps()->create([
+            'name' => 'Result',
+            'type' => WorkflowStep::TYPE_DATA_TASK,
+            'action_key' => 'result',
+            'position' => 20,
+            'is_enabled' => true,
+            'config_json' => ['tasks' => []],
+        ]);
+        $config = $step->config_json;
+        $config['routes']['success'] = [
+            'type' => 'step',
+            'action_key' => $targetStep->action_key,
+            'step' => $targetStep->action_key,
+        ];
+        $step->forceFill(['config_json' => $config])->save();
+
+        $method = new ReflectionMethod(WorkflowExecutionService::class, 'successfulCheckpointContinuation');
+        $method->setAccessible(true);
+        [$action, $nextTaskKey] = $method->invoke(
+            app(WorkflowExecutionService::class),
+            $step->fresh(),
+            'first-task',
+            [
+                'ok' => true,
+                'status' => 'success',
+                'completedTaskKey' => 'first-task',
+            ],
+        );
+
+        $this->assertSame('next_task', $action);
+        $this->assertSame('second-task', $nextTaskKey);
+    }
+
+    public function test_resolved_optional_obstacle_is_skipped_and_continues_with_the_next_task(): void
+    {
+        Queue::fake();
+        [$workflow, $step] = $this->workflow();
+        $config = $step->config_json;
+        $config['tasks'][0] = array_replace($config['tasks'][0], [
+            'task_key' => 'browser.click',
+            'title' => 'Consent: Alle ablehnen',
+            'selector' => '#W0wltc',
+        ]);
+        $step->forceFill(['config_json' => $config])->save();
+        $session = app(WorkflowCopilotSessionService::class)->start($workflow);
+        $execution = app(WorkflowExecutionService::class);
+        $run = $execution->start($workflow, [
+            'workflow_copilot_session_id' => $session->id,
+            'copilot_supervised' => true,
+        ], 'workflow-copilot');
+        $stepRun = $this->putRunAtCheckpoint($run, $step->fresh(), 'first-task');
+        $context = $run->fresh()->context_json;
+        $context['copilot_checkpoint'] = array_replace($context['copilot_checkpoint'], [
+            'successful' => false,
+            'outcome' => 'failed',
+            'next_action' => 'repair',
+            'next_task_key' => null,
+            'result' => [
+                'ok' => false,
+                'status' => 'failed',
+                'failedTaskKey' => 'first-task',
+                'tasks' => [[
+                    'key' => 'first-task',
+                    'task_key' => 'browser.click',
+                    'status' => 'failed',
+                ]],
+            ],
+        ]);
+        $run->forceFill(['context_json' => $context])->save();
+        Queue::fake();
+
+        $continued = $execution->skipResolvedCopilotTask($run, 'first-task');
+
+        $run->refresh();
+        $this->assertTrue($continued);
+        $this->assertSame('running', $run->status);
+        $this->assertSame('second-task', data_get($run->context_json, 'next_task_key'));
+        $this->assertNull(data_get($run->context_json, 'copilot_checkpoint'));
+        $this->assertSame('queued', $stepRun->fresh()->status);
+        $this->assertSame('skipped', data_get($stepRun->fresh()->result_json, 'tasks.0.status'));
         Queue::assertPushed(RunWorkflowJob::class, fn (RunWorkflowJob $job): bool => $job->workflowRunId === $run->id);
     }
 

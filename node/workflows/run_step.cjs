@@ -1251,17 +1251,23 @@ async function devDomSnapshot(targetPage) {
     const visibleText = normalize(document.body ? document.body.innerText || '' : '');
     const classifyUiState = () => {
       const haystack = `${window.location.href} ${document.title} ${visibleText}`.toLowerCase();
+      const locationAndTitle = `${window.location.href} ${document.title}`.toLowerCase();
       const visibleActionText = normalize(Array.from(document.querySelectorAll('button,a,[role="button"],input[type="button"],input[type="submit"]'))
         .filter((element) => isVisible(element))
         .map((element) => element.innerText || element.textContent || element.value || element.getAttribute('aria-label') || '')
         .join(' ')).toLowerCase();
+      const hasVisibleSearchInput = Array.from(document.querySelectorAll('input[type="search"], input[name="q"], textarea[name="q"], [role="searchbox"]'))
+        .some((element) => isVisible(element));
+      const hasVisiblePasswordInput = Array.from(document.querySelectorAll('input[type="password"]'))
+        .some((element) => isVisible(element));
       const hasConsentContext = /(?:consent|cookie|einwilligung|datenschutz|privacy)/i.test(haystack);
       const hasConsentAction = /(?:alle\s+ablehnen|alle\s+akzeptieren|reject\s+all|decline\s+all|refuse\s+all|accept\s+all|allow\s+all|nur\s+(?:notwendige|erforderliche)|only\s+(?:necessary|required))/i.test(visibleActionText);
 
       if (haystack.includes('captcha')) return 'captcha_blocked';
       if (hasConsentContext && hasConsentAction) return 'consent_blocked';
-      if (haystack.includes('login') || haystack.includes('signin') || haystack.includes('anmelden')) return 'login_page';
-      if (haystack.includes('register') || haystack.includes('signup') || haystack.includes('registr')) return 'registration_form';
+      if (hasVisibleSearchInput) return 'search_input';
+      if (locationAndTitle.includes('register') || locationAndTitle.includes('signup') || locationAndTitle.includes('registr')) return 'registration_form';
+      if (hasVisiblePasswordInput || locationAndTitle.includes('login') || locationAndTitle.includes('signin') || locationAndTitle.includes('anmeld')) return 'login_page';
       if (haystack.includes('verification') || haystack.includes('verifizierung') || haystack.includes('code')) return 'verification_pending';
       if (haystack.includes('inbox') || haystack.includes('posteingang')) return 'inbox_visible';
       if (haystack.includes('empty inbox') || haystack.includes('keine mail') || haystack.includes('0 mail')) return 'empty_inbox';
