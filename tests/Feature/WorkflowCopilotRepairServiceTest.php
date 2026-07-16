@@ -564,10 +564,7 @@ class WorkflowCopilotRepairServiceTest extends TestCase
             'goal' => 'Google-Suche erfolgreich abschliessen.',
         ]);
         $ai = Mockery::mock(AiConnectionService::class);
-        $ai->shouldReceive('json')->twice()->andReturn([
-            'action' => 'pause',
-            'reason' => 'Auf der leeren Seite ist kein Element sichtbar.',
-        ]);
+        $ai->shouldNotReceive('json');
         $this->app->instance(AiConnectionService::class, $ai);
         $service = app(WorkflowCopilotRepairService::class);
         $checkpoint = [
@@ -589,18 +586,123 @@ class WorkflowCopilotRepairServiceTest extends TestCase
         $plan = $service->plan($session, $step, $checkpoint, $observation, $vision);
 
         $this->assertSame('restart_with_workflow_changes', $plan['action']);
-        $this->assertSame('update_step_routes', data_get($plan, 'operations.0.type'));
-        $this->assertSame('open-homepage', data_get($plan, 'operations.0.routes.failed.step'));
-        $this->assertSame('open-homepage', data_get($plan, 'operations.0.routes.timeout.step'));
+        $this->assertTrue(collect($plan['operations'])->contains(
+            fn (array $operation): bool => ($operation['type'] ?? null) === 'update_task_routes'
+                && data_get($operation, 'changes.on_error.step') === 'open-homepage'
+                && data_get($operation, 'changes.on_error.card_key') === 'open-google',
+        ));
+        $this->assertTrue(collect($plan['operations'])->contains(
+            fn (array $operation): bool => ($operation['type'] ?? null) === 'update_step_routes'
+                && data_get($operation, 'routes.failed.step') === 'open-homepage'
+                && data_get($operation, 'routes.timeout.card_key') === 'open-google',
+        ));
 
         $service->applyStructuralOperations($workflow->fresh(), $plan['operations'], $session->fresh(), $observation);
         $this->assertSame('open-homepage', data_get($step->fresh()->config_json, 'routes.timeout.step'));
+        $this->assertSame('open-google', data_get($step->fresh()->config_json, 'routes.timeout.card_key'));
 
         $continued = $service->plan($session->fresh(), $step->fresh(), $checkpoint, $observation, $vision);
 
         $this->assertSame('continue_route', $continued['action']);
-        $this->assertStringContainsString('Navigationsliste', $continued['reason']);
+        $this->assertStringContainsString('Navigationskarte', $continued['reason']);
         $this->assertSame($navigationStep->id, $workflow->steps()->where('action_key', 'open-homepage')->value('id'));
+    }
+
+    public function test_blank_page_ignores_route_churn_and_makes_existing_url_navigation_reachable_from_entry(): void
+    {
+        $workflow = Workflow::query()->create([
+            'name' => 'Session 3 Recovery',
+            'slug' => 'session-3-recovery-'.str()->random(8),
+            'description' => '',
+            'category' => 'test',
+            'is_active' => true,
+            'is_locked' => false,
+            'trigger_type' => 'manual',
+            'settings_json' => [],
+        ]);
+        $entry = $workflow->steps()->create([
+            'name' => 'Vorbereitung',
+            'type' => WorkflowStep::TYPE_PREPARATION,
+            'action_key' => 'prepare',
+            'position' => 10,
+            'is_enabled' => true,
+            'config_json' => [
+                'routes' => ['success' => ['type' => 'step', 'step' => 'cookie-check', 'action_key' => 'cookie-check']],
+                'tasks' => [[
+                    'key' => 'validate-inputs',
+                    'task_key' => 'data.validate_inputs',
+                    'title' => 'Eingaben pruefen',
+                ]],
+            ],
+        ]);
+        $navigation = $workflow->steps()->create([
+            'name' => 'Google oeffnen',
+            'type' => WorkflowStep::TYPE_BROWSER_CONTROL,
+            'action_key' => 'open-google',
+            'position' => 20,
+            'is_enabled' => true,
+            'config_json' => ['tasks' => [[
+                'key' => 'navigate-google',
+                'task_key' => 'browser.open_url',
+                'title' => 'Google URL oeffnen',
+                'url' => 'https://www.google.com',
+            ]]],
+        ]);
+        $failedStep = $workflow->steps()->create([
+            'name' => 'Ergebnisse pruefen',
+            'type' => WorkflowStep::TYPE_BROWSER_TASK,
+            'action_key' => 'check-results',
+            'position' => 30,
+            'is_enabled' => true,
+            'config_json' => ['tasks' => [[
+                'key' => 'wait-results',
+                'task_key' => 'wait.selector',
+                'title' => 'Auf Ergebnisse warten',
+                'selector' => '#search',
+                'on_error' => ['type' => 'step', 'step' => 'cookie-check', 'action_key' => 'cookie-check'],
+            ]]],
+        ]);
+        $workflow->steps()->create([
+            'name' => 'Cookies pruefen',
+            'type' => WorkflowStep::TYPE_DECISION,
+            'action_key' => 'cookie-check',
+            'position' => 40,
+            'is_enabled' => true,
+            'config_json' => ['tasks' => []],
+        ]);
+        $session = app(WorkflowCopilotSessionService::class)->start($workflow);
+        $ai = Mockery::mock(AiConnectionService::class);
+        $ai->shouldNotReceive('json');
+        $this->app->instance(AiConnectionService::class, $ai);
+
+        $plan = app(WorkflowCopilotRepairService::class)->plan(
+            $session,
+            $failedStep,
+            ['task_key' => 'wait-results', 'outcome' => 'timeout'],
+            ['page' => ['url' => 'about:blank'], 'interaction_map' => []],
+            ['verdict' => 'pause', 'confidence' => 0],
+        );
+
+        $this->assertSame('restart_with_workflow_changes', $plan['action']);
+        $this->assertTrue(collect($plan['operations'])->contains(
+            fn (array $operation): bool => ($operation['step_action_key'] ?? null) === 'prepare'
+                && data_get($operation, 'routes.success.card_key') === 'navigate-google',
+        ));
+        $this->assertTrue(collect($plan['operations'])->contains(
+            fn (array $operation): bool => ($operation['task_key'] ?? null) === 'wait-results'
+                && data_get($operation, 'changes.on_error.card_key') === 'navigate-google',
+        ));
+
+        app(WorkflowCopilotRepairService::class)->applyStructuralOperations(
+            $workflow->fresh(),
+            $plan['operations'],
+            $session->fresh(),
+            ['page' => ['url' => 'about:blank']],
+        );
+
+        $this->assertSame('navigate-google', data_get($entry->fresh()->config_json, 'routes.success.card_key'));
+        $this->assertSame('navigate-google', data_get($failedStep->fresh()->task_cards, '0.on_error.card_key'));
+        $this->assertSame($navigation->id, $workflow->steps()->where('action_key', 'open-google')->value('id'));
     }
 
     public function test_structural_planner_can_insert_only_a_catalog_bound_non_visual_task(): void

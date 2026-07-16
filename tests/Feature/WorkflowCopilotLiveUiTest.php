@@ -370,6 +370,99 @@ class WorkflowCopilotLiveUiTest extends TestCase
         $this->assertNull($workflow->fresh()->active_workflow_copilot_session_id);
     }
 
+    public function test_manager_restart_cancels_the_run_and_preserves_session_inputs_with_fresh_budgets(): void
+    {
+        Queue::fake();
+        $workflow = $this->workflow('copilot-manager-restart');
+        $service = app(WorkflowCopilotSessionService::class);
+        $session = $service->start($workflow, [
+            'goal' => 'Workflow erfolgreich abschliessen.',
+            'success_criteria' => ['assertions' => ['Erfolgsseite sichtbar']],
+            'workflow_inputs' => ['query' => 'OpenAI'],
+            'budget' => [
+                'max_minutes' => 45,
+                'max_repair_iterations' => 8,
+                'max_probe_actions' => 25,
+                'max_same_state_repeats' => 3,
+                'auto_execute_workflow_actions' => true,
+            ],
+        ]);
+        $session->forceFill([
+            'usage_json' => ['repair_iterations' => 5, 'probe_actions' => 7, 'same_state_repeats' => 2],
+            'state_json' => ['current_task_key' => 'stale-task'],
+        ])->save();
+        $run = WorkflowRun::query()->create([
+            'run_uuid' => (string) str()->uuid(),
+            'workflow_id' => $workflow->id,
+            'status' => 'queued',
+            'context_json' => [
+                'workflow_copilot_session_id' => $session->id,
+                'execution_target' => 'system',
+            ],
+        ]);
+        $service->attachRun($session->fresh(), $run);
+
+        $manager = Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
+            ->call('restartCopilotOptimization')
+            ->assertSet('showRunPreviewModal', true)
+            ->assertSet('previewWorkflowRunId', null)
+            ->assertDispatched('workflow-copilot-session-activated');
+
+        $restartedId = (int) $manager->get('activeCopilotSessionId');
+        $restarted = WorkflowCopilotSession::query()->findOrFail($restartedId);
+
+        $this->assertNotSame($session->id, $restarted->id);
+        $this->assertSame('cancelled', $run->fresh()->status);
+        $this->assertSame(WorkflowCopilotSession::STATUS_STOPPED, $session->fresh()->status);
+        $this->assertSame(WorkflowCopilotSession::STATUS_RUNNING, $restarted->status);
+        $this->assertSame($session->goal, $restarted->goal);
+        $this->assertSame($session->success_criteria_json, $restarted->success_criteria_json);
+        $this->assertSame($session->workflow_inputs_json, $restarted->workflow_inputs_json);
+        $this->assertSame(45, $restarted->budget_json['max_minutes']);
+        $this->assertSame(0, $restarted->usage_json['repair_iterations']);
+        $this->assertSame(0, $restarted->usage_json['probe_actions']);
+        $this->assertSame($session->id, data_get($restarted->state_json, 'restarted_from_session_id'));
+        $this->assertNull(data_get($restarted->state_json, 'current_task_key'));
+        $this->assertSame($restarted->id, $workflow->fresh()->active_workflow_copilot_session_id);
+        $this->assertDatabaseHas('workflow_copilot_events', [
+            'workflow_copilot_session_id' => $session->id,
+            'event_type' => 'session.restart_requested',
+        ]);
+        $this->assertDatabaseHas('workflow_copilot_events', [
+            'workflow_copilot_session_id' => $restarted->id,
+            'event_type' => 'session.restarted',
+        ]);
+        Queue::assertPushed(
+            WorkflowCopilotSupervisorJob::class,
+            fn (WorkflowCopilotSupervisorJob $job): bool => $job->workflowCopilotSessionId === $restarted->id,
+        );
+    }
+
+    public function test_sidebar_restart_attaches_the_new_session_and_reopens_the_shared_run_preview(): void
+    {
+        Queue::fake();
+        $workflow = $this->workflow('copilot-sidebar-restart');
+        $session = app(WorkflowCopilotSessionService::class)->start($workflow, [
+            'goal' => 'Workflow vollstaendig testen.',
+        ]);
+
+        $chat = Livewire::test(Chatbot::class)
+            ->call('attachCopilotSession', $session->id)
+            ->call('restartCopilotSession')
+            ->assertDispatched('workflow-copilot-session-activated')
+            ->assertDispatched('assistant-open-workflow-run-preview');
+
+        $restartedId = (int) $chat->get('activeCopilotSessionId');
+
+        $this->assertNotSame($session->id, $restartedId);
+        $this->assertSame(WorkflowCopilotSession::STATUS_STOPPED, $session->fresh()->status);
+        $this->assertSame(WorkflowCopilotSession::STATUS_RUNNING, WorkflowCopilotSession::query()->findOrFail($restartedId)->status);
+        Queue::assertPushed(
+            WorkflowCopilotSupervisorJob::class,
+            fn (WorkflowCopilotSupervisorJob $job): bool => $job->workflowCopilotSessionId === $restartedId,
+        );
+    }
+
     public function test_active_copilot_lock_blocks_manual_livewire_mutations(): void
     {
         $workflow = $this->workflow('copilot-manual-edit-lock');

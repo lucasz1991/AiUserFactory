@@ -62,8 +62,7 @@
             return await component.call(method, ...parameters);
         },
         init() {
-            sessionStorage.removeItem('workflow-copilot-open');
-            this.showChat = false;
+            this.showChat = sessionStorage.getItem('workflow-copilot-open') === '1';
             this.showImportPanel = false;
             this.clearVoiceCaptureState();
             this.autoRead = this.readBool('workflow-copilot-auto-read', this.autoRead);
@@ -73,8 +72,14 @@
             this.lastAssistantMessageKey = this.latestAssistantMessageKey(this.chatHistory);
             this.workflowImprovements = this.latestWorkflowImprovements(this.chatHistory);
             this._reapplyImprovementHighlights = () => this.queueImprovementHighlights();
+            this._syncCopilotDockLayout = () => this.syncDockLayout();
             document.addEventListener('livewire:updated', this._reapplyImprovementHighlights);
             document.addEventListener('livewire:navigated', this._reapplyImprovementHighlights);
+            window.addEventListener('resize', this._syncCopilotDockLayout);
+            this.$watch('showChat', (open) => {
+                sessionStorage.setItem('workflow-copilot-open', open ? '1' : '0');
+                this.syncDockLayout();
+            });
             this.$watch('chatHistory', (history) => {
                 this.handleNewAssistantMessage(history);
                 this.syncWorkflowImprovementsFromHistory(history);
@@ -96,6 +101,7 @@
             });
             this.scheduleToolAlerts(this.toolEvents);
             this.$nextTick(() => {
+                this.syncDockLayout();
                 window.setTimeout(() => this.syncContext(), 0);
                 this.observeMessages();
                 this.scrollMessages(false);
@@ -105,6 +111,8 @@
         destroy() {
             document.removeEventListener('livewire:updated', this._reapplyImprovementHighlights);
             document.removeEventListener('livewire:navigated', this._reapplyImprovementHighlights);
+            window.removeEventListener('resize', this._syncCopilotDockLayout);
+            document.body.classList.remove('workflow-copilot-docked');
             window.clearTimeout(this.improvementRefreshTimer);
             this.messageScrollTimers.forEach((timer) => window.clearTimeout(timer));
             this.messageScrollTimers = [];
@@ -135,6 +143,12 @@
             this.showImportPanel = false;
             this.stopSpeaking();
             this.stopListening();
+        },
+        desktopDocked() {
+            return window.matchMedia('(min-width: 1280px)').matches;
+        },
+        syncDockLayout() {
+            document.body.classList.toggle('workflow-copilot-docked', this.showChat && this.desktopDocked());
         },
         busy() {
             return this.submitting || this.isLoading || this.voiceUploading;
@@ -1068,6 +1082,23 @@
             outline-color: rgb(14 165 233);
             box-shadow: 0 0 0 7px rgba(14, 165, 233, .15), 0 18px 38px -22px rgba(3, 105, 161, .5);
         }
+        @media (min-width: 1280px) {
+            body.workflow-copilot-docked > main,
+            body.workflow-copilot-docked > .main-content {
+                padding-right: 30rem;
+                transition: padding-right 200ms ease;
+            }
+            body.workflow-copilot-docked > nav {
+                right: 30rem !important;
+                transition: right 200ms ease;
+            }
+            body.workflow-copilot-docked .jetstream-modal[data-interactive-aside] {
+                right: 30rem !important;
+            }
+            body.workflow-copilot-docked .jetstream-modal[data-interactive-aside] > .fixed.inset-0 {
+                right: 30rem !important;
+            }
+        }
     </style>
 
     @if($activeCopilotSessionId && data_get($copilotStatus, 'active'))
@@ -1077,7 +1108,7 @@
     @if($assistantEnabled)
         <button
             type="button"
-            x-show="!showChat"
+            x-show.important="!showChat"
             x-cloak
             x-on:click.stop.prevent="setOpen(true)"
             class="fixed bottom-5 right-5 z-[80] flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-slate-950 via-cyan-800 to-emerald-700 text-sm font-black text-white shadow-2xl shadow-cyan-950/25 ring-1 ring-white/30 transition hover:-translate-y-0.5 hover:shadow-cyan-700/30"
@@ -1093,17 +1124,20 @@
                 <div
                     x-transition.opacity
                     x-on:click.stop.prevent="closeChat()"
-                    class="fixed inset-0 z-[70] bg-slate-950/45 backdrop-blur-[2px]"
+                    class="fixed inset-0 z-[70] bg-slate-950/45 backdrop-blur-[2px] xl:hidden"
                     aria-hidden="true"
                 ></div>
 
                 <aside
                     x-transition:enter="transition ease-out duration-200"
-                    x-transition:enter-start="translate-y-3 scale-95 opacity-0"
-                    x-transition:enter-end="translate-y-0 scale-100 opacity-100"
-                    class="fixed bottom-4 right-4 z-[90] flex h-[min(760px,calc(100vh-2rem))] w-[min(480px,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-2xl border border-white/80 bg-white shadow-[0_30px_90px_-22px_rgba(15,23,42,.55)] ring-1 ring-slate-900/5"
-                    role="dialog"
-                    aria-modal="true"
+                    x-transition:enter-start="translate-x-full opacity-0"
+                    x-transition:enter-end="translate-x-0 opacity-100"
+                    x-transition:leave="transition ease-in duration-150"
+                    x-transition:leave-start="translate-x-0 opacity-100"
+                    x-transition:leave-end="translate-x-full opacity-0"
+                    class="fixed inset-y-0 right-0 z-[90] flex h-dvh w-[min(480px,calc(100vw-1rem))] flex-col overflow-hidden border-l border-white/80 bg-white shadow-[-24px_0_70px_-28px_rgba(15,23,42,.55)] ring-1 ring-slate-900/5 xl:w-[30rem]"
+                    x-bind:role="desktopDocked() ? 'complementary' : 'dialog'"
+                    x-bind:aria-modal="desktopDocked() ? null : 'true'"
                     aria-label="AI Workflow Copilot"
                     x-on:click.stop
                 >
@@ -1271,12 +1305,28 @@
                     class="scroll-container min-h-0 flex-1 space-y-3 overflow-y-auto bg-slate-50 px-4 py-4"
                 >
                     @if($activeCopilotSessionId && $copilotStatus !== [])
+                        @php
+                            $copilotSessionStatus = (string) data_get($copilotStatus, 'status', 'unknown');
+                            $copilotSessionStatusLabel = match ($copilotSessionStatus) {
+                                'running' => 'Laeuft',
+                                'paused' => 'Pausiert',
+                                'repairing' => 'Repariert',
+                                'verifying' => 'Verifiziert',
+                                'succeeded' => 'Erfolgreich',
+                                'budget_exhausted' => 'Budget erreicht',
+                                'failed' => 'Fehlgeschlagen',
+                                'stopped' => 'Gestoppt',
+                                default => $copilotSessionStatus,
+                            };
+                            $copilotSucceeded = $copilotSessionStatus === 'succeeded';
+                            $copilotNeedsAttention = in_array($copilotSessionStatus, ['budget_exhausted', 'failed'], true);
+                        @endphp
                         <section
                             wire:key="workflow-copilot-session-status-{{ $activeCopilotSessionId }}"
-                            class="overflow-hidden rounded-2xl border border-cyan-200 bg-white shadow-lg shadow-cyan-100/50"
+                            class="overflow-hidden rounded-2xl border bg-white shadow-lg {{ $copilotSucceeded ? 'border-emerald-200 shadow-emerald-100/60' : ($copilotNeedsAttention ? 'border-rose-200 shadow-rose-100/60' : 'border-cyan-200 shadow-cyan-100/50') }}"
                             aria-live="polite"
                         >
-                            <div class="bg-gradient-to-r from-slate-950 via-cyan-900 to-emerald-800 px-4 py-3 text-white">
+                            <div class="px-4 py-3 text-white {{ $copilotSucceeded ? 'bg-gradient-to-r from-emerald-950 via-emerald-800 to-teal-700' : ($copilotNeedsAttention ? 'bg-gradient-to-r from-slate-950 via-rose-950 to-rose-800' : 'bg-gradient-to-r from-slate-950 via-cyan-900 to-emerald-800') }}">
                                 <div class="flex items-start justify-between gap-3">
                                     <div class="min-w-0">
                                         <p class="truncate text-sm font-black">{{ data_get($copilotStatus, 'workflow_name', 'Workflow') }}</p>
@@ -1286,12 +1336,24 @@
                                     </div>
                                     <span class="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-white/15 px-2.5 py-1 text-[10px] font-bold">
                                         <span class="h-1.5 w-1.5 rounded-full {{ data_get($copilotStatus, 'active') ? 'animate-pulse bg-emerald-300' : 'bg-slate-300' }}"></span>
-                                        {{ data_get($copilotStatus, 'status', 'unbekannt') }}
+                                        {{ $copilotSessionStatusLabel }}
                                     </span>
                                 </div>
                             </div>
 
                             <div class="space-y-3 p-4">
+                                @if($copilotSucceeded)
+                                    <div data-workflow-copilot-completed-state class="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-emerald-950">
+                                        <p class="text-xs font-black uppercase tracking-[.12em] text-emerald-700">Ziel erreicht</p>
+                                        <p class="mt-1 text-sm font-bold">Der Workflow wurde erfolgreich durchlaufen und abschliessend verifiziert.</p>
+                                    </div>
+                                @elseif($copilotNeedsAttention)
+                                    <div class="rounded-xl border border-rose-200 bg-rose-50 p-3 text-rose-950">
+                                        <p class="text-xs font-black uppercase tracking-[.12em] text-rose-700">Aktion erforderlich</p>
+                                        <p class="mt-1 text-sm font-bold">Der Lauf ist beendet. Protokoll und Ergebnis bleiben sichtbar; ein Neustart beginnt mit frischen Budgets.</p>
+                                    </div>
+                                @endif
+
                                 @if(data_get($copilotStatus, 'latest_screenshot_url'))
                                     <a href="{{ data_get($copilotStatus, 'latest_screenshot_url') }}" target="_blank" rel="noopener noreferrer" class="block overflow-hidden rounded-xl border border-slate-200 bg-slate-100">
                                         <img src="{{ data_get($copilotStatus, 'latest_screenshot_url') }}" alt="Letzter Workflow-Copilot-Screenshot" class="max-h-44 w-full object-contain" loading="lazy">
@@ -1386,20 +1448,22 @@
                                     </div>
                                 @endif
 
-                                @if(data_get($copilotStatus, 'active'))
-                                    <div class="flex flex-wrap gap-2 border-t border-slate-100 pt-3">
+                                <div class="flex flex-wrap gap-2 border-t border-slate-100 pt-3">
+                                    <button type="button" wire:click="openCopilotRunPreview" wire:loading.attr="disabled" class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-[11px] font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50">Testlauf oeffnen</button>
+                                    @if(data_get($copilotStatus, 'active'))
                                         @if(data_get($copilotStatus, 'paused'))
                                             <button type="button" wire:click="resumeCopilotSession" wire:loading.attr="disabled" class="rounded-lg bg-emerald-600 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-emerald-700 disabled:opacity-50">Fortsetzen</button>
                                         @else
                                             <button type="button" wire:click="pauseCopilotSession" wire:loading.attr="disabled" class="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-[11px] font-bold text-amber-800 hover:bg-amber-100 disabled:opacity-50">Pausieren</button>
                                         @endif
+                                    @endif
+                                    <button type="button" wire:click="restartCopilotSession" wire:confirm="Copilot-Optimierung vollstaendig neu starten? Der aktuelle Testlauf wird beendet und die Budgets werden zurueckgesetzt. Bereits ausgeloeste externe Wirkungen bleiben bestehen." wire:loading.attr="disabled" wire:target="restartCopilotSession" class="rounded-lg bg-cyan-700 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-cyan-800 disabled:opacity-50">Neu starten</button>
+                                    @if(data_get($copilotStatus, 'active'))
                                         <button type="button" wire:click="stopCopilotSession" wire:confirm="Autonome Workflow-Optimierung wirklich stoppen?" wire:loading.attr="disabled" class="rounded-lg border border-rose-300 bg-rose-50 px-3 py-1.5 text-[11px] font-bold text-rose-700 hover:bg-rose-100 disabled:opacity-50">Stoppen</button>
-                                    </div>
-                                @elseif(in_array(data_get($copilotStatus, 'status'), ['budget_exhausted', 'failed'], true))
-                                    <div class="border-t border-slate-100 pt-3">
+                                    @elseif($copilotNeedsAttention)
                                         <button type="button" wire:click="stopCopilotSession" wire:confirm="Sitzung beenden und Workflow-Lock freigeben?" wire:loading.attr="disabled" class="rounded-lg border border-rose-300 bg-rose-50 px-3 py-1.5 text-[11px] font-bold text-rose-700 hover:bg-rose-100 disabled:opacity-50">Sitzung beenden und Lock freigeben</button>
-                                    </div>
-                                @endif
+                                    @endif
+                                </div>
                             </div>
                         </section>
                     @endif

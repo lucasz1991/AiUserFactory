@@ -691,6 +691,67 @@ class WorkflowCopilotSupervisorTest extends TestCase
         $this->assertSame($newRun->id, (int) $session->active_workflow_run_id);
     }
 
+    public function test_repeated_checkpoint_failure_stops_route_churn_without_calling_the_repair_planner_again(): void
+    {
+        [$workflow, $step] = $this->workflowWithBrokenSelector();
+        $sessions = app(WorkflowCopilotSessionService::class);
+        $session = $sessions->start($workflow, ['budget' => ['max_same_state_repeats' => 1]]);
+        $checkpoint = [
+            'id' => 'repeated-checkpoint-failure',
+            'kind' => 'regular',
+            'workflow_step_id' => $step->id,
+            'workflow_step_name' => $step->name,
+            'task_key' => 'login-click',
+            'task_title' => 'Login klicken',
+            'successful' => false,
+            'outcome' => 'failed',
+            'next_action' => 'repair',
+            'result' => ['ok' => false, 'statusMessage' => 'Element nicht gefunden.'],
+        ];
+        [$run] = $this->waitingRun($session, $step, $checkpoint);
+        $session = $sessions->attachRun($session, $run);
+        $observation = $this->observation();
+        $signature = hash('sha256', (string) json_encode([
+            'workflow_step_id' => (int) $step->id,
+            'task_key' => 'login-click',
+            'state_signature' => 'login-page-v1',
+            'page_url' => 'https://example.test/login',
+            'error' => 'Element nicht gefunden.',
+        ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE));
+        $state = is_array($session->state_json) ? $session->state_json : [];
+        $state['last_repair_failure_signature'] = $signature;
+        $state['repair_failure_repeats'] = 0;
+        $session->forceFill(['state_json' => $state])->save();
+
+        $observations = Mockery::mock(WorkflowCopilotObservationService::class);
+        $observations->shouldReceive('observe')->once()->andReturn($observation);
+        $visionService = Mockery::mock(WorkflowCopilotVisionService::class);
+        $visionService->shouldReceive('analyze')->once()->andReturn($this->visionResult('pause'));
+        $repairs = Mockery::mock(WorkflowCopilotRepairService::class);
+        $repairs->shouldNotReceive('plan');
+        $execution = Mockery::mock(WorkflowExecutionService::class);
+        $execution->shouldReceive('cancel')->once()->withArgs(
+            fn (WorkflowRun $candidate, string $message): bool => $candidate->is($run)
+                && str_contains($message, 'Budget'),
+        )->andReturn(['ok' => true]);
+        $execution->shouldNotReceive('start');
+        $this->app->instance(WorkflowCopilotObservationService::class, $observations);
+        $this->app->instance(WorkflowCopilotVisionService::class, $visionService);
+        $this->app->instance(WorkflowCopilotRepairService::class, $repairs);
+        $this->app->instance(WorkflowExecutionService::class, $execution);
+
+        app(WorkflowCopilotSupervisorService::class)->supervise($session->id);
+
+        $session->refresh();
+        $this->assertSame(WorkflowCopilotSession::STATUS_BUDGET_EXHAUSTED, $session->status);
+        $this->assertSame(1, data_get($session->state_json, 'repair_failure_repeats'));
+        $this->assertSame(1, data_get($session->usage_json, 'same_state_repeats'));
+        $this->assertDatabaseHas('workflow_copilot_events', [
+            'workflow_copilot_session_id' => $session->id,
+            'event_type' => 'repair.no_progress',
+        ]);
+    }
+
     public function test_same_page_signature_does_not_consume_retry_budget_for_a_different_task(): void
     {
         [$workflow, $step] = $this->workflowWithBrokenSelector();

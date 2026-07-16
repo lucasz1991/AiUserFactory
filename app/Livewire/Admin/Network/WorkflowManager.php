@@ -1212,6 +1212,7 @@ class WorkflowManager extends Component
             $this->showCopilotPreviewModal = false;
             $this->showRunPreviewModal = true;
             $this->refreshCopilotSession();
+            $this->dispatch('workflow-copilot-session-activated', sessionId: (int) $session->getKey());
 
             return;
         }
@@ -1405,6 +1406,35 @@ class WorkflowManager extends Component
 
             app(WorkflowCopilotSessionService::class)->stop($session, 'Im Workflow Manager gestoppt.');
             $this->refreshCopilotSession();
+        }
+    }
+
+    public function restartCopilotOptimization(): void
+    {
+        $session = $this->activeCopilotSession();
+
+        if (! $session) {
+            return;
+        }
+
+        try {
+            $restarted = app(WorkflowCopilotSessionService::class)->restart(
+                $session,
+                'Vollstaendiger Neustart wurde im Workflow Manager angefordert.',
+            );
+
+            WorkflowCopilotSupervisorJob::dispatch((int) $restarted->getKey());
+            $this->activeCopilotSessionId = (int) $restarted->getKey();
+            $this->dismissedCopilotTerminalSessionId = null;
+            $this->previewWorkflowRunId = null;
+            $this->showCopilotPreviewModal = false;
+            $this->showRunPreviewModal = true;
+            $this->copilotRewindCheckpoint = '';
+            $this->refreshCopilotSession();
+            $this->dispatch('workflow-copilot-session-activated', sessionId: (int) $restarted->getKey());
+            session()->flash('success', 'Copilot-Optimierung wurde mit denselben Vorgaben neu gestartet.');
+        } catch (\Throwable $exception) {
+            session()->flash('error', 'Copilot-Neustart fehlgeschlagen: '.$exception->getMessage());
         }
     }
 

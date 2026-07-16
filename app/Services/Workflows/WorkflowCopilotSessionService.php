@@ -38,6 +38,10 @@ class WorkflowCopilotSessionService
         'same_state_repeats' => 0,
     ];
 
+    public function __construct(
+        protected WorkflowExecutionService $workflowExecution,
+    ) {}
+
     /** @var array<string, list<string>> */
     private const STATUS_TRANSITIONS = [
         WorkflowCopilotSession::STATUS_RUNNING => [
@@ -286,6 +290,69 @@ class WorkflowCopilotSessionService
             [],
             $reason ?: 'Workflow-Copilot-Sitzung wurde gestoppt.',
         );
+    }
+
+    public function restart(WorkflowCopilotSession $session, ?string $reason = null): WorkflowCopilotSession
+    {
+        return DB::transaction(function () use ($session, $reason): WorkflowCopilotSession {
+            $previous = WorkflowCopilotSession::query()
+                ->with(['workflow', 'activeRun'])
+                ->findOrFail($session->getKey());
+            $this->assertSystemExecutionTarget((string) $previous->execution_target);
+
+            $restartReason = $reason ?: 'Workflow-Copilot-Sitzung wird mit denselben Vorgaben neu gestartet.';
+            $this->appendEvent(
+                $previous,
+                'session.restart_requested',
+                $restartReason,
+                ['previous_status' => (string) $previous->status],
+                (string) $previous->phase,
+                'warning',
+                true,
+            );
+
+            if ($previous->activeRun) {
+                $this->workflowExecution->cancel(
+                    $previous->activeRun,
+                    'Workflow-Test wurde fuer den Neustart der Copilot-Optimierung beendet.',
+                );
+            }
+
+            if ($previous->retainsWorkflowLock()) {
+                $previous = $this->stop(
+                    $previous->fresh() ?? $previous,
+                    'Vorherige Copilot-Sitzung wurde fuer einen vollstaendigen Neustart beendet.',
+                );
+            }
+
+            $workflow = $previous->workflow()->firstOrFail();
+            $restarted = $this->start($workflow, [
+                'person_id' => $previous->person_id,
+                'execution_target' => WorkflowCopilotSession::EXECUTION_TARGET_SYSTEM,
+                'goal' => $previous->goal,
+                'success_criteria' => is_array($previous->success_criteria_json) ? $previous->success_criteria_json : [],
+                'workflow_inputs' => is_array($previous->workflow_inputs_json) ? $previous->workflow_inputs_json : [],
+                'budget' => is_array($previous->budget_json) ? $previous->budget_json : [],
+                'state' => [
+                    'restarted_from_session_id' => (int) $previous->getKey(),
+                ],
+            ]);
+
+            $this->appendEvent(
+                $restarted,
+                'session.restarted',
+                'Copilot-Optimierung wurde vollstaendig neu gestartet; Testlauf und Arbeitsbudgets beginnen von vorn.',
+                [
+                    'previous_session_id' => (int) $previous->getKey(),
+                    'previous_status' => (string) $previous->status,
+                ],
+                'executing',
+                'success',
+                true,
+            );
+
+            return $restarted->fresh(['workflow']) ?? $restarted;
+        });
     }
 
     public function transition(

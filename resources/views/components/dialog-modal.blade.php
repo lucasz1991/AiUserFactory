@@ -1,6 +1,6 @@
-@props(['id' => null, 'maxWidth' => null])
+@props(['id' => null, 'maxWidth' => null, 'interactiveAside' => false])
 
-<x-modal :id="$id" :maxWidth="$maxWidth" {{ $attributes }}>
+<x-modal :id="$id" :maxWidth="$maxWidth" :interactive-aside="$interactiveAside" {{ $attributes }}>
     <x-slot name="title">
         {{ $title }}
     </x-slot>

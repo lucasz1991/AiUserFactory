@@ -24,13 +24,18 @@ class WorkflowCopilotUiMarkupTest extends TestCase
         $this->assertStringContainsString('Workflow-Revisionen', $view);
         $this->assertStringContainsString('Zum Checkpoint zurueckspulen', $view);
         $this->assertStringContainsString('wire:click="openCopilotChat"', $view);
+        $this->assertStringContainsString('wire:click="restartCopilotOptimization"', $view);
         $this->assertStringContainsString('wire:click="downloadCopilotOptimizationLog"', $view);
+        $this->assertStringContainsString(':interactive-aside="true"', $view);
+        $this->assertSame(3, substr_count($view, ':interactive-aside="true"'));
+        $this->assertStringContainsString('data-workflow-copilot-completed-state', $view);
         $this->assertStringContainsString('Autonome Aktionen sind freigegeben', $view);
         $this->assertStringContainsString('@disabled(! $copilotAutoExecute)', $view);
         $this->assertStringNotContainsString('copilotExecutionTarget', $view);
         $this->assertStringNotContainsString('copilotNetworkNode', $view);
         $this->assertStringContainsString("'execution_target' => 'system'", $component);
         $this->assertStringContainsString('WorkflowCopilotPlanningService::class', $component);
+        $this->assertStringContainsString('function restartCopilotOptimization()', $component);
         $this->assertStringNotContainsString("'execution_target' => \$validated['copilot", $component);
     }
 

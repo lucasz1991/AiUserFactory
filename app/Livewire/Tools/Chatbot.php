@@ -379,6 +379,55 @@ class Chatbot extends Component
         }
     }
 
+    public function restartCopilotSession(): void
+    {
+        $session = $this->activeCopilotSession();
+
+        if (! $session) {
+            return;
+        }
+
+        try {
+            $restarted = app(WorkflowCopilotSessionService::class)->restart(
+                $session,
+                'Vollstaendiger Neustart wurde in der Copilot-Sidebar angefordert.',
+            );
+
+            WorkflowCopilotSupervisorJob::dispatch((int) $restarted->getKey());
+            $this->activeCopilotSessionId = (int) $restarted->getKey();
+            $this->copilotLastEventSequence = 0;
+            Session::put(self::COPILOT_SESSION_KEY, $this->activeCopilotSessionId);
+            $this->restoreCopilotProjection($restarted);
+            $this->dispatch('workflow-copilot-session-activated', sessionId: (int) $restarted->getKey());
+            $this->dispatch(
+                'assistant-open-workflow-run-preview',
+                workflow_id: (int) $restarted->workflow_id,
+                run_id: 0,
+                session_id: (int) $restarted->getKey(),
+            );
+        } catch (\Throwable $exception) {
+            $this->appendDisplayMessage(
+                'assistant',
+                'Der Copilot-Neustart ist fehlgeschlagen: '.$exception->getMessage(),
+                'error',
+            );
+        }
+    }
+
+    public function openCopilotRunPreview(): void
+    {
+        if (! $session = $this->activeCopilotSession()) {
+            return;
+        }
+
+        $this->dispatch(
+            'assistant-open-workflow-run-preview',
+            workflow_id: (int) $session->workflow_id,
+            run_id: (int) ($session->active_workflow_run_id ?? 0),
+            session_id: (int) $session->getKey(),
+        );
+    }
+
     public function dismissToolEvent(string $eventId): void
     {
         $this->toolEvents = collect($this->toolEvents)

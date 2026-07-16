@@ -781,7 +781,7 @@
             </x-slot>
         </x-dialog-modal>
 
-        <x-dialog-modal wire:model="showRunModal" maxWidth="xl">
+        <x-dialog-modal wire:model="showRunModal" maxWidth="xl" :interactive-aside="true">
             <x-slot name="title">Workflow testen</x-slot>
             <x-slot name="content">
                 <div class="space-y-4">
@@ -845,7 +845,7 @@
             </x-slot>
         </x-dialog-modal>
 
-        <x-dialog-modal wire:model="showCopilotModal" maxWidth="3xl">
+        <x-dialog-modal wire:model="showCopilotModal" maxWidth="3xl" :interactive-aside="true">
             <x-slot name="title">Workflow mit Copilot optimieren</x-slot>
             <x-slot name="content">
                 <div class="space-y-5">
@@ -940,10 +940,48 @@
             </x-slot>
         </x-dialog-modal>
 
-        <x-dialog-modal wire:model="showRunPreviewModal" maxWidth="7xl">
-            <x-slot name="title">{{ $activeCopilotSession ? 'Workflow-Vorschau / Copilot-Live-Optimierung' : 'Workflow-Vorschau' }}</x-slot>
+        <x-dialog-modal wire:model="showRunPreviewModal" maxWidth="7xl" :interactive-aside="true">
+            <x-slot name="title">
+                <div class="flex flex-wrap items-center gap-2">
+                    <span>{{ $activeCopilotSession ? 'Testlauf & Copilot-Optimierung' : 'Workflow-Testlauf' }}</span>
+                    @if($activeCopilotSession && $copilotStatus !== [])
+                        @php
+                            $managerCopilotStatus = (string) data_get($copilotStatus, 'status', 'unknown');
+                            $managerCopilotStatusLabel = match ($managerCopilotStatus) {
+                                'running' => 'Laeuft',
+                                'paused' => 'Pausiert',
+                                'repairing' => 'Repariert',
+                                'verifying' => 'Verifiziert',
+                                'succeeded' => 'Erfolgreich abgeschlossen',
+                                'budget_exhausted' => 'Budget erreicht',
+                                'failed' => 'Fehlgeschlagen',
+                                'stopped' => 'Gestoppt',
+                                default => $managerCopilotStatus,
+                            };
+                        @endphp
+                        <span class="rounded-full px-2.5 py-1 text-xs font-bold {{ $managerCopilotStatus === 'succeeded' ? 'bg-emerald-100 text-emerald-800' : (in_array($managerCopilotStatus, ['failed', 'budget_exhausted'], true) ? 'bg-rose-100 text-rose-800' : 'bg-cyan-100 text-cyan-800') }}">{{ $managerCopilotStatusLabel }}</span>
+                    @endif
+                </div>
+            </x-slot>
             <x-slot name="content">
                 <div @if($showRunPreviewModal) wire:poll.2s="refreshRunPreview" @endif class="space-y-5">
+                    @if($activeCopilotSession && data_get($copilotStatus, 'status') === 'succeeded')
+                        <section data-workflow-copilot-completed-state class="flex flex-col gap-3 rounded-xl border border-emerald-200 bg-gradient-to-r from-emerald-50 to-teal-50 p-4 text-emerald-950 sm:flex-row sm:items-center sm:justify-between">
+                            <div>
+                                <p class="text-xs font-black uppercase tracking-[.14em] text-emerald-700">Optimierung abgeschlossen</p>
+                                <h3 class="mt-1 text-base font-black">Ziel und Erfolgskriterien wurden im Kontrolllauf bestaetigt.</h3>
+                                <p class="mt-1 text-sm text-emerald-800">Ergebnis, Screenshot, Ereignisse und Revisionen bleiben fuer die Nachvollziehbarkeit sichtbar.</p>
+                            </div>
+                            <span class="inline-flex shrink-0 items-center justify-center rounded-full bg-emerald-600 px-4 py-2 text-xs font-black text-white">BESTANDEN</span>
+                        </section>
+                    @elseif($activeCopilotSession && in_array(data_get($copilotStatus, 'status'), ['failed', 'budget_exhausted'], true))
+                        <section class="rounded-xl border border-rose-200 bg-rose-50 p-4 text-rose-950">
+                            <p class="text-xs font-black uppercase tracking-[.14em] text-rose-700">Optimierung beendet</p>
+                            <h3 class="mt-1 text-base font-black">Der Workflow hat das Ziel in diesem Lauf nicht erreicht.</h3>
+                            <p class="mt-1 text-sm text-rose-800">Analysiere Ereignisse und letzten Bildschirm oder starte mit denselben Vorgaben und frischen Budgets neu.</p>
+                        </section>
+                    @endif
+
                     @if($previewWorkflowRun)
                         <x-workflows.run-preview :workflow-run="$previewWorkflowRun" />
                     @elseif($activeCopilotSession)
@@ -1102,6 +1140,7 @@
                 @if($activeCopilotSession)
                     <button type="button" wire:click="downloadCopilotOptimizationLog" wire:loading.attr="disabled" wire:target="downloadCopilotOptimizationLog" class="rounded-md border border-cyan-300 bg-white px-4 py-2 text-sm font-semibold text-cyan-800 hover:bg-cyan-50 disabled:opacity-50">Komplettes Optimierungslog exportieren</button>
                     <button type="button" wire:click="openCopilotChat" class="rounded-md bg-cyan-700 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-800">Copilot-Chat oeffnen</button>
+                    <button type="button" wire:click="restartCopilotOptimization" wire:confirm="Copilot-Optimierung vollstaendig neu starten? Der aktuelle Testlauf wird beendet und die Budgets werden zurueckgesetzt. Bereits ausgeloeste externe Wirkungen bleiben bestehen." wire:loading.attr="disabled" wire:target="restartCopilotOptimization" class="rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50">Optimierung neu starten</button>
                     @if(data_get($copilotStatus, 'active'))
                         @if(data_get($copilotStatus, 'paused'))
                             <button type="button" wire:click="resumeCopilotOptimization" class="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700">Fortsetzen</button>

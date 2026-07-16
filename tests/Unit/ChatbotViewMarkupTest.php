@@ -68,5 +68,13 @@ class ChatbotViewMarkupTest extends TestCase
         $this->assertStringContainsString('wire:click="pauseCopilotSession"', $source);
         $this->assertStringContainsString('wire:click="resumeCopilotSession"', $source);
         $this->assertStringContainsString('wire:click="stopCopilotSession"', $source);
+        $this->assertStringContainsString('wire:click="restartCopilotSession"', $source);
+        $this->assertStringContainsString('wire:click="openCopilotRunPreview"', $source);
+        $this->assertStringContainsString('workflow-copilot-docked', $source);
+        $this->assertStringContainsString('desktopDocked()', $definition);
+        $this->assertStringContainsString('syncDockLayout()', $definition);
+        $this->assertStringContainsString('xl:hidden', $source);
+        $this->assertStringContainsString('xl:w-[30rem]', $source);
+        $this->assertStringContainsString('data-workflow-copilot-completed-state', $source);
     }
 }

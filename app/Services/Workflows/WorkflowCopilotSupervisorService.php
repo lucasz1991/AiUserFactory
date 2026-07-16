@@ -223,6 +223,28 @@ class WorkflowCopilotSupervisorService
         return trim((string) preg_replace('/\d+/', '#', $error));
     }
 
+    protected function repairFailureSignature(WorkflowStep $step, array $checkpoint, array $observation): string
+    {
+        $error = trim((string) data_get(
+            $checkpoint,
+            'result.statusMessage',
+            data_get($checkpoint, 'result.error', data_get($checkpoint, 'error', '')),
+        ));
+        $error = trim((string) preg_replace('/\d+/', '#', $error));
+        $payload = [
+            'workflow_step_id' => (int) $step->id,
+            'task_key' => trim((string) ($checkpoint['task_key'] ?? '')),
+            'state_signature' => trim((string) ($observation['state_signature'] ?? '')),
+            'page_url' => Str::lower(trim((string) data_get($observation, 'page.url', ''))),
+            'error' => $error,
+        ];
+
+        return hash('sha256', (string) json_encode(
+            $payload,
+            JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE,
+        ));
+    }
+
     protected function unresolvedRouteTargetFromError(string $error): ?string
     {
         if (preg_match('/nicht gefunden:\s*(.+)$/u', trim($error), $matches) === 1) {
@@ -406,8 +428,47 @@ class WorkflowCopilotSupervisorService
         $usage = is_array($session->usage_json) ? $session->usage_json : [];
         $newRepairIteration = ($state['repair_counted_checkpoint_id'] ?? null) !== $runtimeCheckpointId;
 
-        if ($newRepairIteration && $this->repairBudgetReachedBeforeAction($session)) {
-            $this->exhaustBudget($session);
+        if ($newRepairIteration) {
+            $failureSignature = $this->repairFailureSignature($step, $checkpoint, $observation);
+            $previousFailureSignature = trim((string) ($state['last_repair_failure_signature'] ?? ''));
+            $failureRepeats = $failureSignature !== '' && hash_equals($previousFailureSignature, $failureSignature)
+                ? max(0, (int) ($state['repair_failure_repeats'] ?? 0)) + 1
+                : 0;
+            $state['last_repair_failure_signature'] = $failureSignature;
+            $state['repair_failure_repeats'] = $failureRepeats;
+            $usage['same_state_repeats'] = $failureRepeats;
+            $session->forceFill([
+                'state_json' => $state,
+                'usage_json' => $usage,
+                'last_activity_at' => now(),
+            ])->save();
+
+            $maxSameFailureRepeats = max(1, (int) data_get($session->budget_json, 'max_same_state_repeats', 2));
+
+            if ($failureRepeats >= $maxSameFailureRepeats) {
+                $this->sessions->appendEvent(
+                    $session,
+                    'repair.no_progress',
+                    'Dieselbe Task scheitert nach mehreren Reparaturrevisionen weiterhin im gleichen Zustand; weitere Routen-Aenderungen ohne neue Evidenz werden beendet.',
+                    [
+                        'workflow_run_id' => (int) $run->id,
+                        'workflow_step_id' => (int) $step->id,
+                        'task_key' => $checkpoint['task_key'] ?? null,
+                        'state_signature' => $observation['state_signature'] ?? null,
+                        'failure_repeats' => $failureRepeats,
+                    ],
+                    'repairing',
+                    'error',
+                    true,
+                );
+                $this->exhaustBudget($session->fresh() ?? $session);
+
+                return;
+            }
+        }
+
+        if ($newRepairIteration && $this->repairBudgetReachedBeforeAction($session->fresh() ?? $session)) {
+            $this->exhaustBudget($session->fresh() ?? $session);
 
             return;
         }

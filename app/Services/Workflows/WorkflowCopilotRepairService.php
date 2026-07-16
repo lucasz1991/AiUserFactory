@@ -160,6 +160,12 @@ class WorkflowCopilotRepairService
             }
         }
 
+        $blankPageRecovery = $this->blankPageRecoveryPlan($step, $checkpoint, $observation, $vision);
+
+        if ($blankPageRecovery !== []) {
+            return $blankPageRecovery;
+        }
+
         try {
             $decision = $this->ai->json(
                 $this->plannerPrompt($session, $step, $task, $checkpoint, $observation, $vision),
@@ -246,12 +252,6 @@ class WorkflowCopilotRepairService
                 'reason' => $this->safeReason($decision['reason'] ?? 'Katalogkonforme Task-Anpassung pruefen.'),
                 'original_task_key' => $taskKey,
             ];
-        }
-
-        $blankPageRecovery = $this->blankPageRecoveryPlan($step, $checkpoint, $observation, $vision);
-
-        if ($blankPageRecovery !== []) {
-            return $blankPageRecovery;
         }
 
         return $this->pausePlan($taskKey, $this->safeReason($decision['reason'] ?? 'Keine sichere autonome Reparatur gefunden.'));
@@ -1348,57 +1348,125 @@ class WorkflowCopilotRepairService
             return [];
         }
 
-        $navigationStep = $workflow->steps
+        $failedTaskKey = trim((string) ($checkpoint['task_key'] ?? ''));
+        $navigationTarget = $workflow->steps
             ->where('is_enabled', true)
-            ->first(function (WorkflowStep $step) use ($failedStep): bool {
-                if ((int) $step->id === (int) $failedStep->id) {
-                    return false;
-                }
+            ->flatMap(function (WorkflowStep $step) use ($failedTaskKey): array {
+                return collect($step->task_cards)
+                    ->filter(function (array $task) use ($failedTaskKey): bool {
+                        $catalogKey = trim((string) ($task['task_key'] ?? ''));
+                        $taskKey = trim((string) ($task['key'] ?? ''));
+                        $url = Str::lower(trim((string) ($task['url'] ?? '')));
 
-                return collect($step->task_cards)->contains(function (array $task): bool {
-                    $catalogKey = trim((string) ($task['task_key'] ?? ''));
-                    $url = trim((string) ($task['url'] ?? ''));
+                        return $taskKey !== ''
+                            && $taskKey !== $failedTaskKey
+                            && in_array($catalogKey, self::SAFE_NAVIGATION_TASKS, true)
+                            && $url !== ''
+                            && $url !== 'about:blank';
+                    })
+                    ->map(fn (array $task): array => [
+                        'step' => $step,
+                        'task' => $task,
+                        'priority' => trim((string) ($task['task_key'] ?? '')) === 'browser.open_url' ? 0 : 1,
+                    ])
+                    ->all();
+            })
+            ->sortBy(fn (array $target): string => sprintf(
+                '%d-%010d-%010d',
+                (int) $target['priority'],
+                (int) ($target['step']->position ?? 0),
+                (int) data_get($target, 'task.position', data_get($target, 'task.order_id', 0)),
+            ))
+            ->first();
 
-                    return in_array($catalogKey, self::SAFE_NAVIGATION_TASKS, true)
-                        && ($catalogKey !== 'browser.open_url' || ($url !== '' && $url !== 'about:blank'));
-                });
-            });
-
-        if (! $navigationStep) {
+        if (! is_array($navigationTarget)
+            || ! ($navigationTarget['step'] ?? null) instanceof WorkflowStep
+            || ! is_array($navigationTarget['task'] ?? null)) {
             return [];
         }
 
+        /** @var WorkflowStep $navigationStep */
+        $navigationStep = $navigationTarget['step'];
+        $navigationTask = $navigationTarget['task'];
         $route = [
-            'type' => 'step',
+            'type' => 'card',
             'action_key' => (string) $navigationStep->action_key,
             'step' => (string) $navigationStep->action_key,
-            'label' => (string) $navigationStep->name,
+            'card_key' => (string) $navigationTask['key'],
+            'card' => (string) $navigationTask['key'],
+            'label' => (string) $navigationStep->name.' / '.(string) ($navigationTask['title'] ?? $navigationTask['key']),
         ];
         $outcome = Str::lower(trim((string) ($checkpoint['outcome'] ?? 'failed')));
         $outcome = in_array($outcome, ['failed', 'timeout'], true) ? $outcome : 'failed';
-        $existingRoute = data_get($failedStep->config_json, 'routes.'.$outcome);
+        $operations = [];
+        $entryStep = $workflow->steps->where('is_enabled', true)->first();
 
-        if ($existingRoute === $route) {
+        if ($entryStep instanceof WorkflowStep) {
+            $entryTask = collect($entryStep->task_cards)->first();
+
+            if (is_array($entryTask)
+                && (string) ($entryTask['key'] ?? '') !== (string) $navigationTask['key']
+                && is_array($entryTask['next'] ?? null)
+                && $entryTask['next'] !== $route) {
+                $operations[] = [
+                    'type' => 'update_task_routes',
+                    'step_action_key' => (string) $entryStep->action_key,
+                    'task_key' => (string) $entryTask['key'],
+                    'changes' => ['next' => $route],
+                ];
+            }
+
+            if ((int) $entryStep->id !== (int) $navigationStep->id
+                && data_get($entryStep->config_json, 'routes.success') !== $route) {
+                $operations[] = [
+                    'type' => 'update_step_routes',
+                    'step_action_key' => (string) $entryStep->action_key,
+                    'routes' => ['success' => $route],
+                ];
+            }
+        }
+
+        $failedTask = collect($failedStep->task_cards)->firstWhere('key', $failedTaskKey);
+
+        if (is_array($failedTask) && ($failedTask['on_error'] ?? null) !== $route) {
+            $operations[] = [
+                'type' => 'update_task_routes',
+                'step_action_key' => (string) $failedStep->action_key,
+                'task_key' => $failedTaskKey,
+                'changes' => ['on_error' => $route],
+            ];
+        }
+
+        $failedRoutes = [];
+
+        foreach (['failed', 'timeout'] as $failedOutcome) {
+            if (data_get($failedStep->config_json, 'routes.'.$failedOutcome) !== $route) {
+                $failedRoutes[$failedOutcome] = $route;
+            }
+        }
+
+        if ($failedRoutes !== []) {
+            $operations[] = [
+                'type' => 'update_step_routes',
+                'step_action_key' => (string) $failedStep->action_key,
+                'routes' => $failedRoutes,
+            ];
+        }
+
+        if ($operations === []) {
             return [
                 'action' => 'continue_route',
-                'task_key' => trim((string) ($checkpoint['task_key'] ?? '')),
-                'reason' => 'Der Browser ist leer; die bereits konfigurierte Fehlerroute zur vorhandenen Navigationsliste wird jetzt ausgefuehrt.',
+                'task_key' => $failedTaskKey,
+                'reason' => 'Der Browser ist leer; die bereits konfigurierte Fehlerroute zur konkreten Navigationskarte wird jetzt ausgefuehrt.',
                 'planning_handoff' => $this->planningHandoff($vision),
             ];
         }
 
         return [
             'action' => 'restart_with_workflow_changes',
-            'task_key' => trim((string) ($checkpoint['task_key'] ?? '')),
-            'operations' => [[
-                'type' => 'update_step_routes',
-                'step_action_key' => (string) $failedStep->action_key,
-                'routes' => [
-                    'failed' => $route,
-                    'timeout' => $route,
-                ],
-            ]],
-            'reason' => 'Der Test steht auf about:blank, obwohl eine kataloggebundene Navigationsliste vorhanden ist. Die Fehlerroute wird dorthin verbunden und der Workflow von Anfang an neu getestet.',
+            'task_key' => $failedTaskKey,
+            'operations' => array_slice($operations, 0, 4),
+            'reason' => 'Der Test steht auf about:blank, obwohl eine konkrete kataloggebundene URL-Navigation vorhanden ist. Start- und Fehlerpfad werden direkt mit dieser Navigationskarte verbunden und der Workflow von Anfang an neu getestet.',
             'planning_handoff' => $this->planningHandoff($vision),
         ];
     }
