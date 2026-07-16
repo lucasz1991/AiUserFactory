@@ -79,6 +79,12 @@ class WorkflowManager extends Component
 
     public array $newTaskExtra = [];
 
+    public string $newTaskValueSource = 'fixed';
+
+    public string $newTaskWorkflowVariable = '';
+
+    public string $newTaskValueFallback = '';
+
     public int $newTaskTimeoutSeconds = 0;
 
     public string $newTaskSuccessTarget = '';
@@ -208,6 +214,12 @@ class WorkflowManager extends Component
     public string $editingTaskFailurePayload = '';
 
     public array $editingTaskExtra = [];
+
+    public string $editingTaskValueSource = 'fixed';
+
+    public string $editingTaskWorkflowVariable = '';
+
+    public string $editingTaskValueFallback = '';
 
     public int $editingTaskTimeoutSeconds = 0;
 
@@ -691,6 +703,9 @@ class WorkflowManager extends Component
             'newTaskBrowserWindow' => ['nullable', 'string', 'max:80'],
             'newTaskSuccessPayload' => ['nullable', 'string', 'max:4000'],
             'newTaskFailurePayload' => ['nullable', 'string', 'max:4000'],
+            'newTaskValueSource' => ['required', 'string', 'in:fixed,workflow_variable'],
+            'newTaskWorkflowVariable' => ['nullable', 'string', 'max:4000'],
+            'newTaskValueFallback' => ['nullable', 'string', 'max:4000'],
             'newTaskExtra' => ['array'],
             'newTaskExtra.*' => ['nullable', 'string', 'max:4000'],
             'newTaskTimeoutSeconds' => ['required', 'integer', 'min:0', 'max:3600'],
@@ -760,7 +775,11 @@ class WorkflowManager extends Component
             $task['failure_payload'] = $failurePayload;
         }
 
-        $task = $this->applyTaskExtraFields($task, $formConfig, $validated['newTaskExtra'] ?? []);
+        $task = $this->applyTaskExtraFields(
+            $task,
+            $formConfig,
+            $this->taskExtraFieldValues('newTask', $formConfig, $validated['newTaskExtra'] ?? []),
+        );
 
         $successRoute = $this->taskRouteTargetFromValue(
             (string) ($validated['newTaskSuccessTarget'] ?? ''),
@@ -809,6 +828,9 @@ class WorkflowManager extends Component
         $this->newTaskSuccessPayload = '';
         $this->newTaskFailurePayload = '';
         $this->newTaskExtra = [];
+        $this->newTaskValueSource = 'fixed';
+        $this->newTaskWorkflowVariable = '';
+        $this->newTaskValueFallback = '';
         $this->newTaskTimeoutSeconds = 0;
         $this->newTaskSuccessTarget = '';
         $this->newTaskFailedTarget = 'fail';
@@ -865,6 +887,11 @@ class WorkflowManager extends Component
         $this->editingTaskLoopPairEndKey = $loopPair['end_key'];
         $this->applyTaskDefinitionToForm('editingTask', $this->editingTaskCatalogKey, false);
         $this->editingTaskExtra = $this->taskExtraFieldsFromTask($this->taskFormConfig($this->editingTaskCatalogKey), $task);
+        $this->syncTaskValueSourceProperties(
+            'editingTask',
+            $this->taskFormConfig($this->editingTaskCatalogKey),
+            $this->editingTaskExtra,
+        );
         $this->showEditTaskModal = true;
     }
 
@@ -914,6 +941,9 @@ class WorkflowManager extends Component
             'editingTaskBrowserWindow' => ['nullable', 'string', 'max:80'],
             'editingTaskSuccessPayload' => ['nullable', 'string', 'max:4000'],
             'editingTaskFailurePayload' => ['nullable', 'string', 'max:4000'],
+            'editingTaskValueSource' => ['required', 'string', 'in:fixed,workflow_variable'],
+            'editingTaskWorkflowVariable' => ['nullable', 'string', 'max:4000'],
+            'editingTaskValueFallback' => ['nullable', 'string', 'max:4000'],
             'editingTaskExtra' => ['array'],
             'editingTaskExtra.*' => ['nullable', 'string', 'max:4000'],
             'editingTaskTimeoutSeconds' => ['required', 'integer', 'min:0', 'max:3600'],
@@ -1029,7 +1059,11 @@ class WorkflowManager extends Component
 
                 unset($task['on_partial']);
 
-                return $this->applyTaskExtraFields($task, $formConfig, $validated['editingTaskExtra'] ?? []);
+                return $this->applyTaskExtraFields(
+                    $task,
+                    $formConfig,
+                    $this->taskExtraFieldValues('editingTask', $formConfig, $validated['editingTaskExtra'] ?? []),
+                );
             })
             ->values()
             ->toArray();
@@ -2230,6 +2264,7 @@ class WorkflowManager extends Component
         }
 
         $this->{$extraProperty} = $this->taskExtraFieldDefaults($formConfig);
+        $this->syncTaskValueSourceProperties($prefix, $formConfig, $this->{$extraProperty});
     }
 
     protected function taskFormConfig(string $taskKey): array
@@ -2323,6 +2358,60 @@ class WorkflowManager extends Component
         }
 
         return (string) ($field['default'] ?? '');
+    }
+
+    protected function syncTaskValueSourceProperties(string $prefix, array $formConfig, array $values): void
+    {
+        $valueSourceProperty = $prefix.'ValueSource';
+        $workflowVariableProperty = $prefix.'WorkflowVariable';
+        $valueFallbackProperty = $prefix.'ValueFallback';
+
+        if (! ($formConfig['value_source_control'] ?? false)) {
+            $this->{$valueSourceProperty} = 'fixed';
+            $this->{$workflowVariableProperty} = '';
+            $this->{$valueFallbackProperty} = '';
+
+            return;
+        }
+
+        $this->{$valueSourceProperty} = ($values['value_source'] ?? 'fixed') === 'workflow_variable'
+            ? 'workflow_variable'
+            : 'fixed';
+        $this->{$workflowVariableProperty} = trim((string) ($values['workflow_variable'] ?? ''));
+        $this->{$valueFallbackProperty} = trim((string) ($values['value_fallback'] ?? ''));
+    }
+
+    protected function taskExtraFieldValues(string $prefix, array $formConfig, array $values): array
+    {
+        if (! ($formConfig['value_source_control'] ?? false)) {
+            return $values;
+        }
+
+        $valueSourceProperty = $prefix.'ValueSource';
+        $workflowVariableProperty = $prefix.'WorkflowVariable';
+        $valueFallbackProperty = $prefix.'ValueFallback';
+        $values['value_source'] = trim((string) $this->{$valueSourceProperty});
+        $values['workflow_variable'] = trim((string) $this->{$workflowVariableProperty});
+        $values['value_fallback'] = trim((string) $this->{$valueFallbackProperty});
+
+        return $values;
+    }
+
+    protected function taskExtraFieldErrorProperty(string $prefix, array $formConfig, string $fieldName): string
+    {
+        if ($formConfig['value_source_control'] ?? false) {
+            $dedicatedProperties = [
+                'value_source' => $prefix.'ValueSource',
+                'workflow_variable' => $prefix.'WorkflowVariable',
+                'value_fallback' => $prefix.'ValueFallback',
+            ];
+
+            if (isset($dedicatedProperties[$fieldName])) {
+                return $dedicatedProperties[$fieldName];
+            }
+        }
+
+        return $prefix.'Extra.'.$fieldName;
     }
 
     protected function arrayPayloadFromTaskValue(mixed $value): array
@@ -2680,6 +2769,11 @@ class WorkflowManager extends Component
         $mailboxSourceProperty = $prefix.'MailboxSource';
         $browserWindowProperty = $prefix.'BrowserWindow';
         $extraProperty = $prefix.'Extra';
+        $extraValues = $this->taskExtraFieldValues(
+            $prefix,
+            $formConfig,
+            is_array($this->{$extraProperty} ?? null) ? $this->{$extraProperty} : [],
+        );
 
         if (($formConfig['browser_window'] ?? false) && trim((string) $this->{$browserWindowProperty}) === '') {
             $this->addError($browserWindowProperty, 'Bitte ein Browserfenster angeben.');
@@ -2701,17 +2795,23 @@ class WorkflowManager extends Component
         }
 
         if ($formConfig['value_source_control'] ?? false) {
-            $valueSource = trim((string) (($this->{$extraProperty} ?? [])['value_source'] ?? 'fixed'));
-            $workflowVariable = trim((string) (($this->{$extraProperty} ?? [])['workflow_variable'] ?? ''));
+            $valueSource = trim((string) ($extraValues['value_source'] ?? 'fixed'));
+            $workflowVariable = trim((string) ($extraValues['workflow_variable'] ?? ''));
 
             if (! in_array($valueSource, ['fixed', 'workflow_variable'], true)) {
-                $this->addError($extraProperty.'.value_source', 'Bitte eine gueltige Wertquelle auswaehlen.');
+                $this->addError(
+                    $this->taskExtraFieldErrorProperty($prefix, $formConfig, 'value_source'),
+                    'Bitte eine gueltige Wertquelle auswaehlen.',
+                );
                 $valid = false;
             } elseif ($valueSource === 'fixed' && trim((string) $this->{$valueProperty}) === '') {
                 $this->addError($valueProperty, 'Bitte einen festen Wert angeben.');
                 $valid = false;
             } elseif ($valueSource === 'workflow_variable' && $workflowVariable === '') {
-                $this->addError($extraProperty.'.workflow_variable', 'Bitte den Namen der Workflow-Variable angeben.');
+                $this->addError(
+                    $this->taskExtraFieldErrorProperty($prefix, $formConfig, 'workflow_variable'),
+                    'Bitte den Namen der Workflow-Variable angeben.',
+                );
                 $valid = false;
             }
         }
@@ -2723,11 +2823,12 @@ class WorkflowManager extends Component
 
         foreach ($this->taskExtraFields($formConfig) as $field) {
             $name = $field['name'];
-            $fieldValue = trim((string) (($this->{$extraProperty} ?? [])[$name] ?? ''));
+            $fieldValue = trim((string) ($extraValues[$name] ?? ''));
             $fieldLabel = (string) ($field['label'] ?? $name);
+            $errorProperty = $this->taskExtraFieldErrorProperty($prefix, $formConfig, $name);
 
             if (($field['required'] ?? false) && $fieldValue === '') {
-                $this->addError($extraProperty.'.'.$name, 'Bitte '.$fieldLabel.' angeben.');
+                $this->addError($errorProperty, 'Bitte '.$fieldLabel.' angeben.');
                 $valid = false;
             }
 
@@ -2736,9 +2837,9 @@ class WorkflowManager extends Component
             $requiredWhenValue = (string) ($requiredWhen['equals'] ?? '');
 
             if ($requiredWhenField !== ''
-                && (string) (($this->{$extraProperty} ?? [])[$requiredWhenField] ?? '') === $requiredWhenValue
+                && (string) ($extraValues[$requiredWhenField] ?? '') === $requiredWhenValue
                 && $fieldValue === '') {
-                $this->addError($extraProperty.'.'.$name, 'Bitte '.$fieldLabel.' angeben.');
+                $this->addError($errorProperty, 'Bitte '.$fieldLabel.' angeben.');
                 $valid = false;
             }
 
@@ -2746,20 +2847,20 @@ class WorkflowManager extends Component
                 $options = is_array($field['options'] ?? null) ? array_keys($field['options']) : [];
 
                 if ($fieldValue !== '' && ! in_array($fieldValue, $options, true)) {
-                    $this->addError($extraProperty.'.'.$name, 'Bitte eine gueltige Option fuer '.$fieldLabel.' auswaehlen.');
+                    $this->addError($errorProperty, 'Bitte eine gueltige Option fuer '.$fieldLabel.' auswaehlen.');
                     $valid = false;
                 }
             }
 
             if (($field['type'] ?? 'text') === 'number' && $fieldValue !== '' && ! is_numeric($fieldValue)) {
-                $this->addError($extraProperty.'.'.$name, $fieldLabel.' muss eine Zahl sein.');
+                $this->addError($errorProperty, $fieldLabel.' muss eine Zahl sein.');
                 $valid = false;
             }
 
             if (($field['format'] ?? null) === 'variable_path'
                 && $fieldValue !== ''
                 && preg_match('/^[A-Za-z0-9_.-]+$/', $fieldValue) !== 1) {
-                $this->addError($extraProperty.'.'.$name, $fieldLabel.' darf nur Buchstaben, Zahlen, Punkt, Unterstrich und Bindestrich enthalten.');
+                $this->addError($errorProperty, $fieldLabel.' darf nur Buchstaben, Zahlen, Punkt, Unterstrich und Bindestrich enthalten.');
                 $valid = false;
             }
 

@@ -206,13 +206,14 @@
     $extraFieldTabGroup = 'workflow-task-'.$prefix.'-'.(\Illuminate\Support\Str::slug((string) $catalogKey) ?: 'task').'-settings';
     $taskSettingsTabsKey = 'workflow-task-settings-tabs-'.$prefix.'-'.(\Illuminate\Support\Str::slug((string) $catalogKey) ?: 'task').'-'.md5(json_encode(array_keys($taskSettingsTabOptions)));
     $browserWindowDatalistId = 'workflow-'.$prefix.'-browser-windows';
+    $valueSourceProperty = $prefix.'ValueSource';
 @endphp
 
 <div
     class="space-y-4"
     x-data="{
         failedTarget: @entangle($prefix.'FailedTarget').live,
-        valueSource: @entangle($prefix.'Extra.value_source').live,
+        valueSource: @entangle($valueSourceProperty).live,
     }"
 >
     <div class="grid gap-4 md:grid-cols-2">
@@ -407,6 +408,14 @@
                                     $visibleWhen = is_array($field['visible_when'] ?? null) ? $field['visible_when'] : [];
                                     $visibleWhenField = trim((string) ($visibleWhen['field'] ?? ''));
                                     $visibleWhenValue = (string) ($visibleWhen['equals'] ?? '');
+                                    $dedicatedValueSourceModels = [
+                                        'value_source' => $prefix.'ValueSource',
+                                        'workflow_variable' => $prefix.'WorkflowVariable',
+                                        'value_fallback' => $prefix.'ValueFallback',
+                                    ];
+                                    $fieldModel = ($form['value_source_control'] ?? false) && isset($dedicatedValueSourceModels[$fieldName])
+                                        ? $dedicatedValueSourceModels[$fieldName]
+                                        : $prefix.'Extra.'.$fieldName;
                                 @endphp
                                 @if($fieldName !== '')
                                     <div
@@ -421,14 +430,14 @@
                                             <textarea
                                                 rows="{{ $fieldRows }}"
                                                 wire:key="{{ $prefix }}-extra-{{ $catalogKey }}-{{ $fieldName }}"
-                                                wire:model="{{ $prefix }}Extra.{{ $fieldName }}"
+                                                wire:model="{{ $fieldModel }}"
                                                 placeholder="{{ $fieldPlaceholder }}"
                                                 class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"
                                             ></textarea>
                                         @elseif($fieldType === 'select')
                                             <select
                                                 wire:key="{{ $prefix }}-extra-{{ $catalogKey }}-{{ $fieldName }}"
-                                                wire:model.live="{{ $prefix }}Extra.{{ $fieldName }}"
+                                                wire:model.live="{{ $fieldModel }}"
                                                 class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"
                                             >
                                                 @foreach($fieldOptions as $optionValue => $optionLabel)
@@ -442,7 +451,7 @@
                                                 @if(isset($field['min'])) min="{{ $field['min'] }}" @endif
                                                 @if(isset($field['max'])) max="{{ $field['max'] }}" @endif
                                                 @if(isset($field['step'])) step="{{ $field['step'] }}" @endif
-                                                wire:model="{{ $prefix }}Extra.{{ $fieldName }}"
+                                                wire:model="{{ $fieldModel }}"
                                                 placeholder="{{ $fieldPlaceholder }}"
                                                 class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"
                                             >
@@ -450,7 +459,7 @@
                                         @if($fieldHelp !== '')
                                             <p class="mt-1 text-xs text-slate-500">{{ $fieldHelp }}</p>
                                         @endif
-                                        @error($prefix.'Extra.'.$fieldName) <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                                        @error($fieldModel) <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
                                     </div>
                                 @endif
                             @endforeach

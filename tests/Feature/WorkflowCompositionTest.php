@@ -574,9 +574,9 @@ class WorkflowCompositionTest extends TestCase
             ->assertSee('Fallback-Wert')
             ->set('newTaskElementSelector', '#search')
             ->set('newTaskBrowserWindow', 'main')
-            ->set('newTaskExtra.value_source', 'workflow_variable')
-            ->set('newTaskExtra.workflow_variable', 'google_search_url')
-            ->set('newTaskExtra.value_fallback', 'fallback search')
+            ->set('newTaskValueSource', 'workflow_variable')
+            ->set('newTaskWorkflowVariable', 'google_search_url')
+            ->set('newTaskValueFallback', 'fallback search')
             ->call('addTaskCard')
             ->assertHasNoErrors();
 
@@ -589,10 +589,10 @@ class WorkflowCompositionTest extends TestCase
 
         Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
             ->call('openEditTaskCard', $step->id, $task['key'])
-            ->assertSet('editingTaskExtra.value_source', 'workflow_variable')
-            ->assertSet('editingTaskExtra.workflow_variable', 'google_search_url')
-            ->assertSet('editingTaskExtra.value_fallback', 'fallback search')
-            ->set('editingTaskExtra.value_source', 'fixed')
+            ->assertSet('editingTaskValueSource', 'workflow_variable')
+            ->assertSet('editingTaskWorkflowVariable', 'google_search_url')
+            ->assertSet('editingTaskValueFallback', 'fallback search')
+            ->set('editingTaskValueSource', 'fixed')
             ->set('editingTaskInputValue', 'literal search')
             ->call('saveEditTaskCard')
             ->assertHasNoErrors();
@@ -614,15 +614,15 @@ class WorkflowCompositionTest extends TestCase
             ->call('prepareTaskFromCatalog', $step->id, 'input.fill_field', 0)
             ->set('newTaskElementSelector', '#search')
             ->set('newTaskBrowserWindow', 'main')
-            ->set('newTaskExtra.value_source', 'workflow_variable')
+            ->set('newTaskValueSource', 'workflow_variable')
             ->call('addTaskCard')
-            ->assertHasErrors(['newTaskExtra.workflow_variable']);
+            ->assertHasErrors(['newTaskWorkflowVariable']);
 
         Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
             ->call('prepareTaskFromCatalog', $step->id, 'input.fill_field', 0)
             ->set('newTaskElementSelector', '#search')
             ->set('newTaskBrowserWindow', 'main')
-            ->set('newTaskExtra.value_source', 'fixed')
+            ->set('newTaskValueSource', 'fixed')
             ->call('addTaskCard')
             ->assertHasErrors(['newTaskInputValue']);
     }
