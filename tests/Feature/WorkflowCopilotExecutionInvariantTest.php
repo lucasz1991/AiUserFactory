@@ -207,6 +207,58 @@ class WorkflowCopilotExecutionInvariantTest extends TestCase
         Queue::assertPushed(RunWorkflowJob::class, fn (RunWorkflowJob $job): bool => $job->workflowRunId === $resumeRun->id);
     }
 
+    public function test_successful_probe_resumes_after_the_original_task_instead_of_waiting_on_repair(): void
+    {
+        Queue::fake();
+        [$workflow, $step] = $this->workflow();
+        $session = app(WorkflowCopilotSessionService::class)->start($workflow);
+        $execution = app(WorkflowExecutionService::class);
+        $run = $execution->start($workflow, [
+            'workflow_copilot_session_id' => $session->id,
+            'copilot_supervised' => true,
+        ], 'workflow-copilot');
+        $stepRun = $this->putRunAtCheckpoint($run, $step, 'first-task');
+        $context = $run->fresh()->context_json;
+        $context['copilot_repair_plan'] = [
+            'action' => 'probe_update',
+            'original_task_key' => 'first-task',
+        ];
+        $context['copilot_checkpoint'] = [
+            'id' => 'successful-probe-checkpoint',
+            'kind' => 'probe',
+            'workflow_step_id' => $step->id,
+            'task_key' => 'first-task--copilot-probe',
+            'successful' => true,
+            'outcome' => 'success',
+            'next_action' => 'repair',
+            'next_task_key' => null,
+            'result' => [
+                'ok' => true,
+                'status' => 'success',
+                'tasks' => [[
+                    'key' => 'first-task--copilot-probe',
+                    'task_key' => 'wait.seconds',
+                    'status' => 'success',
+                ]],
+            ],
+        ];
+        $run->forceFill(['context_json' => $context])->save();
+        Queue::fake();
+
+        $continued = $execution->resumeCopilotCheckpoint($run, 'first-task');
+
+        $run->refresh();
+        $this->assertTrue($continued);
+        $this->assertSame('running', $run->status);
+        $this->assertSame($step->id, $run->current_workflow_step_id);
+        $this->assertSame('second-task', data_get($run->context_json, 'next_task_key'));
+        $this->assertNull(data_get($run->context_json, 'copilot_checkpoint'));
+        $this->assertNull(data_get($run->context_json, 'copilot_transient_task'));
+        $this->assertNull(data_get($run->context_json, 'copilot_repair_plan'));
+        $this->assertSame('queued', $stepRun->fresh()->status);
+        Queue::assertPushed(RunWorkflowJob::class, fn (RunWorkflowJob $job): bool => $job->workflowRunId === $run->id);
+    }
+
     public function test_resumed_task_cursor_keeps_its_checkpoint_step_when_an_earlier_step_was_skipped(): void
     {
         Queue::fake();

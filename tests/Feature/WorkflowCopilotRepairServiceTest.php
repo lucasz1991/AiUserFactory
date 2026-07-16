@@ -307,6 +307,75 @@ class WorkflowCopilotRepairServiceTest extends TestCase
         $this->assertSame('button.login-secondary', data_get($plan, 'changes.selector'));
     }
 
+    public function test_valid_configured_failure_route_is_preferred_over_an_unrelated_visible_selector(): void
+    {
+        [$workflow, $step] = $this->workflowWithTasks([[
+            'key' => 'wait-results',
+            'task_key' => 'wait.selector',
+            'title' => 'Auf Suchergebnisbereich warten',
+            'description' => 'Wartet auf sichtbare Suchergebnisse.',
+            'selector' => 'div#search article.result',
+            'on_error' => [
+                'type' => 'step',
+                'action_key' => 'fill-search',
+                'step' => 'fill-search',
+                'label' => 'Sucheingabe',
+            ],
+        ]]);
+        $workflow->steps()->create([
+            'name' => 'Sucheingabe',
+            'type' => WorkflowStep::TYPE_BROWSER_TASK,
+            'action_key' => 'fill-search',
+            'position' => 20,
+            'is_enabled' => true,
+            'config_json' => ['tasks' => [[
+                'key' => 'fill-query',
+                'task_key' => 'input.fill_field',
+                'title' => 'Suchbegriff eingeben',
+                'selector' => 'textarea[name="q"]',
+            ]]],
+        ]);
+        $session = app(WorkflowCopilotSessionService::class)->start($workflow->fresh());
+
+        $plan = app(WorkflowCopilotRepairService::class)->plan(
+            $session,
+            $step->fresh(),
+            [
+                'task_key' => 'wait-results',
+                'successful' => false,
+                'outcome' => 'timeout',
+                'result' => [
+                    'statusMessage' => 'Ergebnisbereich wurde nicht gefunden.',
+                    'sideEffects' => [],
+                ],
+            ],
+            [
+                'interaction_map' => [[
+                    'element_ref' => 'el_search_button',
+                    'visible' => true,
+                    'enabled' => true,
+                    'text' => 'Google Suche',
+                    'selector_candidates' => ['input[aria-label="Google Suche"]'],
+                ]],
+            ],
+            [
+                'confidence' => 0.9,
+                'verdict' => 'continue',
+                'safe_pause' => false,
+                'relevant_elements' => [[
+                    'element_ref' => 'el_search_button',
+                    'confidence' => 0.9,
+                ]],
+            ],
+        );
+
+        $this->assertSame('continue_route', $plan['action']);
+        $this->assertFalse($plan['resume_checkpoint']);
+        $this->assertSame('fill-search', data_get($plan, 'configured_route.action_key'));
+        $this->assertStringContainsString('Fehlerroute', $plan['reason']);
+        $this->assertArrayNotHasKey('changes', $plan);
+    }
+
     public function test_verification_status_blocks_planning_and_persisting_repairs(): void
     {
         [$workflow, $step] = $this->workflowWithTasks([[

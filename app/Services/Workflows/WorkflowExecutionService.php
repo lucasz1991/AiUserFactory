@@ -642,15 +642,17 @@ class WorkflowExecutionService
         $this->continueAfterStep($stepRun->workflowRun, $stepRun, $result, $outcome, max(0, (int) $stepRun->workflowStep->wait_after_seconds));
     }
 
-    public function resumeCopilotCheckpoint(int|WorkflowRun $workflowRun): void
-    {
+    public function resumeCopilotCheckpoint(
+        int|WorkflowRun $workflowRun,
+        ?string $completedProbeTaskKey = null,
+    ): bool {
         $runId = $workflowRun instanceof WorkflowRun ? (int) $workflowRun->id : (int) $workflowRun;
-        $this->withLockedCopilotRun($runId, function (WorkflowRun $run): void {
+        $continued = $this->withLockedCopilotRun($runId, function (WorkflowRun $run) use ($completedProbeTaskKey): bool {
             $context = is_array($run->context_json) ? $run->context_json : [];
             $checkpoint = is_array($context['copilot_checkpoint'] ?? null) ? $context['copilot_checkpoint'] : [];
 
             if ($checkpoint === []) {
-                return;
+                return false;
             }
 
             $stepRun = WorkflowStepRun::query()
@@ -666,17 +668,45 @@ class WorkflowExecutionService
             $action = trim((string) ($checkpoint['next_action'] ?? ''));
             $result = is_array($checkpoint['result'] ?? null) ? $checkpoint['result'] : [];
             $outcome = trim((string) ($checkpoint['outcome'] ?? 'success')) ?: 'success';
+            $probeTaskKey = trim((string) $completedProbeTaskKey);
+
+            if ($probeTaskKey !== '') {
+                if (($checkpoint['kind'] ?? null) !== 'probe' || ! (bool) ($checkpoint['successful'] ?? false)) {
+                    throw new \RuntimeException('Nur ein erfolgreicher Copilot-Probe-Checkpoint kann als Original-Task fortgesetzt werden.');
+                }
+
+                $step = $stepRun->workflowStep;
+                $originalTask = collect($step->task_cards)->firstWhere('key', $probeTaskKey);
+
+                if (! is_array($originalTask)) {
+                    throw new \RuntimeException('Die Original-Task der erfolgreichen Copilot-Probe wurde nicht gefunden.');
+                }
+
+                $result = $this->probeResultAsOriginalTask(
+                    $result,
+                    $checkpoint,
+                    $probeTaskKey,
+                    $originalTask,
+                );
+                $outcome = 'success';
+                [$action, $nextTaskKey] = $this->successfulCheckpointContinuation(
+                    $step,
+                    $probeTaskKey,
+                    $result,
+                );
+            } else {
+                $nextTaskKey = trim((string) ($checkpoint['next_task_key'] ?? ''));
+            }
 
             unset(
                 $context['copilot_checkpoint'],
                 $context['copilot_transient_task'],
                 $context['copilot_probe_plan'],
+                $context['copilot_repair_plan'],
                 $context['copilot_segment_started_at'],
             );
 
             if ($action === 'next_task') {
-                $nextTaskKey = trim((string) ($checkpoint['next_task_key'] ?? ''));
-
                 if ($nextTaskKey === '') {
                     throw new \RuntimeException('Der naechste Copilot-Task fehlt im Checkpoint.');
                 }
@@ -699,11 +729,11 @@ class WorkflowExecutionService
 
                 RunWorkflowJob::dispatch($run->id);
 
-                return;
+                return true;
             }
 
             if ($action !== 'complete_step') {
-                return;
+                throw new \RuntimeException('Der Copilot-Checkpoint kann mit next_action='.$action.' nicht fortgesetzt werden.');
             }
 
             unset($context['next_task_key'], $context['copilot_current_task_key']);
@@ -724,7 +754,10 @@ class WorkflowExecutionService
                 max(0, (int) $stepRun->workflowStep->wait_after_seconds),
             );
 
+            return true;
         });
+
+        return $continued === true;
     }
 
     public function retryCopilotTask(
@@ -849,27 +882,11 @@ class WorkflowExecutionService
         if ($isProbe) {
             $nextAction = 'repair';
         } elseif ($successful) {
-            $route = $this->routeForResult($step, $outcome, $result);
-            $routeType = trim((string) ($route['type'] ?? ''));
-            $routeStep = trim((string) ($route['action_key'] ?? $route['step'] ?? ''));
-            $routeTask = trim((string) ($route['card_key'] ?? $route['card'] ?? ''));
-
-            if ($routeType === 'card'
-                && $routeTask !== ''
-                && ($routeStep === '' || $routeStep === $step->action_key)) {
-                $nextAction = 'next_task';
-                $nextTaskKey = $routeTask;
-            } elseif ($route !== null) {
-                $nextAction = 'complete_step';
-            } else {
-                $tasks = collect($step->task_cards)->values();
-                $currentIndex = $tasks->search(
-                    fn (array $task): bool => (string) ($task['key'] ?? '') === $currentTaskKey,
-                );
-                $nextTask = $currentIndex === false ? null : $tasks->get(((int) $currentIndex) + 1);
-                $nextTaskKey = is_array($nextTask) ? trim((string) ($nextTask['key'] ?? '')) : '';
-                $nextAction = $nextTaskKey !== '' ? 'next_task' : 'complete_step';
-            }
+            [$nextAction, $nextTaskKey] = $this->successfulCheckpointContinuation(
+                $step,
+                $currentTaskKey,
+                $result,
+            );
         }
 
         $publicResult = $this->publicRunSnapshot($result);
@@ -932,6 +949,78 @@ class WorkflowExecutionService
             (string) $checkpoint['id'],
             (int) ($run->workflow_copilot_session_id ?: data_get($context, 'workflow_copilot_session_id', 0)),
         ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $result
+     * @param  array<string, mixed>  $checkpoint
+     * @param  array<string, mixed>  $originalTask
+     * @return array<string, mixed>
+     */
+    protected function probeResultAsOriginalTask(
+        array $result,
+        array $checkpoint,
+        string $originalTaskKey,
+        array $originalTask,
+    ): array {
+        $result['copilotProbeTaskKey'] = trim((string) ($checkpoint['task_key'] ?? ''));
+        $result['copilot_probe_task_key'] = $result['copilotProbeTaskKey'];
+        $result['completedTaskKey'] = $originalTaskKey;
+        $result['completed_task_key'] = $originalTaskKey;
+
+        unset(
+            $result['failedTaskKey'],
+            $result['failed_task_key'],
+            $result['routeRequested'],
+            $result['route_requested'],
+            $result['routeOutcome'],
+            $result['route_outcome'],
+        );
+
+        if (is_array($originalTask['next'] ?? null)) {
+            $result['routeRequested'] = true;
+            $result['route_requested'] = true;
+            $result['routeOutcome'] = 'success';
+            $result['route_outcome'] = 'success';
+        }
+
+        return $result;
+    }
+
+    /**
+     * @param  array<string, mixed>  $result
+     * @return array{0:string,1:?string}
+     */
+    protected function successfulCheckpointContinuation(
+        WorkflowStep $step,
+        string $currentTaskKey,
+        array $result,
+    ): array {
+        $route = $this->routeForResult($step, $this->resultOutcome($result), $result);
+        $routeType = trim((string) ($route['type'] ?? ''));
+        $routeStep = trim((string) ($route['action_key'] ?? $route['step'] ?? ''));
+        $routeTask = trim((string) ($route['card_key'] ?? $route['card'] ?? ''));
+
+        if ($routeType === 'card'
+            && $routeTask !== ''
+            && ($routeStep === '' || $routeStep === $step->action_key)) {
+            return ['next_task', $routeTask];
+        }
+
+        if ($route !== null) {
+            return ['complete_step', null];
+        }
+
+        $tasks = collect($step->task_cards)->values();
+        $currentIndex = $tasks->search(
+            fn (array $task): bool => (string) ($task['key'] ?? '') === $currentTaskKey,
+        );
+        $nextTask = $currentIndex === false ? null : $tasks->get(((int) $currentIndex) + 1);
+        $nextTaskKey = is_array($nextTask) ? trim((string) ($nextTask['key'] ?? '')) : '';
+
+        return $nextTaskKey !== ''
+            ? ['next_task', $nextTaskKey]
+            : ['complete_step', null];
     }
 
     public function expireTimedOutRuns(): void

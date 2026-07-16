@@ -109,6 +109,18 @@ class WorkflowCopilotRepairService
             return $consentPlan;
         }
 
+        $blankPageRecovery = $this->blankPageRecoveryPlan($step, $checkpoint, $observation, $vision);
+
+        if ($blankPageRecovery !== []) {
+            return $blankPageRecovery;
+        }
+
+        $configuredFailureRoute = $this->configuredFailureRoutePlan($step, $task, $checkpoint);
+
+        if ($configuredFailureRoute !== []) {
+            return $configuredFailureRoute;
+        }
+
         $requiresVisualTarget = $this->taskRequiresVisualTarget($taskCatalogKey);
         $trustedElementRefs = $this->trustedVisionElementRefs($vision, $observation);
         $contextDomains = $this->observationDomains($observation);
@@ -165,12 +177,6 @@ class WorkflowCopilotRepairService
                     'original_task_key' => $taskKey,
                 ];
             }
-        }
-
-        $blankPageRecovery = $this->blankPageRecoveryPlan($step, $checkpoint, $observation, $vision);
-
-        if ($blankPageRecovery !== []) {
-            return $blankPageRecovery;
         }
 
         try {
@@ -453,6 +459,83 @@ class WorkflowCopilotRepairService
         $step->forceFill(['config_json' => $config])->save();
 
         return collect($tasks)->firstWhere('key', $taskKey) ?? [];
+    }
+
+    /**
+     * A valid explicit error route is executable workflow intent. Following it
+     * is safer than replacing a failed selector with an unrelated visible
+     * element from the current page.
+     *
+     * @param  array<string, mixed>  $task
+     * @param  array<string, mixed>  $checkpoint
+     * @return array<string, mixed>
+     */
+    protected function configuredFailureRoutePlan(
+        WorkflowStep $step,
+        array $task,
+        array $checkpoint,
+    ): array {
+        if ((bool) ($checkpoint['successful'] ?? false)
+            || (bool) data_get($checkpoint, 'result.irreversibleSideEffect', false)
+            || (is_array(data_get($checkpoint, 'result.sideEffects'))
+                && data_get($checkpoint, 'result.sideEffects') !== [])) {
+            return [];
+        }
+
+        $outcome = Str::lower(trim((string) ($checkpoint['outcome'] ?? 'failed')));
+
+        if (! in_array($outcome, ['failed', 'timeout'], true)) {
+            return [];
+        }
+
+        $route = $task['on_error'] ?? data_get($task, 'status_routes.'.$outcome);
+
+        if (! is_array($route)
+            || ! $this->isValidRoute($step, $route)
+            || $this->routeLoopsToSourceTask($step, $task, $route)) {
+            return [];
+        }
+
+        $routeType = Str::lower(trim((string) ($route['type'] ?? '')));
+        $target = Str::lower(trim((string) ($route['action_key'] ?? $route['step'] ?? '')));
+
+        if ($routeType === 'fail' || $target === 'fail') {
+            return [];
+        }
+
+        return [
+            'action' => 'continue_route',
+            'task_key' => (string) ($task['key'] ?? ''),
+            'resume_checkpoint' => false,
+            'configured_route' => $route,
+            'reason' => 'Die fehlgeschlagene Task besitzt bereits eine gueltige konfigurierte Fehlerroute; sie wird vor einer unspezifischen Selektor-Probe ausgefuehrt.',
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $task
+     * @param  array<string, mixed>  $route
+     */
+    protected function routeLoopsToSourceTask(
+        WorkflowStep $step,
+        array $task,
+        array $route,
+    ): bool {
+        $type = Str::lower(trim((string) ($route['type'] ?? '')));
+        $targetStep = trim((string) ($route['action_key'] ?? $route['step'] ?? ''));
+        $targetTask = trim((string) ($route['card_key'] ?? $route['card'] ?? ''));
+
+        if ($type === '') {
+            $type = $targetTask !== '' ? 'card' : 'step';
+        }
+
+        if ($type === 'card') {
+            $sameStep = $targetStep === '' || $targetStep === $step->action_key;
+
+            return $sameStep && $targetTask === trim((string) ($task['key'] ?? ''));
+        }
+
+        return $type === 'step' && $targetStep === $step->action_key;
     }
 
     protected function selectorCandidates(

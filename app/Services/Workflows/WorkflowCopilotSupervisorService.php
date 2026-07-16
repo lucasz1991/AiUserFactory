@@ -110,6 +110,14 @@ class WorkflowCopilotSupervisorService
             return;
         }
 
+        if ($checkpoint !== []
+            && $run->status === 'waiting'
+            && $this->checkpointProcessed($session, $run, $checkpoint)) {
+            $this->recoverProcessedWaitingCheckpoint($session, $run, $checkpoint);
+
+            return;
+        }
+
         if ($run->status === 'queued') {
             $this->redispatchQueuedRunAfterResume($session, $run);
 
@@ -142,6 +150,73 @@ class WorkflowCopilotSupervisorService
             true,
         );
         $this->handleTechnicalRunFailure($session, $run);
+    }
+
+    /**
+     * A processed checkpoint must not remain attached to a waiting run. This
+     * state means a previous continuation was recorded but never committed to
+     * the run, so queue recovery must replay the continuation itself.
+     *
+     * @param  array<string, mixed>  $checkpoint
+     */
+    protected function recoverProcessedWaitingCheckpoint(
+        WorkflowCopilotSession $session,
+        WorkflowRun $run,
+        array $checkpoint,
+    ): void {
+        $context = is_array($run->context_json) ? $run->context_json : [];
+        $continuationAction = trim((string) data_get($session->state_json, 'continuation_applied_action', ''));
+        $originalTaskKey = null;
+
+        if (($checkpoint['kind'] ?? null) === 'probe'
+            || $continuationAction === 'revision_continue_after_probe') {
+            $plan = is_array($context['copilot_repair_plan'] ?? null)
+                ? $context['copilot_repair_plan']
+                : (is_array($context['copilot_probe_plan'] ?? null) ? $context['copilot_probe_plan'] : []);
+            $originalTaskKey = trim((string) ($plan['original_task_key'] ?? $plan['task_key'] ?? ''));
+
+            if ($originalTaskKey === '') {
+                $this->sessions->appendEvent(
+                    $session,
+                    'checkpoint.continuation_recovery_failed',
+                    'Der verarbeitete Probe-Checkpoint wartet weiter, aber die Original-Task der Probe fehlt.',
+                    [
+                        'workflow_run_id' => (int) $run->id,
+                        'checkpoint_id' => $this->runtimeCheckpointId($run, $checkpoint),
+                        'continuation_action' => $continuationAction,
+                    ],
+                    'queue_recovery',
+                    'error',
+                    true,
+                );
+                $this->sessions->pause(
+                    $session,
+                    'Die wartende Probe konnte ohne gespeicherte Original-Task nicht sicher fortgesetzt werden.',
+                );
+
+                return;
+            }
+        }
+
+        if (! $this->execution->resumeCopilotCheckpoint($run, $originalTaskKey)) {
+            return;
+        }
+
+        $this->sessions->appendEvent(
+            $session->fresh() ?? $session,
+            'checkpoint.continuation_recovered',
+            'Ein bereits verarbeiteter, aber weiterhin wartender Checkpoint wurde durch die Queue-Ueberwachung fortgesetzt.',
+            [
+                'workflow_run_id' => (int) $run->id,
+                'checkpoint_id' => $this->runtimeCheckpointId($run, $checkpoint),
+                'checkpoint_kind' => $checkpoint['kind'] ?? 'regular',
+                'original_task_key' => $originalTaskKey,
+                'continuation_action' => $continuationAction,
+            ],
+            'executing',
+            'warning',
+            true,
+        );
     }
 
     /**
@@ -423,8 +498,9 @@ class WorkflowCopilotSupervisorService
                 ['next_action' => (string) ($checkpoint['next_action'] ?? '')],
                 'Der Workflow wird am sicheren Task-Checkpoint fortgesetzt.',
             );
-            $this->execution->resumeCopilotCheckpoint($run);
-            $this->markContinuationApplied($session, $checkpoint, 'resume');
+            if ($this->execution->resumeCopilotCheckpoint($run)) {
+                $this->markContinuationApplied($session, $checkpoint, 'resume');
+            }
 
             return;
         }
@@ -465,8 +541,9 @@ class WorkflowCopilotSupervisorService
             (bool) ($checkpoint['successful'] ?? false) ? 'success' : 'warning',
             ! (bool) ($checkpoint['successful'] ?? false),
         );
-        $this->execution->resumeCopilotCheckpoint($run);
-        $this->markContinuationApplied($session, $checkpoint, 'verification_resume');
+        if ($this->execution->resumeCopilotCheckpoint($run)) {
+            $this->markContinuationApplied($session, $checkpoint, 'verification_resume');
+        }
     }
 
     protected function repairFailedCheckpoint(
@@ -576,13 +653,22 @@ class WorkflowCopilotSupervisorService
                 $context = is_array($run->context_json) ? $run->context_json : [];
                 $pending = is_array($context['copilot_checkpoint'] ?? null) ? $context['copilot_checkpoint'] : [];
                 $pending['next_action'] = 'complete_step';
+
+                if (is_array($plan['configured_route'] ?? null)) {
+                    $pendingResult = is_array($pending['result'] ?? null) ? $pending['result'] : [];
+                    $pendingResult['failedTaskKey'] = (string) ($plan['task_key'] ?? $checkpoint['task_key'] ?? '');
+                    $pendingResult['failed_task_key'] = $pendingResult['failedTaskKey'];
+                    $pending['result'] = $pendingResult;
+                }
+
                 $context['copilot_checkpoint'] = $pending;
                 $run->forceFill(['context_json' => $context])->save();
             }
             $this->sessions->appendEvent($session, 'repair.route_selected', $plan['reason'], $plan, 'repairing', 'info', true);
             $this->sessions->transition($session, WorkflowCopilotSession::STATUS_RUNNING, 'executing');
-            $this->execution->resumeCopilotCheckpoint($run);
-            $this->markContinuationApplied($session, $checkpoint, 'continue_route');
+            if ($this->execution->resumeCopilotCheckpoint($run)) {
+                $this->markContinuationApplied($session, $checkpoint, 'continue_route');
+            }
 
             return;
         }
@@ -880,8 +966,12 @@ class WorkflowCopilotSupervisorService
             ],
             'Die erfolgreiche Probe gilt als Task-Ausfuehrung und wird auf dem bereits veraenderten Browserzustand nicht doppelt ausgefuehrt.',
         );
+        if (! $this->execution->resumeCopilotCheckpoint($run, $originalTaskKey)) {
+            return;
+        }
+
         $this->sessions->appendEvent(
-            $session,
+            $session->fresh() ?? $session,
             'probe.committed_as_task_result',
             'Die getestete Task-Konfiguration wurde gespeichert; der Workflow setzt hinter der erfolgreichen Probe fort.',
             [
@@ -897,7 +987,6 @@ class WorkflowCopilotSupervisorService
             'success',
             true,
         );
-        $this->execution->resumeCopilotCheckpoint($run);
         $this->markContinuationApplied($session, $checkpoint, 'revision_continue_after_probe');
     }
 
@@ -937,14 +1026,22 @@ class WorkflowCopilotSupervisorService
             }
 
             $storedCheckpoint = WorkflowRunCheckpoint::query()->lockForUpdate()->findOrFail($checkpointId);
-            $revision = $storedCheckpoint->workflow_revision_id
-                ? WorkflowRevision::query()->lockForUpdate()->find($storedCheckpoint->workflow_revision_id)
-                : null;
+            $state = is_array($lockedSession->state_json) ? $lockedSession->state_json : [];
+            $revisionAlreadyApplied = ($state['revision_applied_checkpoint_id'] ?? null) === $runtimeCheckpointId;
+            $revision = null;
 
-            if ($revision
-                && ((int) $revision->workflow_id !== (int) $lockedSession->workflow_id
-                    || (int) $revision->workflow_copilot_session_id !== (int) $lockedSession->id)) {
-                throw new \RuntimeException('Der Probe-Checkpoint verweist auf eine fremde Workflow-Revision.');
+            if ($revisionAlreadyApplied) {
+                $revisionNumber = max(0, (int) ($state['revision_applied_number'] ?? 0));
+                $revision = WorkflowRevision::query()
+                    ->where('workflow_id', $lockedSession->workflow_id)
+                    ->where('workflow_copilot_session_id', $lockedSession->id)
+                    ->where('revision_number', $revisionNumber)
+                    ->lockForUpdate()
+                    ->first();
+
+                if (! $revision) {
+                    throw new \RuntimeException('Die bereits markierte Probe-Revision konnte nicht mehr geladen werden.');
+                }
             }
 
             if (! $revision) {
@@ -963,16 +1060,16 @@ class WorkflowCopilotSupervisorService
                         );
                     },
                 );
-                $storedCheckpoint->forceFill(['workflow_revision_id' => $revision->id])->save();
-
-                if ($storedCheckpoint->workflow_task_attempt_id) {
-                    WorkflowTaskAttempt::query()
-                        ->whereKey($storedCheckpoint->workflow_task_attempt_id)
-                        ->update(['workflow_revision_id' => $revision->id]);
-                }
             }
 
-            $state = is_array($lockedSession->state_json) ? $lockedSession->state_json : [];
+            $storedCheckpoint->forceFill(['workflow_revision_id' => $revision->id])->save();
+
+            if ($storedCheckpoint->workflow_task_attempt_id) {
+                WorkflowTaskAttempt::query()
+                    ->whereKey($storedCheckpoint->workflow_task_attempt_id)
+                    ->update(['workflow_revision_id' => $revision->id]);
+            }
+
             $state['revision_applied_checkpoint_id'] = $runtimeCheckpointId;
             $state['revision_applied_number'] = (int) $revision->revision_number;
             $lockedSession->forceFill([

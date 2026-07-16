@@ -99,6 +99,13 @@ class WorkflowCopilotSupervisorTest extends TestCase
         $storedContext = $session->checkpoints()->firstOrFail()->context_json;
         $this->assertNotEmpty(data_get($storedContext, 'encrypted_runtime_context'));
         $this->assertStringNotContainsString('checkpoint@example.test', json_encode($storedContext));
+        $run->refresh();
+        $dispatchedContext = $run->context_json;
+        unset($dispatchedContext['copilot_checkpoint']);
+        $run->forceFill([
+            'status' => 'running',
+            'context_json' => $dispatchedContext,
+        ])->save();
 
         $observations = Mockery::mock(WorkflowCopilotObservationService::class);
         $observations->shouldNotReceive('observe');
@@ -116,6 +123,18 @@ class WorkflowCopilotSupervisorTest extends TestCase
         $this->assertDatabaseCount('workflow_task_attempts', 1);
         $this->assertDatabaseCount('workflow_run_checkpoints', 1);
 
+        app(WorkflowRevisionService::class)->apply(
+            $session->fresh(),
+            0,
+            'Bereits vorhandene Revision vor dem erfolgreichen Probe-Ergebnis.',
+            function () use ($step): void {
+                $freshStep = WorkflowStep::query()->findOrFail($step->id);
+                $config = $freshStep->config_json;
+                $config['description'] = 'Vorhandene Basisrevision';
+                $freshStep->forceFill(['config_json' => $config])->save();
+            },
+        );
+        $session->refresh();
         $plan = data_get($session->state_json, 'active_repair_plan');
         $run->refresh();
         $context = $run->context_json;
@@ -134,7 +153,10 @@ class WorkflowCopilotSupervisorTest extends TestCase
             'started_at' => now()->subSecond()->toIso8601String(),
             'finished_at' => now()->toIso8601String(),
         ];
-        $run->forceFill(['context_json' => $context])->save();
+        $run->forceFill([
+            'status' => 'waiting',
+            'context_json' => $context,
+        ])->save();
 
         $observations = Mockery::mock(WorkflowCopilotObservationService::class);
         $observations->shouldReceive('observe')->once()->andReturn($observation);
@@ -144,8 +166,10 @@ class WorkflowCopilotSupervisorTest extends TestCase
         $execution->shouldNotReceive('retryCopilotTask');
         $execution->shouldReceive('resumeCopilotCheckpoint')
             ->once()
-            ->withArgs(fn (mixed $runArgument): bool => $runArgument instanceof WorkflowRun
-                && (int) $runArgument->getKey() === (int) $run->getKey());
+            ->withArgs(fn (mixed $runArgument, ?string $originalTaskKey): bool => $runArgument instanceof WorkflowRun
+                && (int) $runArgument->getKey() === (int) $run->getKey()
+                && $originalTaskKey === 'login-click')
+            ->andReturn(true);
         $this->app->instance(WorkflowCopilotObservationService::class, $observations);
         $this->app->instance(WorkflowCopilotVisionService::class, $visionService);
         $this->app->instance(WorkflowExecutionService::class, $execution);
@@ -153,17 +177,70 @@ class WorkflowCopilotSupervisorTest extends TestCase
         app(WorkflowCopilotSupervisorService::class)->supervise($session->id);
 
         $this->assertSame('button[type="submit"]', data_get($step->fresh()->config_json, 'tasks.0.selector'));
-        $this->assertSame(1, $workflow->fresh()->copilot_revision);
-        $this->assertSame(1, $session->fresh()->current_revision);
-        $this->assertSame(1, $run->fresh()->workflow_revision);
-        $this->assertSame(1, data_get($run->fresh()->context_json, 'workflow_revision'));
+        $this->assertSame(2, $workflow->fresh()->copilot_revision);
+        $this->assertSame(2, $session->fresh()->current_revision);
+        $this->assertSame(2, $run->fresh()->workflow_revision);
+        $this->assertSame(2, data_get($run->fresh()->context_json, 'workflow_revision'));
         $this->assertSame('runtime-probe-1', data_get($session->fresh()->state_json, 'continuation_applied_checkpoint_id'));
         $this->assertDatabaseCount('workflow_task_attempts', 2);
         $this->assertDatabaseCount('workflow_run_checkpoints', 2);
-        $this->assertDatabaseCount('workflow_revisions', 1);
+        $this->assertDatabaseCount('workflow_revisions', 2);
         $this->assertDatabaseHas('workflow_copilot_events', [
             'workflow_copilot_session_id' => $session->id,
             'event_type' => 'revision.saved',
+        ]);
+    }
+
+    public function test_processed_waiting_probe_checkpoint_is_recovered_instead_of_ignored(): void
+    {
+        [$workflow, $step] = $this->workflowWithBrokenSelector();
+        $sessions = app(WorkflowCopilotSessionService::class);
+        $session = $sessions->start($workflow, ['goal' => 'Workflow fortsetzen.']);
+        [$run] = $this->waitingRun($session, $step, [
+            'id' => 'processed-waiting-probe',
+            'kind' => 'probe',
+            'workflow_step_id' => $step->id,
+            'workflow_step_name' => $step->name,
+            'task_key' => 'login-click--copilot-probe',
+            'task_title' => 'Login klicken (Copilot-Probe)',
+            'successful' => true,
+            'outcome' => 'success',
+            'next_action' => 'repair',
+            'result' => ['ok' => true, 'statusMessage' => 'Probe erfolgreich.'],
+        ]);
+        $context = $run->context_json;
+        $context['copilot_repair_plan'] = [
+            'action' => 'probe_update',
+            'task_key' => 'login-click',
+            'original_task_key' => 'login-click',
+        ];
+        $run->forceFill(['context_json' => $context])->save();
+        $session = $sessions->attachRun($session, $run);
+        $state = $session->state_json;
+        $state['continuation_applied_checkpoint_id'] = 'processed-waiting-probe';
+        $state['continuation_applied_action'] = 'revision_continue_after_probe';
+        $session->forceFill(['state_json' => $state])->save();
+
+        $observations = Mockery::mock(WorkflowCopilotObservationService::class);
+        $observations->shouldNotReceive('observe');
+        $visionService = Mockery::mock(WorkflowCopilotVisionService::class);
+        $visionService->shouldNotReceive('analyze');
+        $execution = Mockery::mock(WorkflowExecutionService::class);
+        $execution->shouldReceive('resumeCopilotCheckpoint')
+            ->once()
+            ->withArgs(fn (mixed $runArgument, ?string $originalTaskKey): bool => $runArgument instanceof WorkflowRun
+                && (int) $runArgument->id === (int) $run->id
+                && $originalTaskKey === 'login-click')
+            ->andReturn(true);
+        $this->app->instance(WorkflowCopilotObservationService::class, $observations);
+        $this->app->instance(WorkflowCopilotVisionService::class, $visionService);
+        $this->app->instance(WorkflowExecutionService::class, $execution);
+
+        app(WorkflowCopilotSupervisorService::class)->supervise($session->id);
+
+        $this->assertDatabaseHas('workflow_copilot_events', [
+            'workflow_copilot_session_id' => $session->id,
+            'event_type' => 'checkpoint.continuation_recovered',
         ]);
     }
 
@@ -777,7 +854,7 @@ class WorkflowCopilotSupervisorTest extends TestCase
         $visionService = Mockery::mock(WorkflowCopilotVisionService::class);
         $visionService->shouldNotReceive('analyze');
         $execution = Mockery::mock(WorkflowExecutionService::class);
-        $execution->shouldReceive('resumeCopilotCheckpoint')->once();
+        $execution->shouldReceive('resumeCopilotCheckpoint')->once()->andReturn(true);
         $this->app->instance(WorkflowCopilotObservationService::class, $observations);
         $this->app->instance(WorkflowCopilotVisionService::class, $visionService);
         $this->app->instance(WorkflowExecutionService::class, $execution);
@@ -802,7 +879,7 @@ class WorkflowCopilotSupervisorTest extends TestCase
         $visionService = Mockery::mock(WorkflowCopilotVisionService::class);
         $visionService->shouldReceive('analyze')->once()->andReturn($this->visionResult('continue'));
         $execution = Mockery::mock(WorkflowExecutionService::class);
-        $execution->shouldReceive('resumeCopilotCheckpoint')->once();
+        $execution->shouldReceive('resumeCopilotCheckpoint')->once()->andReturn(true);
         $this->app->instance(WorkflowCopilotObservationService::class, $observations);
         $this->app->instance(WorkflowCopilotVisionService::class, $visionService);
         $this->app->instance(WorkflowExecutionService::class, $execution);
