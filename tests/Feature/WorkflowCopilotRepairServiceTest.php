@@ -539,6 +539,152 @@ class WorkflowCopilotRepairServiceTest extends TestCase
         $this->assertStringContainsString('nicht verfuegbar', $plan['reason']);
     }
 
+    public function test_blank_page_repairs_the_route_to_existing_navigation_and_then_continues_it(): void
+    {
+        [$workflow, $step] = $this->workflowWithTasks([[
+            'key' => 'wait-results',
+            'task_key' => 'wait.selector',
+            'title' => 'Auf Ergebnisse warten',
+            'selector' => '#search',
+        ]]);
+        $navigationStep = $workflow->steps()->create([
+            'name' => 'Startseite',
+            'type' => WorkflowStep::TYPE_BROWSER_CONTROL,
+            'action_key' => 'open-homepage',
+            'position' => 20,
+            'is_enabled' => true,
+            'config_json' => ['tasks' => [[
+                'key' => 'open-google',
+                'task_key' => 'browser.open_url',
+                'title' => 'Google oeffnen',
+                'url' => 'https://www.google.com',
+            ]]],
+        ]);
+        $session = app(WorkflowCopilotSessionService::class)->start($workflow, [
+            'goal' => 'Google-Suche erfolgreich abschliessen.',
+        ]);
+        $ai = Mockery::mock(AiConnectionService::class);
+        $ai->shouldReceive('json')->twice()->andReturn([
+            'action' => 'pause',
+            'reason' => 'Auf der leeren Seite ist kein Element sichtbar.',
+        ]);
+        $this->app->instance(AiConnectionService::class, $ai);
+        $service = app(WorkflowCopilotRepairService::class);
+        $checkpoint = [
+            'task_key' => 'wait-results',
+            'outcome' => 'timeout',
+            'result' => ['statusMessage' => 'Timeout'],
+        ];
+        $observation = [
+            'page' => ['url' => 'about:blank', 'state' => 'unknown_browser_state'],
+            'interaction_map' => [],
+        ];
+        $vision = [
+            'confidence' => 0,
+            'verdict' => 'pause',
+            'safe_pause' => true,
+            'suggested_task_actions' => [],
+        ];
+
+        $plan = $service->plan($session, $step, $checkpoint, $observation, $vision);
+
+        $this->assertSame('restart_with_workflow_changes', $plan['action']);
+        $this->assertSame('update_step_routes', data_get($plan, 'operations.0.type'));
+        $this->assertSame('open-homepage', data_get($plan, 'operations.0.routes.failed.step'));
+        $this->assertSame('open-homepage', data_get($plan, 'operations.0.routes.timeout.step'));
+
+        $service->applyStructuralOperations($workflow->fresh(), $plan['operations'], $session->fresh(), $observation);
+        $this->assertSame('open-homepage', data_get($step->fresh()->config_json, 'routes.timeout.step'));
+
+        $continued = $service->plan($session->fresh(), $step->fresh(), $checkpoint, $observation, $vision);
+
+        $this->assertSame('continue_route', $continued['action']);
+        $this->assertStringContainsString('Navigationsliste', $continued['reason']);
+        $this->assertSame($navigationStep->id, $workflow->steps()->where('action_key', 'open-homepage')->value('id'));
+    }
+
+    public function test_structural_planner_can_insert_only_a_catalog_bound_non_visual_task(): void
+    {
+        [$workflow, $step] = $this->workflowWithTasks([[
+            'key' => 'find-results',
+            'task_key' => 'browser.find_element',
+            'title' => 'Ergebnisse finden',
+            'selector' => '#search',
+        ]]);
+        $session = app(WorkflowCopilotSessionService::class)->start($workflow, [
+            'goal' => 'Google-Suche erfolgreich abschliessen.',
+        ]);
+        $ai = Mockery::mock(AiConnectionService::class);
+        $ai->shouldReceive('json')
+            ->once()
+            ->withArgs(fn (string $prompt, ?string $system, array $options): bool => str_contains($prompt, 'workflow_structure')
+                && str_contains($prompt, 'workflow_task_catalog')
+                && str_contains((string) $system, 'Datenanalyse- und Planungsmodell')
+                && str_contains((string) $system, 'Bildverstehen-Modell')
+                && data_get($options, 'max_completion_tokens') === 2200)
+            ->andReturn([
+                'action' => 'structural_update',
+                'reason' => 'Vor der Ergebnispruefung fehlt die Navigation.',
+                'operations' => [[
+                    'type' => 'insert_task',
+                    'step_action_key' => 'start',
+                    'task_catalog_key' => 'browser.open_url',
+                    'title' => 'Google oeffnen',
+                    'description' => 'Oeffnet die bereits vertrauenswuerdige Zielseite.',
+                    'parameters' => [
+                        'url' => 'https://www.google.com',
+                        'browser_window' => 'main',
+                    ],
+                    'insert_position' => 0,
+                ], [
+                    'type' => 'insert_task',
+                    'step_action_key' => 'start',
+                    'task_catalog_key' => 'browser.click',
+                    'title' => 'Unsicher klicken',
+                    'parameters' => ['selector' => '#danger'],
+                    'insert_position' => 1,
+                ]],
+            ]);
+        $this->app->instance(AiConnectionService::class, $ai);
+        $service = app(WorkflowCopilotRepairService::class);
+
+        $plan = $service->plan(
+            $session,
+            $step,
+            ['task_key' => 'find-results', 'outcome' => 'failed'],
+            [
+                'page' => ['url' => 'https://www.google.com', 'state' => 'content'],
+                'interaction_map' => [],
+            ],
+            [
+                'confidence' => 0,
+                'verdict' => 'pause',
+                'safe_pause' => true,
+                'model' => 'vision/model-test',
+                'analysis_source' => 'vision',
+            ],
+        );
+
+        $this->assertSame('restart_with_workflow_changes', $plan['action']);
+        $this->assertCount(1, $plan['operations']);
+        $this->assertSame('browser.open_url', data_get($plan, 'operations.0.task_catalog_key'));
+        $this->assertSame('https://www.google.com', data_get($plan, 'operations.0.parameters.url'));
+        $this->assertArrayNotHasKey('browser_window', data_get($plan, 'operations.0.parameters'));
+        $this->assertSame('image_understanding', data_get($plan, 'planning_handoff.vision_profile'));
+        $this->assertSame('vision/model-test', data_get($plan, 'planning_handoff.vision_model'));
+        $this->assertSame('data_analysis', data_get($plan, 'planning_handoff.planner_profile'));
+
+        $service->applyStructuralOperations($workflow->fresh(), $plan['operations'], $session->fresh(), [
+            'page' => ['url' => 'https://www.google.com'],
+        ]);
+
+        $tasks = $step->fresh()->task_cards;
+        $this->assertSame('browser.open_url', data_get($tasks, '0.task_key'));
+        $this->assertSame('https://www.google.com', data_get($tasks, '0.url'));
+        $this->assertSame('browser.find_element', data_get($tasks, '1.task_key'));
+        $this->assertNotContains('browser.click', collect($tasks)->pluck('task_key')->all());
+    }
+
     public function test_url_repairs_block_private_metadata_and_cross_workflow_hosts(): void
     {
         [, $step] = $this->workflowWithTasks([[

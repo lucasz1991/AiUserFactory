@@ -468,6 +468,88 @@ class WorkflowCopilotSupervisorService
             return;
         }
 
+        if ($plan['action'] === 'restart_with_workflow_changes') {
+            $operations = is_array($plan['operations'] ?? null) ? $plan['operations'] : [];
+            $recordedSideEffects = $this->recordedRunSideEffects($session, $run);
+
+            if ($operations === []) {
+                $this->sessions->pause($session, 'Die strukturelle Reparatur enthielt keine gueltige Workflow-Aenderung.');
+
+                return;
+            }
+
+            if ($recordedSideEffects !== []) {
+                $this->sessions->appendEvent(
+                    $session,
+                    'repair.restart_blocked_after_side_effect',
+                    'Der Workflow wird nach der Strukturreparatur nicht automatisch neu gestartet, weil der aktuelle Lauf bereits externe Wirkungen protokolliert hat.',
+                    [
+                        'workflow_run_id' => (int) $run->id,
+                        'side_effect_ledger' => $recordedSideEffects,
+                        'external_side_effects_reverted' => false,
+                    ],
+                    'repairing',
+                    'warning',
+                    true,
+                );
+                $this->sessions->pause($session, 'Ein automatischer Neustart koennte bereits ausgefuehrte externe Wirkungen wiederholen.');
+
+                return;
+            }
+
+            try {
+                $revision = $this->revisions->apply(
+                    $session,
+                    (int) $session->current_revision,
+                    (string) ($plan['reason'] ?? 'Kataloggebundene strukturelle Workflow-Reparatur.'),
+                    function (Workflow $workflow) use ($operations, $session, $observation): void {
+                        $this->repairs->applyStructuralOperations($workflow, $operations, $session, $observation);
+                    },
+                );
+            } catch (Throwable $exception) {
+                $message = Str::limit(trim($exception->getMessage()), 1000, '') ?: 'Die strukturelle Workflow-Reparatur konnte nicht gespeichert werden.';
+                $this->sessions->appendEvent(
+                    $session,
+                    'repair.structural_update_failed',
+                    $message,
+                    ['operation_count' => count($operations)],
+                    'repairing',
+                    'error',
+                    true,
+                );
+                $this->sessions->pause($session, 'Die validierte Strukturreparatur konnte nicht revisioniert gespeichert werden.');
+
+                return;
+            }
+
+            $this->sessions->appendEvent(
+                $session->fresh() ?? $session,
+                'repair.structural_update_applied',
+                'Fehlende oder falsch geroutete Workflow-Logik wurde als Revision gespeichert; der naechste Test startet von Anfang an.',
+                [
+                    'workflow_run_id' => (int) $run->id,
+                    'workflow_revision_id' => (int) $revision->id,
+                    'revision_number' => (int) $revision->revision_number,
+                    'operation_count' => count($operations),
+                    'operations' => $operations,
+                    'planning_handoff' => is_array($plan['planning_handoff'] ?? null)
+                        ? $plan['planning_handoff']
+                        : [
+                            'vision_profile' => 'image_understanding',
+                            'vision_model' => $vision['model'] ?? null,
+                            'planner_profile' => 'data_analysis',
+                        ],
+                ],
+                'repairing',
+                'success',
+                true,
+            );
+            $this->execution->cancel($run, 'Copilot startet nach einer strukturellen Workflow-Reparatur einen frischen Testlauf.');
+            $this->startRepairRun($session->fresh() ?? $session);
+
+            return;
+        }
+
         if ($plan['action'] !== 'probe_update') {
             $this->sessions->appendEvent(
                 $session,
@@ -828,6 +910,33 @@ class WorkflowCopilotSupervisorService
             'info',
             true,
         );
+    }
+
+    protected function recordedRunSideEffects(
+        WorkflowCopilotSession $session,
+        WorkflowRun $run,
+    ): array {
+        return WorkflowRunCheckpoint::query()
+            ->where('workflow_copilot_session_id', $session->id)
+            ->where('workflow_run_id', $run->id)
+            ->orderBy('sequence')
+            ->get(['id', 'sequence', 'side_effect_ledger_json'])
+            ->flatMap(function (WorkflowRunCheckpoint $checkpoint): array {
+                $ledger = is_array($checkpoint->side_effect_ledger_json)
+                    ? $checkpoint->side_effect_ledger_json
+                    : [];
+
+                return collect($ledger)
+                    ->filter(fn (mixed $entry): bool => is_array($entry))
+                    ->map(fn (array $entry): array => [
+                        'checkpoint_id' => (int) $checkpoint->id,
+                        'checkpoint_sequence' => (int) $checkpoint->sequence,
+                        ...$entry,
+                    ])
+                    ->all();
+            })
+            ->values()
+            ->all();
     }
 
     protected function startVerification(WorkflowCopilotSession $session, WorkflowRun $repairRun): void

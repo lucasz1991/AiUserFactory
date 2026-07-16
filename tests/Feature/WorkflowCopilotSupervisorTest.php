@@ -11,6 +11,7 @@ use App\Models\WorkflowStep;
 use App\Models\WorkflowStepRun;
 use App\Services\Ai\WorkflowCopilotVisionService;
 use App\Services\Workflows\WorkflowCopilotObservationService;
+use App\Services\Workflows\WorkflowCopilotRepairService;
 use App\Services\Workflows\WorkflowCopilotSessionService;
 use App\Services\Workflows\WorkflowCopilotSupervisorService;
 use App\Services\Workflows\WorkflowExecutionService;
@@ -163,6 +164,103 @@ class WorkflowCopilotSupervisorTest extends TestCase
             'workflow_copilot_session_id' => $session->id,
             'event_type' => 'revision.saved',
         ]);
+    }
+
+    public function test_structural_repair_is_versioned_and_restarts_the_workflow_from_the_beginning(): void
+    {
+        [$workflow, $step] = $this->workflowWithBrokenSelector();
+        $sessions = app(WorkflowCopilotSessionService::class);
+        $session = $sessions->start($workflow, [
+            'goal' => 'Login erfolgreich abschliessen.',
+            'budget' => ['max_repair_iterations' => 3],
+        ]);
+        [$run] = $this->waitingRun($session, $step, [
+            'id' => 'runtime-structure-failure-1',
+            'kind' => 'regular',
+            'workflow_step_id' => $step->id,
+            'workflow_step_name' => $step->name,
+            'task_key' => 'login-click',
+            'task_title' => 'Login klicken',
+            'successful' => false,
+            'outcome' => 'failed',
+            'next_action' => 'repair',
+            'result' => ['ok' => false, 'statusMessage' => 'Vorausgehende Navigation fehlt.'],
+        ]);
+        $session = $sessions->attachRun($session, $run);
+        $newRun = WorkflowRun::query()->create([
+            'run_uuid' => (string) str()->uuid(),
+            'workflow_id' => $workflow->id,
+            'workflow_copilot_session_id' => $session->id,
+            'workflow_revision' => 1,
+            'status' => 'queued',
+            'context_json' => ['execution_target' => 'system', 'workflow_revision' => 1],
+            'result_json' => [],
+        ]);
+        $observation = $this->observation();
+        $vision = $this->visionResult('pause');
+        $observations = Mockery::mock(WorkflowCopilotObservationService::class);
+        $observations->shouldReceive('observe')->once()->andReturn($observation);
+        $visionService = Mockery::mock(WorkflowCopilotVisionService::class);
+        $visionService->shouldReceive('analyze')->once()->andReturn($vision);
+        $repairs = Mockery::mock(WorkflowCopilotRepairService::class);
+        $repairs->shouldReceive('plan')->once()->andReturn([
+            'action' => 'restart_with_workflow_changes',
+            'task_key' => 'login-click',
+            'reason' => 'Die Fehlerroute muss die vorhandene Navigation erreichen.',
+            'operations' => [[
+                'type' => 'update_step_routes',
+                'step_action_key' => 'login',
+                'routes' => [
+                    'failed' => ['type' => 'step', 'step' => 'login', 'action_key' => 'login'],
+                ],
+            ]],
+        ]);
+        $repairs->shouldReceive('applyStructuralOperations')
+            ->once()
+            ->withArgs(function (Workflow $lockedWorkflow, array $operations, WorkflowCopilotSession $owningSession, array $structuralObservation): bool {
+                $lockedStep = $lockedWorkflow->steps()->where('action_key', 'login')->firstOrFail();
+                $config = is_array($lockedStep->config_json) ? $lockedStep->config_json : [];
+                $config['routes']['failed'] = data_get($operations, '0.routes.failed');
+                $lockedStep->forceFill(['config_json' => $config])->save();
+
+                return (int) $owningSession->workflow_id === (int) $lockedWorkflow->id
+                    && data_get($structuralObservation, 'page.url') === 'https://example.test/login';
+            });
+        $execution = Mockery::mock(WorkflowExecutionService::class);
+        $execution->shouldReceive('cancel')
+            ->once()
+            ->withArgs(fn (mixed $runArgument, string $message): bool => $runArgument instanceof WorkflowRun
+                && (int) $runArgument->id === (int) $run->id
+                && str_contains($message, 'strukturellen Workflow-Reparatur'))
+            ->andReturn(['ok' => true]);
+        $execution->shouldReceive('start')
+            ->once()
+            ->withArgs(fn (Workflow $startedWorkflow, array $context, string $source): bool => (int) $startedWorkflow->id === (int) $workflow->id
+                && data_get($context, 'workflow_revision') === 1
+                && data_get($context, 'execution_target') === 'system'
+                && $source === 'workflow-copilot')
+            ->andReturn($newRun);
+        $this->app->instance(WorkflowCopilotObservationService::class, $observations);
+        $this->app->instance(WorkflowCopilotVisionService::class, $visionService);
+        $this->app->instance(WorkflowCopilotRepairService::class, $repairs);
+        $this->app->instance(WorkflowExecutionService::class, $execution);
+
+        app(WorkflowCopilotSupervisorService::class)->supervise($session->id);
+
+        $session->refresh();
+        $this->assertSame(WorkflowCopilotSession::STATUS_RUNNING, $session->status);
+        $this->assertSame(1, $session->current_revision);
+        $this->assertSame($newRun->id, (int) $session->active_workflow_run_id);
+        $this->assertSame('login', data_get($step->fresh()->config_json, 'routes.failed.step'));
+        $this->assertDatabaseCount('workflow_revisions', 1);
+        $this->assertDatabaseHas('workflow_copilot_events', [
+            'workflow_copilot_session_id' => $session->id,
+            'event_type' => 'repair.structural_update_applied',
+        ]);
+        $this->assertSame(1, data_get($session->usage_json, 'repair_iterations'));
+        $structuralEvent = $session->events()->where('event_type', 'repair.structural_update_applied')->firstOrFail();
+        $this->assertSame('image_understanding', data_get($structuralEvent->payload_json, 'planning_handoff.vision_profile'));
+        $this->assertSame('data_analysis', data_get($structuralEvent->payload_json, 'planning_handoff.planner_profile'));
     }
 
     public function test_completed_verification_marks_revision_verified_and_unlocks_workflow(): void
