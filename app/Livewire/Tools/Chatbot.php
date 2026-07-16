@@ -29,6 +29,8 @@ class Chatbot extends Component
 
     private const COPILOT_CLEARED_SEQUENCES_KEY = 'ai_user_factory_workflow_copilot_cleared_sequences';
 
+    private const COPILOT_ACTIVITY_STALE_AFTER_SECONDS = 120;
+
     public string $message = '';
 
     public array $chatHistory = [];
@@ -1093,7 +1095,107 @@ class Chatbot extends Component
             'remaining_minutes' => max(0, $maxMinutes - $elapsedMinutes),
             'started_at' => optional($session->started_at)->format('d.m.Y H:i:s'),
             'finished_at' => optional($session->finished_at)->format('d.m.Y H:i:s'),
+            'activity' => $this->copilotActivityPayload($session, $state),
             'verification_report' => $this->copilotVerificationReport($session, $state),
+        ];
+    }
+
+    private function copilotActivityPayload(WorkflowCopilotSession $session, array $state): ?array
+    {
+        if (! $this->isCopilotSessionActive($session)
+            || (string) $session->status === WorkflowCopilotSession::STATUS_PAUSED) {
+            return null;
+        }
+
+        $events = $session->events()
+            ->reorder()
+            ->orderByDesc('sequence')
+            ->limit(60)
+            ->get();
+        $lastProgressEvent = $events->first(function ($event): bool {
+            $eventType = Str::lower(trim((string) ($event->event_type ?? '')));
+
+            return $eventType !== ''
+                && ! Str::startsWith($eventType, ['queue.', 'chat.']);
+        });
+        $latestEventType = Str::lower(trim((string) ($lastProgressEvent?->event_type ?? '')));
+        $phase = Str::lower(trim((string) ($lastProgressEvent?->phase ?? $session->phase ?? data_get($state, 'phase', ''))));
+        $activePlan = is_array($state['active_repair_plan'] ?? null) ? $state['active_repair_plan'] : [];
+        $continuationAction = Str::lower(trim((string) ($state['continuation_applied_action'] ?? '')));
+        $probePending = ($activePlan['action'] ?? null) === 'probe_update' && $continuationAction === 'probe';
+        $kind = 'workflow_test';
+        $label = 'Workflow-Test laeuft';
+        $startEventTypes = ['task.started', 'run.started', 'task.scheduled', 'session.started'];
+
+        if ($probePending) {
+            $kind = 'browser_probe';
+            $label = 'Browser-Probe wird ausgefuehrt';
+            $startEventTypes = ['checkpoint.probe_recovered', 'probe.started'];
+        } elseif ($latestEventType === 'vision.analysis_started') {
+            $kind = 'image_analysis';
+            $label = 'Bildanalyse laeuft';
+            $startEventTypes = ['vision.analysis_started'];
+        } elseif ($latestEventType === 'observation.started') {
+            $kind = 'browser_analysis';
+            $label = 'Screenshot und DOM werden analysiert';
+            $startEventTypes = ['observation.started'];
+        } elseif ($latestEventType === 'repair.analysis_started' || $phase === 'visual_analysis') {
+            $kind = 'repair_analysis';
+            $label = 'Workflow-Reparatur wird geplant';
+            $startEventTypes = ['repair.analysis_started'];
+        } elseif ((string) $session->status === WorkflowCopilotSession::STATUS_VERIFYING
+            || Str::contains($phase, 'verification')) {
+            $kind = 'verification';
+            $label = 'Abschlusspruefung laeuft';
+            $startEventTypes = ['verification.started', 'vision.analysis_started', 'run.started'];
+        } elseif ((string) $session->status === WorkflowCopilotSession::STATUS_REPAIRING
+            || Str::contains($phase, 'repair')) {
+            $kind = 'repair';
+            $label = 'Workflow-Reparatur laeuft';
+            $startEventTypes = ['repair.analysis_started', 'repair.decision_planned', 'checkpoint.review_pause'];
+        }
+
+        $startedEvent = $events->first(
+            fn ($event): bool => in_array(
+                Str::lower(trim((string) ($event->event_type ?? ''))),
+                $startEventTypes,
+                true,
+            ),
+        );
+        $startedAt = $startedEvent?->occurred_at
+            ?? $startedEvent?->created_at
+            ?? $lastProgressEvent?->occurred_at
+            ?? $lastProgressEvent?->created_at
+            ?? $session->last_activity_at
+            ?? $session->started_at;
+        $lastProgressAt = $lastProgressEvent?->occurred_at
+            ?? $lastProgressEvent?->created_at
+            ?? $session->last_activity_at
+            ?? $session->started_at;
+        $staleSeconds = $lastProgressAt
+            ? max(0, (int) $lastProgressAt->diffInSeconds(now()))
+            : 0;
+        $taskTitle = trim((string) data_get($state, 'current_task_title', ''));
+        $taskKey = trim((string) data_get($state, 'current_task_key', data_get($state, 'cursor.task_key', '')));
+        $detail = $this->sanitizeAssistantText((string) ($lastProgressEvent?->message ?? ''));
+
+        if ($probePending && filled($activePlan['task_catalog_key'] ?? null)) {
+            $detail = 'Probe-Tool: '.trim((string) $activePlan['task_catalog_key']);
+        } elseif ($detail === '' && ($taskTitle !== '' || $taskKey !== '')) {
+            $detail = 'Aktueller Task: '.($taskTitle ?: $taskKey);
+        }
+
+        return [
+            'active' => true,
+            'kind' => $kind,
+            'label' => $label,
+            'detail' => $detail,
+            'started_at' => optional($startedAt)->toIso8601String(),
+            'last_progress_at' => optional($lastProgressAt)->toIso8601String(),
+            'elapsed_seconds' => $startedAt ? max(0, (int) $startedAt->diffInSeconds(now())) : 0,
+            'stale' => $staleSeconds >= self::COPILOT_ACTIVITY_STALE_AFTER_SECONDS,
+            'stale_seconds' => $staleSeconds,
+            'stale_after_seconds' => self::COPILOT_ACTIVITY_STALE_AFTER_SECONDS,
         ];
     }
 

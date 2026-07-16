@@ -96,6 +96,14 @@ class WorkflowCopilotSupervisorTest extends TestCase
         $this->assertDatabaseCount('workflow_task_attempts', 1);
         $this->assertDatabaseCount('workflow_run_checkpoints', 1);
         $this->assertDatabaseCount('workflow_revisions', 0);
+        $this->assertDatabaseHas('workflow_copilot_events', [
+            'workflow_copilot_session_id' => $session->id,
+            'event_type' => 'observation.started',
+        ]);
+        $this->assertDatabaseHas('workflow_copilot_events', [
+            'workflow_copilot_session_id' => $session->id,
+            'event_type' => 'vision.analysis_started',
+        ]);
         $evidenceEvent = $session->events()->where('event_type', 'repair.evidence_evaluated')->firstOrFail();
         $decisionEvent = $session->events()->where('event_type', 'repair.decision_planned')->firstOrFail();
         $this->assertSame('login_form', data_get($evidenceEvent->payload_json, 'vision.ui_state'));
@@ -245,6 +253,73 @@ class WorkflowCopilotSupervisorTest extends TestCase
         app(WorkflowCopilotSupervisorService::class)->supervise($session->id);
 
         $this->assertDatabaseHas('workflow_copilot_events', [
+            'workflow_copilot_session_id' => $session->id,
+            'event_type' => 'checkpoint.continuation_recovered',
+        ]);
+    }
+
+    public function test_processed_waiting_failure_checkpoint_restarts_an_orphaned_probe(): void
+    {
+        [$workflow, $step] = $this->workflowWithBrokenSelector();
+        $sessions = app(WorkflowCopilotSessionService::class);
+        $session = $sessions->start($workflow, ['goal' => 'Workflow fortsetzen.']);
+        $checkpoint = [
+            'id' => 'orphaned-probe-source-checkpoint',
+            'kind' => 'regular',
+            'workflow_step_id' => $step->id,
+            'workflow_step_name' => $step->name,
+            'task_key' => 'login-click',
+            'task_title' => 'Login klicken',
+            'successful' => false,
+            'outcome' => 'failed',
+            'next_action' => 'repair',
+            'result' => ['ok' => false, 'statusMessage' => 'Externer Lauf konnte nicht gelesen werden.'],
+        ];
+        [$run] = $this->waitingRun($session, $step, $checkpoint);
+        $session = $sessions->attachRun($session, $run);
+        $probeTask = [
+            'key' => 'login-click--copilot-probe',
+            'task_key' => 'browser.click',
+            'title' => 'Login klicken (Copilot-Probe)',
+            'selector' => 'button[type="submit"]',
+        ];
+        $plan = [
+            'action' => 'probe_update',
+            'task_key' => 'login-click',
+            'original_task_key' => 'login-click',
+            'task_catalog_key' => 'browser.click',
+            'probe_task' => $probeTask,
+        ];
+        $state = $session->state_json;
+        $state['continuation_applied_checkpoint_id'] = $checkpoint['id'];
+        $state['continuation_applied_action'] = 'probe';
+        $state['active_repair_plan'] = $plan;
+        $session->forceFill(['state_json' => $state])->save();
+
+        $observations = Mockery::mock(WorkflowCopilotObservationService::class);
+        $observations->shouldNotReceive('observe');
+        $visionService = Mockery::mock(WorkflowCopilotVisionService::class);
+        $visionService->shouldNotReceive('analyze');
+        $execution = Mockery::mock(WorkflowExecutionService::class);
+        $execution->shouldReceive('retryCopilotTask')
+            ->once()
+            ->withArgs(fn (mixed $runArgument, string $taskKey, ?array $transientTask, array $repairPlan): bool => $runArgument instanceof WorkflowRun
+                && (int) $runArgument->id === (int) $run->id
+                && $taskKey === 'login-click'
+                && $transientTask === $probeTask
+                && $repairPlan === $plan);
+        $execution->shouldNotReceive('resumeCopilotCheckpoint');
+        $this->app->instance(WorkflowCopilotObservationService::class, $observations);
+        $this->app->instance(WorkflowCopilotVisionService::class, $visionService);
+        $this->app->instance(WorkflowExecutionService::class, $execution);
+
+        app(WorkflowCopilotSupervisorService::class)->supervise($session->id);
+
+        $this->assertDatabaseHas('workflow_copilot_events', [
+            'workflow_copilot_session_id' => $session->id,
+            'event_type' => 'checkpoint.probe_recovered',
+        ]);
+        $this->assertDatabaseMissing('workflow_copilot_events', [
             'workflow_copilot_session_id' => $session->id,
             'event_type' => 'checkpoint.continuation_recovered',
         ]);

@@ -517,6 +517,12 @@ class WorkflowExecutionService
             return;
         }
 
+        if ($this->isWaitingAtCopilotCheckpoint($stepRun)) {
+            // The supervisor owns a held checkpoint. Delayed monitor jobs must
+            // not reinterpret a cleared external run id as a second failure.
+            return;
+        }
+
         $isClientControllerStep = in_array($stepRun->external_run_type, ['client-controller-workflow-task', 'client-controller-workflow-run'], true);
 
         if (! $isClientControllerStep && $this->stepRunTimedOut($stepRun)) {

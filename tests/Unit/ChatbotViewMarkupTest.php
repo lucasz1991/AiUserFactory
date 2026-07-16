@@ -78,8 +78,18 @@ class ChatbotViewMarkupTest extends TestCase
         $this->assertStringContainsString('workflow-copilot-docked', $source);
         $this->assertStringContainsString('desktopDocked()', $definition);
         $this->assertStringContainsString('syncDockLayout()', $definition);
+        $this->assertStringContainsString('observeAssistantStatusStream()', $definition);
+        $this->assertStringContainsString('assistantActivityRunning()', $definition);
+        $this->assertStringContainsString('copilotActivityRunning()', $definition);
+        $this->assertStringContainsString('copilotActivityIsStale()', $definition);
+        $this->assertStringContainsString('activityElapsed(value)', $definition);
         $this->assertStringContainsString('xl:hidden', $source);
         $this->assertStringContainsString('xl:w-[30rem]', $source);
         $this->assertStringContainsString('data-workflow-copilot-completed-state', $source);
+        $this->assertStringContainsString('data-assistant-active-work', $source);
+        $this->assertStringContainsString('data-assistant-activity-timer', $source);
+        $this->assertStringContainsString('data-copilot-activity-timer', $source);
+        $this->assertStringContainsString('Keine Statusaenderung seit', $source);
+        $this->assertStringContainsString('<template x-if="assistantActivityRunning() || copilotActivityRunning()">', $source);
     }
 }

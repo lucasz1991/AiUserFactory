@@ -498,6 +498,29 @@ class WorkflowCopilotExecutionInvariantTest extends TestCase
         $this->assertSame($firstId, data_get($stepRun->fresh()->result_json, 'copilotCheckpointId'));
     }
 
+    public function test_delayed_monitor_does_not_replace_a_held_checkpoint_after_the_external_id_was_cleared(): void
+    {
+        Queue::fake();
+        [$workflow, $step] = $this->workflow();
+        $session = app(WorkflowCopilotSessionService::class)->start($workflow);
+        $run = app(WorkflowExecutionService::class)->start($workflow, [
+            'workflow_copilot_session_id' => $session->id,
+            'copilot_supervised' => true,
+        ], 'workflow-copilot');
+        $stepRun = $this->putRunAtCheckpoint($run, $step, 'first-task');
+        $stepRun->forceFill([
+            'external_run_type' => null,
+            'external_run_id' => null,
+        ])->save();
+
+        app(WorkflowExecutionService::class)->monitorStepRun($stepRun->id);
+
+        $this->assertSame('checkpoint-first-task', data_get($run->fresh()->context_json, 'copilot_checkpoint.id'));
+        $this->assertSame('waiting', $stepRun->fresh()->status);
+        $this->assertDatabaseCount('workflow_task_attempts', 0);
+        $this->assertDatabaseCount('workflow_run_checkpoints', 0);
+    }
+
     public function test_system_copilot_run_always_captures_observation_artifacts_without_dev_mode(): void
     {
         Queue::fake();

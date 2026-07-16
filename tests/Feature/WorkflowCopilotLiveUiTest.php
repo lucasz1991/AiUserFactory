@@ -14,6 +14,7 @@ use App\Services\Ai\AiConnectionService;
 use App\Services\Ai\WorkflowCopilotAiUsageTracker;
 use App\Services\Workflows\WorkflowCopilotSessionService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 use Livewire\Livewire;
 use Tests\TestCase;
@@ -363,6 +364,60 @@ class WorkflowCopilotLiveUiTest extends TestCase
         Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
             ->assertSet('activeCopilotSessionId', $active->id)
             ->assertSet('copilotStatus.active', true);
+    }
+
+    public function test_chatbot_projects_a_stale_running_probe_with_elapsed_activity_metadata(): void
+    {
+        $workflow = $this->workflow('copilot-stale-probe-activity');
+        $service = app(WorkflowCopilotSessionService::class);
+        $session = $service->start($workflow);
+        $event = $service->appendEvent(
+            $session,
+            'probe.started',
+            'Browser-Probe wurde gestartet.',
+            ['task_catalog_key' => 'browser.click'],
+            'probing',
+            'info',
+            true,
+        );
+        DB::table('workflow_copilot_events')
+            ->where('id', $event->id)
+            ->update([
+                'occurred_at' => now()->subMinutes(4),
+                'created_at' => now()->subMinutes(4),
+            ]);
+        $state = $session->fresh()->state_json;
+        $state['current_task_key'] = 'search-submit';
+        $state['continuation_applied_action'] = 'probe';
+        $state['active_repair_plan'] = [
+            'action' => 'probe_update',
+            'task_key' => 'search-submit',
+            'task_catalog_key' => 'browser.click',
+            'probe_task' => [
+                'key' => 'search-submit--copilot-probe',
+                'task_key' => 'browser.click',
+            ],
+        ];
+        $session->forceFill([
+            'status' => WorkflowCopilotSession::STATUS_REPAIRING,
+            'phase' => 'probing',
+            'state_json' => $state,
+            'last_activity_at' => now()->subMinutes(4),
+        ])->save();
+
+        session()->flush();
+
+        $component = Livewire::test(Chatbot::class)
+            ->call('updatePageContext', ['workflow_id' => $workflow->id])
+            ->assertSet('activeCopilotSessionId', $session->id)
+            ->assertSet('copilotStatus.activity.active', true)
+            ->assertSet('copilotStatus.activity.kind', 'browser_probe')
+            ->assertSet('copilotStatus.activity.label', 'Browser-Probe wird ausgefuehrt')
+            ->assertSet('copilotStatus.activity.detail', 'Probe-Tool: browser.click');
+        $activity = $component->get('copilotStatus')['activity'];
+
+        $this->assertTrue((bool) $activity['stale'], json_encode($activity, JSON_PRETTY_PRINT));
+        $this->assertGreaterThanOrEqual(240, (int) $activity['stale_seconds']);
     }
 
     public function test_manager_cancels_the_active_run_before_stopping_the_session(): void

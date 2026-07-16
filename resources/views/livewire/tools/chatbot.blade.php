@@ -6,8 +6,14 @@
         isLoading: @entangle('isLoading'),
         chatHistory: @entangle('chatHistory'),
         toolEvents: @entangle('toolEvents'),
+        copilotStatus: @entangle('copilotStatus'),
         submitting: false,
         pendingLabel: '',
+        assistantActivityStartedAt: null,
+        assistantActivityLabelText: 'AI-Anfrage wird vorbereitet.',
+        activityClock: Date.now(),
+        activityTimer: null,
+        assistantStatusObserver: null,
         selectedChatOptions: {},
         showImportPanel: false,
         voiceSupported: false,
@@ -74,7 +80,10 @@
             this.lastAssistantMessageKey = this.latestAssistantMessageKey(this.chatHistory);
             this.knownAssistantMessageKeys = this.assistantMessageKeys(this.chatHistory);
             this.workflowImprovements = this.latestWorkflowImprovements(this.chatHistory);
-            this._reapplyImprovementHighlights = () => this.queueImprovementHighlights();
+            this._reapplyImprovementHighlights = () => {
+                this.queueImprovementHighlights();
+                this.$nextTick(() => this.observeAssistantStatusStream());
+            };
             this._syncCopilotDockLayout = () => {
                 this.syncDockLayout();
                 this.scrollMessages(false);
@@ -91,7 +100,15 @@
                 this.syncWorkflowImprovementsFromHistory(history);
                 this.scrollMessages(false);
             });
-            this.$watch('isLoading', () => this.scrollMessages(false));
+            this.$watch('isLoading', (loading) => {
+                if (loading) {
+                    this.startAssistantActivity('AI-Anfrage wird verarbeitet.');
+                } else {
+                    this.finishAssistantActivityIfIdle();
+                }
+                this.scrollMessages(false);
+            });
+            this.$watch('copilotStatus', () => this.scrollMessages(false));
             this.$watch('autoRead', (enabled) => {
                 localStorage.setItem('workflow-copilot-auto-read', enabled ? '1' : '0');
                 if (!enabled) this.stopSpeaking();
@@ -102,10 +119,14 @@
                 if (!supported) this.clearVoiceCaptureState();
             });
             this.scheduleToolAlerts(this.toolEvents);
+            this.activityTimer = window.setInterval(() => {
+                this.activityClock = Date.now();
+            }, 1000);
             this.$nextTick(() => {
                 this.syncDockLayout();
                 window.setTimeout(() => this.syncContext(), 0);
                 this.observeMessages();
+                this.observeAssistantStatusStream();
                 this.scrollMessages(false);
                 this.queueImprovementHighlights();
             });
@@ -122,6 +143,10 @@
             this.messageObserver = null;
             this.messageResizeObserver?.disconnect();
             this.messageResizeObserver = null;
+            this.assistantStatusObserver?.disconnect();
+            this.assistantStatusObserver = null;
+            window.clearInterval(this.activityTimer);
+            this.activityTimer = null;
             this.stopSpeaking();
         },
         readBool(key, fallback) {
@@ -157,6 +182,86 @@
         },
         busy() {
             return this.submitting || this.isLoading || this.voiceUploading;
+        },
+        startAssistantActivity(label = 'AI-Anfrage wird vorbereitet.') {
+            this.assistantActivityStartedAt = this.assistantActivityStartedAt || Date.now();
+            this.assistantActivityLabelText = String(label || 'AI-Anfrage wird vorbereitet.');
+            this.activityClock = Date.now();
+        },
+        finishAssistantActivityIfIdle() {
+            if (this.busy()) return;
+            this.assistantActivityStartedAt = null;
+            this.assistantActivityLabelText = 'AI-Anfrage wird vorbereitet.';
+        },
+        assistantActivityRunning() {
+            return this.busy() && Boolean(this.assistantActivityStartedAt);
+        },
+        assistantActivityLabel() {
+            if (this.voiceUploading) return 'Audioaufnahme wird analysiert.';
+            return String(this.assistantActivityLabelText || 'AI-Anfrage wird verarbeitet.');
+        },
+        assistantActivityKind() {
+            return this.voiceUploading ? 'Audioanalyse' : 'AI-Anfrage / Tool';
+        },
+        observeAssistantStatusStream() {
+            const status = this.$refs.assistantStatusStream;
+            if (!status || !window.MutationObserver) return;
+
+            this.assistantStatusObserver?.disconnect();
+            const update = () => {
+                const label = String(status.textContent || '').trim();
+                if (label) this.assistantActivityLabelText = label;
+            };
+            this.assistantStatusObserver = new MutationObserver(update);
+            this.assistantStatusObserver.observe(status, {
+                childList: true,
+                subtree: true,
+                characterData: true,
+            });
+            update();
+        },
+        copilotActivity() {
+            const activity = this.copilotStatus && typeof this.copilotStatus === 'object'
+                ? this.copilotStatus.activity
+                : null;
+            return activity && typeof activity === 'object' ? activity : null;
+        },
+        copilotActivityRunning() {
+            const activity = this.copilotActivity();
+            return Boolean(activity?.active && this.copilotStatus?.active && !this.copilotStatus?.paused);
+        },
+        activityTimestamp(value) {
+            if (typeof value === 'number') return value;
+            const parsed = Date.parse(String(value || ''));
+            return Number.isFinite(parsed) ? parsed : null;
+        },
+        activitySecondsSince(value) {
+            const timestamp = this.activityTimestamp(value);
+            if (timestamp === null) return 0;
+            return Math.max(0, Math.floor((this.activityClock - timestamp) / 1000));
+        },
+        activityElapsed(value) {
+            const seconds = this.activitySecondsSince(value);
+            if (seconds < 60) return `${seconds} Sek.`;
+
+            const minutes = Math.floor(seconds / 60);
+            const remainingSeconds = seconds % 60;
+            if (minutes < 60) return `${minutes} Min. ${remainingSeconds} Sek.`;
+
+            const hours = Math.floor(minutes / 60);
+            return `${hours} Std. ${minutes % 60} Min.`;
+        },
+        copilotActivityIsStale() {
+            const activity = this.copilotActivity();
+            if (!activity) return false;
+            const threshold = Math.max(1, Number(activity.stale_after_seconds || 120));
+            return Boolean(activity.stale) || this.activitySecondsSince(activity.last_progress_at) >= threshold;
+        },
+        copilotActivityStaleLabel() {
+            const activity = this.copilotActivity();
+            return activity
+                ? `Keine Statusaenderung seit ${this.activityElapsed(activity.last_progress_at)}`
+                : '';
         },
         collectContext(extra = {}) {
             const path = window.location.pathname;
@@ -238,6 +343,7 @@
 
             this.submitting = true;
             this.pendingLabel = outgoing;
+            this.startAssistantActivity('Kontext wird geprueft und die Anfrage vorbereitet.');
             this.draft = '';
             this.resizeComposer();
             this.scrollMessages();
@@ -248,6 +354,7 @@
             } finally {
                 this.submitting = false;
                 this.pendingLabel = '';
+                this.finishAssistantActivityIfIdle();
                 this.resizeComposer();
                 this.scrollMessages();
             }
@@ -257,6 +364,7 @@
             this.setOpen(true);
             this.submitting = true;
             this.pendingLabel = prompt;
+            this.startAssistantActivity('Kontext wird geprueft und die Anfrage vorbereitet.');
             this.draft = '';
             this.scrollMessages();
 
@@ -266,6 +374,7 @@
             } finally {
                 this.submitting = false;
                 this.pendingLabel = '';
+                this.finishAssistantActivityIfIdle();
                 this.resizeComposer();
                 this.scrollMessages();
             }
@@ -292,6 +401,7 @@
             };
             this.submitting = true;
             this.pendingLabel = option?.prompt || option?.label || 'Auswahl wird gesendet.';
+            this.startAssistantActivity('Die ausgewaehlte Antwort wird verarbeitet.');
             this.scrollMessages();
 
             try {
@@ -304,6 +414,7 @@
                 this.selectedChatOptions = remainingSelections;
                 this.submitting = false;
                 this.pendingLabel = '';
+                this.finishAssistantActivityIfIdle();
                 this.resizeComposer();
                 this.scrollMessages();
             }
@@ -759,6 +870,7 @@
             }
 
             this.voiceUploading = true;
+            this.startAssistantActivity('Audioaufnahme wird analysiert.');
             this.ttsError = '';
 
             try {
@@ -796,6 +908,7 @@
                 this.ttsError = `Spracheingabe: ${this.ttsErrorMessage(error)}`;
             } finally {
                 this.voiceUploading = false;
+                this.finishAssistantActivityIfIdle();
             }
         },
         releaseRecordedMediaStream() {
@@ -1731,7 +1844,7 @@
                                         <span class="h-1.5 w-1.5 animate-bounce rounded-full bg-emerald-500"></span>
                                     </span>
                                 </div>
-                                <p wire:stream="assistant-status-stream" class="mt-1 text-xs leading-5 text-slate-500">Kontext wird geprueft und passende Werkzeuge werden vorbereitet.</p>
+                                <p x-ref="assistantStatusStream" wire:stream="assistant-status-stream" class="mt-1 text-xs leading-5 text-slate-500">Kontext wird geprueft und passende Werkzeuge werden vorbereitet.</p>
                             </div>
                         </div>
                         <div class="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-100">
@@ -1740,6 +1853,68 @@
                         <p wire:stream="assistant-response-stream" class="mt-3 whitespace-pre-line border-t border-cyan-100 pt-3 text-sm leading-6 text-slate-700 [&:empty]:hidden"></p>
                     </div>
                 </div>
+
+                <template x-if="assistantActivityRunning() || copilotActivityRunning()">
+                    <div
+                        data-assistant-active-work
+                        class="shrink-0 border-t border-slate-200 bg-slate-950 px-3 py-2 text-white shadow-[0_-8px_24px_rgba(15,23,42,.16)]"
+                        role="status"
+                        aria-live="polite"
+                    >
+                        <div class="space-y-2">
+                            <template x-if="assistantActivityRunning()">
+                                <div class="flex items-center gap-2.5">
+                                    <span class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-cyan-500/20 text-cyan-200">
+                                        <svg class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                            <circle class="opacity-30" cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3"></circle>
+                                            <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round"></path>
+                                        </svg>
+                                    </span>
+                                    <div class="min-w-0 flex-1">
+                                        <p class="text-[10px] font-bold uppercase tracking-[.12em] text-cyan-200" x-text="assistantActivityKind()"></p>
+                                        <p class="truncate text-xs font-semibold text-white" x-text="assistantActivityLabel()"></p>
+                                    </div>
+                                    <span
+                                        data-assistant-activity-timer
+                                        class="shrink-0 rounded-md bg-white/10 px-2 py-1 text-[10px] font-bold tabular-nums text-slate-100"
+                                        x-text="activityElapsed(assistantActivityStartedAt)"
+                                    ></span>
+                                </div>
+                            </template>
+
+                            <template x-if="copilotActivityRunning()">
+                                <div
+                                    class="flex items-center gap-2.5 rounded-lg border px-2.5 py-2"
+                                    :class="copilotActivityIsStale() ? 'border-amber-400/50 bg-amber-400/10' : 'border-white/10 bg-white/5'"
+                                >
+                                    <span
+                                        class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg"
+                                        :class="copilotActivityIsStale() ? 'bg-amber-400/20 text-amber-200' : 'bg-emerald-400/20 text-emerald-200'"
+                                    >
+                                        <svg class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                            <circle class="opacity-30" cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3"></circle>
+                                            <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round"></path>
+                                        </svg>
+                                    </span>
+                                    <div class="min-w-0 flex-1">
+                                        <p class="truncate text-xs font-bold text-white" x-text="copilotActivity()?.label || 'Workflow-Copilot arbeitet'"></p>
+                                        <template x-if="copilotActivity()?.detail">
+                                            <p class="truncate text-[10px] text-slate-300" x-text="copilotActivity().detail"></p>
+                                        </template>
+                                        <template x-if="copilotActivityIsStale()">
+                                            <p class="mt-0.5 text-[10px] font-bold text-amber-200" x-text="copilotActivityStaleLabel()"></p>
+                                        </template>
+                                    </div>
+                                    <span
+                                        data-copilot-activity-timer
+                                        class="shrink-0 rounded-md bg-white/10 px-2 py-1 text-[10px] font-bold tabular-nums text-slate-100"
+                                        x-text="activityElapsed(copilotActivity()?.started_at)"
+                                    ></span>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                </template>
 
                 <footer class="shrink-0 border-t border-slate-200 bg-white p-3">
                     <form x-on:submit.prevent="send()" class="overflow-hidden rounded-2xl border bg-white shadow-sm transition focus-within:border-cyan-400 focus-within:ring-4 focus-within:ring-cyan-100" :class="voiceSupported && (voiceCaptureActive || voiceUploading) ? 'border-rose-300 ring-4 ring-rose-100' : 'border-slate-300'">

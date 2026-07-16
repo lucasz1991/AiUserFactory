@@ -168,6 +168,57 @@ class WorkflowCopilotSupervisorService
         $continuationAction = trim((string) data_get($session->state_json, 'continuation_applied_action', ''));
         $originalTaskKey = null;
 
+        if ($continuationAction === 'probe') {
+            $plan = is_array(data_get($session->state_json, 'active_repair_plan'))
+                ? data_get($session->state_json, 'active_repair_plan')
+                : (is_array($context['copilot_repair_plan'] ?? null) ? $context['copilot_repair_plan'] : []);
+            $taskKey = trim((string) ($plan['task_key'] ?? ''));
+            $probeTask = is_array($plan['probe_task'] ?? null) ? $plan['probe_task'] : [];
+
+            if (($plan['action'] ?? null) !== 'probe_update' || $taskKey === '' || $probeTask === []) {
+                $this->sessions->appendEvent(
+                    $session,
+                    'checkpoint.probe_recovery_failed',
+                    'Die als gestartet markierte Probe wartet weiterhin am alten Checkpoint, aber ihr gespeicherter Reparaturplan ist unvollstaendig.',
+                    [
+                        'workflow_run_id' => (int) $run->id,
+                        'checkpoint_id' => $this->runtimeCheckpointId($run, $checkpoint),
+                        'continuation_action' => $continuationAction,
+                        'has_probe_task' => $probeTask !== [],
+                        'task_key' => $taskKey ?: null,
+                    ],
+                    'queue_recovery',
+                    'error',
+                    true,
+                );
+                $this->sessions->pause(
+                    $session,
+                    'Die verwaiste Browser-Probe konnte ohne vollstaendigen Reparaturplan nicht sicher neu gestartet werden.',
+                );
+
+                return;
+            }
+
+            $this->execution->retryCopilotTask($run, $taskKey, $probeTask, $plan);
+            $this->sessions->appendEvent(
+                $session->fresh() ?? $session,
+                'checkpoint.probe_recovered',
+                'Eine als gestartet markierte, aber nicht ausgefuehrte Browser-Probe wurde mit ihrer gespeicherten Task-Konfiguration erneut eingeplant.',
+                [
+                    'workflow_run_id' => (int) $run->id,
+                    'checkpoint_id' => $this->runtimeCheckpointId($run, $checkpoint),
+                    'task_key' => $taskKey,
+                    'task_catalog_key' => $plan['task_catalog_key'] ?? null,
+                    'continuation_action' => $continuationAction,
+                ],
+                'probing',
+                'warning',
+                true,
+            );
+
+            return;
+        }
+
         if (($checkpoint['kind'] ?? null) === 'probe'
             || $continuationAction === 'revision_continue_after_probe') {
             $plan = is_array($context['copilot_repair_plan'] ?? null)
@@ -350,6 +401,21 @@ class WorkflowCopilotSupervisorService
             return;
         }
 
+        $this->sessions->appendEvent(
+            $session,
+            'observation.started',
+            'Aktueller Browserzustand, Screenshot und DOM werden fuer den sicheren Checkpoint erfasst.',
+            [
+                'workflow_run_id' => (int) $run->id,
+                'workflow_step_run_id' => (int) $stepRun->id,
+                'task_key' => $checkpoint['task_key'] ?? null,
+                'checkpoint_kind' => $checkpoint['kind'] ?? 'regular',
+            ],
+            'observing',
+            'info',
+            false,
+        );
+        $session = $session->fresh() ?? $session;
         $observation = $this->observations->observe($run, $stepRun);
         $vision = [];
         $runContext = is_array($run->context_json) ? $run->context_json : [];
@@ -367,6 +433,22 @@ class WorkflowCopilotSupervisorService
             || ($stateSignature !== '' && $stateSignature === $previousStateSignature);
 
         if ($shouldAnalyze) {
+            $this->sessions->appendEvent(
+                $session,
+                'vision.analysis_started',
+                'Die Bildanalyse des aktuellen Browserzustands laeuft.',
+                [
+                    'workflow_run_id' => (int) $run->id,
+                    'workflow_step_run_id' => (int) $stepRun->id,
+                    'task_key' => $checkpoint['task_key'] ?? null,
+                    'analysis_purpose' => $isVerificationCheckpoint ? 'verification_vision' : 'checkpoint_vision',
+                    'screenshot_artifact_id' => data_get($observation, 'screenshot.artifact_id'),
+                ],
+                $isVerificationCheckpoint ? 'verification_vision' : 'visual_analysis',
+                'info',
+                false,
+            );
+            $session = $session->fresh() ?? $session;
             $vision = $this->captureCopilotAiUsage(
                 $session,
                 fn (): array => $this->vision->analyze($observation, (string) $session->goal),
