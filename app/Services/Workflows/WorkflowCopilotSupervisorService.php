@@ -12,6 +12,7 @@ use App\Models\WorkflowRun;
 use App\Models\WorkflowRunCheckpoint;
 use App\Models\WorkflowStep;
 use App\Models\WorkflowTaskAttempt;
+use App\Services\Ai\WorkflowCopilotAiUsageTracker;
 use App\Services\Ai\WorkflowCopilotVisionService;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Arr;
@@ -33,6 +34,7 @@ class WorkflowCopilotSupervisorService
         protected WorkflowCopilotVisionService $vision,
         protected WorkflowCopilotRepairService $repairs,
         protected WorkflowRevisionService $revisions,
+        protected WorkflowCopilotAiUsageTracker $aiUsage,
     ) {}
 
     public function supervise(int $sessionId): void
@@ -285,11 +287,16 @@ class WorkflowCopilotSupervisorService
             || (string) ($checkpoint['kind'] ?? '') === 'probe'
             || $isVerificationCheckpoint
             || (bool) ($observation['screenshot_changed'] ?? false)
+            || str_ends_with($pageState, '_blocked')
             || in_array($pageState, ['', 'unknown', 'unknown_browser_state'], true)
             || ($stateSignature !== '' && $stateSignature === $previousStateSignature);
 
         if ($shouldAnalyze) {
-            $vision = $this->vision->analyze($observation, (string) $session->goal);
+            $vision = $this->captureCopilotAiUsage(
+                $session,
+                fn (): array => $this->vision->analyze($observation, (string) $session->goal),
+                $isVerificationCheckpoint ? 'verification_vision' : 'checkpoint_vision',
+            );
         }
 
         [$attempt, $storedCheckpoint] = $this->storeCheckpoint(
@@ -317,6 +324,14 @@ class WorkflowCopilotSupervisorService
             'observing',
         );
 
+        $session = $session->fresh() ?? $session;
+
+        if ($this->costBudgetReached($session)) {
+            $this->exhaustBudget($session);
+
+            return;
+        }
+
         if ($isVerificationCheckpoint) {
             $this->processVerificationCheckpoint($session, $run, $checkpoint, $attempt->id, $storedCheckpoint->id, $vision);
 
@@ -325,6 +340,45 @@ class WorkflowCopilotSupervisorService
 
         if ((string) ($checkpoint['kind'] ?? '') === 'probe') {
             $this->processProbeResult($session->fresh() ?? $session, $run->fresh() ?? $run, $stepRun->workflowStep, $checkpoint, $observation, $vision);
+
+            return;
+        }
+
+        $resolvedPageState = Str::lower(trim((string) data_get($vision, 'ui_state', $pageState)));
+
+        if ((bool) ($checkpoint['successful'] ?? false) && str_contains($resolvedPageState, 'consent')) {
+            $this->sessions->appendEvent(
+                $session,
+                'checkpoint.consent_blocked',
+                'Die Task war technisch erfolgreich, der aktuelle Bildschirm bleibt jedoch durch einen sichtbaren Consent-Dialog blockiert.',
+                [
+                    'workflow_run_id' => (int) $run->id,
+                    'task_attempt_id' => (int) $attempt->id,
+                    'checkpoint_id' => (int) $storedCheckpoint->id,
+                    'task_key' => $checkpoint['task_key'] ?? null,
+                    'page_state' => $resolvedPageState,
+                    'technical_success' => true,
+                    'requires_workflow_repair' => true,
+                ],
+                'repairing',
+                'warning',
+                true,
+            );
+            $blockedCheckpoint = $checkpoint;
+            $blockedCheckpoint['successful'] = false;
+            $blockedCheckpoint['outcome'] = 'blocked';
+            $blockedResult = is_array($blockedCheckpoint['result'] ?? null) ? $blockedCheckpoint['result'] : [];
+            $blockedResult['technicalSuccess'] = true;
+            $blockedResult['statusMessage'] = 'Task technisch erfolgreich, Seite weiterhin durch Consent-Banner blockiert.';
+            $blockedCheckpoint['result'] = $blockedResult;
+            $this->repairFailedCheckpoint(
+                $session->fresh() ?? $session,
+                $run->fresh() ?? $run,
+                $stepRun->workflowStep,
+                $blockedCheckpoint,
+                $observation,
+                $vision,
+            );
 
             return;
         }
@@ -504,14 +558,27 @@ class WorkflowCopilotSupervisorService
         }
 
         $rejectedSelectors = is_array($state['rejected_selectors'] ?? null) ? $state['rejected_selectors'] : [];
-        $plan = $this->repairs->plan($session, $step, $checkpoint, $observation, $vision, $rejectedSelectors);
+        $plan = $this->captureCopilotAiUsage(
+            $session,
+            fn (): array => $this->repairs->plan($session, $step, $checkpoint, $observation, $vision, $rejectedSelectors),
+            'repair_planning',
+        );
+        $session = $session->fresh() ?? $session;
+
+        if ($this->costBudgetReached($session)) {
+            $this->exhaustBudget($session);
+
+            return;
+        }
 
         if ($plan['action'] === 'continue_route') {
-            $context = is_array($run->context_json) ? $run->context_json : [];
-            $pending = is_array($context['copilot_checkpoint'] ?? null) ? $context['copilot_checkpoint'] : [];
-            $pending['next_action'] = 'complete_step';
-            $context['copilot_checkpoint'] = $pending;
-            $run->forceFill(['context_json' => $context])->save();
+            if (! (bool) ($plan['resume_checkpoint'] ?? false)) {
+                $context = is_array($run->context_json) ? $run->context_json : [];
+                $pending = is_array($context['copilot_checkpoint'] ?? null) ? $context['copilot_checkpoint'] : [];
+                $pending['next_action'] = 'complete_step';
+                $context['copilot_checkpoint'] = $pending;
+                $run->forceFill(['context_json' => $context])->save();
+            }
             $this->sessions->appendEvent($session, 'repair.route_selected', $plan['reason'], $plan, 'repairing', 'info', true);
             $this->sessions->transition($session, WorkflowCopilotSession::STATUS_RUNNING, 'executing');
             $this->execution->resumeCopilotCheckpoint($run);
@@ -563,8 +630,13 @@ class WorkflowCopilotSupervisorService
                     $session,
                     (int) $session->current_revision,
                     (string) ($plan['reason'] ?? 'Kataloggebundene strukturelle Workflow-Reparatur.'),
-                    function (Workflow $workflow) use ($operations, $session, $observation): void {
-                        $this->repairs->applyStructuralOperations($workflow, $operations, $session, $observation);
+                    function (Workflow $workflow) use ($operations, $session, $observation, $checkpoint): void {
+                        $this->repairs->applyStructuralOperations(
+                            $workflow,
+                            $operations,
+                            $session,
+                            array_replace($observation, ['copilot_checkpoint' => $checkpoint]),
+                        );
                     },
                 );
             } catch (Throwable $exception) {
@@ -2243,6 +2315,24 @@ class WorkflowCopilotSupervisorService
         );
     }
 
+    protected function captureCopilotAiUsage(
+        WorkflowCopilotSession $session,
+        callable $callback,
+        string $source,
+    ): mixed {
+        $this->aiUsage->beginCapture();
+
+        try {
+            return $callback();
+        } finally {
+            $records = $this->aiUsage->finishCapture();
+
+            if ($records !== []) {
+                $this->sessions->recordAiUsage($session, $records, $source);
+            }
+        }
+    }
+
     /**
      * Sicherheitsnetz im Steady-State: greift bewusst erst OBERHALB des Limits
      * (`>`), damit eine Sitzung nach der letzten erlaubten Iteration noch ihre
@@ -2256,6 +2346,7 @@ class WorkflowCopilotSupervisorService
         $usage = is_array($session->usage_json) ? $session->usage_json : [];
 
         return $this->timeBudgetExceeded($session)
+            || $this->costBudgetReached($session)
             || (int) ($usage['repair_iterations'] ?? 0) > max(1, (int) ($budget['max_repair_iterations'] ?? 15))
             || (int) ($usage['probe_actions'] ?? 0) > max(1, (int) ($budget['max_probe_actions'] ?? 60))
             || (int) ($usage['same_state_repeats'] ?? 0) > max(1, (int) ($budget['max_same_state_repeats'] ?? 2));
@@ -2267,6 +2358,7 @@ class WorkflowCopilotSupervisorService
         $usage = is_array($session->usage_json) ? $session->usage_json : [];
 
         return $this->timeBudgetExceeded($session)
+            || $this->costBudgetReached($session)
             || (int) ($usage['repair_iterations'] ?? 0) >= max(1, (int) ($budget['max_repair_iterations'] ?? 15))
             || (int) ($usage['same_state_repeats'] ?? 0) >= max(1, (int) ($budget['max_same_state_repeats'] ?? 2));
     }
@@ -2277,7 +2369,17 @@ class WorkflowCopilotSupervisorService
         $usage = is_array($session->usage_json) ? $session->usage_json : [];
 
         return $this->timeBudgetExceeded($session)
+            || $this->costBudgetReached($session)
             || (int) ($usage['probe_actions'] ?? 0) >= max(1, (int) ($budget['max_probe_actions'] ?? 60));
+    }
+
+    protected function costBudgetReached(WorkflowCopilotSession $session): bool
+    {
+        $budget = is_array($session->budget_json) ? $session->budget_json : [];
+        $usage = is_array($session->usage_json) ? $session->usage_json : [];
+        $maximum = max(0, (float) ($budget['max_cost_usd'] ?? 0));
+
+        return $maximum > 0 && max(0, (float) ($usage['cost_usd'] ?? 0)) >= $maximum;
     }
 
     protected function timeBudgetExceeded(WorkflowCopilotSession $session): bool

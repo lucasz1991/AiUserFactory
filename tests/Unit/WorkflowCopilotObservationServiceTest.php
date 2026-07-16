@@ -215,6 +215,52 @@ HTML);
         );
     }
 
+    public function test_visible_consent_actions_are_prioritized_before_the_interaction_limit(): void
+    {
+        $elements = [];
+
+        for ($index = 0; $index < 120; $index++) {
+            $elements[] = [
+                'tag' => 'a',
+                'text' => 'Navigation '.$index,
+                'selector' => 'a[data-index="'.$index.'"]',
+                'visible' => true,
+                'enabled' => true,
+            ];
+        }
+
+        $elements[] = [
+            'tag' => 'button',
+            'text' => 'Alle akzeptieren',
+            'selector' => 'button:has-text("Alle akzeptieren")',
+            'visible' => true,
+            'enabled' => true,
+        ];
+        $elements[] = [
+            'tag' => 'button',
+            'text' => 'Alle ablehnen',
+            'selector' => 'button:has-text("Alle ablehnen")',
+            'visible' => true,
+            'enabled' => true,
+        ];
+
+        $run = (new WorkflowRun)->forceFill([
+            'id' => 5,
+            'result_json' => ['interaction_map' => $elements],
+        ]);
+        $run->setRelation('stepRuns', collect());
+        $run->setRelation('artifacts', collect());
+
+        $observation = (new WorkflowCopilotObservationService(Mockery::mock(WorkflowDebugArtifactService::class)))->observe($run);
+
+        $this->assertCount(WorkflowCopilotObservationService::MAX_ELEMENTS, $observation['interaction_map']);
+        $this->assertSame('Alle ablehnen', data_get($observation, 'interaction_map.0.text'));
+        $this->assertSame('button:has-text("Alle ablehnen")', data_get($observation, 'interaction_map.0.selector_candidates.0'));
+        $this->assertTrue(collect($observation['interaction_map'])->contains(
+            fn (array $element): bool => ($element['text'] ?? null) === 'Alle akzeptieren',
+        ));
+    }
+
     public function test_element_reference_stays_stable_when_text_changes_but_selector_does_not(): void
     {
         $run = (new WorkflowRun)->forceFill([

@@ -26,8 +26,10 @@ class WorkflowCopilotUiMarkupTest extends TestCase
         $this->assertStringContainsString('wire:click="openCopilotChat"', $view);
         $this->assertStringContainsString('wire:click="restartCopilotOptimization"', $view);
         $this->assertStringContainsString('wire:click="downloadCopilotOptimizationLog"', $view);
+        $this->assertStringContainsString('wire:model="showCopilotRunsModal"', $view);
+        $this->assertStringContainsString('admin.network.workflow-copilot-runs', $view);
         $this->assertStringContainsString(':interactive-aside="true"', $view);
-        $this->assertSame(3, substr_count($view, ':interactive-aside="true"'));
+        $this->assertSame(4, substr_count($view, ':interactive-aside="true"'));
         $this->assertStringContainsString('data-workflow-copilot-completed-state', $view);
         $this->assertStringContainsString('Autonome Aktionen sind freigegeben', $view);
         $this->assertStringContainsString('@disabled(! $copilotAutoExecute)', $view);
@@ -51,10 +53,12 @@ class WorkflowCopilotUiMarkupTest extends TestCase
         $this->assertStringContainsString('assistantCopilotMaxRepairIterations', $view);
         $this->assertStringContainsString('assistantCopilotMaxProbeActions', $view);
         $this->assertStringContainsString('assistantCopilotMaxSameStateRepeats', $view);
+        $this->assertStringContainsString('assistantCopilotMaxCostUsd', $view);
         $this->assertStringContainsString('assistantCopilotAutoExecute', $view);
         $this->assertStringContainsString('nie Client', $view);
         $this->assertStringContainsString("'vision_fallback_models'", $component);
         $this->assertStringContainsString("'optimization_defaults'", $component);
+        $this->assertStringContainsString("'max_cost_usd'", $component);
         $this->assertStringContainsString("'auto_execute_workflow_actions'", $component);
     }
 }

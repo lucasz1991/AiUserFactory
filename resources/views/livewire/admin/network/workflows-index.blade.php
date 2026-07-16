@@ -16,6 +16,7 @@
                     <div x-cloak x-show="open" x-transition x-on:click.outside="open = false" class="absolute right-0 z-50 mt-2 w-56 rounded-lg border border-slate-200 bg-white p-1.5 shadow-xl">
                         <button type="button" wire:click="$set('showCreateWorkflowModal', true)" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-100">Neuer Workflow</button>
                         <button type="button" wire:click="$set('showImportWorkflowModal', true)" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-blue-700 hover:bg-blue-50">Workflows importieren</button>
+                        <button type="button" wire:click="$set('showCopilotRunsModal', true)" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-cyan-800 hover:bg-cyan-50">Copilot-Optimierungslaeufe</button>
                     </div>
                 </div>
 
@@ -328,6 +329,18 @@
             <button type="button" wire:click="importWorkflows" wire:loading.attr="disabled" wire:target="workflowImportFile,importWorkflows" class="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:opacity-50">
                 Importieren
             </button>
+        </x-slot>
+    </x-dialog-modal>
+
+    <x-dialog-modal wire:model="showCopilotRunsModal" maxWidth="7xl" :interactive-aside="true">
+        <x-slot name="title">Copilot-Optimierungslaeufe aller Workflows</x-slot>
+        <x-slot name="content">
+            @if($showCopilotRunsModal)
+                @livewire('admin.network.workflow-copilot-runs', [], key('workflow-copilot-runs-all'))
+            @endif
+        </x-slot>
+        <x-slot name="footer">
+            <button type="button" x-on:click="$dispatch('close')" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">Schliessen</button>
         </x-slot>
     </x-dialog-modal>
 </div>

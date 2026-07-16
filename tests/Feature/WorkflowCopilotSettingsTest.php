@@ -27,6 +27,7 @@ class WorkflowCopilotSettingsTest extends TestCase
             ->set('assistantCopilotMaxRepairIterations', 20)
             ->set('assistantCopilotMaxProbeActions', 75)
             ->set('assistantCopilotMaxSameStateRepeats', 3)
+            ->set('assistantCopilotMaxCostUsd', 12.5)
             ->set('assistantCopilotAutoExecute', false)
             ->call('saveAssistant')
             ->assertHasNoErrors();
@@ -42,6 +43,7 @@ class WorkflowCopilotSettingsTest extends TestCase
             'max_repair_iterations' => 20,
             'max_probe_actions' => 75,
             'max_same_state_repeats' => 3,
+            'max_cost_usd' => 12.5,
             'auto_execute_workflow_actions' => false,
         ], $settings['optimization_defaults']);
     }

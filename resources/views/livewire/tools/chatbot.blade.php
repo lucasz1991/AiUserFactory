@@ -37,9 +37,11 @@
         speaking: false,
         speakingIndex: null,
         lastAssistantMessageKey: null,
+        knownAssistantMessageKeys: [],
         toolAlertTimers: {},
         refreshTimer: null,
         messageObserver: null,
+        messageResizeObserver: null,
         messageScrollTimers: [],
         workflowImprovements: [],
         improvementRefreshTimer: null,
@@ -70,9 +72,13 @@
             this.voiceSupported = this.voiceProviderSupported();
             this.speechSupported = Boolean(this.ttsEndpoint && window.fetch && window.Audio && window.URL);
             this.lastAssistantMessageKey = this.latestAssistantMessageKey(this.chatHistory);
+            this.knownAssistantMessageKeys = this.assistantMessageKeys(this.chatHistory);
             this.workflowImprovements = this.latestWorkflowImprovements(this.chatHistory);
             this._reapplyImprovementHighlights = () => this.queueImprovementHighlights();
-            this._syncCopilotDockLayout = () => this.syncDockLayout();
+            this._syncCopilotDockLayout = () => {
+                this.syncDockLayout();
+                this.scrollMessages(false);
+            };
             document.addEventListener('livewire:updated', this._reapplyImprovementHighlights);
             document.addEventListener('livewire:navigated', this._reapplyImprovementHighlights);
             window.addEventListener('resize', this._syncCopilotDockLayout);
@@ -81,15 +87,11 @@
                 this.syncDockLayout();
             });
             this.$watch('chatHistory', (history) => {
-                this.handleNewAssistantMessage(history);
+                this.handleNewAssistantMessages(history);
                 this.syncWorkflowImprovementsFromHistory(history);
-                this.scrollMessages();
+                this.scrollMessages(false);
             });
-            this.$watch('isLoading', (loading) => {
-                if (loading) {
-                    this.stopSpeaking();
-                }
-            });
+            this.$watch('isLoading', () => this.scrollMessages(false));
             this.$watch('autoRead', (enabled) => {
                 localStorage.setItem('workflow-copilot-auto-read', enabled ? '1' : '0');
                 if (!enabled) this.stopSpeaking();
@@ -118,6 +120,9 @@
             this.messageScrollTimers = [];
             this.messageObserver?.disconnect();
             this.messageObserver = null;
+            this.messageResizeObserver?.disconnect();
+            this.messageResizeObserver = null;
+            this.stopSpeaking();
         },
         readBool(key, fallback) {
             const stored = localStorage.getItem(key);
@@ -179,30 +184,51 @@
             this.$nextTick(() => {
                 const messages = this.$refs.messages;
                 if (!messages) return;
-                messages.scrollTo({ top: messages.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
-                this.messageScrollTimers = [80, 250, 600].map((delay) => window.setTimeout(() => {
+
+                const pinToBottom = () => {
                     const current = this.$refs.messages;
                     if (current) current.scrollTop = current.scrollHeight;
-                }, delay));
+                };
+
+                pinToBottom();
+                window.requestAnimationFrame(() => {
+                    pinToBottom();
+                    window.requestAnimationFrame(pinToBottom);
+                });
+                this.messageScrollTimers = [40, 100, 250, 500, 1000].map((delay) => window.setTimeout(pinToBottom, delay));
             });
         },
         observeMessages() {
             const messages = this.$refs.messages;
-            if (!messages || !window.MutationObserver) return;
+            if (!messages) return;
 
-            this.messageObserver?.disconnect();
-            this.messageObserver = new MutationObserver(() => this.scrollMessages(false));
-            this.messageObserver.observe(messages, {
-                childList: true,
-                subtree: true,
-                characterData: true,
-            });
+            if (window.MutationObserver) {
+                this.messageObserver?.disconnect();
+                this.messageObserver = new MutationObserver(() => this.scrollMessages(false));
+                this.messageObserver.observe(messages, {
+                    childList: true,
+                    subtree: true,
+                    characterData: true,
+                    attributes: true,
+                });
+            }
+
+            if (window.ResizeObserver) {
+                this.messageResizeObserver?.disconnect();
+                this.messageResizeObserver = new ResizeObserver(() => this.scrollMessages(false));
+                this.messageResizeObserver.observe(messages);
+
+                if (this.$refs.composer) {
+                    this.messageResizeObserver.observe(this.$refs.composer);
+                }
+            }
         },
         resizeComposer() {
             const composer = this.$refs.composer;
             if (!composer) return;
             composer.style.height = 'auto';
             composer.style.height = `${Math.min(composer.scrollHeight, 144)}px`;
+            this.scrollMessages(false);
         },
         async send() {
             if (this.busy()) return;
@@ -210,7 +236,6 @@
             const outgoing = String(this.draft || '').trim();
             if (!outgoing) return;
 
-            this.stopSpeaking();
             this.submitting = true;
             this.pendingLabel = outgoing;
             this.draft = '';
@@ -267,7 +292,6 @@
             };
             this.submitting = true;
             this.pendingLabel = option?.prompt || option?.label || 'Auswahl wird gesendet.';
-            this.stopSpeaking();
             this.scrollMessages();
 
             try {
@@ -314,6 +338,14 @@
             const item = [...messages].reverse().find((message) => message && message.role === 'assistant');
             return item ? `${item.time || ''}|${item.content || ''}` : null;
         },
+        assistantMessageKey(item, index) {
+            return `${index}|${item?.time || ''}|${item?.content || ''}`;
+        },
+        assistantMessageKeys(history) {
+            return (Array.isArray(history) ? history : [])
+                .map((item, index) => item?.role === 'assistant' ? this.assistantMessageKey(item, index) : null)
+                .filter(Boolean);
+        },
         latestWorkflowImprovements(history) {
             const messages = Array.isArray(history) ? history : [];
             const item = [...messages]
@@ -331,25 +363,29 @@
                 this.setWorkflowImprovements(improvements);
             }
         },
-        handleNewAssistantMessage(history) {
+        handleNewAssistantMessages(history) {
             const messages = Array.isArray(history) ? history : [];
-            const index = messages.map((item) => item && item.role).lastIndexOf('assistant');
-            if (index < 0) return;
+            const known = new Set(Array.isArray(this.knownAssistantMessageKeys) ? this.knownAssistantMessageKeys : []);
 
-            const item = messages[index];
-            const key = `${item.time || ''}|${item.content || ''}`;
-            if (key === this.lastAssistantMessageKey) return;
+            messages.forEach((item, index) => {
+                if (!item || item.role !== 'assistant') return;
 
-            this.lastAssistantMessageKey = key;
+                const key = this.assistantMessageKey(item, index);
+                if (known.has(key)) return;
 
-            if (this.autoRead && item.content) {
-                this.speak(item.content, index);
-            }
+                known.add(key);
+                this.lastAssistantMessageKey = `${item.time || ''}|${item.content || ''}`;
+
+                if (this.autoRead && item.content) {
+                    this.queueTtsSentence(item.content, index);
+                }
+            });
+
+            this.knownAssistantMessageKeys = Array.from(known).slice(-500);
         },
         speak(text, index = null) {
             if (!this.speechSupported || !text) return;
 
-            this.stopSpeaking();
             this.ttsError = '';
             this.queueTtsSentence(String(text), index);
         },
@@ -1385,7 +1421,7 @@
                                     @endif
                                 @endforeach
 
-                                <div class="grid grid-cols-3 gap-2 text-center text-[10px]">
+                                <div class="grid grid-cols-2 gap-2 text-center text-[10px]">
                                     <div class="rounded-lg border border-slate-200 px-2 py-2">
                                         <strong class="block text-sm text-slate-900">{{ data_get($copilotStatus, 'repair_iteration', 0) }}/{{ data_get($copilotStatus, 'max_repair_iterations', 15) }}</strong>
                                         Reparaturen
@@ -1397,6 +1433,10 @@
                                     <div class="rounded-lg border border-slate-200 px-2 py-2">
                                         <strong class="block text-sm text-slate-900">{{ data_get($copilotStatus, 'remaining_minutes', 0) }}m</strong>
                                         Restzeit
+                                    </div>
+                                    <div class="rounded-lg border border-slate-200 px-2 py-2">
+                                        <strong class="block text-sm text-slate-900">${{ number_format((float) data_get($copilotStatus, 'cost_usd', 0), 4) }}</strong>
+                                        {{ (float) data_get($copilotStatus, 'max_cost_usd', 0) > 0 ? 'von $'.number_format((float) data_get($copilotStatus, 'max_cost_usd'), 2) : 'AI-Kosten' }}
                                     </div>
                                 </div>
 

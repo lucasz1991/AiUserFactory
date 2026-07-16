@@ -14,6 +14,8 @@ class WorkflowCopilotObservationService
 {
     public const MAX_ELEMENTS = 80;
 
+    public const MAX_SOURCE_ELEMENTS = 960;
+
     public const MAX_SCREENSHOT_BYTES = 4_194_304;
 
     public const MAX_SOURCE_SCREENSHOT_BYTES = 20_971_520;
@@ -253,7 +255,7 @@ class WorkflowCopilotObservationService
         $elements = collect($metadata['interaction_map'] ?? $metadata['interactionMap'] ?? [])
             ->filter(fn (mixed $element): bool => is_array($element)
                 && $this->boolOrNull($element['visible'] ?? $element['is_visible'] ?? $element['isVisible'] ?? null) === true)
-            ->take(self::MAX_ELEMENTS * 2)
+            ->take(self::MAX_SOURCE_ELEMENTS)
             ->values()
             ->all();
 
@@ -262,7 +264,7 @@ class WorkflowCopilotObservationService
 
     protected function collectInteractionCandidates(mixed $value, array &$candidates, int $depth = 0): void
     {
-        if ($depth > 7 || count($candidates) >= self::MAX_ELEMENTS * 4) {
+        if ($depth > 7 || count($candidates) >= self::MAX_SOURCE_ELEMENTS) {
             $this->payloadTruncated = true;
 
             return;
@@ -321,6 +323,8 @@ class WorkflowCopilotObservationService
     {
         $normalized = [];
 
+        $candidates = $this->prioritizeInteractionCandidates($candidates);
+
         foreach ($candidates as $candidate) {
             if (! is_array($candidate)) {
                 continue;
@@ -355,6 +359,65 @@ class WorkflowCopilotObservationService
                 return $element;
             })
             ->all();
+    }
+
+    protected function prioritizeInteractionCandidates(array $candidates): array
+    {
+        $ranked = [];
+
+        foreach ($candidates as $index => $candidate) {
+            if (! is_array($candidate)) {
+                continue;
+            }
+
+            $ranked[] = [
+                'candidate' => $candidate,
+                'index' => (int) $index,
+                'priority' => $this->interactionCandidatePriority($candidate),
+            ];
+        }
+
+        usort($ranked, static function (array $left, array $right): int {
+            $priority = ((int) $right['priority']) <=> ((int) $left['priority']);
+
+            return $priority !== 0 ? $priority : ((int) $left['index']) <=> ((int) $right['index']);
+        });
+
+        return array_column($ranked, 'candidate');
+    }
+
+    protected function interactionCandidatePriority(array $candidate): int
+    {
+        if ($this->boolOrNull($candidate['visible'] ?? $candidate['is_visible'] ?? $candidate['isVisible'] ?? null) === false) {
+            return -1000;
+        }
+
+        $haystack = Str::lower(implode(' ', array_filter([
+            $candidate['text'] ?? null,
+            $candidate['label'] ?? null,
+            $candidate['aria'] ?? null,
+            $candidate['aria_label'] ?? null,
+            $candidate['ariaLabel'] ?? null,
+            $candidate['name'] ?? null,
+            $candidate['selector'] ?? null,
+        ], static fn (mixed $value): bool => is_scalar($value))));
+        $tag = Str::lower(trim((string) ($candidate['tag'] ?? $candidate['tag_name'] ?? $candidate['tagName'] ?? '')));
+        $role = Str::lower(trim((string) ($candidate['role'] ?? '')));
+        $priority = in_array($tag, ['button', 'a', 'input'], true) || $role === 'button' ? 20 : 0;
+
+        if (preg_match('/(?:alle\s+ablehnen|reject\s+all|decline\s+all|refuse\s+all|nur\s+(?:notwendige|erforderliche)|only\s+(?:necessary|required)|\bablehnen\b|\breject\b|\bdecline\b)/u', $haystack)) {
+            return $priority + 1000;
+        }
+
+        if (preg_match('/(?:alle\s+akzeptieren|accept\s+all|allow\s+all|\bakzeptieren\b|\baccept\b|\ballow\b)/u', $haystack)) {
+            return $priority + 800;
+        }
+
+        if (preg_match('/(?:consent|cookie|einwilligung|datenschutz|privacy)/u', $haystack)) {
+            return $priority + 500;
+        }
+
+        return $priority;
     }
 
     protected function normalizeElement(array $candidate, string $defaultWindow): ?array

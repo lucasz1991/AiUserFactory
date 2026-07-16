@@ -8,8 +8,8 @@ use App\Models\Workflow;
 use App\Models\WorkflowCopilotSession;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowStep;
-use App\Services\Workflows\WorkflowCopilotSessionService;
 use App\Services\Workflows\WorkflowCopilotPlanningService;
+use App\Services\Workflows\WorkflowCopilotSessionService;
 use App\Services\Workflows\WorkflowExecutionService;
 use App\Services\Workflows\WorkflowTaskCatalog;
 use App\Services\Workflows\WorkflowTaskOrderingService;
@@ -329,6 +329,7 @@ class WorkflowAssistantToolService
                     'max_repair_iterations' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 100],
                     'max_probe_actions' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 500],
                     'max_same_state_repeats' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 10],
+                    'max_cost_usd' => ['type' => 'number', 'minimum' => 0, 'maximum' => 10000],
                 ],
                 'required' => ['goal'],
             ]),
@@ -1607,14 +1608,23 @@ class WorkflowAssistantToolService
                 ->all();
             $workflowInputs = is_array($arguments['workflow_inputs'] ?? null) ? $arguments['workflow_inputs'] : [];
             $initialPlan = null;
+            $initialAiUsage = [];
             $planner = app(WorkflowCopilotPlanningService::class);
 
             if ($planner->needsInitialPlan($workflow)) {
-                $initialPlan = $planner->planAndApply($workflow, $goal, $successCriteria, $workflowInputs);
+                $usageTracker = app(WorkflowCopilotAiUsageTracker::class);
+                $usageTracker->beginCapture();
+
+                try {
+                    $initialPlan = $planner->planAndApply($workflow, $goal, $successCriteria, $workflowInputs);
+                } finally {
+                    $initialAiUsage = $usageTracker->finishCapture();
+                }
                 $workflow = $workflow->fresh(['steps']) ?? $workflow;
             }
 
-            $session = app(WorkflowCopilotSessionService::class)->start($workflow, [
+            $sessionService = app(WorkflowCopilotSessionService::class);
+            $session = $sessionService->start($workflow, [
                 'person_id' => $this->positiveInteger($arguments['person_id'] ?? null),
                 'execution_target' => WorkflowCopilotSession::EXECUTION_TARGET_SYSTEM,
                 'goal' => $goal,
@@ -1626,12 +1636,17 @@ class WorkflowAssistantToolService
                     'max_repair_iterations' => max(1, min(100, (int) ($arguments['max_repair_iterations'] ?? $optimizationDefaults['max_repair_iterations'] ?? 15))),
                     'max_probe_actions' => max(1, min(500, (int) ($arguments['max_probe_actions'] ?? $optimizationDefaults['max_probe_actions'] ?? 60))),
                     'max_same_state_repeats' => max(1, min(10, (int) ($arguments['max_same_state_repeats'] ?? $optimizationDefaults['max_same_state_repeats'] ?? 2))),
+                    'max_cost_usd' => max(0, min(10000, (float) ($arguments['max_cost_usd'] ?? $optimizationDefaults['max_cost_usd'] ?? 0))),
                     'auto_execute_workflow_actions' => true,
                 ],
             ]);
 
+            if ($initialAiUsage !== []) {
+                $session = $sessionService->recordAiUsage($session, $initialAiUsage, 'initial_planning');
+            }
+
             if ($initialPlan) {
-                app(WorkflowCopilotSessionService::class)->appendEvent(
+                $sessionService->appendEvent(
                     $session,
                     'plan.applied',
                     'Der leere Workflow wurde aus Zielbeschreibung und Katalogdaten geplant und aufgebaut.',

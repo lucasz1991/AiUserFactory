@@ -30,9 +30,14 @@ class ChatbotViewMarkupTest extends TestCase
         $this->assertStringContainsString('toggleRecordedVoice()', $definition);
         $this->assertStringContainsString('observeMessages()', $definition);
         $this->assertStringContainsString('new MutationObserver(() => this.scrollMessages(false))', $definition);
+        $this->assertStringContainsString('new ResizeObserver(() => this.scrollMessages(false))', $definition);
         $this->assertStringContainsString('transcribeRecordedBlob(blob)', $definition);
         $this->assertStringContainsString("['whisper_local', 'vosk'].includes(this.speechInputProvider)", $definition);
-        $this->assertStringContainsString('[80, 250, 600].map((delay)', $definition);
+        $this->assertStringContainsString('[40, 100, 250, 500, 1000].map((delay)', $definition);
+        $this->assertStringContainsString('handleNewAssistantMessages(history)', $definition);
+        $this->assertStringContainsString('this.queueTtsSentence(item.content, index)', $definition);
+        $this->assertStringNotContainsString("this.\$watch('isLoading', (loading) => {\n                if (loading) {\n                    this.stopSpeaking();", $definition);
+        $this->assertStringNotContainsString("speak(text, index = null) {\n            if (!this.speechSupported || !text) return;\n\n            this.stopSpeaking();", $definition);
         $this->assertStringContainsString('setWorkflowImprovements(improvements = [])', $definition);
         $this->assertStringContainsString('applyImprovementHighlights()', $definition);
         $this->assertStringContainsString('openWorkflowImprovement(improvement = {})', $definition);

@@ -61,6 +61,8 @@ class WorkflowsIndex extends Component
 
     public bool $showImportWorkflowModal = false;
 
+    public bool $showCopilotRunsModal = false;
+
     public function render()
     {
         $workflows = Workflow::query()

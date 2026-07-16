@@ -9,6 +9,7 @@ use App\Models\WorkflowCopilotSession;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowStep;
 use App\Models\WorkflowStepRun;
+use App\Services\Ai\WorkflowCopilotAiUsageTracker;
 use App\Services\Ai\WorkflowCopilotVisionService;
 use App\Services\Workflows\WorkflowCopilotObservationService;
 use App\Services\Workflows\WorkflowCopilotRepairService;
@@ -808,6 +809,168 @@ class WorkflowCopilotSupervisorTest extends TestCase
         app(WorkflowCopilotSupervisorService::class)->supervise($session->id);
 
         $this->assertSame(0, data_get($session->fresh()->usage_json, 'same_state_repeats'));
+    }
+
+    public function test_ai_cost_budget_is_recorded_and_stops_before_repair(): void
+    {
+        [$workflow, $step] = $this->workflowWithBrokenSelector();
+        $sessions = app(WorkflowCopilotSessionService::class);
+        $session = $sessions->start($workflow, [
+            'goal' => 'Login erfolgreich abschliessen.',
+            'budget' => ['max_cost_usd' => 0.005],
+        ]);
+        [$run] = $this->waitingRun($session, $step, [
+            'id' => 'runtime-cost-budget-1',
+            'kind' => 'regular',
+            'workflow_step_id' => $step->id,
+            'workflow_step_name' => $step->name,
+            'task_key' => 'login-click',
+            'task_title' => 'Login klicken',
+            'successful' => false,
+            'outcome' => 'failed',
+            'next_action' => 'repair',
+            'result' => ['ok' => false, 'statusMessage' => 'Element nicht gefunden.'],
+        ]);
+        $session = $sessions->attachRun($session, $run);
+        $observations = Mockery::mock(WorkflowCopilotObservationService::class);
+        $observations->shouldReceive('observe')->once()->andReturn($this->observation());
+        $visionService = Mockery::mock(WorkflowCopilotVisionService::class);
+        $visionService->shouldReceive('analyze')->once()->andReturnUsing(function (): array {
+            app(WorkflowCopilotAiUsageTracker::class)->recordResponse(
+                ['model' => 'test/vision'],
+                [
+                    'id' => 'cost-budget-generation',
+                    'model' => 'test/vision',
+                    'usage' => [
+                        'prompt_tokens' => 100,
+                        'completion_tokens' => 25,
+                        'total_tokens' => 125,
+                        'cost' => 0.006,
+                    ],
+                ],
+                'image_understanding',
+            );
+
+            return $this->visionResult('continue');
+        });
+        $repairs = Mockery::mock(WorkflowCopilotRepairService::class);
+        $repairs->shouldNotReceive('plan');
+        $execution = Mockery::mock(WorkflowExecutionService::class);
+        $execution->shouldReceive('cancel')
+            ->once()
+            ->withArgs(fn (WorkflowRun $candidate, string $reason): bool => (int) $candidate->id === (int) $run->id
+                && str_contains($reason, 'Budget'))
+            ->andReturn(['ok' => true]);
+        $this->app->instance(WorkflowCopilotObservationService::class, $observations);
+        $this->app->instance(WorkflowCopilotVisionService::class, $visionService);
+        $this->app->instance(WorkflowCopilotRepairService::class, $repairs);
+        $this->app->instance(WorkflowExecutionService::class, $execution);
+
+        app(WorkflowCopilotSupervisorService::class)->supervise($session->id);
+
+        $session->refresh();
+        $this->assertSame(WorkflowCopilotSession::STATUS_BUDGET_EXHAUSTED, $session->status);
+        $this->assertSame(0.006, data_get($session->usage_json, 'cost_usd'));
+        $this->assertSame(125, data_get($session->usage_json, 'total_tokens'));
+        $this->assertDatabaseHas('workflow_copilot_events', [
+            'workflow_copilot_session_id' => $session->id,
+            'event_type' => 'ai.usage_recorded',
+        ]);
+    }
+
+    public function test_successful_task_with_visible_consent_dialog_enters_repair_instead_of_continuing(): void
+    {
+        [$workflow, $step] = $this->workflowWithBrokenSelector();
+        $config = $step->config_json;
+        $config['tasks'] = [[
+            'key' => 'check-consent',
+            'task_key' => 'decision.element_exists',
+            'title' => 'Consent pruefen',
+            'selector' => 'button:has-text("Alle ablehnen")',
+        ]];
+        $step->forceFill(['config_json' => $config])->save();
+        $sessions = app(WorkflowCopilotSessionService::class);
+        $session = $sessions->start($workflow, [
+            'goal' => 'Google-Suche ohne blockierenden Consent-Dialog ausfuehren.',
+        ]);
+        [$run] = $this->waitingRun($session, $step->fresh(), [
+            'id' => 'runtime-consent-success-1',
+            'kind' => 'regular',
+            'workflow_step_id' => $step->id,
+            'workflow_step_name' => $step->name,
+            'task_key' => 'check-consent',
+            'task_title' => 'Consent pruefen',
+            'successful' => true,
+            'outcome' => 'success',
+            'next_action' => 'complete_step',
+            'result' => [
+                'ok' => true,
+                'matchedCandidate' => 'button:has-text("Alle ablehnen")',
+                'element' => ['text' => 'Alle ablehnen'],
+                'statusMessage' => 'Alle ablehnen wurde gefunden.',
+            ],
+        ]);
+        $session = $sessions->attachRun($session, $run);
+        $observation = [
+            'state_signature' => 'google-consent-v1',
+            'page' => ['url' => 'https://www.google.com', 'title' => 'Google', 'state' => 'consent_blocked', 'window' => 'main'],
+            'page_state' => 'consent_blocked',
+            'dom' => ['ui_state' => 'consent_blocked', 'visible_text_excerpt' => 'Alle ablehnen Alle akzeptieren'],
+            'interaction_map' => [[
+                'element_ref' => 'el_reject',
+                'tag' => 'button',
+                'text' => 'Alle ablehnen',
+                'visible' => true,
+                'enabled' => true,
+                'selector_candidates' => ['button:has-text("Alle ablehnen")'],
+                'window' => 'main',
+            ]],
+            'screenshot_changed' => false,
+            'screenshot' => ['available_for_vision' => true],
+            'evidence_sufficient' => true,
+        ];
+        $vision = [
+            'ui_state' => 'consent_blocked',
+            'verdict' => 'blocked',
+            'confidence' => 0.99,
+            'model' => 'test/vision',
+        ];
+        $observations = Mockery::mock(WorkflowCopilotObservationService::class);
+        $observations->shouldReceive('observe')->once()->andReturn($observation);
+        $visionService = Mockery::mock(WorkflowCopilotVisionService::class);
+        $visionService->shouldReceive('analyze')->once()->andReturn($vision);
+        $repairs = Mockery::mock(WorkflowCopilotRepairService::class);
+        $repairs->shouldReceive('plan')
+            ->once()
+            ->withArgs(fn (WorkflowCopilotSession $candidateSession, WorkflowStep $candidateStep, array $checkpoint): bool => (int) $candidateSession->id === (int) $session->id
+                && (int) $candidateStep->id === (int) $step->id
+                && ($checkpoint['successful'] ?? true) === false
+                && ($checkpoint['outcome'] ?? null) === 'blocked'
+                && data_get($checkpoint, 'result.technicalSuccess') === true)
+            ->andReturn([
+                'action' => 'pause',
+                'task_key' => 'check-consent',
+                'reason' => 'Testpause nach erkannter Consent-Blockade.',
+            ]);
+        $execution = Mockery::mock(WorkflowExecutionService::class);
+        $execution->shouldNotReceive('resumeCopilotCheckpoint');
+        $execution->shouldNotReceive('retryCopilotTask');
+        $this->app->instance(WorkflowCopilotObservationService::class, $observations);
+        $this->app->instance(WorkflowCopilotVisionService::class, $visionService);
+        $this->app->instance(WorkflowCopilotRepairService::class, $repairs);
+        $this->app->instance(WorkflowExecutionService::class, $execution);
+
+        app(WorkflowCopilotSupervisorService::class)->supervise($session->id);
+
+        $this->assertSame(WorkflowCopilotSession::STATUS_PAUSED, $session->fresh()->status);
+        $this->assertDatabaseHas('workflow_copilot_events', [
+            'workflow_copilot_session_id' => $session->id,
+            'event_type' => 'checkpoint.consent_blocked',
+        ]);
+        $this->assertDatabaseMissing('workflow_copilot_events', [
+            'workflow_copilot_session_id' => $session->id,
+            'event_type' => 'checkpoint.continue',
+        ]);
     }
 
     private function workflowWithBrokenSelector(): array

@@ -31,7 +31,10 @@ class AiConnectionService
 
         $this->throwIfFailed($response);
 
-        return $response->json() ?? [];
+        $decoded = $response->json() ?? [];
+        $this->recordCopilotUsage($payload, $decoded, $profile);
+
+        return $decoded;
     }
 
     public function requestStreamed(array $payload, ?string $profile = null, ?callable $onTextDelta = null): array
@@ -71,7 +74,10 @@ class AiConnectionService
         $contentType = strtolower((string) $response->header('Content-Type'));
 
         if (str_contains($contentType, 'text/event-stream')) {
-            return $this->parseChatEventStream($body, $onTextDelta);
+            $decoded = $this->parseChatEventStream($body, $onTextDelta);
+            $this->recordCopilotUsage($payload, $decoded, $profile);
+
+            return $decoded;
         }
 
         $decoded = json_decode((string) $body, true);
@@ -86,6 +92,8 @@ class AiConnectionService
         if (is_callable($onTextDelta) && is_string($content) && $content !== '' && $toolCalls === []) {
             $this->streamBufferedText($content, $onTextDelta);
         }
+
+        $this->recordCopilotUsage($payload, $decoded, $profile);
 
         return $decoded;
     }
@@ -119,7 +127,7 @@ class AiConnectionService
                 'json_error' => json_last_error_msg(),
             ]);
 
-            throw new RuntimeException('AI returned invalid JSON: ' . json_last_error_msg());
+            throw new RuntimeException('AI returned invalid JSON: '.json_last_error_msg());
         }
 
         return $decoded;
@@ -162,6 +170,10 @@ class AiConnectionService
         $content = '';
         $toolCalls = [];
         $finishReason = null;
+        $usage = [];
+        $responseId = null;
+        $model = null;
+        $provider = null;
 
         while (! $body->eof()) {
             $line = trim(Utils::readLine($body));
@@ -181,6 +193,14 @@ class AiConnectionService
             if (! is_array($event)) {
                 continue;
             }
+
+            if (is_array($event['usage'] ?? null)) {
+                $usage = $event['usage'];
+            }
+
+            $responseId = is_string($event['id'] ?? null) ? $event['id'] : $responseId;
+            $model = is_string($event['model'] ?? null) ? $event['model'] : $model;
+            $provider = is_string($event['provider'] ?? null) ? $event['provider'] : $provider;
 
             $providerError = data_get($event, 'error.message');
 
@@ -263,12 +283,16 @@ class AiConnectionService
             $message['tool_calls'] = array_values($toolCalls);
         }
 
-        return [
+        return array_filter([
+            'id' => $responseId,
+            'model' => $model,
+            'provider' => $provider,
+            'usage' => $usage !== [] ? $usage : null,
             'choices' => [[
                 'message' => $message,
                 'finish_reason' => $finishReason,
             ]],
-        ];
+        ], static fn (mixed $value): bool => $value !== null);
     }
 
     protected function streamBufferedText(string $content, callable $onTextDelta): void
@@ -460,7 +484,7 @@ class AiConnectionService
         }
 
         return array_filter([
-            'Authorization' => 'Bearer ' . trim($apiKey),
+            'Authorization' => 'Bearer '.trim($apiKey),
             'HTTP-Referer' => $this->firstSetting(['referer_url', 'site_url']),
             'X-Title' => $this->firstSetting(['model_title', 'app_name']),
             'Content-Type' => 'application/json',
@@ -547,8 +571,13 @@ class AiConnectionService
         ]);
 
         throw new RuntimeException(
-            'AI connection failed with status ' . $response->status() . ': ' . $response->body()
+            'AI connection failed with status '.$response->status().': '.$response->body()
         );
+    }
+
+    protected function recordCopilotUsage(array $request, array $response, ?string $profile): void
+    {
+        app(WorkflowCopilotAiUsageTracker::class)->recordResponse($request, $response, $profile);
     }
 
     protected function cleanJson(string $content): string

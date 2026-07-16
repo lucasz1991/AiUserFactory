@@ -156,6 +156,10 @@
                                     {{ $activeCopilotSession ? 'Copilot-Sitzung oeffnen' : 'Mit Copilot optimieren' }}
                                     <span class="mt-0.5 block text-xs font-medium text-cyan-600">Autonome System-Ausfuehrung</span>
                                 </button>
+                                <button type="button" wire:click="$set('showCopilotRunsModal', true)" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-cyan-800 hover:bg-cyan-50">
+                                    Optimierungslaeufe anzeigen
+                                    <span class="mt-0.5 block text-xs font-medium text-cyan-600">Kosten, Tests, Logs und Daten</span>
+                                </button>
                                 <button type="button" wire:click="openLatestRunPreview" x-on:click="open = false" @disabled(! $quickPreviewRun) class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-indigo-700 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-40">
                                     {{ $quickPreviewRun && in_array($quickPreviewRun->status, ['queued', 'running', 'waiting'], true) ? 'Laufenden Test öffnen' : 'Letzten Test öffnen' }}
                                     @if($quickPreviewDurationLabel)
@@ -905,7 +909,7 @@
 
                     <fieldset>
                         <legend class="text-sm font-semibold text-slate-800">Sicherheits- und Arbeitsbudgets</legend>
-                        <div class="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                        <div class="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
                             <div>
                                 <label for="copilot-max-minutes" class="block text-xs font-medium text-gray-600">Laufzeit (Min.)</label>
                                 <input id="copilot-max-minutes" type="number" min="5" max="1440" wire:model.defer="copilotMaxMinutes" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm">
@@ -925,6 +929,12 @@
                                 <label for="copilot-max-same-state" class="block text-xs font-medium text-gray-600">Gleicher Zustand</label>
                                 <input id="copilot-max-same-state" type="number" min="1" max="10" wire:model.defer="copilotMaxSameStateRepeats" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm">
                                 @error('copilotMaxSameStateRepeats') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
+                            </div>
+                            <div>
+                                <label for="copilot-max-cost-usd" class="block text-xs font-medium text-gray-600">AI-Kosten (USD)</label>
+                                <input id="copilot-max-cost-usd" type="number" min="0" max="10000" step="0.0001" wire:model.defer="copilotMaxCostUsd" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm">
+                                <p class="mt-1 text-[11px] text-slate-500">0 = unbegrenzt</p>
+                                @error('copilotMaxCostUsd') <p class="mt-1 text-xs text-red-600">{{ $message }}</p> @enderror
                             </div>
                         </div>
                     </fieldset>
@@ -1080,10 +1090,11 @@
                             <aside class="space-y-4">
                                 <div class="rounded-xl border border-slate-200 bg-white p-4">
                                     <h3 class="text-sm font-bold text-slate-900">Fortschritt und Budget</h3>
-                                    <div class="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
+                                    <div class="mt-3 grid grid-cols-2 gap-2 text-center text-xs sm:grid-cols-4">
                                         <div class="rounded-lg bg-slate-50 p-2"><strong class="block text-base">{{ data_get($copilotStatus, 'repair_iteration', 0) }}/{{ data_get($copilotStatus, 'max_repair_iterations', 15) }}</strong>Runden</div>
                                         <div class="rounded-lg bg-slate-50 p-2"><strong class="block text-base">{{ data_get($copilotStatus, 'probe_actions', 0) }}/{{ data_get($copilotStatus, 'max_probe_actions', 60) }}</strong>Proben</div>
                                         <div class="rounded-lg bg-slate-50 p-2"><strong class="block text-base">{{ data_get($copilotStatus, 'remaining_minutes', 0) }}m</strong>Restzeit</div>
+                                        <div class="rounded-lg bg-slate-50 p-2"><strong class="block text-base">${{ number_format((float) data_get($copilotStatus, 'cost_usd', 0), 4) }}</strong>{{ (float) data_get($copilotStatus, 'max_cost_usd', 0) > 0 ? 'von $'.number_format((float) data_get($copilotStatus, 'max_cost_usd'), 2) : 'AI-Kosten' }}</div>
                                     </div>
                                     <p class="mt-3 text-xs leading-5 text-slate-500">Ziel: {{ data_get($copilotStatus, 'goal') }}</p>
                                 </div>
@@ -1164,6 +1175,18 @@
                 <button type="button" wire:click="closeRunPreview" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">
                     Schliessen
                 </button>
+            </x-slot>
+        </x-dialog-modal>
+
+        <x-dialog-modal wire:model="showCopilotRunsModal" maxWidth="7xl" :interactive-aside="true">
+            <x-slot name="title">Copilot-Optimierungslaeufe dieses Workflows</x-slot>
+            <x-slot name="content">
+                @if($showCopilotRunsModal && $selectedWorkflow)
+                    @livewire('admin.network.workflow-copilot-runs', ['workflowId' => $selectedWorkflow->id], key('workflow-copilot-runs-workflow-'.$selectedWorkflow->id))
+                @endif
+            </x-slot>
+            <x-slot name="footer">
+                <button type="button" x-on:click="$dispatch('close')" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">Schliessen</button>
             </x-slot>
         </x-dialog-modal>
 

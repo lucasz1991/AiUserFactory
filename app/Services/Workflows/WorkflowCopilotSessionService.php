@@ -9,6 +9,7 @@ use App\Models\WorkflowRevision;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowRunCheckpoint;
 use App\Models\WorkflowTaskAttempt;
+use App\Services\Ai\WorkflowCopilotAiUsageTracker;
 use DomainException;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -30,16 +31,26 @@ class WorkflowCopilotSessionService
         'max_repair_iterations' => 15,
         'max_probe_actions' => 60,
         'max_same_state_repeats' => 2,
+        'max_cost_usd' => 0.0,
     ];
 
     public const DEFAULT_USAGE = [
         'repair_iterations' => 0,
         'probe_actions' => 0,
         'same_state_repeats' => 0,
+        'ai_requests' => 0,
+        'input_tokens' => 0,
+        'output_tokens' => 0,
+        'total_tokens' => 0,
+        'reasoning_tokens' => 0,
+        'cost_usd' => 0.0,
+        'provider_cost_usd' => 0.0,
+        'ai_models' => [],
     ];
 
     public function __construct(
         protected WorkflowExecutionService $workflowExecution,
+        protected WorkflowCopilotAiUsageTracker $aiUsage,
     ) {}
 
     /** @var array<string, list<string>> */
@@ -173,6 +184,67 @@ class WorkflowCopilotSessionService
 
             return $session->fresh(['workflow']) ?? $session;
         });
+    }
+
+    /** @param list<array<string, mixed>> $records */
+    public function recordAiUsage(
+        WorkflowCopilotSession $session,
+        array $records,
+        string $source = 'copilot',
+    ): WorkflowCopilotSession {
+        if ($records === []) {
+            return $session->fresh() ?? $session;
+        }
+
+        $summary = $this->aiUsage->summarize($records);
+        $updated = DB::transaction(function () use ($session, $summary): WorkflowCopilotSession {
+            $locked = WorkflowCopilotSession::query()->lockForUpdate()->findOrFail($session->id);
+            $usage = array_replace(
+                self::DEFAULT_USAGE,
+                is_array($locked->usage_json) ? $locked->usage_json : [],
+            );
+
+            foreach (['ai_requests', 'input_tokens', 'output_tokens', 'total_tokens', 'reasoning_tokens'] as $field) {
+                $usage[$field] = max(0, (int) ($usage[$field] ?? 0)) + max(0, (int) ($summary[$field] ?? 0));
+            }
+
+            foreach (['cost_usd', 'provider_cost_usd'] as $field) {
+                $usage[$field] = round(
+                    max(0, (float) ($usage[$field] ?? 0)) + max(0, (float) ($summary[$field] ?? 0)),
+                    10,
+                );
+            }
+
+            $models = is_array($usage['ai_models'] ?? null) ? $usage['ai_models'] : [];
+
+            foreach (is_array($summary['models'] ?? null) ? $summary['models'] : [] as $model => $count) {
+                $models[(string) $model] = max(0, (int) ($models[(string) $model] ?? 0)) + max(0, (int) $count);
+            }
+
+            $usage['ai_models'] = $models;
+            $locked->forceFill([
+                'usage_json' => $usage,
+                'last_activity_at' => now(),
+            ])->save();
+
+            return $locked;
+        });
+
+        $this->appendEvent(
+            $updated,
+            'ai.usage_recorded',
+            'Token- und Kostennutzung der Copilot-Modelle wurde dem Optimierungslauf zugeordnet.',
+            [
+                'source' => Str::limit(trim($source), 80, '') ?: 'copilot',
+                'summary' => $summary,
+                'requests' => array_slice($records, 0, 12),
+                'session_cost_usd' => (float) data_get($updated->usage_json, 'cost_usd', 0),
+                'max_cost_usd' => (float) data_get($updated->budget_json, 'max_cost_usd', 0),
+            ],
+            (string) $updated->phase,
+        );
+
+        return $updated->fresh() ?? $updated;
     }
 
     public function appendEvent(

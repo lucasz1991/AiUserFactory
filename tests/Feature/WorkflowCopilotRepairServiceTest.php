@@ -705,6 +705,111 @@ class WorkflowCopilotRepairServiceTest extends TestCase
         $this->assertSame($navigation->id, $workflow->steps()->where('action_key', 'open-google')->value('id'));
     }
 
+    public function test_consent_obstacle_creates_one_reject_step_and_preserves_the_original_route(): void
+    {
+        [$workflow, $step] = $this->workflowWithTasks([[
+            'key' => 'check-consent',
+            'task_key' => 'decision.element_exists',
+            'title' => 'Consent pruefen',
+            'selector' => 'button:has-text("Alle ablehnen")',
+        ]]);
+        $targetStep = $workflow->steps()->create([
+            'name' => 'Sucheingabe',
+            'type' => WorkflowStep::TYPE_BROWSER_TASK,
+            'action_key' => 'search-input',
+            'position' => 20,
+            'is_enabled' => true,
+            'config_json' => ['tasks' => [[
+                'key' => 'fill-query',
+                'task_key' => 'input.fill_field',
+                'title' => 'Suchbegriff fuellen',
+                'selector' => 'textarea[name="q"]',
+            ]]],
+        ]);
+        $stepConfig = $step->config_json;
+        $stepConfig['routes']['success'] = [
+            'type' => 'step',
+            'action_key' => $targetStep->action_key,
+            'step' => $targetStep->action_key,
+            'label' => $targetStep->name,
+        ];
+        $step->forceFill(['config_json' => $stepConfig])->save();
+        $session = app(WorkflowCopilotSessionService::class)->start($workflow, [
+            'goal' => 'Google-Suche ohne blockierenden Consent-Dialog ausfuehren.',
+        ]);
+        $checkpoint = [
+            'task_key' => 'check-consent',
+            'successful' => false,
+            'outcome' => 'blocked',
+            'result' => [
+                'ok' => true,
+                'matchedCandidate' => 'button:has-text("Alle ablehnen")',
+                'element' => ['text' => 'Alle ablehnen'],
+            ],
+        ];
+        $observation = [
+            'page' => ['url' => 'https://www.google.com', 'state' => 'consent_blocked', 'window' => 'main'],
+            'page_state' => 'consent_blocked',
+            'dom' => ['ui_state' => 'consent_blocked', 'visible_text_excerpt' => 'Alle ablehnen Alle akzeptieren'],
+            'interaction_map' => [[
+                'element_ref' => 'el_accept',
+                'tag' => 'button',
+                'text' => 'Alle akzeptieren',
+                'visible' => true,
+                'enabled' => true,
+                'selector_candidates' => ['button:has-text("Alle akzeptieren")'],
+                'window' => 'main',
+            ], [
+                'element_ref' => 'el_reject',
+                'tag' => 'button',
+                'text' => 'Alle ablehnen',
+                'visible' => true,
+                'enabled' => true,
+                'selector_candidates' => ['button:has-text("Alle ablehnen")'],
+                'window' => 'main',
+            ]],
+        ];
+        $vision = [
+            'ui_state' => 'consent_blocked',
+            'verdict' => 'blocked',
+            'confidence' => 0.99,
+            'model' => 'test/vision',
+        ];
+        $ai = Mockery::mock(AiConnectionService::class);
+        $ai->shouldNotReceive('json');
+        $this->app->instance(AiConnectionService::class, $ai);
+        $service = app(WorkflowCopilotRepairService::class);
+
+        $plan = $service->plan($session, $step->fresh(), $checkpoint, $observation, $vision);
+
+        $this->assertSame('restart_with_workflow_changes', $plan['action']);
+        $this->assertSame('insert_step', data_get($plan, 'operations.0.type'));
+        $this->assertSame('reject', data_get($plan, 'operations.0.decision'));
+        $this->assertSame('button:has-text("Alle ablehnen")', data_get($plan, 'operations.0.selector'));
+
+        $service->applyStructuralOperations(
+            $workflow->fresh(),
+            $plan['operations'],
+            $session->fresh(),
+            array_replace($observation, ['copilot_checkpoint' => $checkpoint]),
+        );
+
+        $ordered = $workflow->steps()->ordered()->get();
+        $this->assertCount(3, $ordered);
+        $this->assertSame($step->id, $ordered->get(0)->id);
+        $this->assertSame($targetStep->id, $ordered->get(2)->id);
+        $consentStep = $ordered->get(1);
+        $this->assertSame($consentStep->action_key, data_get($step->fresh()->config_json, 'routes.success.action_key'));
+        $this->assertSame('browser.click', data_get($consentStep->task_cards, '0.task_key'));
+        $this->assertSame('button:has-text("Alle ablehnen")', data_get($consentStep->task_cards, '0.selector'));
+        $this->assertSame($targetStep->action_key, data_get($consentStep->task_cards, '0.next.action_key'));
+
+        $followUp = $service->plan($session->fresh(), $step->fresh(), $checkpoint, $observation, $vision);
+        $this->assertSame('continue_route', $followUp['action']);
+        $this->assertTrue($followUp['resume_checkpoint']);
+        $this->assertCount(3, $workflow->steps()->get());
+    }
+
     public function test_structural_planner_can_insert_only_a_catalog_bound_non_visual_task(): void
     {
         [$workflow, $step] = $this->workflowWithTasks([[

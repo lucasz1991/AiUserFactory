@@ -40,7 +40,7 @@ Feature-Wünsche und Fehlerberichte können über GitHub Issues eingereicht werd
 
 ## Agenten-Uebergabe: Workflow Manager und Workflow Copilot
 
-Stand: 2026-07-15
+Stand: 2026-07-16
 
 Dieser Abschnitt ist die gemeinsame Kommunikationsebene fuer Codex, Claude und
 weitere Agents. Vor Arbeiten am Workflow Manager oder Workflow Copilot zuerst
@@ -57,9 +57,13 @@ Arbeitsprotokoll aktualisieren.
 | Leerer Workflow | Aus Zielbeschreibung, Erfolgskriterien und benannten Workflow-Eingaben soll ein leerer Workflow selbststaendig geplant und aufgebaut werden. | Umgesetzt. `WorkflowCopilotPlanningService` fordert eine JSON-Planung an, erlaubt nur Keys aus `WorkflowTaskCatalog`, legt Steps und Tasks an und erzeugt Loop-Endsegmente automatisch. Erst danach startet die Optimierung. |
 | Kurze Arbeitszyklen | Der Copilot soll nicht viele Aenderungen blind stapeln, sondern regelmaessig Kontext und Teststatus neu pruefen. | Umgesetzt. Der Assistant-Systemprompt fordert nach hoechstens zwei aendernden Toolaufrufen eine erneute Kontext- oder Statuspruefung. Der Runtime-Supervisor prueft weiterhin jeden Task-Checkpoint. |
 | Modelluebergabe | Screenshots und redigiertes DOM sollen vom Bildverstehen-Modell ausgewertet werden; das Datenanalyse-Modell soll danach Workflow-Graph, Fehlerbefund und Task-Katalog gemeinsam planen und optimieren. | Umgesetzt. `WorkflowCopilotVisionService` liefert den strukturierten visuellen Befund ueber das Profil `image_understanding`; `WorkflowCopilotRepairService` uebergibt ihn anschliessend mit dem vollstaendigen Workflow-Graph an das Profil `data_analysis`. Strukturrevisionen protokollieren beide Profile und das verwendete Vision-Modell als `planning_handoff`. |
-| Chat-Scroll | Nach neuen Nachrichten, Poll-Ergebnissen und Streaming-Text muss der Chat unten bleiben. | Umgesetzt. Ein `MutationObserver` beobachtet den Nachrichtenbereich einschliesslich Streaming-Text und scrollt nach jeder DOM-Aenderung ans Ende. |
+| Chat-Scroll | Nach neuen Nachrichten, Poll-Ergebnissen, Streaming-Text und Hoehenaenderungen muss der Chat unten bleiben. | Umgesetzt. `MutationObserver`, `ResizeObserver`, zwei Animation-Frames und kurze Nachpruefungen halten Nachrichtenbereich und wachsenden Composer am Ende. |
+| Chat-Audio | Neue Vorleseausgaben duerfen eine laufende Nachricht nicht abbrechen, sondern muessen in Eingangsreihenfolge abgespielt werden. | Umgesetzt. Neue Assistant-Nachrichten werden stabil erkannt und in die bestehende TTS-Warteschlange aufgenommen. Nur explizites Stoppen, Schliessen oder Deaktivieren leert die Queue. |
 | Serverlokale Sprache | Spracheingabe und -ausgabe sollen ohne kostenpflichtigen Anbieter und ohne oeffentlichen Voice-Port direkt auf dem Laravel-Server laufen. | Anwendungscode und UI sind produktiv ausgerollt. `whisper_local` nutzt ffmpeg plus whisper.cpp, `piper_local` Piper per CLI. Die Plesk-Runtime ist noch nicht installiert: Der Live-Status meldet deaktiviert sowie alle sechs Komponenten als fehlend; Vosk/eSpeak bleiben bis zur Installation aktiv. |
 | Vollstaendiges Protokoll | Sichtbare Antworten, Toolaufrufe, Toolergebnisse, Anpassungen, Revisionen, Checkpoints, Taskversuche und alle Testlaeufe muessen exportierbar sein. | Umgesetzt. `WorkflowCopilotLogExportService` erzeugt ein ZIP mit Gesamtsnapshot, JSONL-Ereignisstrom, Chat-/Toolprotokoll, finalem Workflow und einem bereinigten Debug-ZIP pro Run. |
+| Kostenbudget | Das USD-Budget muss global voreinstellbar und pro Optimierung anpassbar sein; Planung, Vision, Reparaturplanung und Verifikation muessen demselben Lauf zugerechnet werden. | Umgesetzt. `max_cost_usd=0` bedeutet unbegrenzt. OpenRouter-Usage wird pro Antwort normalisiert, als `ai.usage_recorded` protokolliert und beendet den Lauf vor der naechsten Aktion, sobald das Limit erreicht ist. |
+| Laufarchiv | Copilot-Optimierungslaeufe sollen mit Kosten, Logs, Testlaeufen, Revisionen und bereinigten Laufdaten in einem eigenen Livewire-Modul sichtbar sein. | Umgesetzt. `WorkflowCopilotRuns` ist global auf der Workflow-Liste und workflowbezogen im Manager als Modal erreichbar. Es nutzt keine zweite Run-Vorschau; der vollstaendige Datensatz bleibt als redigiertes ZIP exportierbar. |
+| Consent-Hindernisse | Ein sichtbarer Consent-Dialog muss auch nach technisch erfolgreicher Task-Ausfuehrung als Blockade behandelt und vorzugsweise ueber `Alle ablehnen` beseitigt werden. | Umgesetzt. Consent-Aktionen werden vor der DOM-Begrenzung priorisiert. `consent_blocked` startet eine deterministische Strukturreparatur, die genau eine kataloggebundene `browser.click`-Liste zwischen Quell- und Folgeroute setzt und doppelte Listen verhindert. |
 | Geheimnisse | Exportierte Diagnosepakete duerfen keine Passwoerter, Tokens, Cookies, Session-Payloads oder WebSocket-Endpunkte enthalten. | Umgesetzt fuer strukturierte sensible Felder und bekannte Geheimwerte. Freitext bleibt grundsaetzlich sorgfaeltig zu behandeln und darf keine unbekannten Geheimnisse enthalten. |
 | Ausfuehrungsziel | Autonome Reparaturen duerfen nur auf dem System-Runner laufen. | Umgesetzt und serverseitig erzwungen. ClientController bleibt fuer normale Vorschau-Tests moeglich, aber nicht fuer Copilot-Reparatursitzungen. |
 
@@ -74,6 +78,11 @@ Arbeitsprotokoll aktualisieren.
 | `app/Services/Workflows/WorkflowCopilotPlanningService.php` | Kataloggebundene Erstplanung und Aufbau eines leeren Workflows. |
 | `app/Services/Workflows/WorkflowCopilotSupervisorService.php` | Checkpoint-Beobachtung, Reparatur, Probe, Fortsetzung und Endverifikation. |
 | `app/Services/Workflows/WorkflowCopilotSessionService.php` | Persistente Sitzungen, unveraenderliche Events, Checkpoints, Status und Locks. |
+| `app/Livewire/Admin/Network/WorkflowCopilotRuns.php` | Globale oder workflowbezogene Projektion der Optimierungslaeufe mit Kosten, Logs, Tests, Revisionen und bereinigten Daten. |
+| `resources/views/livewire/admin/network/workflow-copilot-runs.blade.php` | Dichte Listen-/Detailoberflaeche des Copilot-Laufarchivs innerhalb der bestehenden Modale. |
+| `app/Services/Ai/WorkflowCopilotAiUsageTracker.php` | Request-lokale Erfassung und Normalisierung der vom AI-Provider gemeldeten Token- und Kostendaten. |
+| `app/Services/Workflows/WorkflowCopilotObservationService.php` | Redigierte Browserbeobachtung und priorisierte sichtbare Interaktionskarte, insbesondere fuer Consent-Aktionen. |
+| `app/Services/Workflows/WorkflowCopilotRepairService.php` | Kataloggebundene Task-/Routenreparaturen sowie deterministische, eigenstaendige Consent-Klick-Listen. |
 | `app/Services/Ai/WorkflowAssistantToolService.php` | Assistant-Tools, Systemprompt und Start von normalen Tests bzw. Optimierungen. |
 | `app/Livewire/Tools/Chatbot.php` | Chatdurchlauf, Toolausfuehrung und persistente Chat-/Tool-Auditereignisse. |
 | `resources/views/livewire/tools/chatbot.blade.php` | Chatinteraktion, Streaming, Autoscroll und Weiterleitung zur gemeinsamen Vorschau. |
@@ -107,6 +116,9 @@ Arbeitsprotokoll aktualisieren.
 9. Parallel arbeitende Agents bearbeiten nicht still denselben Bereich. Im
    Arbeitsprotokoll zuerst Dateibereich und Ziel beanspruchen; bei Ueberschneidung
    den vorhandenen Stand uebernehmen und die eigene Abgrenzung dokumentieren.
+10. AI-Kosten nur aus Provider-Usage uebernehmen, nie schaetzen. Historische
+    Sitzungen ohne Usage als `nicht erfasst` anzeigen; `max_cost_usd=0` bleibt
+    unbegrenzt.
 
 ### Arbeitsprotokoll
 
@@ -138,6 +150,7 @@ Statuswerte: `geplant`, `in_arbeit`, `verifiziert`, `blockiert`.
 | 2026-07-16 | Codex | verifiziert | Stillstand aus Copilot-Session 2/Run 349 behoben. Der reale Pfad uebersprang die vorhandene Navigation, endete auf `about:blank`, und drei manuelle Fortsetzungen analysierten denselben Checkpoint ohne Revision erneut als `pause`. Die Reparaturplanung kann jetzt kataloggebundene Strukturrevisionen fuer fehlende Tasks, Listen-Routen und Task-Routen erzeugen. Gueltige Aenderungen starten einen frischen Test von Anfang an; der konkrete Leerbildschirm-Fall verbindet deterministisch eine vorhandene, bisher unerreichbare Navigation und fuehrt sie bei der naechsten Auswertung aus. Screenshot/DOM laufen zuerst ueber `image_understanding`, danach plant `data_analysis`; der Handoff wird protokolliert. Unbekannte Katalog-Keys, neue visuell zielgebundene Klick-/Eingabe-Tasks, unsichere URLs, ungueltige Routen und Neustarts nach protokollierten externen Wirkungen werden abgewiesen. | Exporte von Session 2 und Run 349 strukturiert ausgewertet; der exportierte 1366x900-Screenshot wurde als vollstaendig leer bestaetigt. Gezielt: Vision-, Repair- und Supervisor-Tests 28 Tests/241 Assertions. Gesamte Copilot-Suite mit SQLite in-memory: 74 Tests/628 Assertions gruen. PHP-Syntax, Pint und `git diff --check` gruen; nur bestehende PHP-8.5-Deprecation-Hinweise aus Konfiguration/Abhaengigkeiten. | Nach Deployment denselben Google-Suche-Copilot-Lauf erneut starten. Erwartung: `planning_handoff`, mindestens eine `repair.structural_update_applied`-/`revision.saved`-Sequenz bei fehlender Logik, ein frischer Run und schliesslich ein erfolgreicher unveraenderlicher Kontrolllauf. Restrisiko: Die reale Modellentscheidung und Browserausfuehrung sind lokal gemockt, nicht produktiv gegen OpenRouter getestet. |
 
 | 2026-07-16 | Codex | verifiziert | Session-3-Log (Runs 351-358) ausgewertet und den erneuten Stillstand behoben: Alle Laeufe blieben auf `about:blank`, weil der Eingabe-Checkpoint den ersten Step beendete und die vorhandene `browser.open_url`-Karte trotz sieben Modellrevisionen unerreichbar blieb. Die sichere Leerbildschirm-Reparatur laeuft nun deterministisch vor dem Datenanalyse-Planer, routet auf die konkrete Navigationskarte und verhindert weitere reine Routen-Umbauten; eine task-/step-/state-/URL-/fehlerbezogene Wiederholungssignatur beendet erfolglose Reparaturschleifen mit `repair.no_progress`. Dazu feste 480-px-Copilot-Sidebar rechts ueber volle Hoehe, mobiler Drawer, interaktive Copilot-/Testlauf-Dialoge ohne Sidebar-Backdrop, klarere Lauf-/Abschlusszustaende und Neustart mit gleichen Ziel-, Eingabe- und Budgetvorgaben. Die bestehende `WorkflowRunPreview` bleibt die einzige Vorschau. | Gesamte Copilot-Suite mit SQLite in-memory: 78 bestanden plus 2 unter PHP 8.5 als `deprecated` markierte erfolgreiche Tests, 682 Assertions. Blade-Cache, Pint fuer 10 Dateien und `git diff --check` gruen; Vite-Produktionsbuild erfolgreich (69 Module). Browser-Smoke-Test: Desktop 1280x720 mit 480-px-Dock, verkleinerter Topbar/Inhaltsflaeche und interaktivem Testdialog; mobil 390x844 als Dialog/Drawer mit Backdrop; jeweils kein horizontaler Overflow, nach Oeffnen/Schliessen korrekter Layout-Reset und keine Browser-Konsolenfehler. Restrisiko: kein echter externer OpenRouter-/Browser-Workflow-Lauf in diesem lokalen Stand. | Aenderungen deployen und den Google-Suche-Copilot ueber den neuen Neustart einmal real ausfuehren. Erwartung: Navigation weg von `about:blank`, anschliessende Task-Ausfuehrung und erfolgreicher unveraenderlicher Kontrolllauf; falls der produktive Workflow durch die sieben alten Revisionen fachlich verformt ist, dessen neue Revision vor weiterer Optimierung im Auditlog pruefen. |
+| 2026-07-16 | Codex | verifiziert | Session-5-Log (Workflow 15, Runs 361/362) analysiert und drei Bereiche umgesetzt: konfigurierbares USD-Kostenbudget mit Provider-Usage fuer Erstplanung, Vision, Reparaturplanung und Verifikation; eigenes globales bzw. workflowbezogenes `WorkflowCopilotRuns`-Modal mit Kosten, Logs, Tests, Revisionen, bereinigten Daten und ZIP-Export; sequenzielle Chat-TTS-Queue mit dauerhaftem Scroll-Ende. Consent-Aktionen werden in Node und Laravel vor der Elementbegrenzung priorisiert. Ein technisch erfolgreicher Checkpoint mit aktivem Consent-Dialog wird nicht mehr fortgesetzt, sondern erzeugt revisioniert eine eigene `browser.click`-Liste, bevorzugt `Alle ablehnen`, erhaelt die bisherige Folgeroute und dupliziert keine bestehende Consent-Liste. Die gemeinsame `WorkflowRunPreview` bleibt unveraendert die einzige Vorschau. | Anhang sicher entpackt und visuell/strukturiert geprueft: `decision.element_exists` fand `Alle ablehnen`, waehrend der nachfolgende Klick `configured` blieb. Gesamte Copilot-Suite mit SQLite in-memory: 85 Tests/697 Assertions gruen. Zusaetzliche Chat-Markup-Pruefung gruen; Blade-Cache, PHP-Syntax, Pint fuer 22 Dateien, `node --check`, Runtime-Sync mit gleichem SHA-256 und `git diff --check` ohne Inhaltsfehler. | Nach Deployment Workflow 15 mit einem neuen realen Copilot-Lauf pruefen. Erwartung: `checkpoint.consent_blocked`, `revision.saved`, `repair.structural_update_applied`, neue Consent-Liste direkt nach der Quell-Liste, Klick auf `Alle ablehnen` und anschliessende Suche. Reale OpenRouter-Kostenwerte und Browserausfuehrung sind lokal nicht extern getestet. |
 
 Neue Eintraege immer unten anhaengen. Ein Eintrag gilt erst als `verifiziert`,
 wenn die ausgefuehrten Testkommandos und verbleibende Risiken genannt sind.
@@ -146,8 +159,13 @@ wenn die ausgefuehrten Testkommandos und verbleibende Risiken genannt sind.
 
 ```bash
 php artisan test tests/Unit/ChatbotViewMarkupTest.php
+php artisan test tests/Unit/WorkflowCopilotAiUsageTrackerTest.php
+php artisan test tests/Unit/WorkflowCopilotObservationServiceTest.php
 php artisan test tests/Unit/WorkflowCopilotUiMarkupTest.php
 php artisan test tests/Feature/WorkflowCopilotLiveUiTest.php
+php artisan test tests/Feature/WorkflowCopilotRunsUiTest.php
+php artisan test tests/Feature/WorkflowCopilotRepairServiceTest.php
+php artisan test tests/Feature/WorkflowCopilotSupervisorTest.php
 php artisan test tests/Feature/WorkflowCopilotToolServiceTest.php
 php artisan test tests/Feature/WorkflowCopilotLogExportServiceTest.php
 ```
@@ -164,3 +182,7 @@ zeigt, die Tests mit `DB_CONNECTION=sqlite` und `DB_DATABASE=:memory:` starten.
   der Genauigkeit der Zielbeschreibung ab. Ungueltige oder unbekannte Task-Keys
   werden verworfen; ohne mindestens einen gueltigen Task startet keine Sitzung.
 - Die Copilot-Live-Optimierung bleibt absichtlich auf `execution_target=system`.
+- Die neue Consent-Strukturreparatur ist automatisiert mit gemockter Browser-
+  und Vision-Evidenz verifiziert. Der produktive Klick und die echte
+  OpenRouter-Kostenmeldung muessen nach Deployment in einem neuen Lauf von
+  Workflow 15 bestaetigt werden.

@@ -16,57 +16,95 @@ class SettingsPage extends Component
     public string $activeTab = 'scraper-transfer';
 
     public string $baseApiUrl = '';
+
     public string $apiPassword = '';
 
     public string $openRouterApiUrl = '';
+
     public string $openRouterApiKey = '';
+
     public string $openRouterRefererUrl = '';
+
     public string $openRouterModelTitle = '';
 
     public string $openRouterTextModel = '';
+
     public string $openRouterDataModel = '';
+
     public string $openRouterImageGenerationModel = '';
+
     public string $openRouterImageUnderstandingModel = '';
+
     public string $openRouterSpeechToTextModel = '';
+
     public string $openRouterTextToSpeechModel = '';
 
     /** @var array<string, array{state:string, output:string, images:array, duration_ms:int}> */
     public array $openRouterModelTests = [];
+
     public $openRouterVisionTestImage = null;
+
     public $openRouterSpeechTestAudio = null;
 
     public int $openRouterTimeout = 120;
+
     public float $openRouterTemperature = 0.4;
+
     public int $openRouterMaxCompletionTokens = 1500;
 
     public bool $openRouterStreamEnabled = true;
 
     public bool $assistantEnabled = true;
+
     public string $assistantName = 'Workflow Copilot';
+
     public string $assistantInstructions = '';
+
     public int $assistantMaxToolRounds = 5;
+
     public bool $assistantAutoReadDefault = false;
+
     public float $assistantSpeechRate = 1.0;
+
     public string $assistantSpeechInputProvider = 'browser';
+
     public string $assistantSpeechOutputProvider = 'ai';
+
     public string $assistantVoskTranscriptionUrl = '';
+
     public string $assistantEspeakNgSpeechUrl = '';
+
     public string $assistantEspeakNgVoice = 'de';
+
     public array $assistantLocalVoiceStatus = [];
+
     public string $assistantVisionFallbackModels = '';
+
     public int $assistantCopilotMaxMinutes = 90;
+
     public int $assistantCopilotMaxRepairIterations = 15;
+
     public int $assistantCopilotMaxProbeActions = 60;
+
     public int $assistantCopilotMaxSameStateRepeats = 2;
+
+    public float $assistantCopilotMaxCostUsd = 0.0;
+
     public bool $assistantCopilotAutoExecute = true;
 
     // ClientController settings tab
     public string $ccServerDomain = '';
+
     public string $ccFallbackServerDomain = '';
+
     public bool $ccRequireSignedJobs = true;
+
     public bool $ccAllowServerRebind = true;
+
     public int $ccHeartbeatIntervalSeconds = 30;
+
     public int $ccJobTimeoutSeconds = 180;
+
     public string $ccBootstrapApiKey = 'followflow-default-node-key-change-me';
 
     public function mount(string $tab = 'scraper-transfer'): void
@@ -304,6 +342,7 @@ class SettingsPage extends Component
             'assistantCopilotMaxRepairIterations' => ['required', 'integer', 'min:1', 'max:100'],
             'assistantCopilotMaxProbeActions' => ['required', 'integer', 'min:1', 'max:500'],
             'assistantCopilotMaxSameStateRepeats' => ['required', 'integer', 'min:1', 'max:10'],
+            'assistantCopilotMaxCostUsd' => ['required', 'numeric', 'min:0', 'max:10000'],
             'assistantCopilotAutoExecute' => ['boolean'],
         ]);
 
@@ -357,6 +396,7 @@ class SettingsPage extends Component
                 'max_repair_iterations' => (int) $validated['assistantCopilotMaxRepairIterations'],
                 'max_probe_actions' => (int) $validated['assistantCopilotMaxProbeActions'],
                 'max_same_state_repeats' => (int) $validated['assistantCopilotMaxSameStateRepeats'],
+                'max_cost_usd' => round((float) $validated['assistantCopilotMaxCostUsd'], 4),
                 'auto_execute_workflow_actions' => (bool) $validated['assistantCopilotAutoExecute'],
             ],
         ]);
@@ -476,6 +516,7 @@ class SettingsPage extends Component
         $this->assistantCopilotMaxRepairIterations = max(1, min(100, (int) ($optimizationDefaults['max_repair_iterations'] ?? 15)));
         $this->assistantCopilotMaxProbeActions = max(1, min(500, (int) ($optimizationDefaults['max_probe_actions'] ?? 60)));
         $this->assistantCopilotMaxSameStateRepeats = max(1, min(10, (int) ($optimizationDefaults['max_same_state_repeats'] ?? 2)));
+        $this->assistantCopilotMaxCostUsd = max(0, min(10000, (float) ($optimizationDefaults['max_cost_usd'] ?? 0)));
         $this->assistantCopilotAutoExecute = filter_var(
             $optimizationDefaults['auto_execute_workflow_actions'] ?? true,
             FILTER_VALIDATE_BOOL,

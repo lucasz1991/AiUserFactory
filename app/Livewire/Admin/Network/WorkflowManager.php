@@ -11,6 +11,7 @@ use App\Models\Workflow;
 use App\Models\WorkflowCopilotSession;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowStep;
+use App\Services\Ai\WorkflowCopilotAiUsageTracker;
 use App\Services\Workflows\PersonaActionWorkflowCatalog;
 use App\Services\Workflows\WorkflowCopilotLogExportService;
 use App\Services\Workflows\WorkflowCopilotPlanningService;
@@ -112,6 +113,8 @@ class WorkflowManager extends Component
 
     public bool $showCopilotPreviewModal = false;
 
+    public bool $showCopilotRunsModal = false;
+
     public ?int $activeCopilotSessionId = null;
 
     public ?int $dismissedCopilotTerminalSessionId = null;
@@ -131,6 +134,8 @@ class WorkflowManager extends Component
     public int $copilotMaxProbeActions = 60;
 
     public int $copilotMaxSameStateRepeats = 2;
+
+    public float $copilotMaxCostUsd = 0.0;
 
     public bool $copilotAutoExecute = true;
 
@@ -1249,6 +1254,7 @@ class WorkflowManager extends Component
             'copilotMaxRepairIterations' => ['required', 'integer', 'min:1', 'max:100'],
             'copilotMaxProbeActions' => ['required', 'integer', 'min:1', 'max:500'],
             'copilotMaxSameStateRepeats' => ['required', 'integer', 'min:1', 'max:10'],
+            'copilotMaxCostUsd' => ['required', 'numeric', 'min:0', 'max:10000'],
         ]);
 
         $workflowInputs = trim((string) ($validated['copilotWorkflowInputs'] ?? '')) === ''
@@ -1265,19 +1271,28 @@ class WorkflowManager extends Component
 
         try {
             $initialPlan = null;
+            $initialAiUsage = [];
             $planner = app(WorkflowCopilotPlanningService::class);
 
             if ($planner->needsInitialPlan($workflow)) {
-                $initialPlan = $planner->planAndApply(
-                    $workflow,
-                    trim($validated['copilotGoal']),
-                    $successCriteria,
-                    $workflowInputs,
-                );
+                $usageTracker = app(WorkflowCopilotAiUsageTracker::class);
+                $usageTracker->beginCapture();
+
+                try {
+                    $initialPlan = $planner->planAndApply(
+                        $workflow,
+                        trim($validated['copilotGoal']),
+                        $successCriteria,
+                        $workflowInputs,
+                    );
+                } finally {
+                    $initialAiUsage = $usageTracker->finishCapture();
+                }
                 $workflow = $workflow->fresh(['steps']) ?? $workflow;
             }
 
-            $session = app(WorkflowCopilotSessionService::class)->start($workflow, [
+            $sessionService = app(WorkflowCopilotSessionService::class);
+            $session = $sessionService->start($workflow, [
                 'person_id' => $validated['copilotPersonId'] ?: null,
                 'execution_target' => 'system',
                 'goal' => trim($validated['copilotGoal']),
@@ -1289,12 +1304,17 @@ class WorkflowManager extends Component
                     'max_repair_iterations' => (int) $validated['copilotMaxRepairIterations'],
                     'max_probe_actions' => (int) $validated['copilotMaxProbeActions'],
                     'max_same_state_repeats' => (int) $validated['copilotMaxSameStateRepeats'],
+                    'max_cost_usd' => round((float) $validated['copilotMaxCostUsd'], 4),
                     'auto_execute_workflow_actions' => true,
                 ],
             ]);
 
+            if ($initialAiUsage !== []) {
+                $session = $sessionService->recordAiUsage($session, $initialAiUsage, 'initial_planning');
+            }
+
             if ($initialPlan) {
-                app(WorkflowCopilotSessionService::class)->appendEvent(
+                $sessionService->appendEvent(
                     $session,
                     'plan.applied',
                     'Der leere Workflow wurde aus Zielbeschreibung und Katalogdaten geplant und aufgebaut.',
@@ -1623,6 +1643,7 @@ class WorkflowManager extends Component
         $this->copilotMaxRepairIterations = max(1, min(100, (int) ($defaults['max_repair_iterations'] ?? 15)));
         $this->copilotMaxProbeActions = max(1, min(500, (int) ($defaults['max_probe_actions'] ?? 60)));
         $this->copilotMaxSameStateRepeats = max(1, min(10, (int) ($defaults['max_same_state_repeats'] ?? 2)));
+        $this->copilotMaxCostUsd = max(0, min(10000, (float) ($defaults['max_cost_usd'] ?? 0)));
         $this->copilotAutoExecute = filter_var(
             $defaults['auto_execute_workflow_actions'] ?? true,
             FILTER_VALIDATE_BOOL,
@@ -1807,6 +1828,10 @@ class WorkflowManager extends Component
             'max_repair_iterations' => max(1, (int) ($budget['max_repair_iterations'] ?? 15)),
             'probe_actions' => (int) ($usage['probe_actions'] ?? 0),
             'max_probe_actions' => max(1, (int) ($budget['max_probe_actions'] ?? 60)),
+            'ai_requests' => max(0, (int) ($usage['ai_requests'] ?? 0)),
+            'total_tokens' => max(0, (int) ($usage['total_tokens'] ?? 0)),
+            'cost_usd' => max(0, (float) ($usage['cost_usd'] ?? 0)),
+            'max_cost_usd' => max(0, (float) ($budget['max_cost_usd'] ?? 0)),
             'elapsed_minutes' => $elapsedMinutes,
             'remaining_minutes' => max(0, $maxMinutes - $elapsedMinutes),
             'started_at' => optional($session->started_at)->format('d.m.Y H:i:s'),

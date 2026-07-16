@@ -48,6 +48,7 @@ class WorkflowCopilotRepairService
     ];
 
     private const STRUCTURAL_OPERATION_TYPES = [
+        'insert_step',
         'insert_task',
         'update_step_routes',
         'update_task_routes',
@@ -100,6 +101,12 @@ class WorkflowCopilotRepairService
 
         if ($definition === null) {
             return $this->pausePlan($taskKey, 'Die Task ist nicht im WorkflowTaskCatalog registriert und darf nicht autonom veraendert werden.');
+        }
+
+        $consentPlan = $this->consentObstaclePlan($step, $task, $checkpoint, $observation, $vision);
+
+        if ($consentPlan !== []) {
+            return $consentPlan;
         }
 
         $requiresVisualTarget = $this->taskRequiresVisualTarget($taskCatalogKey);
@@ -280,6 +287,12 @@ class WorkflowCopilotRepairService
         foreach ($operations as $operation) {
             if (! is_array($operation) || ! in_array($operation['type'] ?? null, self::STRUCTURAL_OPERATION_TYPES, true)) {
                 throw new \DomainException('Die strukturelle Reparatur enthaelt eine nicht erlaubte Operation.');
+            }
+
+            if ($operation['type'] === 'insert_step') {
+                $this->applyConsentObstacleStep($workflow, $operation, $observation);
+
+                continue;
             }
 
             $step = $workflow->steps()
@@ -1190,6 +1203,12 @@ class WorkflowCopilotRepairService
                 continue;
             }
 
+            // New visual-target steps are emitted only by the deterministic
+            // consent repair below, never from model-provided operations.
+            if ($type === 'insert_step') {
+                continue;
+            }
+
             $targetStep = $this->structuralTargetStep($workflow, $operation);
 
             if (! $targetStep) {
@@ -1322,6 +1341,458 @@ class WorkflowCopilotRepairService
             ->all();
 
         while (in_array($candidate, $existing, true)) {
+            $candidate = $base.'-'.$suffix++;
+        }
+
+        return $candidate;
+    }
+
+    protected function consentObstaclePlan(
+        WorkflowStep $step,
+        array $task,
+        array $checkpoint,
+        array $observation,
+        array $vision,
+    ): array {
+        if (! $this->consentBlocked($observation, $vision)) {
+            return [];
+        }
+
+        $target = $this->consentTargetFromEvidence($checkpoint, $observation, $vision);
+
+        if ($target === []) {
+            return [];
+        }
+
+        if ($this->taskLooksLikeConsentClick($task)) {
+            return [];
+        }
+
+        [$originalRoute] = $this->routeAfterTask($step, $task);
+
+        if ($this->routeTargetsConsentClick($step, $originalRoute)) {
+            return [
+                'action' => 'continue_route',
+                'task_key' => (string) ($task['key'] ?? ''),
+                'resume_checkpoint' => true,
+                'reason' => 'Die konfigurierte Folgeroute fuehrt bereits zu einer eigenen Consent-Klick-Liste und wird jetzt ausgefuehrt.',
+            ];
+        }
+
+        $decisionLabel = $target['decision'] === 'reject' ? 'ablehnen' : 'akzeptieren';
+
+        return [
+            'action' => 'restart_with_workflow_changes',
+            'task_key' => (string) ($task['key'] ?? ''),
+            'reason' => 'Der technisch erfolgreiche Task liess einen sichtbaren Consent-Dialog aktiv. Eine eigene kataloggebundene Browser-Klick-Liste wird zwischen Quelle und bisheriger Folgeroute eingefuegt.',
+            'operations' => [[
+                'type' => 'insert_step',
+                'purpose' => 'consent_obstacle',
+                'source_step_action_key' => (string) $step->action_key,
+                'source_task_key' => (string) ($task['key'] ?? ''),
+                'task_catalog_key' => 'browser.click',
+                'name' => 'Consent-Banner '.$decisionLabel,
+                'title' => 'Consent '.$decisionLabel,
+                'description' => 'Bestaetigt den sichtbaren Consent-Dialog vor der bisherigen Workflow-Fortsetzung.',
+                'selector' => $target['selector'],
+                'label' => $target['label'],
+                'decision' => $target['decision'],
+                'browser_window' => $target['window'],
+                'element_ref' => $target['element_ref'],
+            ]],
+            'planning_handoff' => [
+                'vision_profile' => 'image_understanding',
+                'vision_model' => $vision['model'] ?? null,
+                'planner_profile' => 'deterministic_consent_repair',
+            ],
+        ];
+    }
+
+    protected function applyConsentObstacleStep(Workflow $workflow, array $operation, array $observation): void
+    {
+        if (($operation['purpose'] ?? null) !== 'consent_obstacle'
+            || ($operation['task_catalog_key'] ?? null) !== 'browser.click') {
+            throw new \DomainException('Die einzufuegende Liste ist keine erlaubte Consent-Reparatur.');
+        }
+
+        $sourceStep = $workflow->steps()
+            ->where('action_key', trim((string) ($operation['source_step_action_key'] ?? '')))
+            ->first();
+        $sourceTaskKey = trim((string) ($operation['source_task_key'] ?? ''));
+        $sourceTask = $sourceStep
+            ? collect($sourceStep->task_cards)->firstWhere('key', $sourceTaskKey)
+            : null;
+
+        if (! $sourceStep || ! is_array($sourceTask) || $sourceTaskKey === '') {
+            throw new \DomainException('Die Quell-Task der Consent-Reparatur wurde nicht gefunden.');
+        }
+
+        $checkpoint = is_array($observation['copilot_checkpoint'] ?? null)
+            ? $observation['copilot_checkpoint']
+            : [];
+        $target = $this->consentTargetFromEvidence($checkpoint, $observation, []);
+        $selector = trim((string) ($operation['selector'] ?? ''));
+
+        if ($target === []
+            || ! $this->isSafeSelector($selector)
+            || ! hash_equals((string) $target['selector'], $selector)) {
+            throw new \DomainException('Der Consent-Klick ist nicht durch sichtbare Laufzeitevidenz abgesichert.');
+        }
+
+        [$originalRoute, $sourceRouteField] = $this->routeAfterTask($sourceStep, $sourceTask);
+
+        if (! $this->isValidRoute($sourceStep, $originalRoute)) {
+            throw new \DomainException('Die bisherige Folgeroute der Consent-Reparatur ist ungueltig.');
+        }
+
+        if ($this->routeTargetsConsentClick($sourceStep, $originalRoute)) {
+            throw new \DomainException('Die Folgeroute enthaelt bereits eine Consent-Klick-Liste.');
+        }
+
+        $definition = $this->catalog->task('browser.click');
+
+        if (! is_array($definition)) {
+            throw new \DomainException('Die Browser-Klick-Task ist nicht im WorkflowTaskCatalog registriert.');
+        }
+
+        $actionKey = $this->uniqueWorkflowStepActionKey($workflow, 'consent-banner-'.$target['decision']);
+        $name = Str::limit(trim((string) ($operation['name'] ?? 'Consent-Banner behandeln')), 180, '') ?: 'Consent-Banner behandeln';
+        $position = max(0, (int) $workflow->steps()->max('position')) + 10;
+        $newStep = $workflow->steps()->create([
+            'name' => $name,
+            'type' => WorkflowStep::TYPE_BROWSER_TASK,
+            'action_key' => $actionKey,
+            'position' => $position,
+            'is_enabled' => true,
+            'config_json' => ['tasks' => [], 'routes' => []],
+            'retry_attempts' => 0,
+            'wait_after_seconds' => 0,
+        ]);
+        $insertedRoute = [
+            'type' => 'step',
+            'action_key' => $actionKey,
+            'step' => $actionKey,
+            'label' => $name,
+        ];
+        $failureRoute = ['type' => 'fail', 'step' => 'fail', 'label' => 'Consent-Klick fehlgeschlagen'];
+        $card = $this->catalog->cardFromDefinition('browser.click', [
+            'key' => 'consent-'.$target['decision'],
+            'title' => Str::limit(trim((string) ($operation['title'] ?? 'Consent behandeln')), 180, ''),
+            'description' => Str::limit(trim((string) ($operation['description'] ?? 'Sichtbaren Consent-Dialog behandeln.')), 1000, ''),
+        ]);
+        $card = array_replace($card, [
+            'selector' => $selector,
+            'element_selector' => $selector,
+            'browser_window' => $target['window'],
+            'browser_window_name' => $target['window'],
+            'timeout_seconds' => 15,
+            'next' => $originalRoute,
+            'on_error' => $failureRoute,
+        ]);
+        $this->taskOrdering->appendTask($newStep, $card);
+
+        $newConfig = is_array($newStep->fresh()?->config_json) ? $newStep->fresh()->config_json : [];
+        $newConfig['routes'] = [
+            'success' => $originalRoute,
+            'failed' => $failureRoute,
+        ];
+        $newStep->forceFill(['config_json' => $newConfig])->save();
+
+        $orderedSteps = $workflow->steps()->ordered()->get();
+        $sourceIndex = $orderedSteps->search(fn (WorkflowStep $candidate): bool => (int) $candidate->id === (int) $sourceStep->id);
+
+        if ($sourceIndex === false || ! $this->taskOrdering->sortSteps($workflow, (int) $newStep->id, (int) $sourceIndex + 1)) {
+            throw new \DomainException('Die Consent-Liste konnte nicht hinter ihrer Quell-Liste einsortiert werden.');
+        }
+
+        if ($sourceRouteField === 'task_next') {
+            $this->applyChangesToLockedStep($sourceStep->fresh(), $sourceTaskKey, ['next' => $insertedRoute]);
+        } else {
+            $sourceConfig = is_array($sourceStep->fresh()?->config_json) ? $sourceStep->fresh()->config_json : [];
+            $sourceConfig['routes'] = array_replace(
+                is_array($sourceConfig['routes'] ?? null) ? $sourceConfig['routes'] : [],
+                ['success' => $insertedRoute],
+            );
+            $sourceStep->forceFill(['config_json' => $sourceConfig])->save();
+        }
+    }
+
+    /** @return array{0:array<string, mixed>, 1:string} */
+    protected function routeAfterTask(WorkflowStep $step, array $task): array
+    {
+        if (is_array($task['next'] ?? null)) {
+            return [$task['next'], 'task_next'];
+        }
+
+        $successRoute = data_get($step->config_json, 'routes.success');
+
+        if (is_array($successRoute)) {
+            return [$successRoute, 'step_success'];
+        }
+
+        return [[
+            'type' => 'step',
+            'action_key' => 'next',
+            'step' => 'next',
+            'label' => 'Naechste Liste',
+        ], 'step_success'];
+    }
+
+    protected function routeTargetsConsentClick(WorkflowStep $sourceStep, array $route): bool
+    {
+        $type = Str::lower(trim((string) ($route['type'] ?? '')));
+        $targetKey = trim((string) ($route['action_key'] ?? $route['step'] ?? ''));
+        $cardKey = trim((string) ($route['card_key'] ?? $route['card'] ?? ''));
+
+        if (in_array($type, ['end', 'fail'], true) || in_array($targetKey, ['end', 'fail'], true)) {
+            return false;
+        }
+
+        if ($targetKey === '' && $cardKey !== '') {
+            $targetStep = $sourceStep;
+        } elseif ($targetKey === 'next') {
+            $steps = WorkflowStep::query()
+                ->where('workflow_id', $sourceStep->workflow_id)
+                ->ordered()
+                ->get();
+            $sourceIndex = $steps->search(fn (WorkflowStep $candidate): bool => (int) $candidate->id === (int) $sourceStep->id);
+            $targetStep = $sourceIndex === false ? null : $steps->get((int) $sourceIndex + 1);
+        } else {
+            $targetStep = WorkflowStep::query()
+                ->where('workflow_id', $sourceStep->workflow_id)
+                ->where('action_key', $targetKey)
+                ->first();
+        }
+
+        if (! $targetStep instanceof WorkflowStep) {
+            return false;
+        }
+
+        $targetTask = $cardKey !== ''
+            ? collect($targetStep->task_cards)->firstWhere('key', $cardKey)
+            : collect($targetStep->task_cards)->first();
+
+        return is_array($targetTask) && $this->taskLooksLikeConsentClick($targetTask);
+    }
+
+    protected function taskLooksLikeConsentClick(array $task): bool
+    {
+        if (($task['task_key'] ?? null) !== 'browser.click') {
+            return false;
+        }
+
+        return $this->canonicalConsentAction(implode(' ', array_filter([
+            $task['title'] ?? null,
+            $task['description'] ?? null,
+            $task['selector'] ?? null,
+            $task['element_selector'] ?? null,
+        ], static fn (mixed $value): bool => is_scalar($value)))) !== null;
+    }
+
+    protected function consentBlocked(array $observation, array $vision): bool
+    {
+        $states = [
+            data_get($observation, 'page.state'),
+            $observation['page_state'] ?? null,
+            data_get($observation, 'dom.ui_state'),
+            $vision['ui_state'] ?? null,
+            $vision['page_state'] ?? null,
+        ];
+
+        if (collect($states)->contains(
+            fn (mixed $state): bool => str_contains(Str::lower(trim((string) $state)), 'consent'),
+        )) {
+            return true;
+        }
+
+        $evidence = Str::lower(implode(' ', [
+            (string) data_get($observation, 'dom.visible_text_excerpt', ''),
+            (string) json_encode($vision, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+        ]));
+
+        return preg_match('/(?:consent|cookie|einwilligung|datenschutz|privacy)/u', $evidence) === 1
+            && $this->canonicalConsentAction($evidence) !== null;
+    }
+
+    /** @return array<string, mixed> */
+    protected function consentTargetFromEvidence(array $checkpoint, array $observation, array $vision): array
+    {
+        if (! $this->consentBlocked($observation, $vision)) {
+            return [];
+        }
+
+        $candidates = [];
+
+        foreach ($observation['interaction_map'] ?? [] as $element) {
+            if (! is_array($element)
+                || ($element['visible'] ?? null) !== true
+                || ($element['enabled'] ?? true) === false) {
+                continue;
+            }
+
+            $this->appendConsentTargetCandidate(
+                $candidates,
+                implode(' ', array_filter([
+                    $element['text'] ?? null,
+                    $element['aria'] ?? null,
+                    $element['name'] ?? null,
+                ], static fn (mixed $value): bool => is_scalar($value))),
+                is_array($element['selector_candidates'] ?? null) ? $element['selector_candidates'] : [],
+                (string) ($element['window'] ?? data_get($observation, 'page.window', 'main')),
+                (string) ($element['element_ref'] ?? ''),
+                'interaction_map',
+            );
+        }
+
+        $result = is_array($checkpoint['result'] ?? null) ? $checkpoint['result'] : [];
+        $resultElement = is_array($result['element'] ?? null) ? $result['element'] : [];
+        $resultSelectors = array_filter([
+            $result['matchedCandidate'] ?? null,
+            $result['matched_candidate'] ?? null,
+            $result['selector'] ?? null,
+            $resultElement['selector'] ?? null,
+        ], static fn (mixed $value): bool => is_scalar($value));
+        $this->appendConsentTargetCandidate(
+            $candidates,
+            implode(' ', array_filter([
+                $resultElement['text'] ?? null,
+                $resultElement['aria'] ?? null,
+                $result['statusMessage'] ?? null,
+                ...$resultSelectors,
+            ], static fn (mixed $value): bool => is_scalar($value))),
+            $resultSelectors,
+            (string) ($result['browserWindow'] ?? $result['browser_window'] ?? data_get($observation, 'page.window', 'main')),
+            (string) ($resultElement['element_ref'] ?? ''),
+            'checkpoint_result',
+        );
+
+        $this->appendConsentTargetCandidate(
+            $candidates,
+            (string) data_get($observation, 'dom.visible_text_excerpt', ''),
+            [],
+            (string) data_get($observation, 'page.window', 'main'),
+            '',
+            'visible_text',
+        );
+        $this->appendConsentTargetCandidate(
+            $candidates,
+            (string) json_encode($vision, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+            [],
+            (string) data_get($observation, 'page.window', 'main'),
+            '',
+            'vision',
+        );
+
+        usort($candidates, static function (array $left, array $right): int {
+            return ((int) $right['score']) <=> ((int) $left['score']);
+        });
+
+        return $candidates[0] ?? [];
+    }
+
+    protected function appendConsentTargetCandidate(
+        array &$candidates,
+        string $evidence,
+        array $selectors,
+        string $window,
+        string $elementRef,
+        string $source,
+    ): void {
+        $action = $this->canonicalConsentAction($evidence);
+
+        if ($action === null) {
+            return;
+        }
+
+        $selectors = collect($selectors)
+            ->map(fn (mixed $selector): string => trim((string) $selector))
+            ->filter(fn (string $selector): bool => $this->isSpecificConsentSelector($selector))
+            ->values();
+        $selector = (string) ($selectors->first() ?: $this->consentSelectorForLabel($action['label']));
+
+        if (! $this->isSafeSelector($selector)) {
+            return;
+        }
+
+        $sourceBonus = match ($source) {
+            'checkpoint_result' => 40,
+            'interaction_map' => 30,
+            'visible_text' => 20,
+            default => 10,
+        };
+        $candidates[] = [
+            'selector' => $selector,
+            'label' => $action['label'],
+            'decision' => $action['decision'],
+            'window' => trim($window) ?: 'main',
+            'element_ref' => trim($elementRef) ?: null,
+            'source' => $source,
+            'score' => $action['score'] + $sourceBonus,
+        ];
+    }
+
+    /** @return array{label:string, decision:string, score:int}|null */
+    protected function canonicalConsentAction(string $evidence): ?array
+    {
+        $evidence = Str::lower($evidence);
+        $actions = [
+            ['/(?:alle\s+ablehnen)/u', 'Alle ablehnen', 'reject', 1000],
+            ['/(?:reject\s+all)/u', 'Reject all', 'reject', 990],
+            ['/(?:decline\s+all)/u', 'Decline all', 'reject', 980],
+            ['/(?:refuse\s+all)/u', 'Refuse all', 'reject', 970],
+            ['/(?:nur\s+notwendige)/u', 'Nur notwendige', 'reject', 960],
+            ['/(?:nur\s+erforderliche)/u', 'Nur erforderliche', 'reject', 950],
+            ['/(?:only\s+necessary)/u', 'Only necessary', 'reject', 940],
+            ['/(?:only\s+required)/u', 'Only required', 'reject', 930],
+            ['/\bablehnen\b/u', 'Ablehnen', 'reject', 900],
+            ['/\breject\b/u', 'Reject', 'reject', 890],
+            ['/\bdecline\b/u', 'Decline', 'reject', 880],
+            ['/(?:alle\s+akzeptieren)/u', 'Alle akzeptieren', 'accept', 600],
+            ['/(?:accept\s+all)/u', 'Accept all', 'accept', 590],
+            ['/(?:allow\s+all)/u', 'Allow all', 'accept', 580],
+            ['/\bakzeptieren\b/u', 'Akzeptieren', 'accept', 560],
+            ['/\baccept\b/u', 'Accept', 'accept', 550],
+            ['/\ballow\b/u', 'Allow', 'accept', 540],
+        ];
+
+        foreach ($actions as [$pattern, $label, $decision, $score]) {
+            if (preg_match($pattern, $evidence) === 1) {
+                return compact('label', 'decision', 'score');
+            }
+        }
+
+        return null;
+    }
+
+    protected function isSpecificConsentSelector(string $selector): bool
+    {
+        if (! $this->isSafeSelector($selector)) {
+            return false;
+        }
+
+        $normalized = Str::lower(preg_replace('/\s+/', '', $selector) ?? $selector);
+
+        return ! in_array($normalized, ['button', 'a', 'input', '*'], true)
+            && (str_contains($normalized, ':has-text(')
+                || str_contains($normalized, 'text=')
+                || str_contains($normalized, '#')
+                || str_contains($normalized, '['));
+    }
+
+    protected function consentSelectorForLabel(string $label): string
+    {
+        $label = str_replace(['\\', '"'], ['\\\\', '\\"'], $label);
+
+        return 'button:has-text("'.$label.'")';
+    }
+
+    protected function uniqueWorkflowStepActionKey(Workflow $workflow, string $name): string
+    {
+        $base = Str::slug($name) ?: 'consent-banner';
+        $candidate = $base;
+        $suffix = 2;
+
+        while ($workflow->steps()->where('action_key', $candidate)->exists()) {
             $candidate = $base.'-'.$suffix++;
         }
 

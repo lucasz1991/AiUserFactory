@@ -11,6 +11,7 @@ use App\Models\WorkflowCopilotSession;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowStep;
 use App\Services\Ai\AiConnectionService;
+use App\Services\Ai\WorkflowCopilotAiUsageTracker;
 use App\Services\Workflows\WorkflowCopilotSessionService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
@@ -33,20 +34,37 @@ class WorkflowCopilotLiveUiTest extends TestCase
         Queue::fake();
         $workflow = $this->workflow('copilot-system-start');
         $ai = \Mockery::mock(AiConnectionService::class);
-        $ai->shouldReceive('json')->once()->andReturn([
-            'summary' => 'Ein kurzer, ausfuehrbarer Startplan.',
-            'assumptions' => ['Der Test darf kurz warten.'],
-            'steps' => [[
-                'name' => 'Start vorbereiten',
-                'type' => WorkflowStep::TYPE_WAIT,
-                'description' => 'Initialer, katalogkonformer Testschritt.',
-                'tasks' => [[
-                    'task_key' => 'wait.seconds',
-                    'title' => 'Kurz warten',
-                    'parameters' => ['value' => 1],
+        $ai->shouldReceive('json')->once()->andReturnUsing(function (): array {
+            app(WorkflowCopilotAiUsageTracker::class)->recordResponse(
+                ['model' => 'test/planner'],
+                [
+                    'id' => 'initial-plan-generation',
+                    'model' => 'test/planner',
+                    'usage' => [
+                        'prompt_tokens' => 200,
+                        'completion_tokens' => 50,
+                        'total_tokens' => 250,
+                        'cost' => 0.0025,
+                    ],
+                ],
+                'data_analysis',
+            );
+
+            return [
+                'summary' => 'Ein kurzer, ausfuehrbarer Startplan.',
+                'assumptions' => ['Der Test darf kurz warten.'],
+                'steps' => [[
+                    'name' => 'Start vorbereiten',
+                    'type' => WorkflowStep::TYPE_WAIT,
+                    'description' => 'Initialer, katalogkonformer Testschritt.',
+                    'tasks' => [[
+                        'task_key' => 'wait.seconds',
+                        'title' => 'Kurz warten',
+                        'parameters' => ['value' => 1],
+                    ]],
                 ]],
-            ]],
-        ]);
+            ];
+        });
         $this->app->instance(AiConnectionService::class, $ai);
 
         $component = Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
@@ -70,6 +88,8 @@ class WorkflowCopilotLiveUiTest extends TestCase
 
         $this->assertSame('system', $session->execution_target);
         $this->assertSame(45, $session->budget_json['max_minutes']);
+        $this->assertSame(0.0025, $session->usage_json['cost_usd']);
+        $this->assertSame(250, $session->usage_json['total_tokens']);
         $this->assertSame(['Finale URL enthaelt /success', 'Text Fertig ist sichtbar'], $session->success_criteria_json['assertions']);
         $this->assertSame($session->id, $workflow->fresh()->active_workflow_copilot_session_id);
         $this->assertSame('wait.seconds', data_get($workflow->fresh()->steps()->first()?->task_cards, '0.task_key'));

@@ -451,6 +451,13 @@
                             <p class="mt-1 text-xs text-gray-500">Danach gilt der Lauf als festgefahren.</p>
                             @error('assistantCopilotMaxSameStateRepeats') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
                         </div>
+
+                        <div>
+                            <label for="assistant-copilot-max-cost-usd" class="block text-sm font-medium text-gray-700">AI-Kostenbudget (USD)</label>
+                            <input id="assistant-copilot-max-cost-usd" type="number" min="0" max="10000" step="0.0001" wire:model.defer="assistantCopilotMaxCostUsd" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500" />
+                            <p class="mt-1 text-xs text-gray-500">0 bedeutet unbegrenzt. Erfasst werden die von OpenRouter gemeldeten Kosten je Optimierungslauf.</p>
+                            @error('assistantCopilotMaxCostUsd') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                        </div>
                     </div>
                 </div>
 

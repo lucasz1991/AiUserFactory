@@ -1237,12 +1237,29 @@ function appendDebugArtifact(artifact) {
 async function devDomSnapshot(targetPage) {
   return targetPage.evaluate(() => {
     const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+    const isVisible = (element) => {
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+
+      return rect.width > 0
+        && rect.height > 0
+        && style.display !== 'none'
+        && style.visibility !== 'hidden'
+        && Number.parseFloat(style.opacity || '1') > 0
+        && element.getAttribute('aria-hidden') !== 'true';
+    };
     const visibleText = normalize(document.body ? document.body.innerText || '' : '');
     const classifyUiState = () => {
       const haystack = `${window.location.href} ${document.title} ${visibleText}`.toLowerCase();
+      const visibleActionText = normalize(Array.from(document.querySelectorAll('button,a,[role="button"],input[type="button"],input[type="submit"]'))
+        .filter((element) => isVisible(element))
+        .map((element) => element.innerText || element.textContent || element.value || element.getAttribute('aria-label') || '')
+        .join(' ')).toLowerCase();
+      const hasConsentContext = /(?:consent|cookie|einwilligung|datenschutz|privacy)/i.test(haystack);
+      const hasConsentAction = /(?:alle\s+ablehnen|alle\s+akzeptieren|reject\s+all|decline\s+all|refuse\s+all|accept\s+all|allow\s+all|nur\s+(?:notwendige|erforderliche)|only\s+(?:necessary|required))/i.test(visibleActionText);
 
       if (haystack.includes('captcha')) return 'captcha_blocked';
-      if (haystack.includes('consent') || haystack.includes('cookie') || haystack.includes('einwilligung')) return 'consent_blocked';
+      if (hasConsentContext && hasConsentAction) return 'consent_blocked';
       if (haystack.includes('login') || haystack.includes('signin') || haystack.includes('anmelden')) return 'login_page';
       if (haystack.includes('register') || haystack.includes('signup') || haystack.includes('registr')) return 'registration_form';
       if (haystack.includes('verification') || haystack.includes('verifizierung') || haystack.includes('code')) return 'verification_pending';
@@ -1261,6 +1278,7 @@ async function devDomSnapshot(targetPage) {
 
         return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
       };
+      const escapeText = (value) => String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 
       if (!tag) return '';
       if (element.id) return `#${escapeCss(element.id)}`;
@@ -1274,10 +1292,28 @@ async function devDomSnapshot(targetPage) {
       const role = element.getAttribute('role');
       const text = normalize(element.innerText || element.textContent || '').slice(0, 80);
 
-      if (role) return `${tag}[role="${escapeCss(role)}"]${text ? ` /* text: ${text} */` : ''}`;
-      if (text && ['a', 'button', 'label', 'span', 'div'].includes(tag)) return `${tag} /* text: ${text} */`;
+      if (role) return `${tag}[role="${escapeCss(role)}"]${text ? `:has-text("${escapeText(text)}")` : ''}`;
+      if (text && ['a', 'button', 'label', 'span', 'div'].includes(tag)) return `${tag}:has-text("${escapeText(text)}")`;
 
       return tag;
+    };
+    const interactionPriority = (item) => {
+      const haystack = normalize(`${item.text} ${item.ariaLabel} ${item.name} ${item.selector}`).toLowerCase();
+      const controlPriority = item.tag === 'button' || item.role === 'button' ? 20 : 0;
+
+      if (/(?:alle\s+ablehnen|reject\s+all|decline\s+all|refuse\s+all|nur\s+(?:notwendige|erforderliche)|only\s+(?:necessary|required)|\bablehnen\b|\breject\b|\bdecline\b)/i.test(haystack)) {
+        return controlPriority + 1000;
+      }
+
+      if (/(?:alle\s+akzeptieren|accept\s+all|allow\s+all|\bakzeptieren\b|\baccept\b|\ballow\b)/i.test(haystack)) {
+        return controlPriority + 800;
+      }
+
+      if (/(?:consent|cookie|einwilligung|datenschutz|privacy)/i.test(haystack)) {
+        return controlPriority + 500;
+      }
+
+      return controlPriority;
     };
     const selectorSuggestions = Array.from(document.querySelectorAll('button,a,input,textarea,select,[role],[aria-label],[data-testid],[data-test],[data-cy],[data-qa]'))
       .map((element) => {
@@ -1315,7 +1351,10 @@ async function devDomSnapshot(targetPage) {
         };
       })
       .filter((item) => item.selector && !/nth-child/i.test(item.selector))
-      .slice(0, 50);
+      .map((item, index) => ({ item, index, priority: interactionPriority(item) }))
+      .sort((left, right) => right.priority - left.priority || left.index - right.index)
+      .slice(0, 80)
+      .map(({ item }) => item);
 
     return {
       html: document.documentElement ? document.documentElement.outerHTML || '' : '',
