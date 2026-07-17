@@ -228,6 +228,8 @@
                             :workflow-run="$workflowRun"
                             :active-step-id="$activeStepId"
                             :active-task-key="$activeTaskKey"
+                            :selected-step-id="$selectedStepId"
+                            :selected-task-key="$selectedTaskKey"
                             :selectable-tasks="$selectableTasks"
                             :show-header="false"
                         />

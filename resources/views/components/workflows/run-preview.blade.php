@@ -3,6 +3,8 @@
     'process' => null,
     'activeStepId' => null,
     'activeTaskKey' => null,
+    'selectedStepId' => null,
+    'selectedTaskKey' => null,
     'selectableTasks' => false,
     'expanded' => false,
 ])
@@ -12,11 +14,13 @@
         :workflow-run-id="$workflowRun?->id"
         :active-step-id="$activeStepId"
         :active-task-key="$activeTaskKey"
+        :selected-step-id="$selectedStepId"
+        :selected-task-key="$selectedTaskKey"
         :selectable-tasks="$selectableTasks"
         :expanded="$expanded"
         :process-pid="$process?->pid"
         :process-type="$process?->process_type"
         :process-status="$process?->status"
-        :key="'workflow-run-preview-'.($workflowRun?->id ?? 'empty')"
+        :key="'workflow-run-preview-'.($workflowRun?->id ?? 'empty').'-'.($selectedStepId ?? 'none').'-'.($selectedTaskKey ?: 'none')"
     />
 </div>

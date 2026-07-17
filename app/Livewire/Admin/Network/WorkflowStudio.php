@@ -10,12 +10,10 @@ use App\Models\Person;
 use App\Models\Workflow;
 use App\Models\WorkflowCopilotSession;
 use App\Models\WorkflowRun;
-use App\Models\WorkflowStudioCheckpoint;
 use App\Models\WorkflowStudioSession;
 use App\Services\Workflows\WorkflowCopilotSessionService;
 use App\Services\Workflows\WorkflowExecutionService;
 use App\Services\Workflows\WorkflowStudioAuthorizationService;
-use App\Services\Workflows\WorkflowStudioCheckpointService;
 use App\Services\Workflows\WorkflowStudioRevisionService;
 use App\Services\Workflows\WorkflowStudioSessionService;
 use App\Services\Workflows\WorkflowTaskCatalog;
@@ -66,17 +64,13 @@ class WorkflowStudio extends Component
 
     public string $probeBrowserWindow = 'main';
 
-    public string $checkpointName = '';
-
-    public string $selectedCheckpointId = '';
-
     public array $lastActionResult = [];
 
     public array $pendingConfirmation = [];
 
     public bool $showCopilotSettingsModal = false;
 
-    public bool $showCheckpointsModal = false;
+    public string $observedCursorSignature = '';
 
     public function mount(Workflow $workflow): void
     {
@@ -110,9 +104,12 @@ class WorkflowStudio extends Component
         $this->personId = (string) ($session->person_id ?: '');
         $this->executionTarget = (string) data_get($session->state_json, 'execution_target', 'system');
 
-        $firstStep = $workflow->steps()->orderBy('position')->first();
-        if ($firstStep) {
-            $this->selectTask((int) $firstStep->getKey(), (string) data_get($firstStep->task_cards, '0.key', ''));
+        $activeRun = $this->activeRun();
+        if (! $this->synchronizeSelectionWithRunCursor($activeRun, true)) {
+            $firstTask = $this->taskNavigation($workflow)->first();
+            if ($firstTask) {
+                $this->selectTask((int) $firstTask['step_id'], (string) $firstTask['task_key']);
+            }
         }
     }
 
@@ -157,27 +154,7 @@ class WorkflowStudio extends Component
     public function startRun(): void
     {
         $this->perform('run.started', function (): array {
-            $session = $this->session();
-            $active = $session->activeRun;
-            if ($active && ! in_array($active->status, ['completed', 'failed', 'cancelled', 'timed_out', 'lost'], true)) {
-                throw new DomainException('Die Studio-Sitzung besitzt bereits einen aktiven Lauf.');
-            }
-
-            $inputs = $this->decodeObject($this->workflowInputs, 'Workflow-Eingaben');
-            $context = [
-                'workflow_studio_session_id' => $session->getKey(),
-                'interactive_debug' => true,
-                'workflow_inputs' => $inputs,
-                'workflow_variables' => $inputs,
-                'person_id' => $this->personId !== '' ? (int) $this->personId : null,
-                'execution_target' => $this->executionTarget,
-                'network_node_id' => $this->executionTarget === 'client_controller' && $this->networkNodeId !== ''
-                    ? (int) $this->networkNodeId
-                    : null,
-            ];
-            $run = app(WorkflowExecutionService::class)->start($this->workflow(), $context, 'workflow-studio');
-            app(WorkflowStudioSessionService::class)->attachRun($session, $run);
-            $this->activeRunId = (int) $run->getKey();
+            $run = $this->startInteractiveRun();
 
             return $this->result((string) $run->status, 'Workflow-Test wurde gestartet.', $run);
         });
@@ -207,9 +184,23 @@ class WorkflowStudio extends Component
     public function runSingleTask(): void
     {
         $this->perform('run.single_task', function (): array {
-            $run = $this->activeRunOrFail();
+            if ($this->selectedStepId === '' || $this->selectedTaskKey === '') {
+                throw new DomainException('Wählen Sie zuerst eine Task aus.');
+            }
+
+            $run = $this->activeRun();
+            if (! $run || $this->isFinalRunStatus((string) $run->status)) {
+                $run = $this->startInteractiveRun(
+                    true,
+                    (int) $this->selectedStepId,
+                    $this->selectedTaskKey,
+                );
+
+                return $this->result('running', 'Die ausgewählte Task wird einmal ausgeführt; danach pausiert der Lauf.', $run);
+            }
+
             if ($run->status !== 'paused') {
-                throw new DomainException('Einzel-Task ist nur bei pausiertem Lauf moeglich.');
+                throw new DomainException('Die laufende Task muss zuerst beendet oder der Lauf pausiert werden.');
             }
             $this->rebasePausedRunRevision($run);
             $response = app(WorkflowExecutionService::class)->resumeManualPause(
@@ -356,14 +347,40 @@ class WorkflowStudio extends Component
             return;
         }
         $task = collect($step->task_cards)->firstWhere('key', $taskKey);
+        if ($taskKey !== '' && ! $task) {
+            return;
+        }
         $this->selectedStepId = (string) $stepId;
         $this->selectedTaskKey = $taskKey;
         $this->editingTaskJson = $task ? (json_encode($task, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) ?: '') : '';
     }
 
+    public function selectPreviousTask(): void
+    {
+        $this->moveTaskSelection(-1);
+    }
+
+    public function selectNextTask(): void
+    {
+        $this->moveTaskSelection(1);
+    }
+
+    public function openBuilderForStep(int $stepId): void
+    {
+        $step = $this->workflow()->steps()->find($stepId);
+        if (! $step) {
+            return;
+        }
+
+        $this->selectedStepId = (string) $stepId;
+        $this->dispatch('workflow-studio-builder-target', stepId: $stepId);
+        $this->dispatch('workflow-studio-open-builder');
+    }
+
     public function editTask(int $stepId, string $taskKey): void
     {
         $this->selectTask($stepId, $taskKey);
+        $this->dispatch('workflow-studio-open-builder');
         $this->dispatch('open-workflow-studio-task-editor', stepId: $stepId, taskKey: $taskKey);
     }
 
@@ -383,6 +400,18 @@ class WorkflowStudio extends Component
     {
         $this->selectTask($stepId, $taskKey);
         $this->lastActionResult = $this->result('draft', 'Task wurde gespeichert und eine neue Revision erstellt.');
+    }
+
+    #[On('workflow-studio-definition-updated')]
+    public function handleDefinitionUpdated(?int $stepId = null, ?string $taskKey = null, string $message = 'Workflow wurde aktualisiert.'): void
+    {
+        if ($stepId && filled($taskKey)) {
+            $this->selectTask($stepId, (string) $taskKey);
+        } else {
+            $this->ensureSelectedTaskExists();
+        }
+
+        $this->lastActionResult = $this->result('draft', $message);
     }
 
     public function saveSelectedTask(): void
@@ -410,42 +439,6 @@ class WorkflowStudio extends Component
             );
 
             return $this->result('draft', 'Task wurde als neue Revision gespeichert.');
-        });
-    }
-
-    public function createCheckpoint(): void
-    {
-        $this->perform('checkpoint.created', function (): array {
-            $checkpoint = app(WorkflowStudioCheckpointService::class)->create(
-                $this->session(),
-                $this->activeRunOrFail(),
-                $this->checkpointName,
-            );
-            $this->selectedCheckpointId = (string) $checkpoint->getKey();
-            $this->checkpointName = '';
-
-            return $this->result('checkpoint_created', 'Checkpoint wurde gespeichert.', $this->activeRun(), false, null, $checkpoint);
-        });
-    }
-
-    public function restoreCheckpoint(): void
-    {
-        $this->perform('checkpoint.restored', function (): array {
-            $checkpoint = $this->selectedCheckpointOrFail();
-            $run = app(WorkflowStudioCheckpointService::class)->restore($this->session(), $checkpoint, $this->activeRunOrFail());
-
-            return $this->result('paused', 'Checkpoint wurde in den aktuellen Lauf geladen.', $run, false, null, $checkpoint);
-        });
-    }
-
-    public function branchFromCheckpoint(): void
-    {
-        $this->perform('checkpoint.branched', function (): array {
-            $checkpoint = $this->selectedCheckpointOrFail();
-            $run = app(WorkflowStudioCheckpointService::class)->branch($this->session(), $checkpoint);
-            $this->activeRunId = (int) $run->getKey();
-
-            return $this->result('paused', 'Neuer Lauf wurde vom Checkpoint abgezweigt.', $run, false, null, $checkpoint);
         });
     }
 
@@ -489,6 +482,8 @@ class WorkflowStudio extends Component
             $this->pendingConfirmation = $pending;
         }
         $run = $this->activeRun();
+        $this->synchronizeSelectionWithRunCursor($run);
+        $this->ensureSelectedTaskExists();
         if ($session && $run && $session->status !== $run->status && $session->status !== 'confirmation_required') {
             $session->forceFill([
                 'status' => $run->status,
@@ -502,19 +497,27 @@ class WorkflowStudio extends Component
     public function render()
     {
         $workflow = $this->workflow()->load(['steps', 'studioRevisions']);
-        $session = $this->session()->load(['checkpoints.revision', 'events']);
+        $session = $this->session()->load('events');
         $run = $this->activeRun()?->load(['stepRuns.workflowStep', 'artifacts']);
+        $taskNavigation = $this->taskNavigation($workflow);
+        $selectedTaskIndex = $taskNavigation->search(fn (array $task): bool => (int) $task['step_id'] === (int) $this->selectedStepId
+            && (string) $task['task_key'] === $this->selectedTaskKey
+        );
+        $selectedTaskIndex = $selectedTaskIndex === false ? null : (int) $selectedTaskIndex;
 
         return view('livewire.admin.network.workflow-studio', [
             'workflow' => $workflow,
             'session' => $session,
             'run' => $run,
             'steps' => $workflow->steps,
-            'checkpoints' => $session->checkpoints()->with('revision')->latest('sequence')->get(),
             'events' => $session->events()->latest('sequence')->limit(40)->get()->reverse()->values(),
             'persons' => Person::query()->orderBy('sort_order')->orderBy('id')->limit(500)->get(),
             'networkNodes' => NetworkNode::query()->available()->orderBy('name')->get(),
             'permissionModes' => WorkflowCopilotPermissionMode::cases(),
+            'taskCount' => $taskNavigation->count(),
+            'selectedTaskNumber' => $selectedTaskIndex === null ? null : $selectedTaskIndex + 1,
+            'hasPreviousTask' => $selectedTaskIndex !== null && $selectedTaskIndex > 0,
+            'hasNextTask' => $selectedTaskIndex !== null && $selectedTaskIndex < $taskNavigation->count() - 1,
         ])->layout('layouts.master');
     }
 
@@ -558,7 +561,6 @@ class WorkflowStudio extends Component
         ?WorkflowRun $run = null,
         bool $confirmationRequired = false,
         ?string $confirmationId = null,
-        ?WorkflowStudioCheckpoint $checkpoint = null,
     ): array {
         $run ??= $this->activeRun();
 
@@ -569,7 +571,6 @@ class WorkflowStudio extends Component
                 'task_key' => data_get($run?->context_json, 'next_task_key'),
             ],
             'revision' => (int) $this->workflow()->copilot_revision,
-            'checkpoint' => $checkpoint ? ['id' => (int) $checkpoint->getKey(), 'sequence' => (int) $checkpoint->sequence] : null,
             'confirmation_required' => $confirmationRequired,
             'confirmation_id' => $confirmationId,
             'message' => $message,
@@ -619,13 +620,154 @@ class WorkflowStudio extends Component
         return $this->activeRun() ?? throw new DomainException('Es ist kein Studio-Lauf aktiv.');
     }
 
-    private function selectedCheckpointOrFail(): WorkflowStudioCheckpoint
-    {
-        if ($this->selectedCheckpointId === '') {
-            throw new DomainException('Waehlen Sie zuerst einen Checkpoint aus.');
+    private function startInteractiveRun(
+        bool $singleTask = false,
+        ?int $workflowStepId = null,
+        ?string $taskKey = null,
+    ): WorkflowRun {
+        $session = $this->session()->load('activeRun');
+        $active = $session->activeRun;
+        if ($active && ! $this->isFinalRunStatus((string) $active->status)) {
+            throw new DomainException('Die Studio-Sitzung besitzt bereits einen aktiven Lauf.');
         }
 
-        return $this->session()->checkpoints()->findOrFail((int) $this->selectedCheckpointId);
+        $workflow = $this->workflow()->load('steps');
+        $inputs = $this->decodeObject($this->workflowInputs, 'Workflow-Eingaben');
+        $context = [
+            'workflow_studio_session_id' => $session->getKey(),
+            'interactive_debug' => true,
+            'workflow_inputs' => $inputs,
+            'workflow_variables' => $inputs,
+            'person_id' => $this->personId !== '' ? (int) $this->personId : null,
+            'execution_target' => $this->executionTarget,
+            'network_node_id' => $this->executionTarget === 'client_controller' && $this->networkNodeId !== ''
+                ? (int) $this->networkNodeId
+                : null,
+        ];
+
+        if ($singleTask) {
+            $step = $workflow->steps->firstWhere('id', $workflowStepId);
+            $taskKey = trim((string) $taskKey);
+            $taskExists = $step && collect($step->task_cards)->contains(
+                fn (array $task): bool => trim((string) ($task['key'] ?? '')) === $taskKey,
+            );
+
+            if (! $step || ! $step->is_enabled || ! $taskExists) {
+                throw new DomainException('Die ausgewählte Task ist nicht ausführbar oder nicht mehr vorhanden.');
+            }
+
+            $context['studio_single_task'] = true;
+            $context['next_step_action_key'] = (string) $step->action_key;
+            $context['next_task_key'] = $taskKey;
+        }
+
+        $run = app(WorkflowExecutionService::class)->start($workflow, $context, 'workflow-studio');
+        app(WorkflowStudioSessionService::class)->attachRun($session, $run);
+        $this->activeRunId = (int) $run->getKey();
+
+        if ($singleTask && $workflowStepId && filled($taskKey)) {
+            $this->observedCursorSignature = $workflowStepId.'::'.$taskKey;
+        }
+
+        return $run;
+    }
+
+    private function isFinalRunStatus(string $status): bool
+    {
+        return in_array($status, ['completed', 'failed', 'cancelled', 'timed_out', 'lost'], true);
+    }
+
+    private function taskNavigation(?Workflow $workflow = null): \Illuminate\Support\Collection
+    {
+        $workflow ??= $this->workflow()->load('steps');
+        $steps = $workflow->relationLoaded('steps')
+            ? $workflow->steps->sortBy([['position', 'asc'], ['id', 'asc']])->values()
+            : $workflow->steps()->ordered()->get();
+
+        return $steps->flatMap(function ($step): array {
+            return collect($step->task_cards)
+                ->filter(fn (mixed $task): bool => is_array($task) && filled($task['key'] ?? null))
+                ->values()
+                ->map(fn (array $task, int $taskIndex): array => [
+                    'step_id' => (int) $step->getKey(),
+                    'step_name' => (string) $step->name,
+                    'step_action_key' => (string) $step->action_key,
+                    'step_enabled' => (bool) $step->is_enabled,
+                    'task_index' => $taskIndex,
+                    'task_key' => (string) $task['key'],
+                    'task_title' => (string) ($task['title'] ?? $task['key']),
+                ])->all();
+        })->values();
+    }
+
+    private function moveTaskSelection(int $direction): void
+    {
+        $tasks = $this->taskNavigation();
+        if ($tasks->isEmpty()) {
+            return;
+        }
+
+        $currentIndex = $tasks->search(fn (array $task): bool => (int) $task['step_id'] === (int) $this->selectedStepId
+            && (string) $task['task_key'] === $this->selectedTaskKey
+        );
+        $currentIndex = $currentIndex === false ? ($direction > 0 ? -1 : $tasks->count()) : (int) $currentIndex;
+        $target = $tasks->get(max(0, min($tasks->count() - 1, $currentIndex + $direction)));
+
+        if ($target) {
+            $this->selectTask((int) $target['step_id'], (string) $target['task_key']);
+        }
+    }
+
+    private function ensureSelectedTaskExists(): void
+    {
+        $tasks = $this->taskNavigation();
+        $selectedExists = $tasks->contains(fn (array $task): bool => (int) $task['step_id'] === (int) $this->selectedStepId
+            && (string) $task['task_key'] === $this->selectedTaskKey
+        );
+
+        if ($selectedExists) {
+            return;
+        }
+
+        $first = $tasks->first();
+        if ($first) {
+            $this->selectTask((int) $first['step_id'], (string) $first['task_key']);
+        } else {
+            $this->selectedStepId = '';
+            $this->selectedTaskKey = '';
+            $this->editingTaskJson = '';
+        }
+    }
+
+    private function synchronizeSelectionWithRunCursor(?WorkflowRun $run, bool $force = false): bool
+    {
+        if (! $run) {
+            return false;
+        }
+
+        $taskKey = trim((string) data_get($run->context_json, 'next_task_key', ''));
+        if ($taskKey === '') {
+            return false;
+        }
+
+        $workflow = $this->workflow()->load('steps');
+        $step = $workflow->steps->firstWhere('id', (int) $run->current_workflow_step_id);
+        if (! $step || ! collect($step->task_cards)->contains(fn (array $task): bool => (string) ($task['key'] ?? '') === $taskKey)) {
+            $step = $workflow->steps->first(fn ($candidate): bool => collect($candidate->task_cards)->contains(fn (array $task): bool => (string) ($task['key'] ?? '') === $taskKey)
+            );
+        }
+
+        if (! $step) {
+            return false;
+        }
+
+        $signature = $step->getKey().'::'.$taskKey;
+        if ($force || $signature !== $this->observedCursorSignature) {
+            $this->selectTask((int) $step->getKey(), $taskKey);
+        }
+        $this->observedCursorSignature = $signature;
+
+        return true;
     }
 
     private function rebasePausedRunRevision(WorkflowRun $run): void

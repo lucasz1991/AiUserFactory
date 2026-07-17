@@ -452,7 +452,7 @@ class WorkflowExecutionService
             return ['ok' => true, 'message' => 'Workflow-Lauf wurde pausiert.'];
         }
 
-        return ['ok' => true, 'message' => 'Pause ist angefordert und greift am naechsten sicheren Task-Checkpoint.'];
+        return ['ok' => true, 'message' => 'Pause ist angefordert und greift nach der aktuell laufenden Task.'];
     }
 
     public function resumeManualPause(
@@ -1459,7 +1459,6 @@ class WorkflowExecutionService
 
             $run->forceFill(['context_json' => $context])->save();
             $this->completeStepRun($stepRun, $result, $routedFailure ? $outcome : 'completed');
-            $this->createStudioCheckpointSafely($run, 'task', 'Nach Task '.$currentTaskKey);
             $this->continueAfterStep($run, $stepRun, $result, $outcome, max(0, (int) $step->wait_after_seconds));
 
             return;
@@ -1493,7 +1492,6 @@ class WorkflowExecutionService
             'current_workflow_step_id' => $step->id,
             'context_json' => $context,
         ])->save();
-        $this->createStudioCheckpointSafely($run, 'task', 'Nach Task '.$currentTaskKey);
 
         if ($pauseNow) {
             $this->holdManualPause($run, $context, $stepRun);
@@ -1547,24 +1545,6 @@ class WorkflowExecutionService
                 $state['failed_selectors'] = array_values(array_unique([...(array) ($state['failed_selectors'] ?? []), $selector]));
                 $session->forceFill(['state_json' => $state, 'last_activity_at' => now()])->save();
             }
-        }
-        $this->createStudioCheckpointSafely($run, 'probe', 'Nach Probe '.$stepRun->id);
-    }
-
-    protected function createStudioCheckpointSafely(WorkflowRun $run, string $phase, string $name): void
-    {
-        $sessionId = (int) ($run->workflow_studio_session_id ?: data_get($run->context_json, 'workflow_studio_session_id', 0));
-        if ($sessionId <= 0) {
-            return;
-        }
-
-        try {
-            $session = WorkflowStudioSession::query()->find($sessionId);
-            if ($session) {
-                app(WorkflowStudioCheckpointService::class)->create($session, $run->fresh(), $name, $phase);
-            }
-        } catch (\Throwable $exception) {
-            report($exception);
         }
     }
 

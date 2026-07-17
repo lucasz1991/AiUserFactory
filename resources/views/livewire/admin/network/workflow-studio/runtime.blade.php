@@ -19,7 +19,7 @@
 
             <div class="grid gap-4 lg:grid-cols-2">
                 <section class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-                    <div class="border-b border-slate-200 px-4 py-3"><h3 class="text-sm font-bold text-slate-900">Workflow-Variablen</h3><p class="mt-1 text-xs text-slate-500">Bleiben mit Checkpoints und Pausen erhalten.</p></div>
+                    <div class="border-b border-slate-200 px-4 py-3"><h3 class="text-sm font-bold text-slate-900">Workflow-Variablen</h3><p class="mt-1 text-xs text-slate-500">Bleiben während Einzelschritten und Pausen erhalten.</p></div>
                     <pre class="max-h-[520px] min-h-[260px] overflow-auto whitespace-pre-wrap p-4 text-[11px] leading-5 text-slate-600">{{ json_encode($variables, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) }}</pre>
                 </section>
                 <section class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">

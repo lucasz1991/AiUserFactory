@@ -237,17 +237,24 @@ class WorkflowStudioTest extends TestCase
         $this->assertCount(2, $step->fresh()->task_cards);
     }
 
-    public function test_fullscreen_studio_renders_the_shared_preview_controls_and_permission_select(): void
+    public function test_fullscreen_studio_renders_the_test_builder_and_task_navigation_without_checkpoint_controls(): void
     {
         [$workflow] = $this->workflow();
         $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
         $this->actingAs($admin);
 
         Livewire::test(WorkflowStudio::class, ['workflow' => $workflow])
-            ->assertSee('Workflow-Vorschau', false)
+            ->assertSee('Live-Browser & Ausführung', false)
+            ->assertSee('1 Task ausführen')
+            ->assertSee('Task zurück')
+            ->assertSee('Task weiter')
+            ->assertSee('Workflow bearbeiten')
+            ->assertSee('Task-Katalog')
             ->assertSee('Selector-Probe')
             ->assertSee('Kritisch nachfragen')
-            ->assertSee('Checkpoint');
+            ->assertSeeHtml('data-studio-selected-task="true"')
+            ->assertDontSee('Checkpoints verwalten')
+            ->assertDontSeeHtml('wire:model="showCheckpointsModal"');
     }
 
     public function test_revision_history_is_opened_from_the_workflow_manager_actions(): void
@@ -297,6 +304,72 @@ class WorkflowStudioTest extends TestCase
 
         $this->assertTrue((bool) data_get($run->fresh()->context_json, 'studio_single_task'));
         Queue::assertPushed(RunWorkflowJob::class, 2);
+    }
+
+    public function test_single_task_button_starts_at_the_selected_task_without_an_existing_run(): void
+    {
+        Queue::fake();
+        [$workflow, $step] = $this->workflow();
+        $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
+        $this->actingAs($admin);
+
+        Livewire::test(WorkflowStudio::class, ['workflow' => $workflow])
+            ->assertSet('selectedStepId', (string) $step->id)
+            ->assertSet('selectedTaskKey', 'first-task')
+            ->call('runSingleTask')
+            ->assertHasNoErrors();
+
+        $run = $workflow->runs()->latest('id')->firstOrFail();
+        $this->assertSame('queued', $run->status);
+        $this->assertTrue((bool) data_get($run->context_json, 'studio_single_task'));
+        $this->assertTrue((bool) data_get($run->context_json, 'interactive_debug'));
+        $this->assertSame($step->action_key, data_get($run->context_json, 'next_step_action_key'));
+        $this->assertSame('first-task', data_get($run->context_json, 'next_task_key'));
+        $this->assertSame($run->id, $workflow->studioSessions()->latest('id')->firstOrFail()->active_workflow_run_id);
+        Queue::assertPushed(RunWorkflowJob::class, 1);
+    }
+
+    public function test_task_navigation_moves_the_selection_across_lists_without_executing_tasks(): void
+    {
+        Queue::fake();
+        [$workflow, $step] = $this->workflow();
+        $config = $step->config_json;
+        $config['tasks'][] = [
+            'key' => 'second-task',
+            'task_key' => 'wait.seconds',
+            'title' => 'Zweiter Task',
+            'value' => 0,
+        ];
+        $step->forceFill(['config_json' => $config])->save();
+        $secondStep = $workflow->steps()->create([
+            'name' => 'Abschluss',
+            'type' => WorkflowStep::TYPE_CLEANUP,
+            'action_key' => 'abschluss',
+            'position' => 20,
+            'is_enabled' => true,
+            'config_json' => ['tasks' => [[
+                'key' => 'third-task',
+                'task_key' => 'wait.seconds',
+                'title' => 'Dritter Task',
+                'value' => 0,
+            ]]],
+        ]);
+        $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
+        $this->actingAs($admin);
+
+        Livewire::test(WorkflowStudio::class, ['workflow' => $workflow->fresh()])
+            ->assertSet('selectedTaskKey', 'first-task')
+            ->call('selectNextTask')
+            ->assertSet('selectedTaskKey', 'second-task')
+            ->call('selectNextTask')
+            ->assertSet('selectedStepId', (string) $secondStep->id)
+            ->assertSet('selectedTaskKey', 'third-task')
+            ->call('selectPreviousTask')
+            ->assertSet('selectedStepId', (string) $step->id)
+            ->assertSet('selectedTaskKey', 'second-task');
+
+        Queue::assertNothingPushed();
+        $this->assertSame(0, $workflow->runs()->count());
     }
 
     public function test_interactive_run_continues_after_a_failed_task_when_an_executable_error_route_exists(): void
@@ -495,6 +568,48 @@ class WorkflowStudioTest extends TestCase
         $this->assertSame('Task im Studio bearbeitet', data_get($step->fresh()->task_cards, '0.title'));
         $this->assertSame(1, $workflow->fresh()->copilot_revision);
         $this->assertSame(2, $workflow->studioRevisions()->count());
+    }
+
+    public function test_paused_studio_builder_can_insert_a_catalog_task_and_records_a_revision(): void
+    {
+        [$workflow, $step] = $this->workflow();
+        $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
+        $session = app(WorkflowStudioSessionService::class)->open($workflow, $admin, 'manual', 'ask_critical');
+        app(WorkflowStudioRevisionService::class)->ensureBaseline($session);
+        $run = WorkflowRun::query()->create([
+            'run_uuid' => (string) str()->uuid(),
+            'workflow_id' => $workflow->id,
+            'workflow_studio_session_id' => $session->id,
+            'workflow_revision' => 0,
+            'current_workflow_step_id' => $step->id,
+            'status' => 'paused',
+            'requested_by' => 'test',
+            'queued_at' => now(),
+            'context_json' => ['next_task_key' => 'first-task'],
+            'result_json' => [],
+        ]);
+        app(WorkflowStudioSessionService::class)->attachRun($session, $run);
+        $this->actingAs($admin);
+
+        Livewire::test(WorkflowStudioTaskEditor::class, [
+            'workflow' => $workflow,
+            'studioSessionId' => $session->id,
+        ])
+            ->assertSee('Task-Katalog')
+            ->assertSee('Workflow aufbauen')
+            ->call('prepareCatalogTask', 'wait.seconds')
+            ->assertSet('showAddTaskModal', true)
+            ->set('newTaskTitle', 'Im Studio eingefügt')
+            ->set('newTaskInputValue', '1')
+            ->call('addTaskCard')
+            ->assertHasNoErrors()
+            ->assertSet('showAddTaskModal', false);
+
+        $this->assertCount(2, $step->fresh()->task_cards);
+        $this->assertSame('Im Studio eingefügt', data_get($step->fresh()->task_cards, '1.title'));
+        $this->assertSame(1, $workflow->fresh()->copilot_revision);
+        $this->assertSame(2, $workflow->studioRevisions()->count());
+        $this->assertSame('paused', $run->fresh()->status);
     }
 
     public function test_creation_with_copilot_builds_a_draft_revision_without_executing_it(): void

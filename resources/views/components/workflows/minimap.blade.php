@@ -2,6 +2,8 @@
     'workflowRun',
     'activeStepId' => null,
     'activeTaskKey' => null,
+    'selectedStepId' => null,
+    'selectedTaskKey' => null,
     'compact' => false,
     'showHeader' => true,
     'selectableTasks' => false,
@@ -14,6 +16,8 @@
     $runningStepRun = $stepRuns->first(fn ($stepRun) => in_array($stepRun->status, ['running', 'waiting'], true));
     $activeStepId = $activeStepId ?: ($workflowRun?->current_workflow_step_id ?: $runningStepRun?->workflow_step_id);
     $activeTaskKey = trim((string) ($activeTaskKey ?: data_get($workflowRun?->context_json, 'next_task_key', '')));
+    $selectedStepId = (int) $selectedStepId;
+    $selectedTaskKey = trim((string) $selectedTaskKey);
     $stepRunByStep = $stepRuns->groupBy('workflow_step_id')->map(fn ($runs) => $runs->last());
     $taskResultsByStep = $stepRuns
         ->groupBy('workflow_step_id')
@@ -615,6 +619,7 @@
                                             ? 'not_executed'
                                             : (string) data_get($taskResult, 'status', data_get($task, 'status', 'configured'));
                                         $isTaskActive = $isActiveStep && ($activeTaskKey === '' ? ($loop->first && in_array($stepStatus, ['running', 'waiting'], true)) : $taskKey === $activeTaskKey);
+                                        $isTaskSelected = $selectedStepId === (int) $step->id && $selectedTaskKey === $taskKey;
                                         $tone = $taskTone($taskStatus, $isTaskActive);
                                         $lineTone = $connectorTone($taskStatus, $isTaskActive);
                                         $taskNode = trim((string) $step->action_key).'::'.$taskKey;
@@ -637,19 +642,24 @@
                                     @endif
 
                                     <div
-                                        data-minimap-node="{{ $taskNode }}"
-                                        data-workflow-minimap-active-target="{{ $isTaskActive ? 'true' : 'false' }}"
+                                         data-minimap-node="{{ $taskNode }}"
+                                         data-workflow-minimap-active-target="{{ $isTaskActive ? 'true' : 'false' }}"
+                                         data-workflow-minimap-selected-task="{{ $isTaskSelected ? 'true' : 'false' }}"
                                         x-on:mouseenter="setHoveredRouteNode(@js($taskNode))"
                                         x-on:mouseleave="setHoveredRouteNode('')"
                                         @if($selectableTasks)
                                             role="button"
                                             tabindex="0"
-                                            x-on:click.stop="$dispatch('workflow-preview-task-selected', { workflowId: {{ (int) $workflow->id }}, stepId: {{ (int) $step->id }}, taskKey: @js($taskKey) })"
-                                            x-on:keydown.enter.prevent.stop="$dispatch('workflow-preview-task-selected', { workflowId: {{ (int) $workflow->id }}, stepId: {{ (int) $step->id }}, taskKey: @js($taskKey) })"
-                                            title="Task-Einstellungen öffnen"
-                                        @endif
-                                        class="relative rounded-md border px-2 py-1.5 text-[11px] shadow-sm {{ $tone }} {{ $selectableTasks ? 'cursor-pointer transition hover:-translate-y-px hover:shadow-md focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2' : '' }}"
-                                    >
+                                             x-on:click.stop="$dispatch('workflow-preview-task-selected', { workflowId: {{ (int) $workflow->id }}, stepId: {{ (int) $step->id }}, taskKey: @js($taskKey) })"
+                                             x-on:keydown.enter.prevent.stop="$dispatch('workflow-preview-task-selected', { workflowId: {{ (int) $workflow->id }}, stepId: {{ (int) $step->id }}, taskKey: @js($taskKey) })"
+                                             x-on:dblclick.stop="$dispatch('workflow-preview-task-edit-requested', { workflowId: {{ (int) $workflow->id }}, stepId: {{ (int) $step->id }}, taskKey: @js($taskKey) })"
+                                             title="Task auswählen; Doppelklick zum Bearbeiten"
+                                         @endif
+                                         class="relative rounded-md border px-2 py-1.5 text-[11px] shadow-sm {{ $tone }} {{ $isTaskSelected ? 'ring-2 ring-sky-500 ring-offset-2 ring-offset-white' : '' }} {{ $selectableTasks ? 'cursor-pointer transition hover:-translate-y-px hover:shadow-md focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2' : '' }}"
+                                     >
+                                         @if($isTaskSelected)
+                                             <span class="absolute inset-y-1.5 -left-1 w-1 rounded-full bg-sky-500" aria-hidden="true"></span>
+                                         @endif
                                         @if($taskRouteBadge)
                                             <span class="absolute right-1 top-1 rounded-full px-1.5 py-0.5 text-[9px] font-semibold ring-1 {{ $routeBadgeClass($taskRouteBadge) }}">
                                                 {{ $taskRouteBadge['label'] }}
