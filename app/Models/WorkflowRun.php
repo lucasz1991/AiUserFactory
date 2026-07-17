@@ -15,6 +15,7 @@ class WorkflowRun extends Model
         'run_uuid',
         'workflow_id',
         'workflow_copilot_session_id',
+        'workflow_studio_session_id',
         'workflow_revision',
         'current_workflow_step_id',
         'status',
@@ -51,6 +52,11 @@ class WorkflowRun extends Model
     public function copilotSession(): BelongsTo
     {
         return $this->belongsTo(WorkflowCopilotSession::class, 'workflow_copilot_session_id');
+    }
+
+    public function studioSession(): BelongsTo
+    {
+        return $this->belongsTo(WorkflowStudioSession::class, 'workflow_studio_session_id');
     }
 
     public function stepRuns(): HasMany

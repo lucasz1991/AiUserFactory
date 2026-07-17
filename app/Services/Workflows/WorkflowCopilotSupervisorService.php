@@ -37,6 +37,7 @@ class WorkflowCopilotSupervisorService
         protected WorkflowCopilotPromptContextService $promptContexts,
         protected WorkflowRevisionService $revisions,
         protected WorkflowCopilotAiUsageTracker $aiUsage,
+        protected WorkflowStudioAuthorizationService $studioAuthorization,
     ) {}
 
     public function supervise(int $sessionId): void
@@ -978,11 +979,16 @@ class WorkflowCopilotSupervisorService
         }
 
         $rejectedSelectors = is_array($state['rejected_selectors'] ?? null) ? $state['rejected_selectors'] : [];
-        $plan = $this->captureCopilotAiUsage(
-            $session,
-            fn (): array => $this->repairs->plan($session, $step, $checkpoint, $observation, $vision, $rejectedSelectors),
-            'repair_planning',
-        );
+        $pendingStudioPlan = is_array($state['studio_pending_repair_plan'] ?? null)
+            ? $state['studio_pending_repair_plan']
+            : [];
+        $plan = $pendingStudioPlan !== []
+            ? $pendingStudioPlan
+            : $this->captureCopilotAiUsage(
+                $session,
+                fn (): array => $this->repairs->plan($session, $step, $checkpoint, $observation, $vision, $rejectedSelectors),
+                'repair_planning',
+            );
         $session = $session->fresh() ?? $session;
         $decisionSummary = $this->repairDecisionSummary($plan, $vision);
         $this->sessions->appendEvent(
@@ -998,6 +1004,10 @@ class WorkflowCopilotSupervisorService
         if ($this->costBudgetReached($session)) {
             $this->exhaustBudget($session);
 
+            return;
+        }
+
+        if (! $this->authorizeStudioRepairPlan($session, $run, $checkpoint, $plan)) {
             return;
         }
 
@@ -1231,6 +1241,98 @@ class WorkflowCopilotSupervisorService
             $plan,
         );
         $this->markContinuationApplied($session, $checkpoint, 'probe');
+    }
+
+    protected function authorizeStudioRepairPlan(
+        WorkflowCopilotSession $session,
+        WorkflowRun $run,
+        array $checkpoint,
+        array $plan,
+    ): bool {
+        $studio = \App\Models\WorkflowStudioSession::query()
+            ->where('workflow_copilot_session_id', $session->getKey())
+            ->latest('id')
+            ->first();
+        if (! $studio || ($plan['action'] ?? 'pause') === 'pause') {
+            return true;
+        }
+
+        $action = $this->studioPermissionActionForRepairPlan($plan);
+        $parameters = [
+            'workflow_copilot_session_id' => (int) $session->getKey(),
+            'workflow_run_id' => (int) $run->getKey(),
+            'runtime_checkpoint_id' => $this->runtimeCheckpointId($run, $checkpoint),
+            'plan' => $plan,
+        ];
+        $sessionState = is_array($session->state_json) ? $session->state_json : [];
+        $confirmationId = trim((string) ($sessionState['studio_authorization_confirmation_id'] ?? '')) ?: null;
+        $decision = $this->studioAuthorization->decide($studio, $action, $parameters, $confirmationId);
+
+        if ($decision['allowed']) {
+            if ($confirmationId) {
+                $this->studioAuthorization->consume($studio, $confirmationId);
+            }
+            unset($sessionState['studio_pending_repair_plan'], $sessionState['studio_authorization_confirmation_id']);
+            $session->forceFill(['state_json' => $sessionState, 'last_activity_at' => now()])->save();
+            $freshStudio = $studio->fresh();
+            $studioState = is_array($freshStudio?->state_json) ? $freshStudio->state_json : [];
+            $studioState['pending_copilot_confirmation'] = null;
+            $studio->forceFill(['state_json' => $studioState, 'status' => 'running', 'last_activity_at' => now()])->save();
+
+            return true;
+        }
+
+        $pending = [
+            'type' => 'copilot_plan',
+            'action' => $action,
+            'confirmation_id' => $decision['confirmation_id'],
+            'message' => 'Copilot moechte den geplanten Reparaturschritt „'.($plan['action'] ?? 'repair').'“ anwenden.',
+            'parameters' => $parameters,
+            'workflow_run_id' => (int) $run->getKey(),
+            'workflow_copilot_session_id' => (int) $session->getKey(),
+            'created_at' => now()->toIso8601String(),
+        ];
+        $sessionState['studio_pending_repair_plan'] = $plan;
+        $sessionState['studio_authorization_confirmation_id'] = $decision['confirmation_id'];
+        $session->forceFill(['state_json' => $sessionState, 'last_activity_at' => now()])->save();
+        $studioState = is_array($studio->state_json) ? $studio->state_json : [];
+        $studioState['pending_copilot_confirmation'] = $pending;
+        $studio->forceFill(['state_json' => $studioState, 'status' => 'confirmation_required', 'last_activity_at' => now()])->save();
+        app(WorkflowStudioSessionService::class)->appendEvent($studio, 'authorization.requested', $pending['message'], [
+            'action' => $action,
+            'confirmation_id' => $decision['confirmation_id'],
+            'workflow_run_id' => (int) $run->getKey(),
+        ], 'warning');
+        $this->sessions->pause($session->fresh() ?? $session, $decision['message']);
+
+        return false;
+    }
+
+    protected function studioPermissionActionForRepairPlan(array $plan): string
+    {
+        $planAction = (string) ($plan['action'] ?? '');
+        if ($planAction === 'restart_with_workflow_changes') {
+            $operations = array_values(array_filter((array) ($plan['operations'] ?? []), 'is_array'));
+            if (count($operations) > 1) {
+                return 'workflow.replace';
+            }
+            $operationType = (string) data_get($operations, '0.type', '');
+
+            return in_array($operationType, ['insert_task', 'insert_step'], true) ? 'task.add' : 'task.update';
+        }
+        if ($planAction === 'probe_update') {
+            $catalogKey = Str::lower(trim((string) data_get($plan, 'probe_task.task_key', '')));
+            if ($catalogKey === 'input.submit' || str_contains($catalogKey, 'send') || str_contains($catalogKey, 'persist')) {
+                return 'external.send';
+            }
+            if (str_contains($catalogKey, 'delete')) {
+                return 'external.delete';
+            }
+
+            return 'selector.search';
+        }
+
+        return 'workflow.execute_task';
     }
 
     protected function processProbeResult(

@@ -15,6 +15,7 @@ use App\Livewire\Admin\Config\SettingsPage;
 use App\Livewire\Admin\Network\ActionsPage;
 use App\Livewire\Admin\Network\WorkflowManager;
 use App\Livewire\Admin\Network\WorkflowsIndex;
+use App\Livewire\Admin\Network\WorkflowStudio;
 use App\Livewire\Admin\Processes\ProcessMonitor;
 use App\Livewire\AdminConfig;
 use App\Livewire\AdminDashboard;
@@ -39,6 +40,7 @@ Route::middleware(['auth:sanctum', config('jetstream.auth_session')])->group(fun
         Route::get('/personen/{profileId}', PersonDetail::class)->name('persons.show');
         Route::get('/netzwerk/aktionen', ActionsPage::class)->name('network.actions');
         Route::get('/netzwerk/workflows', WorkflowsIndex::class)->name('network.workflows');
+        Route::get('/netzwerk/workflows/{workflow}/studio', WorkflowStudio::class)->name('network.workflows.studio');
         Route::get('/netzwerk/workflows/{workflow}', WorkflowManager::class)->name('network.workflows.manage');
         Route::get('/workflow-runs/{run}/artifacts/{artifact}', [WorkflowRunArtifactController::class, 'show'])->name('workflow-run-artifacts.show');
         Route::get('/workflow-runs/{run}/artifacts/{artifact}/download', [WorkflowRunArtifactController::class, 'download'])->name('workflow-run-artifacts.download');

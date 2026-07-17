@@ -70,6 +70,16 @@ class Workflow extends Model
         return $this->hasMany(WorkflowRevision::class)->orderBy('revision_number');
     }
 
+    public function studioSessions(): HasMany
+    {
+        return $this->hasMany(WorkflowStudioSession::class)->latest('id');
+    }
+
+    public function studioRevisions(): HasMany
+    {
+        return $this->hasMany(WorkflowStudioRevision::class)->orderBy('revision_number');
+    }
+
     public function includedWorkflows(): BelongsToMany
     {
         return $this->belongsToMany(

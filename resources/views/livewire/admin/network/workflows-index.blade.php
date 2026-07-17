@@ -278,6 +278,30 @@
                 description-model="newWorkflowDescription"
                 development-model="newWorkflowDevelopment"
             />
+            <div class="mt-5 space-y-4 border-t border-slate-200 pt-5">
+                <label class="flex items-start justify-between gap-4 rounded-lg border border-cyan-200 bg-cyan-50 p-4 text-sm text-cyan-950">
+                    <span><strong class="block">Mit Copilot planen</strong><span class="mt-1 block text-xs text-cyan-800">Erzeugt nach dem Speichern einen vollständigen, noch nicht ausgeführten Entwurf.</span></span>
+                    <input type="checkbox" role="switch" wire:model.live="newWorkflowPlanWithCopilot" class="mt-1 rounded border-cyan-300 text-cyan-700">
+                </label>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700">Fachliches Ziel</label>
+                    <textarea wire:model.defer="newWorkflowGoal" rows="3" class="mt-1 block w-full rounded-md border-slate-300 text-sm shadow-sm" placeholder="Was soll der Workflow von Anfang bis Ende erreichen?"></textarea>
+                    @error('newWorkflowGoal') <p class="mt-1 text-sm text-red-600">{{ $message }}</p> @enderror
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700">Erfolgskriterien · eine Zeile je Kriterium</label>
+                    <textarea wire:model.defer="newWorkflowSuccessCriteria" rows="3" class="mt-1 block w-full rounded-md border-slate-300 text-sm shadow-sm" placeholder="Zielseite ist sichtbar&#10;Ergebnisvariable ist nicht leer"></textarea>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700">Workflow-Eingaben · JSON-Objekt</label>
+                    <textarea wire:model.defer="newWorkflowInputs" rows="4" class="mt-1 block w-full rounded-md border-slate-300 font-mono text-sm shadow-sm" placeholder='{"search_query":""}'></textarea>
+                    @error('newWorkflowInputs') <p class="mt-1 text-sm text-red-600">{{ $message }}</p> @enderror
+                </div>
+                <div class="grid gap-4 md:grid-cols-2">
+                    <div><label class="block text-sm font-medium text-slate-700">Ausführungsziel</label><select wire:model="newWorkflowExecutionTarget" class="mt-1 block w-full rounded-md border-slate-300 text-sm"><option value="system">System</option><option value="client_controller">ClientController</option></select></div>
+                    <div><label class="block text-sm font-medium text-slate-700">Copilot-Berechtigung</label><select wire:model="newWorkflowPermissionMode" class="mt-1 block w-full rounded-md border-slate-300 text-sm"><option value="ask_all">Immer nachfragen</option><option value="ask_critical">Kritisch nachfragen</option><option value="unrestricted">Uneingeschränkt</option></select></div>
+                </div>
+            </div>
         </x-slot>
         <x-slot name="footer">
             <button type="button" x-on:click="$dispatch('close')" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">Abbrechen</button>

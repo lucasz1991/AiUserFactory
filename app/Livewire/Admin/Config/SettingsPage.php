@@ -92,6 +92,8 @@ class SettingsPage extends Component
 
     public bool $assistantCopilotAutoExecute = true;
 
+    public string $assistantCopilotPermissionMode = 'ask_critical';
+
     // ClientController settings tab
     public string $ccServerDomain = '';
 
@@ -344,6 +346,7 @@ class SettingsPage extends Component
             'assistantCopilotMaxSameStateRepeats' => ['required', 'integer', 'min:1', 'max:10'],
             'assistantCopilotMaxCostUsd' => ['required', 'numeric', 'min:0', 'max:10000'],
             'assistantCopilotAutoExecute' => ['boolean'],
+            'assistantCopilotPermissionMode' => ['required', 'string', 'in:ask_all,ask_critical,unrestricted'],
         ]);
 
         $this->refreshAssistantLocalVoiceStatus();
@@ -397,7 +400,8 @@ class SettingsPage extends Component
                 'max_probe_actions' => (int) $validated['assistantCopilotMaxProbeActions'],
                 'max_same_state_repeats' => (int) $validated['assistantCopilotMaxSameStateRepeats'],
                 'max_cost_usd' => round((float) $validated['assistantCopilotMaxCostUsd'], 4),
-                'auto_execute_workflow_actions' => (bool) $validated['assistantCopilotAutoExecute'],
+                'auto_execute_workflow_actions' => $validated['assistantCopilotPermissionMode'] !== 'ask_all',
+                'permission_mode' => $validated['assistantCopilotPermissionMode'],
             ],
         ]);
 
@@ -521,6 +525,10 @@ class SettingsPage extends Component
             $optimizationDefaults['auto_execute_workflow_actions'] ?? true,
             FILTER_VALIDATE_BOOL,
         );
+        $this->assistantCopilotPermissionMode = \App\Enums\WorkflowCopilotPermissionMode::normalize(
+            $optimizationDefaults['permission_mode']
+                ?? ($this->assistantCopilotAutoExecute ? 'ask_critical' : 'ask_all'),
+        )->value;
     }
 
     protected function loadClientControllerSettings(): void

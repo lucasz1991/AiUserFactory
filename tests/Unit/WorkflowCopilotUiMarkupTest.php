@@ -12,8 +12,8 @@ class WorkflowCopilotUiMarkupTest extends TestCase
         $view = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-manager.blade.php');
         $component = file_get_contents($root.'/app/Livewire/Admin/Network/WorkflowManager.php');
 
-        $this->assertStringContainsString('wire:click="openCopilotOptimization"', $view);
-        $this->assertStringContainsString('Mit Copilot optimieren', $view);
+        $this->assertStringContainsString("route('network.workflows.studio'", $view);
+        $this->assertStringContainsString('Mit Copilot im Studio optimieren', $view);
         $this->assertStringContainsString('Ausschliesslich System-Ausfuehrung', $view);
         $this->assertStringContainsString('System-Optimierung starten', $view);
         $this->assertStringContainsString('wire:poll.2s="refreshRunPreview"', $view);
@@ -56,11 +56,12 @@ class WorkflowCopilotUiMarkupTest extends TestCase
         $this->assertStringContainsString('assistantCopilotMaxProbeActions', $view);
         $this->assertStringContainsString('assistantCopilotMaxSameStateRepeats', $view);
         $this->assertStringContainsString('assistantCopilotMaxCostUsd', $view);
-        $this->assertStringContainsString('assistantCopilotAutoExecute', $view);
-        $this->assertStringContainsString('nie Client', $view);
+        $this->assertStringContainsString('assistantCopilotPermissionMode', $view);
+        $this->assertStringContainsString('Kritisch nachfragen', $view);
         $this->assertStringContainsString("'vision_fallback_models'", $component);
         $this->assertStringContainsString("'optimization_defaults'", $component);
         $this->assertStringContainsString("'max_cost_usd'", $component);
         $this->assertStringContainsString("'auto_execute_workflow_actions'", $component);
+        $this->assertStringContainsString("'permission_mode'", $component);
     }
 }

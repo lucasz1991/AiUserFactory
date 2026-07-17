@@ -14,6 +14,7 @@ use App\Models\WorkflowCopilotSession;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowStep;
 use App\Models\WorkflowStepRun;
+use App\Models\WorkflowStudioSession;
 use App\Services\ClientController\NetworkJobDispatcher;
 use App\Services\Mail\MailAccountRegistrationRunner;
 use App\Services\Mail\WebmailSessionRunner;
@@ -57,7 +58,14 @@ class WorkflowExecutionService
         }
 
         $copilotSessionId = max(0, (int) ($context['workflow_copilot_session_id'] ?? $context['workflowCopilotSessionId'] ?? 0));
-        $run = DB::transaction(function () use ($workflowId, $context, $requestedBy, $copilotSessionId): WorkflowRun {
+        $studioSessionId = max(0, (int) ($context['workflow_studio_session_id'] ?? $context['workflowStudioSessionId'] ?? 0));
+        if ($studioSessionId <= 0 && $copilotSessionId > 0 && Schema::hasTable('workflow_studio_sessions')) {
+            $studioSessionId = (int) (WorkflowStudioSession::query()
+                ->where('workflow_copilot_session_id', $copilotSessionId)
+                ->latest('id')
+                ->value('id') ?? 0);
+        }
+        $run = DB::transaction(function () use ($workflowId, $context, $requestedBy, $copilotSessionId, $studioSessionId): WorkflowRun {
             $lockedWorkflow = Workflow::query()->lockForUpdate()->findOrFail($workflowId);
             $hasCopilotLockColumn = Schema::hasColumn('workflows', 'active_workflow_copilot_session_id');
             $activeCopilotSessionId = $hasCopilotLockColumn
@@ -69,6 +77,18 @@ class WorkflowExecutionService
             }
 
             $copilotSession = null;
+            $studioSession = null;
+
+            if ($studioSessionId > 0) {
+                $studioSession = WorkflowStudioSession::query()->lockForUpdate()->find($studioSessionId);
+
+                if (! $studioSession || (int) $studioSession->workflow_id !== (int) $lockedWorkflow->id) {
+                    throw new \RuntimeException('Die Workflow-Studio-Sitzung gehoert nicht zu diesem Workflow.');
+                }
+
+                $context['workflow_studio_session_id'] = $studioSessionId;
+                $context['workflow_revision'] = (int) ($lockedWorkflow->copilot_revision ?? 0);
+            }
 
             if ($copilotSessionId > 0) {
                 $copilotSession = WorkflowCopilotSession::query()->lockForUpdate()->find($copilotSessionId);
@@ -172,7 +192,13 @@ class WorkflowExecutionService
 
             if (Schema::hasColumn('workflow_runs', 'workflow_copilot_session_id')) {
                 $attributes['workflow_copilot_session_id'] = $copilotSessionId ?: null;
-                $attributes['workflow_revision'] = $copilotSessionId > 0 ? (int) ($lockedWorkflow->copilot_revision ?? 0) : null;
+                $attributes['workflow_revision'] = ($copilotSessionId > 0 || $studioSessionId > 0)
+                    ? (int) ($lockedWorkflow->copilot_revision ?? 0)
+                    : null;
+            }
+
+            if (Schema::hasColumn('workflow_runs', 'workflow_studio_session_id')) {
+                $attributes['workflow_studio_session_id'] = $studioSessionId ?: null;
             }
 
             $run = WorkflowRun::query()->create($attributes);
@@ -185,6 +211,15 @@ class WorkflowExecutionService
                     'last_activity_at' => now(),
                 ])->save();
                 RunWorkflowJob::dispatch($run->id)->afterCommit();
+            }
+
+            if ($studioSession) {
+                $studioSession->forceFill([
+                    'active_workflow_run_id' => $run->id,
+                    'status' => 'queued',
+                    'started_at' => $studioSession->started_at ?: now(),
+                    'last_activity_at' => now(),
+                ])->save();
             }
 
             return $run;
@@ -346,6 +381,10 @@ class WorkflowExecutionService
             return;
         }
 
+        if ($this->holdForStudioCopilotAuthorization($run, $step)) {
+            return;
+        }
+
         $stepRun = WorkflowStepRun::query()
             ->where('workflow_run_id', $run->id)
             ->where('workflow_step_id', $step->id)
@@ -483,6 +522,69 @@ class WorkflowExecutionService
         RunWorkflowJob::dispatch($run->id);
 
         return ['ok' => true, 'message' => $taskKey !== '' ? 'Workflow-Lauf wird ab dem ausgewaehlten Task fortgesetzt.' : 'Workflow-Lauf wird fortgesetzt.'];
+    }
+
+    public function runManualProbe(
+        int|WorkflowRun $workflowRun,
+        array $task,
+        ?int $workflowStepId = null,
+    ): array {
+        $run = $this->loadRun($workflowRun);
+
+        if ($run->status !== 'paused') {
+            return ['ok' => false, 'message' => 'Probeaktionen sind ausschliesslich im pausierten Zustand zulaessig.'];
+        }
+
+        if (! is_array($task) || trim((string) ($task['task_key'] ?? '')) === '') {
+            throw new \InvalidArgumentException('Die Probeaktion besitzt keinen gueltigen Task-Typ.');
+        }
+
+        $stepId = $workflowStepId ?: (int) $run->current_workflow_step_id;
+        $step = $run->workflow->steps->firstWhere('id', $stepId) ?: $run->workflow->steps->first();
+
+        if (! $step) {
+            throw new \RuntimeException('Fuer die Probeaktion ist kein Workflow-Schritt vorhanden.');
+        }
+
+        $task['key'] = trim((string) ($task['key'] ?? 'studio-probe-'.Str::lower(Str::random(8))));
+        $context = is_array($run->context_json) ? $run->context_json : [];
+        $context['interactive_debug'] = true;
+        $context['copilot_transient_task'] = $task;
+        $context['studio_probe'] = [
+            'task_key' => $task['key'],
+            'task' => $task,
+            'return_cursor' => [
+                'workflow_step_id' => $run->current_workflow_step_id,
+                'next_task_key' => $context['next_task_key'] ?? null,
+            ],
+            'started_at' => now()->toIso8601String(),
+        ];
+        unset($context['manual_pause_requested'], $context['manual_pause_checkpoint']);
+
+        $stepRun = $run->stepRuns()->firstOrCreate(
+            ['workflow_step_id' => $step->getKey()],
+            ['status' => 'queued', 'logs_json' => [], 'result_json' => []],
+        );
+        $stepRun->forceFill([
+            'status' => 'queued',
+            'external_run_type' => null,
+            'external_run_id' => null,
+            'started_at' => null,
+            'finished_at' => null,
+            'duration_ms' => null,
+            'error_message' => null,
+        ])->save();
+        $run->forceFill([
+            'status' => 'running',
+            'current_workflow_step_id' => $step->getKey(),
+            'context_json' => $context,
+            'finished_at' => null,
+            'error_message' => null,
+        ])->save();
+
+        RunWorkflowJob::dispatch($run->id);
+
+        return ['ok' => true, 'message' => 'Probeaktion wurde gestartet.', 'task_key' => $task['key']];
     }
 
     public function cancel(int|WorkflowRun $workflowRun, string $message = 'Workflow-Lauf wurde manuell gestoppt.'): array
@@ -715,6 +817,16 @@ class WorkflowExecutionService
 
         if (in_array($stepRun->external_run_type, ['workflow-task', 'client-controller-workflow-task'], true)) {
             $this->applyWorkflowVariablesResult($stepRun->workflowRun, $result);
+        }
+
+        if (is_array(data_get($stepRun->workflowRun->fresh(), 'context_json.studio_probe'))) {
+            $this->holdStudioProbeResult(
+                $stepRun,
+                $result,
+                $this->externalSucceeded($stepRun->workflowStep, $status, $result),
+            );
+
+            return;
         }
 
         if ((bool) data_get($stepRun->workflowRun->context_json, 'interactive_debug', false)) {
@@ -1303,6 +1415,7 @@ class WorkflowExecutionService
             unset($context['next_task_key']);
             $run->forceFill(['context_json' => $context])->save();
             $this->completeStepRun($stepRun, $result, 'completed');
+            $this->createStudioCheckpointSafely($run, 'task', 'Nach Task '.$currentTaskKey);
             $this->continueAfterStep($run, $stepRun, $result, $this->resultOutcome($result), max(0, (int) $step->wait_after_seconds));
 
             return;
@@ -1318,7 +1431,10 @@ class WorkflowExecutionService
             'successful' => $successful,
             'recorded_at' => now()->toIso8601String(),
         ];
-        $pauseNow = ! $successful || (bool) ($context['manual_pause_requested'] ?? false);
+        $pauseNow = ! $successful
+            || (bool) ($context['manual_pause_requested'] ?? false)
+            || (bool) ($context['studio_single_task'] ?? false);
+        unset($context['studio_single_task']);
 
         $stepRun->forceFill([
             'status' => $pauseNow ? 'waiting' : 'queued',
@@ -1335,6 +1451,7 @@ class WorkflowExecutionService
             'current_workflow_step_id' => $step->id,
             'context_json' => $context,
         ])->save();
+        $this->createStudioCheckpointSafely($run, 'task', 'Nach Task '.$currentTaskKey);
 
         if ($pauseNow) {
             $this->holdManualPause($run, $context, $stepRun);
@@ -1343,6 +1460,177 @@ class WorkflowExecutionService
         }
 
         RunWorkflowJob::dispatch($run->id);
+    }
+
+    protected function holdStudioProbeResult(WorkflowStepRun $stepRun, array $result, bool $successful): void
+    {
+        $run = $stepRun->workflowRun->fresh();
+        $context = is_array($run->context_json) ? $run->context_json : [];
+        $probe = is_array($context['studio_probe'] ?? null) ? $context['studio_probe'] : [];
+        $returnCursor = is_array($probe['return_cursor'] ?? null) ? $probe['return_cursor'] : [];
+        $context['studio_probe_result'] = [
+            'successful' => $successful,
+            'task' => $probe['task'] ?? null,
+            'result' => $this->publicRunSnapshot($result),
+            'completed_at' => now()->toIso8601String(),
+        ];
+        unset($context['studio_probe'], $context['copilot_transient_task']);
+        if (filled($returnCursor['next_task_key'] ?? null)) {
+            $context['next_task_key'] = $returnCursor['next_task_key'];
+        } else {
+            unset($context['next_task_key']);
+        }
+
+        $stepRun->forceFill([
+            'status' => 'waiting',
+            'external_run_type' => null,
+            'external_run_id' => null,
+            'result_json' => $this->publicRunSnapshot($result),
+            'logs_json' => $this->logsFromExternalStatus($result),
+            'finished_at' => null,
+            'duration_ms' => null,
+            'error_message' => $successful ? null : (string) ($result['statusMessage'] ?? $result['message'] ?? 'Probeaktion fehlgeschlagen.'),
+        ])->save();
+        $run->forceFill([
+            'status' => 'paused',
+            'current_workflow_step_id' => $returnCursor['workflow_step_id'] ?? $stepRun->workflow_step_id,
+            'context_json' => $context,
+        ])->save();
+        if (! $successful) {
+            $sessionId = (int) ($run->workflow_studio_session_id ?: data_get($run->context_json, 'workflow_studio_session_id', 0));
+            $selector = trim((string) data_get($probe, 'task.selector', data_get($probe, 'task.element_selector', '')));
+            $session = $sessionId > 0 ? WorkflowStudioSession::query()->find($sessionId) : null;
+            if ($session && $selector !== '') {
+                $state = is_array($session->state_json) ? $session->state_json : [];
+                $state['failed_selectors'] = array_values(array_unique([...(array) ($state['failed_selectors'] ?? []), $selector]));
+                $session->forceFill(['state_json' => $state, 'last_activity_at' => now()])->save();
+            }
+        }
+        $this->createStudioCheckpointSafely($run, 'probe', 'Nach Probe '.$stepRun->id);
+    }
+
+    protected function createStudioCheckpointSafely(WorkflowRun $run, string $phase, string $name): void
+    {
+        $sessionId = (int) ($run->workflow_studio_session_id ?: data_get($run->context_json, 'workflow_studio_session_id', 0));
+        if ($sessionId <= 0) {
+            return;
+        }
+
+        try {
+            $session = WorkflowStudioSession::query()->find($sessionId);
+            if ($session) {
+                app(WorkflowStudioCheckpointService::class)->create($session, $run->fresh(), $name, $phase);
+            }
+        } catch (\Throwable $exception) {
+            report($exception);
+        }
+    }
+
+    protected function holdForStudioCopilotAuthorization(WorkflowRun $run, WorkflowStep $step): bool
+    {
+        $copilotSessionId = (int) ($run->workflow_copilot_session_id ?: data_get($run->context_json, 'workflow_copilot_session_id', 0));
+        if ($copilotSessionId <= 0) {
+            return false;
+        }
+
+        $studio = WorkflowStudioSession::query()
+            ->where('workflow_copilot_session_id', $copilotSessionId)
+            ->latest('id')
+            ->first();
+        if (! $studio) {
+            return false;
+        }
+
+        $context = is_array($run->context_json) ? $run->context_json : [];
+        $taskKey = trim((string) ($context['next_task_key'] ?? ''));
+        $task = collect($step->task_cards)->first(fn (array $candidate): bool => $taskKey !== ''
+            ? (string) ($candidate['key'] ?? '') === $taskKey
+            : true);
+        if (! is_array($task)) {
+            return false;
+        }
+
+        $action = $this->studioPermissionActionForTask($step, $task);
+        $parameters = [
+            'workflow_run_id' => (int) $run->getKey(),
+            'workflow_revision' => (int) $run->workflow_revision,
+            'workflow_step_id' => (int) $step->getKey(),
+            'task_key' => (string) ($task['key'] ?? ''),
+            'task' => $task,
+        ];
+        $confirmationId = trim((string) ($context['studio_authorization_confirmation_id'] ?? '')) ?: null;
+        $authorization = app(WorkflowStudioAuthorizationService::class);
+        $decision = $authorization->decide($studio, $action, $parameters, $confirmationId);
+
+        if ($decision['allowed']) {
+            if ($confirmationId) {
+                $authorization->consume($studio, $confirmationId);
+            }
+            unset($context['studio_authorization_confirmation_id'], $context['studio_authorization_hold']);
+            $run->forceFill(['context_json' => $context])->save();
+            $studioState = is_array($studio->state_json) ? $studio->state_json : [];
+            if (data_get($studioState, 'pending_copilot_confirmation.confirmation_id') === $confirmationId) {
+                $studioState['pending_copilot_confirmation'] = null;
+                $studio->forceFill(['state_json' => $studioState, 'status' => 'running', 'last_activity_at' => now()])->save();
+            }
+
+            return false;
+        }
+
+        $studioState = is_array($studio->state_json) ? $studio->state_json : [];
+        $studioState['pending_copilot_confirmation'] = [
+            'type' => 'copilot_task',
+            'action' => $action,
+            'confirmation_id' => $decision['confirmation_id'],
+            'message' => 'Copilot moechte Task „'.($task['title'] ?? $task['key'] ?? $task['task_key']).'“ ausfuehren.',
+            'parameters' => $parameters,
+            'workflow_run_id' => (int) $run->getKey(),
+            'workflow_copilot_session_id' => $copilotSessionId,
+            'created_at' => now()->toIso8601String(),
+        ];
+        $studio->forceFill(['state_json' => $studioState, 'status' => 'confirmation_required', 'last_activity_at' => now()])->save();
+        $context['studio_authorization_hold'] = $studioState['pending_copilot_confirmation'];
+        $run->forceFill(['status' => 'paused', 'context_json' => $context])->save();
+        $copilot = WorkflowCopilotSession::query()->find($copilotSessionId);
+        if ($copilot && $copilot->status !== WorkflowCopilotSession::STATUS_PAUSED) {
+            app(WorkflowCopilotSessionService::class)->pause($copilot, $decision['message']);
+        }
+        app(WorkflowStudioSessionService::class)->appendEvent($studio, 'authorization.requested', $studioState['pending_copilot_confirmation']['message'], [
+            'action' => $action,
+            'confirmation_id' => $decision['confirmation_id'],
+            'workflow_run_id' => (int) $run->getKey(),
+            'task_key' => $task['key'] ?? null,
+        ], 'warning');
+
+        return true;
+    }
+
+    protected function studioPermissionActionForTask(WorkflowStep $step, array $task): string
+    {
+        $catalogKey = Str::lower(trim((string) ($task['task_key'] ?? '')));
+        $taskText = Str::lower(implode(' ', array_filter([
+            $task['key'] ?? null,
+            $task['title'] ?? null,
+            $task['description'] ?? null,
+            $task['selector'] ?? null,
+            $task['element_selector'] ?? null,
+        ], fn (mixed $value): bool => is_scalar($value))));
+
+        if ($step->type === WorkflowStep::TYPE_MAIL_ACCOUNT_REGISTRATION
+            || str_contains($catalogKey, 'register')) {
+            return 'external.register';
+        }
+        if ($catalogKey === 'input.submit' || str_contains($taskText, 'type=submit')) {
+            return 'external.send';
+        }
+        if (str_contains($catalogKey, 'delete') || str_contains($taskText, 'loesch')) {
+            return 'external.delete';
+        }
+        if (str_contains($catalogKey, 'persist') || str_contains($catalogKey, 'send')) {
+            return 'external.send';
+        }
+
+        return 'workflow.execute_task';
     }
 
     public function expireTimedOutRuns(): void

@@ -15,8 +15,11 @@
     </x-slot>
 
     <x-slot name="content">
+        <a href="{{ route('network.workflows.studio', ['workflow' => $workflow, 'mode' => 'manual']) }}" class="block px-3 py-2 text-sm font-semibold text-cyan-700 hover:bg-cyan-50">
+            Workflow Studio
+        </a>
         <a href="{{ route('network.workflows.manage', $workflow) }}" class="block px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
-            Oeffnen
+            Klassischen Manager oeffnen
         </a>
 
         @if($editMethod)

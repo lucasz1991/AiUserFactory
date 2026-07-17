@@ -4,6 +4,9 @@ namespace App\Livewire\Admin\Network;
 
 use App\Models\Workflow;
 use App\Models\WorkflowStep;
+use App\Services\Workflows\WorkflowCopilotPlanningService;
+use App\Services\Workflows\WorkflowStudioRevisionService;
+use App\Services\Workflows\WorkflowStudioSessionService;
 use App\Services\Workflows\WorkflowTransferService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -30,6 +33,18 @@ class WorkflowsIndex extends Component
     public string $newWorkflowSubcategory = '';
 
     public bool $newWorkflowDevelopment = false;
+
+    public string $newWorkflowGoal = '';
+
+    public string $newWorkflowSuccessCriteria = '';
+
+    public string $newWorkflowInputs = '{}';
+
+    public string $newWorkflowExecutionTarget = 'system';
+
+    public bool $newWorkflowPlanWithCopilot = true;
+
+    public string $newWorkflowPermissionMode = 'ask_critical';
 
     public bool $showCreateWorkflowModal = false;
 
@@ -249,7 +264,23 @@ class WorkflowsIndex extends Component
             'newWorkflowGroup' => ['required', 'string', 'max:80'],
             'newWorkflowSubcategory' => ['nullable', 'string', 'max:80'],
             'newWorkflowDevelopment' => ['boolean'],
+            'newWorkflowGoal' => ['nullable', 'string', 'max:4000', 'required_if:newWorkflowPlanWithCopilot,true'],
+            'newWorkflowSuccessCriteria' => ['nullable', 'string', 'max:8000'],
+            'newWorkflowInputs' => ['nullable', 'json', 'max:20000'],
+            'newWorkflowExecutionTarget' => ['required', 'string', 'in:system,client_controller'],
+            'newWorkflowPlanWithCopilot' => ['boolean'],
+            'newWorkflowPermissionMode' => ['required', 'string', 'in:ask_all,ask_critical,unrestricted'],
         ]);
+
+        $workflowInputs = json_decode(trim((string) ($validated['newWorkflowInputs'] ?? '')) ?: '{}', true);
+        if (! is_array($workflowInputs) || ($workflowInputs !== [] && array_is_list($workflowInputs))) {
+            $this->addError('newWorkflowInputs', 'Workflow-Eingaben muessen ein JSON-Objekt mit benannten Werten sein.');
+
+            return;
+        }
+        $successCriteria = collect(preg_split('/\r\n|\r|\n/', (string) ($validated['newWorkflowSuccessCriteria'] ?? '')) ?: [])
+            ->map(fn (string $criterion): string => trim($criterion))
+            ->filter()->values()->all();
 
         $group = $this->normalizeGroup($validated['newWorkflowGroup']);
         $subcategory = $this->normalizeSubcategory($validated['newWorkflowSubcategory'] ?? '');
@@ -267,21 +298,70 @@ class WorkflowsIndex extends Component
                 'dev_mode' => (bool) $validated['newWorkflowDevelopment'],
                 'dev_capture_dom_before_step' => true,
                 'dev_keep_artifacts' => true,
+                'studio' => ['permission_mode' => $validated['newWorkflowPermissionMode']],
             ],
         ]);
+
+        $studio = app(WorkflowStudioSessionService::class)->open(
+            $workflow,
+            auth()->user(),
+            $validated['newWorkflowPlanWithCopilot'] ? 'assisted' : 'manual',
+            $validated['newWorkflowPermissionMode'],
+            [
+                'status' => 'draft',
+                'goal' => trim((string) ($validated['newWorkflowGoal'] ?? '')),
+                'success_criteria' => $successCriteria,
+                'workflow_inputs' => $workflowInputs,
+                'execution_target' => $validated['newWorkflowExecutionTarget'],
+            ],
+        );
+        $revisions = app(WorkflowStudioRevisionService::class);
+        $revisions->ensureBaseline($studio, 'Leerer Ausgangsstand bei der Workflow-Neuanlage.');
+        $planningError = null;
+
+        if ($validated['newWorkflowPlanWithCopilot']) {
+            $before = $revisions->snapshot($workflow->fresh(['steps']) ?? $workflow);
+            try {
+                app(WorkflowCopilotPlanningService::class)->planAndApply(
+                    $workflow,
+                    trim($validated['newWorkflowGoal']),
+                    $successCriteria,
+                    $workflowInputs,
+                );
+                $revisions->recordCurrentDefinition(
+                    $studio,
+                    $before,
+                    0,
+                    'Automatischer Copilot-Entwurf bei der Workflow-Neuanlage.',
+                    'copilot:initial-plan',
+                );
+            } catch (Throwable $exception) {
+                report($exception);
+                $planningError = $exception->getMessage();
+                $studio->forceFill(['status' => 'planning_failed'])->save();
+            }
+        }
 
         $this->newWorkflowName = '';
         $this->newWorkflowDescription = '';
         $this->newWorkflowGroup = 'custom';
         $this->newWorkflowSubcategory = '';
         $this->newWorkflowDevelopment = false;
+        $this->newWorkflowGoal = '';
+        $this->newWorkflowSuccessCriteria = '';
+        $this->newWorkflowInputs = '{}';
+        $this->newWorkflowExecutionTarget = 'system';
+        $this->newWorkflowPlanWithCopilot = true;
+        $this->newWorkflowPermissionMode = 'ask_critical';
         $this->showCreateWorkflowModal = false;
         $this->activeGroup = $group;
         $this->activeSubcategory = $subcategory ?: 'all';
 
-        session()->flash('success', 'Workflow wurde erstellt.');
+        session()->flash($planningError ? 'error' : 'success', $planningError
+            ? 'Workflow wurde angelegt, aber der Copilot-Entwurf ist fehlgeschlagen: '.$planningError
+            : ($validated['newWorkflowPlanWithCopilot'] ? 'Workflow und Copilot-Entwurf wurden erstellt.' : 'Workflow wurde erstellt.'));
 
-        $this->redirectRoute('network.workflows.manage', ['workflow' => $workflow->id]);
+        $this->redirectRoute('network.workflows.studio', ['workflow' => $workflow->id, 'session' => $studio->id]);
     }
 
     public function openEditWorkflow(int $workflowId): void

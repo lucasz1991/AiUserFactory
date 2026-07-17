@@ -151,11 +151,11 @@
                                 <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" /></svg>
                             </button>
                             <div x-cloak x-show="open" x-transition x-on:click.outside="open = false" class="absolute right-0 z-50 mt-2 w-56 rounded-lg border border-slate-200 bg-white p-1.5 shadow-xl">
-                                <button type="button" wire:click="$set('showRunModal', true)" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-100">Neuen Test starten</button>
-                                <button type="button" wire:click="openCopilotOptimization" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-cyan-800 hover:bg-cyan-50">
-                                    {{ $activeCopilotSession ? 'Copilot-Sitzung oeffnen' : 'Mit Copilot optimieren' }}
-                                    <span class="mt-0.5 block text-xs font-medium text-cyan-600">Autonome System-Ausfuehrung</span>
-                                </button>
+                                <a href="{{ route('network.workflows.studio', ['workflow' => $selectedWorkflow, 'mode' => 'manual']) }}" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-100">Test im Workflow Studio starten</a>
+                                <a href="{{ route('network.workflows.studio', ['workflow' => $selectedWorkflow, 'mode' => 'assisted']) }}" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-cyan-800 hover:bg-cyan-50">
+                                    Mit Copilot im Studio optimieren
+                                    <span class="mt-0.5 block text-xs font-medium text-cyan-600">Test, Browser, Tasks und Versionen gemeinsam</span>
+                                </a>
                                 <button type="button" wire:click="$set('showCopilotRunsModal', true)" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-cyan-800 hover:bg-cyan-50">
                                     Optimierungslaeufe anzeigen
                                     <span class="mt-0.5 block text-xs font-medium text-cyan-600">Kosten, Tests, Logs und Daten</span>
@@ -635,6 +635,7 @@
                     x-on:scroll.debounce.100ms="refreshRouteLines()"
                     x-bind:class="isFullscreen ? 'min-h-0 flex-1 max-h-none' : ' min-h-70vh'"
                     class="relative isolate overflow-x-auto overflow-y-hidden bg-white scroll-container"
+                    style="background-image:linear-gradient(rgba(148,163,184,.22) 1px,transparent 1px),linear-gradient(90deg,rgba(148,163,184,.22) 1px,transparent 1px),linear-gradient(rgba(100,116,139,.2) 1px,transparent 1px),linear-gradient(90deg,rgba(100,116,139,.2) 1px,transparent 1px);background-size:20px 20px,20px 20px,100px 100px,100px 100px;"
                 >
                     <svg
                         x-cloak

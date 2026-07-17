@@ -28,6 +28,16 @@ class WorkflowTaskRunner
         $livePreviewEnabled = (bool) ($settings['live_preview_enabled'] ?? true);
         $livePreviewIntervalSeconds = max(1, min(60, (int) ($settings['live_preview_interval_seconds'] ?? 3)));
 
+        $tasks = $this->runtimeTasks(
+            $step,
+            trim((string) ($runtimeContext['nextTaskKey'] ?? $runtimeContext['next_task_key'] ?? '')) ?: null,
+            (bool) ($runtimeContext['copilotSupervised'] ?? $runtimeContext['copilot_supervised'] ?? false),
+        );
+        $transientTask = $runtimeContext['copilotTransientTask'] ?? $runtimeContext['copilot_transient_task'] ?? null;
+        if (is_array($transientTask) && $transientTask !== []) {
+            $tasks = $this->expandRuntimeTasks([$transientTask], [(int) $step->workflow_id]);
+        }
+
         return [
             'runId' => $runId,
             'processIdentity' => $this->processIdentity($runId, 'main', $run, $step, $stepRun),
@@ -40,11 +50,7 @@ class WorkflowTaskRunner
             'workflowStepType' => $step->type,
             'timezone' => $timezone,
             'timeZone' => $timezone,
-            'tasks' => $this->runtimeTasks(
-                $step,
-                trim((string) ($runtimeContext['nextTaskKey'] ?? $runtimeContext['next_task_key'] ?? '')) ?: null,
-                (bool) ($runtimeContext['copilotSupervised'] ?? $runtimeContext['copilot_supervised'] ?? false),
-            ),
+            'tasks' => $tasks,
             'livePreviewEnabled' => $livePreviewEnabled,
             'livePreviewIntervalSeconds' => $livePreviewIntervalSeconds,
             'livePreviewIntervalMs' => $livePreviewIntervalSeconds * 1000,
