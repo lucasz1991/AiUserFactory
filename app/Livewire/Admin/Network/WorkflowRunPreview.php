@@ -29,6 +29,10 @@ class WorkflowRunPreview extends Component
 
     public ?string $activeTaskKey = null;
 
+    public bool $selectableTasks = false;
+
+    public bool $expanded = false;
+
     public ?string $processPid = null;
 
     public ?string $processType = null;
@@ -41,6 +45,8 @@ class WorkflowRunPreview extends Component
         int|string|null $workflowRunId = null,
         ?int $activeStepId = null,
         ?string $activeTaskKey = null,
+        bool $selectableTasks = false,
+        bool $expanded = false,
         int|string|null $processPid = null,
         ?string $processType = null,
         ?string $processStatus = null,
@@ -48,6 +54,8 @@ class WorkflowRunPreview extends Component
         $this->workflowRunId = is_numeric($workflowRunId) ? (int) $workflowRunId : null;
         $this->activeStepId = $activeStepId;
         $this->activeTaskKey = $activeTaskKey !== null ? trim($activeTaskKey) : null;
+        $this->selectableTasks = $selectableTasks;
+        $this->expanded = $expanded;
         $this->processPid = is_scalar($processPid) ? (string) $processPid : null;
         $this->processType = $processType !== null ? trim($processType) : null;
         $this->processStatus = $processStatus !== null ? trim($processStatus) : null;

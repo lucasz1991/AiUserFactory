@@ -3,6 +3,8 @@
     'process' => null,
     'activeStepId' => null,
     'activeTaskKey' => null,
+    'selectableTasks' => false,
+    'expanded' => false,
 ])
 
 <div {{ $attributes }}>
@@ -10,6 +12,8 @@
         :workflow-run-id="$workflowRun?->id"
         :active-step-id="$activeStepId"
         :active-task-key="$activeTaskKey"
+        :selectable-tasks="$selectableTasks"
+        :expanded="$expanded"
         :process-pid="$process?->pid"
         :process-type="$process?->process_type"
         :process-status="$process?->status"

@@ -4,6 +4,7 @@
     'activeTaskKey' => null,
     'compact' => false,
     'showHeader' => true,
+    'selectableTasks' => false,
 ])
 
 @php
@@ -640,7 +641,14 @@
                                         data-workflow-minimap-active-target="{{ $isTaskActive ? 'true' : 'false' }}"
                                         x-on:mouseenter="setHoveredRouteNode(@js($taskNode))"
                                         x-on:mouseleave="setHoveredRouteNode('')"
-                                        class="relative rounded-md border px-2 py-1.5 text-[11px] shadow-sm {{ $tone }}"
+                                        @if($selectableTasks)
+                                            role="button"
+                                            tabindex="0"
+                                            x-on:click.stop="$dispatch('workflow-preview-task-selected', { workflowId: {{ (int) $workflow->id }}, stepId: {{ (int) $step->id }}, taskKey: @js($taskKey) })"
+                                            x-on:keydown.enter.prevent.stop="$dispatch('workflow-preview-task-selected', { workflowId: {{ (int) $workflow->id }}, stepId: {{ (int) $step->id }}, taskKey: @js($taskKey) })"
+                                            title="Task-Einstellungen öffnen"
+                                        @endif
+                                        class="relative rounded-md border px-2 py-1.5 text-[11px] shadow-sm {{ $tone }} {{ $selectableTasks ? 'cursor-pointer transition hover:-translate-y-px hover:shadow-md focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2' : '' }}"
                                     >
                                         @if($taskRouteBadge)
                                             <span class="absolute right-1 top-1 rounded-full px-1.5 py-0.5 text-[9px] font-semibold ring-1 {{ $routeBadgeClass($taskRouteBadge) }}">

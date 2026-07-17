@@ -41,7 +41,7 @@
     @else
         <div
             x-data="{
-                overviewOpen: false,
+                overviewOpen: @js($expanded),
                 browserOpen: false,
                 logsOpen: 'timeline',
                 workflowScrollObserver: null,
@@ -228,6 +228,7 @@
                             :workflow-run="$workflowRun"
                             :active-step-id="$activeStepId"
                             :active-task-key="$activeTaskKey"
+                            :selectable-tasks="$selectableTasks"
                             :show-header="false"
                         />
                     </div>

@@ -22,6 +22,7 @@ use App\Services\Workflows\WorkflowTaskCatalog;
 use App\Services\Workflows\WorkflowTaskOrderingService;
 use DomainException;
 use Illuminate\Support\Str;
+use Livewire\Attributes\On;
 use Livewire\Component;
 use Throwable;
 
@@ -72,6 +73,10 @@ class WorkflowStudio extends Component
     public array $lastActionResult = [];
 
     public array $pendingConfirmation = [];
+
+    public bool $showCopilotSettingsModal = false;
+
+    public bool $showCheckpointsModal = false;
 
     public function mount(Workflow $workflow): void
     {
@@ -192,7 +197,7 @@ class WorkflowStudio extends Component
     {
         $this->perform('run.resumed', function (): array {
             $run = $this->activeRunOrFail();
-            $this->assertRunRevisionCurrent($run);
+            $this->rebasePausedRunRevision($run);
             $response = app(WorkflowExecutionService::class)->resumeManualPause($run);
 
             return $this->result('running', $response['message'], $run->fresh());
@@ -206,14 +211,12 @@ class WorkflowStudio extends Component
             if ($run->status !== 'paused') {
                 throw new DomainException('Einzel-Task ist nur bei pausiertem Lauf moeglich.');
             }
-            $this->assertRunRevisionCurrent($run);
-            $context = is_array($run->context_json) ? $run->context_json : [];
-            $context['studio_single_task'] = true;
-            $run->forceFill(['context_json' => $context])->save();
+            $this->rebasePausedRunRevision($run);
             $response = app(WorkflowExecutionService::class)->resumeManualPause(
                 $run,
                 $this->selectedStepId !== '' ? (int) $this->selectedStepId : null,
                 $this->selectedTaskKey ?: null,
+                true,
             );
 
             return $this->result('running', $response['message'], $run->fresh());
@@ -356,6 +359,30 @@ class WorkflowStudio extends Component
         $this->selectedStepId = (string) $stepId;
         $this->selectedTaskKey = $taskKey;
         $this->editingTaskJson = $task ? (json_encode($task, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) ?: '') : '';
+    }
+
+    public function editTask(int $stepId, string $taskKey): void
+    {
+        $this->selectTask($stepId, $taskKey);
+        $this->dispatch('open-workflow-studio-task-editor', stepId: $stepId, taskKey: $taskKey);
+    }
+
+    public function editSelectedTask(): void
+    {
+        if ($this->selectedStepId === '' || $this->selectedTaskKey === '') {
+            $this->addError('studio', 'Wählen Sie zuerst eine Task im Diagramm aus.');
+
+            return;
+        }
+
+        $this->editTask((int) $this->selectedStepId, $this->selectedTaskKey);
+    }
+
+    #[On('workflow-studio-task-saved')]
+    public function handleTaskSaved(int $stepId, string $taskKey): void
+    {
+        $this->selectTask($stepId, $taskKey);
+        $this->lastActionResult = $this->result('draft', 'Task wurde gespeichert und eine neue Revision erstellt.');
     }
 
     public function saveSelectedTask(): void
@@ -601,10 +628,41 @@ class WorkflowStudio extends Component
         return $this->session()->checkpoints()->findOrFail((int) $this->selectedCheckpointId);
     }
 
-    private function assertRunRevisionCurrent(WorkflowRun $run): void
+    private function rebasePausedRunRevision(WorkflowRun $run): void
     {
-        if ((int) $run->workflow_revision !== (int) $this->workflow()->copilot_revision) {
-            throw new DomainException('Die Workflow-Struktur wurde geaendert. Starten Sie einen neuen Lauf oder laden Sie einen kompatiblen Checkpoint.');
+        $currentRevision = (int) $this->workflow()->copilot_revision;
+
+        if ((int) $run->workflow_revision === $currentRevision) {
+            return;
         }
+
+        if ($run->status !== 'paused' || $run->stepRuns()->whereIn('status', ['running'])->exists()) {
+            throw new DomainException('Die Workflow-Struktur wurde geändert. Der Lauf muss für die Übernahme der neuen Revision sicher pausiert sein.');
+        }
+
+        $context = is_array($run->context_json) ? $run->context_json : [];
+        $history = collect(is_array($context['studio_revision_rebases'] ?? null) ? $context['studio_revision_rebases'] : [])
+            ->push([
+                'from_revision' => (int) $run->workflow_revision,
+                'to_revision' => $currentRevision,
+                'task_key' => $context['next_task_key'] ?? null,
+                'rebased_at' => now()->toIso8601String(),
+            ])
+            ->take(-20)
+            ->values()
+            ->all();
+        $context['studio_revision_rebases'] = $history;
+        $run->forceFill([
+            'workflow_revision' => $currentRevision,
+            'context_json' => $context,
+        ])->save();
+
+        app(WorkflowStudioSessionService::class)->appendEvent(
+            $this->session(),
+            'run.rebased',
+            'Pausierter Lauf wurde auf Revision '.$currentRevision.' aktualisiert und behält seinen Runtime-Zustand.',
+            ['workflow_run_id' => (int) $run->getKey(), 'revision' => $currentRevision],
+            'warning',
+        );
     }
 }

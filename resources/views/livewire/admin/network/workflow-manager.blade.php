@@ -154,7 +154,7 @@
                                 <a href="{{ route('network.workflows.studio', ['workflow' => $selectedWorkflow, 'mode' => 'manual']) }}" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-100">Test im Workflow Studio starten</a>
                                 <a href="{{ route('network.workflows.studio', ['workflow' => $selectedWorkflow, 'mode' => 'assisted']) }}" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-cyan-800 hover:bg-cyan-50">
                                     Mit Copilot im Studio optimieren
-                                    <span class="mt-0.5 block text-xs font-medium text-cyan-600">Test, Browser, Tasks und Versionen gemeinsam</span>
+                                    <span class="mt-0.5 block text-xs font-medium text-cyan-600">Test, Browser und Tasks gemeinsam</span>
                                 </a>
                                 <button type="button" wire:click="$set('showCopilotRunsModal', true)" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-cyan-800 hover:bg-cyan-50">
                                     Optimierungslaeufe anzeigen
@@ -194,6 +194,11 @@
                                 <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" /></svg>
                             </button>
                             <div x-cloak x-show="open" x-transition x-on:click.outside="open = false" class="absolute right-0 z-50 mt-2 w-56 rounded-lg border border-slate-200 bg-white p-1.5 shadow-xl">
+                                <button type="button" wire:click="openRevisionHistory" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-violet-700 hover:bg-violet-50">
+                                    Revisionen
+                                    <span class="mt-0.5 block text-xs font-medium text-violet-500">Einsehen, vergleichen, zurücksetzen</span>
+                                </button>
+                                <div class="my-1 border-t border-slate-100"></div>
                                 <button type="button" wire:click="exportWorkflow" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-blue-700 hover:bg-blue-50">Als ZIP exportieren</button>
                                 <a href="{{ route('processes.index') }}" class="block rounded-md px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">Prozesse öffnen</a>
                                 @if(! $workflowLocked)
@@ -635,7 +640,7 @@
                     x-on:scroll.debounce.100ms="refreshRouteLines()"
                     x-bind:class="isFullscreen ? 'min-h-0 flex-1 max-h-none' : ' min-h-70vh'"
                     class="relative isolate overflow-x-auto overflow-y-hidden bg-white scroll-container"
-                    style="background-image:linear-gradient(rgba(148,163,184,.22) 1px,transparent 1px),linear-gradient(90deg,rgba(148,163,184,.22) 1px,transparent 1px),linear-gradient(rgba(100,116,139,.2) 1px,transparent 1px),linear-gradient(90deg,rgba(100,116,139,.2) 1px,transparent 1px);background-size:20px 20px,20px 20px,100px 100px,100px 100px;"
+                    style="background-image:linear-gradient(rgba(148,163,184,.22) 1px,transparent 1px),linear-gradient(90deg,rgba(148,163,184,.22) 1px,transparent 1px),linear-gradient(rgba(100,116,139,.2) 1px,transparent 1px),linear-gradient(90deg,rgba(100,116,139,.2) 1px,transparent 1px);background-size:20px 20px,20px 20px,100px 100px,100px 100px;opacity:0.5;"
                 >
                     <svg
                         x-cloak
@@ -1506,6 +1511,29 @@
                     "
                     class="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700"
                 >Speichern</button>
+            </x-slot>
+        </x-dialog-modal>
+
+        <x-dialog-modal wire:model="showRevisionHistoryModal" maxWidth="6xl">
+            <x-slot name="title">
+                <div>
+                    <span class="text-base font-semibold text-slate-950">Workflow-Revisionen</span>
+                    <p class="mt-1 text-xs font-normal text-slate-500">Stände einsehen, vergleichen und als neue aktuelle Revision wiederherstellen.</p>
+                </div>
+            </x-slot>
+            <x-slot name="content">
+                @if($revisionStudioSessionId)
+                    <livewire:admin.network.workflow-revision-history
+                        :workflow-id="$selectedWorkflow->id"
+                        :studio-session-id="$revisionStudioSessionId"
+                        :key="'manager-workflow-revisions-'.$selectedWorkflow->id.'-'.$revisionStudioSessionId"
+                    />
+                @else
+                    <div class="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center text-sm text-slate-500">Der Revisionsverlauf wird vorbereitet.</div>
+                @endif
+            </x-slot>
+            <x-slot name="footer">
+                <button type="button" x-on:click="$dispatch('close')" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">Schließen</button>
             </x-slot>
         </x-dialog-modal>
 

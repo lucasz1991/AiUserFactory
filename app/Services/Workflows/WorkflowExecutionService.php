@@ -459,6 +459,7 @@ class WorkflowExecutionService
         int|WorkflowRun $workflowRun,
         ?int $workflowStepId = null,
         ?string $taskKey = null,
+        bool $singleTask = false,
     ): array {
         $run = $this->loadRun($workflowRun);
 
@@ -472,6 +473,12 @@ class WorkflowExecutionService
             $context['manual_pause_requested_at'],
             $context['manual_pause_checkpoint'],
         );
+
+        if ($singleTask) {
+            $context['studio_single_task'] = true;
+        } else {
+            unset($context['studio_single_task']);
+        }
 
         $taskKey = trim((string) $taskKey);
         if ($workflowStepId && $taskKey !== '') {
@@ -521,7 +528,12 @@ class WorkflowExecutionService
 
         RunWorkflowJob::dispatch($run->id);
 
-        return ['ok' => true, 'message' => $taskKey !== '' ? 'Workflow-Lauf wird ab dem ausgewaehlten Task fortgesetzt.' : 'Workflow-Lauf wird fortgesetzt.'];
+        return [
+            'ok' => true,
+            'message' => $singleTask
+                ? 'Die ausgewählte Task wird einmal ausgeführt; danach pausiert der Lauf wieder.'
+                : ($taskKey !== '' ? 'Workflow-Lauf wird ab dem ausgewaehlten Task kontinuierlich fortgesetzt.' : 'Workflow-Lauf wird kontinuierlich fortgesetzt.'),
+        ];
     }
 
     public function runManualProbe(

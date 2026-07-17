@@ -3,8 +3,11 @@
 namespace Tests\Feature;
 
 use App\Enums\WorkflowCopilotPermissionMode;
+use App\Jobs\RunWorkflowJob;
+use App\Livewire\Admin\Network\WorkflowManager;
 use App\Livewire\Admin\Network\WorkflowsIndex;
 use App\Livewire\Admin\Network\WorkflowStudio;
+use App\Livewire\Admin\Network\WorkflowStudioTaskEditor;
 use App\Models\Setting;
 use App\Models\User;
 use App\Models\Workflow;
@@ -232,18 +235,139 @@ class WorkflowStudioTest extends TestCase
         $this->assertCount(2, $step->fresh()->task_cards);
     }
 
-    public function test_fullscreen_studio_renders_controls_permission_select_and_revision_module(): void
+    public function test_fullscreen_studio_renders_the_shared_preview_controls_and_permission_select(): void
     {
         [$workflow] = $this->workflow();
         $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
         $this->actingAs($admin);
 
         Livewire::test(WorkflowStudio::class, ['workflow' => $workflow])
-            ->assertSee('Workflow-Diagramm')
-            ->assertSee('Live-Browser & Inspector', false)
+            ->assertSee('Workflow-Vorschau', false)
+            ->assertSee('Selector-Probe')
             ->assertSee('Kritisch nachfragen')
-            ->assertSee('Versionsverlauf')
             ->assertSee('Checkpoint');
+    }
+
+    public function test_revision_history_is_opened_from_the_workflow_manager_actions(): void
+    {
+        [$workflow] = $this->workflow();
+        $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
+        $this->actingAs($admin);
+
+        Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
+            ->assertSee('Revisionen')
+            ->call('openRevisionHistory')
+            ->assertSet('showRevisionHistoryModal', true)
+            ->assertSet('revisionStudioSessionId', fn ($value): bool => is_int($value) && $value > 0)
+            ->assertSee('Workflow-Revisionen');
+
+        $this->assertSame(1, $workflow->studioRevisions()->count());
+    }
+
+    public function test_normal_resume_runs_continuously_while_single_task_resume_sets_a_one_shot_pause(): void
+    {
+        Queue::fake();
+        [$workflow, $step] = $this->workflow();
+        $run = WorkflowRun::query()->create([
+            'run_uuid' => (string) str()->uuid(),
+            'workflow_id' => $workflow->id,
+            'workflow_revision' => 0,
+            'current_workflow_step_id' => $step->id,
+            'status' => 'paused',
+            'requested_by' => 'test',
+            'queued_at' => now(),
+            'context_json' => [
+                'next_task_key' => 'first-task',
+                'manual_pause_requested' => false,
+                'studio_single_task' => true,
+            ],
+            'result_json' => [],
+        ]);
+        $execution = app(WorkflowExecutionService::class);
+
+        $execution->resumeManualPause($run);
+
+        $this->assertSame('running', $run->fresh()->status);
+        $this->assertArrayNotHasKey('studio_single_task', $run->fresh()->context_json);
+
+        $run->refresh()->forceFill(['status' => 'paused'])->save();
+        $execution->resumeManualPause($run->fresh(), $step->id, 'first-task', true);
+
+        $this->assertTrue((bool) data_get($run->fresh()->context_json, 'studio_single_task'));
+        Queue::assertPushed(RunWorkflowJob::class, 2);
+    }
+
+    public function test_paused_studio_run_can_continue_after_a_task_revision_without_losing_runtime_state(): void
+    {
+        Queue::fake();
+        [$workflow, $step] = $this->workflow();
+        $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
+        $session = app(WorkflowStudioSessionService::class)->open($workflow, $admin, 'manual', 'ask_critical');
+        app(WorkflowStudioRevisionService::class)->ensureBaseline($session);
+        $run = WorkflowRun::query()->create([
+            'run_uuid' => (string) str()->uuid(),
+            'workflow_id' => $workflow->id,
+            'workflow_studio_session_id' => $session->id,
+            'workflow_revision' => 0,
+            'current_workflow_step_id' => $step->id,
+            'status' => 'paused',
+            'requested_by' => 'test',
+            'queued_at' => now(),
+            'context_json' => [
+                'next_task_key' => 'first-task',
+                'workflow_variables' => ['query' => 'bleibt-erhalten'],
+                'browser_windows' => ['main' => ['currentUrl' => 'https://example.test']],
+            ],
+            'result_json' => [],
+        ]);
+        app(WorkflowStudioSessionService::class)->attachRun($session, $run);
+        app(WorkflowStudioRevisionService::class)->apply(
+            $session->fresh(),
+            0,
+            'Task-Titel korrigiert',
+            function () use ($step): void {
+                $config = $step->fresh()->config_json;
+                $config['tasks'][0]['title'] = 'Korrigierter Task';
+                $step->fresh()->forceFill(['config_json' => $config])->save();
+            },
+        );
+
+        $this->actingAs($admin);
+        Livewire::test(WorkflowStudio::class, ['workflow' => $workflow->fresh()])
+            ->call('resumeRun')
+            ->assertHasNoErrors();
+
+        $run->refresh();
+        $this->assertSame(1, $run->workflow_revision);
+        $this->assertSame('running', $run->status);
+        $this->assertSame('bleibt-erhalten', data_get($run->context_json, 'workflow_variables.query'));
+        $this->assertSame('https://example.test', data_get($run->context_json, 'browser_windows.main.currentUrl'));
+        $this->assertSame(1, data_get($run->context_json, 'studio_revision_rebases.0.to_revision'));
+    }
+
+    public function test_studio_task_editor_reuses_the_manager_form_and_saves_a_revision(): void
+    {
+        [$workflow, $step] = $this->workflow();
+        $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
+        $session = app(WorkflowStudioSessionService::class)->open($workflow, $admin, 'manual', 'ask_critical');
+        app(WorkflowStudioRevisionService::class)->ensureBaseline($session);
+        $this->actingAs($admin);
+
+        Livewire::test(WorkflowStudioTaskEditor::class, [
+            'workflow' => $workflow,
+            'studioSessionId' => $session->id,
+        ])
+            ->call('openFromStudio', $step->id, 'first-task')
+            ->assertSet('showEditTaskModal', true)
+            ->assertSee('Funktion / Node-Skript')
+            ->set('editingTaskTitle', 'Task im Studio bearbeitet')
+            ->call('saveEditTaskCard')
+            ->assertHasNoErrors()
+            ->assertSet('showEditTaskModal', false);
+
+        $this->assertSame('Task im Studio bearbeitet', data_get($step->fresh()->task_cards, '0.title'));
+        $this->assertSame(1, $workflow->fresh()->copilot_revision);
+        $this->assertSame(2, $workflow->studioRevisions()->count());
     }
 
     public function test_creation_with_copilot_builds_a_draft_revision_without_executing_it(): void

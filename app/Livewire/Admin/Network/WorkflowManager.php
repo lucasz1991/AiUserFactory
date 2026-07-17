@@ -11,6 +11,7 @@ use App\Models\Workflow;
 use App\Models\WorkflowCopilotSession;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowStep;
+use App\Models\WorkflowStudioSession;
 use App\Services\Ai\WorkflowCopilotAiUsageTracker;
 use App\Services\Workflows\PersonaActionWorkflowCatalog;
 use App\Services\Workflows\WorkflowCopilotLogExportService;
@@ -18,6 +19,8 @@ use App\Services\Workflows\WorkflowCopilotPlanningService;
 use App\Services\Workflows\WorkflowCopilotSessionService;
 use App\Services\Workflows\WorkflowExecutionService;
 use App\Services\Workflows\WorkflowRunDebugPackageService;
+use App\Services\Workflows\WorkflowStudioRevisionService;
+use App\Services\Workflows\WorkflowStudioSessionService;
 use App\Services\Workflows\WorkflowTaskCatalog;
 use App\Services\Workflows\WorkflowTaskOrderingService;
 use App\Services\Workflows\WorkflowTransferService;
@@ -166,6 +169,10 @@ class WorkflowManager extends Component
     public bool $showEditStepModal = false;
 
     public bool $showEditTaskModal = false;
+
+    public bool $showRevisionHistoryModal = false;
+
+    public ?int $revisionStudioSessionId = null;
 
     public string $activeTaskGroup = 'browser';
 
@@ -896,6 +903,36 @@ class WorkflowManager extends Component
             $this->editingTaskExtra,
         );
         $this->showEditTaskModal = true;
+    }
+
+    public function openRevisionHistory(): void
+    {
+        $workflow = $this->selectedWorkflow();
+
+        if (! $workflow) {
+            return;
+        }
+
+        $session = WorkflowStudioSession::query()
+            ->where('workflow_id', $workflow->getKey())
+            ->latest('last_activity_at')
+            ->latest('id')
+            ->first();
+        $session ??= app(WorkflowStudioSessionService::class)->latestOrOpen(
+            $workflow,
+            auth()->user(),
+            'manual',
+        );
+        app(WorkflowStudioRevisionService::class)->ensureBaseline($session);
+
+        $this->revisionStudioSessionId = (int) $session->getKey();
+        $this->showRevisionHistoryModal = true;
+    }
+
+    #[On('workflow-studio-revision-restored')]
+    public function handleRevisionRestored(): void
+    {
+        $this->loadWorkflowForm();
     }
 
     public function openAssistantImprovement(int $workflowId, int $stepId, ?string $taskKey = null): void
