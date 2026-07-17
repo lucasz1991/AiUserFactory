@@ -324,6 +324,41 @@ class WorkflowCompositionTest extends TestCase
         $this->assertSame('Suchdauer in Sekunden', data_get($decisionTask, 'form.timeout_label'));
     }
 
+    public function test_only_executable_task_error_routes_continue_the_workflow(): void
+    {
+        $workflow = $this->workflow('terminal-task-routes');
+        $task = $this->waitTask('source-task');
+        $step = $this->step($workflow, 'Source list', [$task]);
+        $config = $step->config_json;
+        $config['routes']['failed'] = [
+            'type' => 'step',
+            'action_key' => 'legacy-step-fallback',
+        ];
+        $step->forceFill(['config_json' => $config])->save();
+
+        $executionReflection = new ReflectionClass(WorkflowExecutionService::class);
+        $execution = $executionReflection->newInstanceWithoutConstructor();
+        $routeMethod = $executionReflection->getMethod('routeForResult');
+        $continuableMethod = $executionReflection->getMethod('isContinuableFailureRoute');
+
+        $this->assertNull($routeMethod->invoke($execution, $step->fresh(), 'failed', [
+            'failedTaskKey' => 'source-task',
+            'tasks' => [['key' => 'source-task', 'status' => 'failed']],
+        ]));
+        $this->assertTrue($continuableMethod->invoke($execution, [
+            'type' => 'card',
+            'action_key' => 'source-list',
+            'card_key' => 'alternative-task',
+        ]));
+        $this->assertTrue($continuableMethod->invoke($execution, [
+            'type' => 'step',
+            'action_key' => 'alternative-list',
+        ]));
+        $this->assertFalse($continuableMethod->invoke($execution, null));
+        $this->assertFalse($continuableMethod->invoke($execution, ['type' => 'end', 'step' => 'end']));
+        $this->assertFalse($continuableMethod->invoke($execution, ['type' => 'fail', 'step' => 'fail']));
+    }
+
     public function test_embedded_workflow_boundary_preserves_success_and_failure_routes(): void
     {
         $parent = $this->workflow('parent-routes');

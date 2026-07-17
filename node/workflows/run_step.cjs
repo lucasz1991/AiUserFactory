@@ -2987,6 +2987,27 @@ async function run() {
             : 'Interne Fehlerroute im eingebetteten Workflow konnte nicht aufgeloest werden.';
           break;
         }
+
+        if (
+          currentEmbeddedFrameKey === ''
+          && !['end', 'fail'].includes(failureRouteType)
+          && routeHasExplicitTarget(failureRoute)
+        ) {
+          requestedFailureRouteTask = {
+            ...task,
+            key: task.route_source_task_key || task.parent_task_key || task.key,
+          };
+          requestedRouteMessage = targetCardKey !== ''
+            ? `Fehlerroute wird ausserhalb des aktuellen Task-Ausschnitts fortgesetzt: ${targetCardKey}.`
+            : `Fehlerroute wird in der Workflow-Liste ${routeStepKey(failureRoute)} fortgesetzt.`;
+          pushEvent('task-error-route-requested', requestedRouteMessage, {
+            taskKey: task.key,
+            targetTaskKey: targetCardKey || null,
+            targetStepKey: routeStepKey(failureRoute) || null,
+            status,
+          });
+          break;
+        }
       }
 
       if (branchFailed) {

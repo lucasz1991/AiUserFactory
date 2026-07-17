@@ -258,6 +258,45 @@ test('failed task follows a forward on_error route in the same Node run', () => 
   )));
 });
 
+test('failed task requests a configured external step route without failing the workflow', () => {
+  const failedTask = returnTask('mailbox-not-found', false);
+  failedTask.on_error = {
+    type: 'step',
+    action_key: 'check-alternative-mailbox',
+    step: 'check-alternative-mailbox',
+  };
+  const result = executeTasks([failedTask]);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.routeRequested, true);
+  assert.equal(result.routeOutcome, 'failed');
+  assert.equal(result.completedTaskKey, 'mailbox-not-found');
+  assert.ok(result.events.some((event) => (
+    event.stage === 'task-error-route-requested'
+    && event.taskKey === 'mailbox-not-found'
+    && event.targetStepKey === 'check-alternative-mailbox'
+  )));
+});
+
+test('failed task remains a workflow failure for end, fail and missing error routes', () => {
+  for (const route of [
+    null,
+    { type: 'end', step: 'end' },
+    { type: 'fail', step: 'fail' },
+  ]) {
+    const failedTask = returnTask('terminal-failure', false);
+
+    if (route) {
+      failedTask.on_error = route;
+    }
+
+    const result = executeTasks([failedTask]);
+    assert.equal(result.ok, false);
+    assert.equal(result.routeRequested, undefined);
+    assert.equal(result.failedTaskKey, 'terminal-failure');
+  }
+});
+
 test('unmatched condition follows on_error without marking the task as failed', () => {
   const result = executeTasks([
     branchTask('condition-not-met', {

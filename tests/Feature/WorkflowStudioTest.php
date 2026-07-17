@@ -13,6 +13,7 @@ use App\Models\User;
 use App\Models\Workflow;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowStep;
+use App\Models\WorkflowStepRun;
 use App\Services\Ai\AiConnectionService;
 use App\Services\Workflows\WorkflowCopilotSessionService;
 use App\Services\Workflows\WorkflowExecutionService;
@@ -25,6 +26,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
 use Livewire\Livewire;
 use Mockery;
+use ReflectionClass;
 use Tests\TestCase;
 
 class WorkflowStudioTest extends TestCase
@@ -295,6 +297,131 @@ class WorkflowStudioTest extends TestCase
 
         $this->assertTrue((bool) data_get($run->fresh()->context_json, 'studio_single_task'));
         Queue::assertPushed(RunWorkflowJob::class, 2);
+    }
+
+    public function test_interactive_run_continues_after_a_failed_task_when_an_executable_error_route_exists(): void
+    {
+        Queue::fake();
+        [$workflow, $step] = $this->workflow();
+        $tasks = $step->task_cards;
+        $tasks[0]['on_error'] = [
+            'type' => 'card',
+            'action_key' => $step->action_key,
+            'step' => $step->action_key,
+            'card_key' => 'alternative-task',
+            'card' => 'alternative-task',
+        ];
+        $tasks[] = [
+            'key' => 'alternative-task',
+            'task_key' => 'wait.seconds',
+            'title' => 'Alternative Task',
+            'value' => 0,
+        ];
+        $config = $step->config_json;
+        $config['tasks'] = $tasks;
+        $step->forceFill(['config_json' => $config])->save();
+        $run = WorkflowRun::query()->create([
+            'run_uuid' => (string) str()->uuid(),
+            'workflow_id' => $workflow->id,
+            'current_workflow_step_id' => $step->id,
+            'status' => 'running',
+            'requested_by' => 'test',
+            'queued_at' => now(),
+            'context_json' => [
+                'interactive_debug' => true,
+                'next_task_key' => 'first-task',
+            ],
+            'result_json' => [],
+        ]);
+        $stepRun = WorkflowStepRun::query()->create([
+            'workflow_run_id' => $run->id,
+            'workflow_step_id' => $step->id,
+            'status' => 'running',
+            'started_at' => now(),
+            'result_json' => [],
+        ])->load(['workflowRun', 'workflowStep']);
+
+        $execution = app(WorkflowExecutionService::class);
+        $method = (new ReflectionClass($execution))->getMethod('continueInteractiveDebugTask');
+        $method->invoke($execution, $stepRun, [
+            'ok' => true,
+            'status' => 'success',
+            'statusMessage' => 'Erste Variante nicht gefunden.',
+            'routeRequested' => true,
+            'routeOutcome' => 'failed',
+            'completedTaskKey' => 'first-task',
+            'tasks' => [['key' => 'first-task', 'status' => 'failed']],
+        ], true);
+
+        $run->refresh();
+        $stepRun->refresh();
+        $this->assertSame('running', $run->status);
+        $this->assertSame('alternative-task', data_get($run->context_json, 'next_task_key'));
+        $this->assertTrue((bool) data_get($run->context_json, 'manual_debug_last_task.routed_failure'));
+        $this->assertFalse((bool) data_get($run->context_json, 'manual_debug_last_task.successful'));
+        $this->assertSame('queued', $stepRun->status);
+        $this->assertNull($stepRun->error_message);
+        Queue::assertPushed(RunWorkflowJob::class, 1);
+    }
+
+    public function test_copilot_checkpoint_treats_a_configured_error_branch_as_continuable(): void
+    {
+        [$workflow, $step] = $this->workflow();
+        $tasks = $step->task_cards;
+        $tasks[0]['on_error'] = [
+            'type' => 'card',
+            'action_key' => $step->action_key,
+            'step' => $step->action_key,
+            'card_key' => 'alternative-task',
+            'card' => 'alternative-task',
+        ];
+        $tasks[] = [
+            'key' => 'alternative-task',
+            'task_key' => 'wait.seconds',
+            'title' => 'Alternative Task',
+            'value' => 0,
+        ];
+        $config = $step->config_json;
+        $config['tasks'] = $tasks;
+        $step->forceFill(['config_json' => $config])->save();
+        $run = WorkflowRun::query()->create([
+            'run_uuid' => (string) str()->uuid(),
+            'workflow_id' => $workflow->id,
+            'current_workflow_step_id' => $step->id,
+            'status' => 'running',
+            'requested_by' => 'test',
+            'queued_at' => now(),
+            'context_json' => [
+                'copilot_current_task_key' => 'first-task',
+            ],
+            'result_json' => [],
+        ]);
+        $stepRun = WorkflowStepRun::query()->create([
+            'workflow_run_id' => $run->id,
+            'workflow_step_id' => $step->id,
+            'status' => 'running',
+            'started_at' => now(),
+            'result_json' => [],
+        ]);
+
+        $execution = app(WorkflowExecutionService::class);
+        $method = (new ReflectionClass($execution))->getMethod('persistCopilotTaskCheckpoint');
+        $method->invoke($execution, $stepRun, [], [
+            'ok' => true,
+            'status' => 'success',
+            'statusMessage' => 'Alternative Route verwenden.',
+            'routeRequested' => true,
+            'routeOutcome' => 'failed',
+            'completedTaskKey' => 'first-task',
+            'tasks' => [['key' => 'first-task', 'status' => 'failed']],
+        ], true);
+
+        $checkpoint = $run->fresh()->context_json['copilot_checkpoint'];
+        $this->assertTrue($checkpoint['successful']);
+        $this->assertFalse($checkpoint['task_successful']);
+        $this->assertTrue($checkpoint['routed_failure']);
+        $this->assertSame('next_task', $checkpoint['next_action']);
+        $this->assertSame('alternative-task', $checkpoint['next_task_key']);
     }
 
     public function test_paused_studio_run_can_continue_after_a_task_revision_without_losing_runtime_state(): void

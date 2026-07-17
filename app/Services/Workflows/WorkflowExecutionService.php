@@ -1227,13 +1227,22 @@ class WorkflowExecutionService
         }
 
         $outcome = $this->resultOutcome($result);
+        $hasFailureOutcome = in_array($outcome, ['failed', 'timeout'], true);
+        $failureRoute = $hasFailureOutcome
+            ? $this->routeForResult($step, $outcome, $result)
+            : null;
+        $routedFailure = ! $isProbe
+            && $hasFailureOutcome
+            && $this->isContinuableFailureRoute($failureRoute);
+        $taskSuccessful = $successful && ! $hasFailureOutcome;
+        $workflowMayContinue = $taskSuccessful || $routedFailure;
         $context = $this->mergeWorkflowBrowserState($context, $result);
         $nextAction = 'repair';
         $nextTaskKey = null;
 
         if ($isProbe) {
             $nextAction = 'repair';
-        } elseif ($successful) {
+        } elseif ($workflowMayContinue) {
             [$nextAction, $nextTaskKey] = $this->successfulCheckpointContinuation(
                 $step,
                 $currentTaskKey,
@@ -1255,7 +1264,7 @@ class WorkflowExecutionService
             && (int) ($existingCheckpoint['workflow_step_id'] ?? 0) === (int) $step->id
             && (string) ($existingCheckpoint['external_run_id'] ?? '') === (string) $stepRun->external_run_id
             && (string) ($existingCheckpoint['task_key'] ?? '') === $currentTaskKey
-            && (bool) ($existingCheckpoint['successful'] ?? false) === $successful
+            && (bool) ($existingCheckpoint['successful'] ?? false) === $workflowMayContinue
             && (string) ($existingCheckpoint['outcome'] ?? '') === $outcome
             && (string) ($existingCheckpoint['result_signature'] ?? '') === $resultSignature;
         $checkpoint = [
@@ -1266,7 +1275,9 @@ class WorkflowExecutionService
             'workflow_step_name' => (string) $step->name,
             'task_key' => $currentTaskKey,
             'task_title' => (string) (collect($step->task_cards)->firstWhere('key', $currentTaskKey)['title'] ?? $transientTask['title'] ?? $currentTaskKey),
-            'successful' => $successful,
+            'successful' => $workflowMayContinue,
+            'task_successful' => $taskSuccessful,
+            'routed_failure' => $routedFailure,
             'outcome' => $outcome,
             'next_action' => $nextAction,
             'next_task_key' => $nextTaskKey,
@@ -1290,7 +1301,7 @@ class WorkflowExecutionService
                 'copilotCheckpointId' => $checkpoint['id'],
             ]),
             'logs_json' => $this->logsFromExternalStatus($result),
-            'error_message' => $successful ? null : (string) (
+            'error_message' => $workflowMayContinue ? null : (string) (
                 $result['statusMessage']
                 ?? $result['message']
                 ?? 'Copilot-Task ist fehlgeschlagen.'
@@ -1415,20 +1426,41 @@ class WorkflowExecutionService
             ?? data_get($step->task_cards, '0.key', '')
         ));
 
+        $outcome = $this->resultOutcome($result);
+        $hasFailureOutcome = in_array($outcome, ['failed', 'timeout'], true);
+        $failureRoute = $hasFailureOutcome
+            ? $this->routeForResult($step, $outcome, $result)
+            : null;
+        $routedFailure = $hasFailureOutcome && $this->isContinuableFailureRoute($failureRoute);
+        $taskSuccessful = $successful && ! $hasFailureOutcome;
+        $workflowMayContinue = $taskSuccessful || $routedFailure;
+
         if ($successful) {
             $result = $this->applyExternalResult($stepRun, $result);
+        }
+
+        if ($workflowMayContinue) {
             [$nextAction, $nextTaskKey] = $this->successfulCheckpointContinuation($step, $currentTaskKey, $result);
         } else {
             $nextAction = 'next_task';
             $nextTaskKey = $currentTaskKey;
         }
 
-        if ($nextAction === 'complete_step' && $successful) {
+        $pauseAfterTask = (bool) ($context['manual_pause_requested'] ?? false)
+            || (bool) ($context['studio_single_task'] ?? false);
+        unset($context['studio_single_task']);
+
+        if ($nextAction === 'complete_step' && $workflowMayContinue) {
             unset($context['next_task_key']);
+
+            if ($pauseAfterTask) {
+                $context['manual_pause_requested'] = true;
+            }
+
             $run->forceFill(['context_json' => $context])->save();
-            $this->completeStepRun($stepRun, $result, 'completed');
+            $this->completeStepRun($stepRun, $result, $routedFailure ? $outcome : 'completed');
             $this->createStudioCheckpointSafely($run, 'task', 'Nach Task '.$currentTaskKey);
-            $this->continueAfterStep($run, $stepRun, $result, $this->resultOutcome($result), max(0, (int) $step->wait_after_seconds));
+            $this->continueAfterStep($run, $stepRun, $result, $outcome, max(0, (int) $step->wait_after_seconds));
 
             return;
         }
@@ -1440,13 +1472,11 @@ class WorkflowExecutionService
         $context['next_task_key'] = $nextTaskKey;
         $context['manual_debug_last_task'] = [
             'task_key' => $currentTaskKey,
-            'successful' => $successful,
+            'successful' => $taskSuccessful,
+            'routed_failure' => $routedFailure,
             'recorded_at' => now()->toIso8601String(),
         ];
-        $pauseNow = ! $successful
-            || (bool) ($context['manual_pause_requested'] ?? false)
-            || (bool) ($context['studio_single_task'] ?? false);
-        unset($context['studio_single_task']);
+        $pauseNow = ! $workflowMayContinue || $pauseAfterTask;
 
         $stepRun->forceFill([
             'status' => $pauseNow ? 'waiting' : 'queued',
@@ -1456,7 +1486,7 @@ class WorkflowExecutionService
             'logs_json' => $this->logsFromExternalStatus($result),
             'finished_at' => null,
             'duration_ms' => null,
-            'error_message' => $successful ? null : (string) ($result['statusMessage'] ?? $result['message'] ?? 'Task fehlgeschlagen.'),
+            'error_message' => $workflowMayContinue ? null : (string) ($result['statusMessage'] ?? $result['message'] ?? 'Task fehlgeschlagen.'),
         ])->save();
         $run->forceFill([
             'status' => $pauseNow ? 'paused' : 'running',
@@ -2608,6 +2638,17 @@ class WorkflowExecutionService
         $this->recordRoute($run, $stepRun, $outcome, $route, $context);
         $run->refresh();
 
+        if (in_array($outcome, ['failed', 'timeout'], true) && ! $this->isContinuableFailureRoute($route)) {
+            $this->failRun($run, (string) (
+                $route['message']
+                ?? data_get($result, 'statusMessage')
+                ?? data_get($result, 'message')
+                ?? 'Workflow wurde durch einen Taskfehler ohne Fortsetzungsroute beendet.'
+            ));
+
+            return;
+        }
+
         if ($routeType === 'end') {
             $this->completeRun($run);
 
@@ -2704,7 +2745,13 @@ class WorkflowExecutionService
     protected function routeForResult(WorkflowStep $step, string $outcome, array $result): ?array
     {
         if ((bool) ($result['routeRequested'] ?? false)) {
-            $completedTaskKey = trim((string) ($result['completedTaskKey'] ?? $result['completed_task_key'] ?? ''));
+            $completedTaskKey = trim((string) (
+                $result['completedTaskKey']
+                ?? $result['completed_task_key']
+                ?? $result['failedTaskKey']
+                ?? $result['failed_task_key']
+                ?? ''
+            ));
             $sourceTask = collect($step->task_cards)
                 ->first(fn (array $task): bool => (string) ($task['key'] ?? '') === $completedTaskKey);
             $route = is_array($sourceTask)
@@ -2717,6 +2764,10 @@ class WorkflowExecutionService
                 $route['_source_card_key'] = $completedTaskKey;
 
                 return $this->normalizeRoute($step, $route);
+            }
+
+            if (is_array($sourceTask) && in_array($outcome, ['failed', 'timeout'], true)) {
+                return null;
             }
         }
 
@@ -2738,11 +2789,39 @@ class WorkflowExecutionService
 
                         return $this->normalizeRoute($step, $route);
                     }
+
+                    return null;
                 }
             }
         }
 
         return $this->routeForOutcome($step, $outcome);
+    }
+
+    /**
+     * A failed task may continue the workflow only when its error route points
+     * to another executable card or step. Missing routes and the explicit
+     * terminal targets `end` and `fail` are real workflow failures.
+     */
+    protected function isContinuableFailureRoute(?array $route): bool
+    {
+        if (! is_array($route) || $route === []) {
+            return false;
+        }
+
+        $type = strtolower(trim((string) ($route['type'] ?? '')));
+        $step = strtolower(trim((string) ($route['action_key'] ?? $route['step'] ?? '')));
+        $card = trim((string) ($route['card_key'] ?? $route['card'] ?? ''));
+
+        if (in_array($type, ['end', 'fail'], true) || in_array($step, ['end', 'fail'], true)) {
+            return false;
+        }
+
+        if ($type === 'card') {
+            return $card !== '';
+        }
+
+        return $step !== '';
     }
 
     protected function hasRouteForOutcome(WorkflowStep $step, string $outcome): bool
