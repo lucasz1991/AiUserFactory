@@ -640,7 +640,7 @@
                     x-on:scroll.debounce.100ms="refreshRouteLines()"
                     x-bind:class="isFullscreen ? 'min-h-0 flex-1 max-h-none' : ' min-h-70vh'"
                     class="relative isolate overflow-x-auto overflow-y-hidden bg-white scroll-container"
-                    style="background-image:linear-gradient(rgba(203,213,225,.18) 1px,transparent 1px),linear-gradient(90deg,rgba(203,213,225,.18) 1px,transparent 1px),linear-gradient(rgba(226,232,240,.12) 1px,transparent 1px),linear-gradient(90deg,rgba(226,232,240,.12) 1px,transparent 1px);background-size:20px 20px,20px 20px,100px 100px,100px 100px;opacity:0.42;"
+                    style="background-image:linear-gradient(rgba(203,213,225,.18) 1px,transparent 1px),linear-gradient(90deg,rgba(203,213,225,.18) 1px,transparent 1px),linear-gradient(rgba(226,232,240,.12) 1px,transparent 1px),linear-gradient(90deg,rgba(226,232,240,.12) 1px,transparent 1px);background-size:20px 20px,20px 20px,100px 100px,100px 100px;"
                 >
                     <svg
                         x-cloak
