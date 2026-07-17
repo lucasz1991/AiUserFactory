@@ -11,7 +11,7 @@
                 </li>
 
                 <li class="px-5 py-3 text-xs font-medium text-gray-500 cursor-default leading-[18px] group-data-[sidebar-size=sm]:hidden block">
-                    Factory
+                    User Factory
                 </li>
 
                 <li>

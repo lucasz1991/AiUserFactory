@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 440 96" role="img" aria-labelledby="title desc">
+  <title id="title">Factory AI User Factory</title>
+  <desc id="desc">Factory AI logo with User Factory wordmark</desc>
+  <defs>
+    <linearGradient id="logo-bg" x1="8" y1="4" x2="78" y2="88" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#102a43"/>
+      <stop offset="1" stop-color="#071421"/>
+    </linearGradient>
+    <linearGradient id="logo-accent" x1="16" y1="18" x2="55" y2="58" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#5eead4"/>
+      <stop offset="1" stop-color="#14b8a6"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="8" width="80" height="80" rx="24" fill="url(#logo-bg)"/>
+  <path d="M20 68V43l13-8v8l12-8v33H20Z" fill="url(#logo-accent)"/>
+  <path d="M45 68V31l10-6v12l9-5v36H45Z" fill="#f59e0b"/>
+  <path d="M28 50h5v5h-5zm0 9h5v5h-5zm13-5h5v5h-5z" fill="#071421" opacity=".8"/>
+  <path d="M18 72h50" stroke="#e2e8f0" stroke-linecap="round" stroke-width="4"/>
+  <circle cx="68" cy="23" r="4" fill="#5eead4"/>
+  <path d="m68 14 1.7 6.3L76 23l-6.3 1.7L68 31l-1.7-6.3L60 23l6.3-1.7L68 14Z" fill="#fbbf24"/>
+  <text x="106" y="49" fill="#081b2d" font-family="Quicksand, Noto Sans, sans-serif" font-size="34" font-weight="800" letter-spacing="-1.2">Factory <tspan fill="#0f9f9a">AI</tspan></text>
+  <text x="109" y="73" fill="#64748b" font-family="Quicksand, Noto Sans, sans-serif" font-size="13" font-weight="700" letter-spacing="4.5">USER FACTORY</text>
+</svg>

@@ -1,7 +1,7 @@
 <div wire:loading.class="cursor-wait" class="space-y-6">
     <div class="flex flex-wrap items-start justify-between gap-4">
         <div>
-            <h1 class="text-2xl font-semibold text-gray-900">Personen Factory</h1>
+            <h1 class="text-2xl font-semibold text-gray-900">Factory AI</h1>
             <p class="mt-1 text-sm text-gray-500">
                 Zentrale Uebersicht fuer Personen, Instagram-Sessions und spaetere Bot-Automation.
             </p>

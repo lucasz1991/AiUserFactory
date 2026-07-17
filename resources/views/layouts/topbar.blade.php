@@ -5,7 +5,7 @@
                 <a href="{{ route('admin.index') }}" class="flex items-center text-lg flex-shrink-0 font-bold leading-[69px]">
                     <x-navigation.application-icon class="inline-block w-10 aspect-square align-middle" />
                     <span class="hidden font-semibold text-gray-700 align-middle xl:block leading-[69px]">
-                        Scraper Factory
+                        Factory AI
                     </span>
                 </a>
             </div>

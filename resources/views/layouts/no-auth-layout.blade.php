@@ -6,7 +6,7 @@
                     <div class="flex h-[90vh] flex-col">
                         <div class="mx-auto">
                             <a href="/" class="flex items-center text-lg flex-shrink-0 font-bold dark:text-white leading-[69px]">
-                                <x-application-mark />
+                                <x-application-logo class="h-14 w-auto max-w-[220px]" />
                             </a>
                         </div>
 
@@ -15,7 +15,7 @@
                         <div class="text-center">
                             <p class="text-gray-500 dark:text-gray-100 relative select-none">
                                 &copy; <script>document.write(new Date().getFullYear())</script>
-                                Personen Factory<br>Made by Zacharias
+                                Factory AI<br><span class="text-xs font-semibold uppercase tracking-[0.18em]">User Factory</span>
                             </p>
                             <p class="text-gray-500 dark:text-gray-100 relative mb-5 select-none">
                                 <small>v.0.1</small>

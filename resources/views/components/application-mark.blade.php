@@ -1,4 +1,4 @@
 <img 
-    class="max-h-18 {{ $class ?? '' }}" 
-    src="{{ asset('/site-images/logo-xs.png') }}" 
-    alt="Logo">
+    class="h-16 w-16 {{ $class ?? '' }}"
+    src="{{ asset('/site-images/brand/factory-ai-mark.svg') }}"
+    alt="Factory AI">

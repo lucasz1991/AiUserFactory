@@ -8,9 +8,9 @@
 @section('content')
     <div class="my-auto">
         <div class="text-center">
-            <h5 class="text-gray-600 dark:text-gray-100">Willkommen in der Personen Factory</h5>
+            <h5 class="text-gray-600 dark:text-gray-100">Willkommen bei Factory AI</h5>
             <p class="text-gray-500 dark:text-gray-100/60 mt-1">
-                Melde dich an, um Scraper-Personas, Browser-Sessions und Bot-Vorbereitungen zu verwalten.
+                Melde dich an, um deine User Factory, Browser-Sessions und Automationen zu verwalten.
             </p>
         </div>
 

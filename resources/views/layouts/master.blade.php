@@ -4,7 +4,7 @@
 <head>
     @include('layouts.metahead')
     <meta name="csrf-token" content="{{ csrf_token() }}">
-    <title>@yield('title') | Personen Factory</title>
+    <title>@yield('title') | Factory AI · User Factory</title>
     <!-- css files -->
     @include('layouts.head-css')
     @vite(['resources/css/app.css'])
