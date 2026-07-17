@@ -153,6 +153,8 @@ class WorkflowManager extends Component
 
     public ?int $previewWorkflowRunId = null;
 
+    public string $manualResumeCursor = '';
+
     public bool $showAddStepModal = false;
 
     public bool $showAddTaskModal = false;
@@ -289,6 +291,7 @@ class WorkflowManager extends Component
             'steps' => $steps,
             'quickPreviewRun' => $quickPreviewRun,
             'previewWorkflowRun' => $this->previewWorkflowRun(),
+            'manualResumeOptions' => $this->manualResumeOptions($selectedWorkflow),
             'activeCopilotSession' => $this->activeCopilotSession(),
             'persons' => $persons,
             'runNetworkNodes' => NetworkNode::query()->available()->orderBy('name')->get(),
@@ -1230,6 +1233,7 @@ class WorkflowManager extends Component
                 'device_id' => $deviceId,
                 'workflow_variables' => $workflowInputs,
                 'workflowVariables' => $workflowInputs,
+                'interactive_debug' => true,
             ]);
 
             $this->showRunModal = false;
@@ -1583,6 +1587,51 @@ class WorkflowManager extends Component
 
         app(WorkflowExecutionService::class)->cancel($run, 'Workflow-Test wurde im Vorschau-Fenster gestoppt.');
         session()->flash('success', 'Workflow-Test wurde gestoppt.');
+    }
+
+    public function pausePreviewWorkflowRun(): void
+    {
+        $run = $this->previewRunForControl();
+
+        if (! $run) {
+            return;
+        }
+
+        $result = app(WorkflowExecutionService::class)->requestManualPause($run);
+        session()->flash(($result['ok'] ?? false) ? 'success' : 'error', (string) ($result['message'] ?? 'Pause konnte nicht angefordert werden.'));
+    }
+
+    public function resumePreviewWorkflowRun(): void
+    {
+        $run = $this->previewRunForControl();
+
+        if (! $run) {
+            return;
+        }
+
+        [$stepId, $taskKey] = array_pad(explode(':', $this->manualResumeCursor, 2), 2, null);
+
+        try {
+            $result = app(WorkflowExecutionService::class)->resumeManualPause(
+                $run,
+                is_numeric($stepId) ? (int) $stepId : null,
+                $taskKey,
+            );
+            session()->flash(($result['ok'] ?? false) ? 'success' : 'error', (string) ($result['message'] ?? 'Fortsetzen ist fehlgeschlagen.'));
+        } catch (\Throwable $exception) {
+            session()->flash('error', 'Fortsetzen ist fehlgeschlagen: '.$exception->getMessage());
+        }
+    }
+
+    protected function previewRunForControl(): ?WorkflowRun
+    {
+        if (! $this->previewWorkflowRunId) {
+            return null;
+        }
+
+        return WorkflowRun::query()
+            ->where('workflow_id', $this->selectedWorkflowId)
+            ->find($this->previewWorkflowRunId);
     }
 
     public function downloadCopilotOptimizationLog(WorkflowCopilotLogExportService $exports): mixed
@@ -2093,10 +2142,29 @@ class WorkflowManager extends Component
             ->find($this->previewWorkflowRunId);
     }
 
+    protected function manualResumeOptions(?Workflow $workflow): array
+    {
+        if (! $workflow) {
+            return [];
+        }
+
+        return $workflow->steps()
+            ->ordered()
+            ->get()
+            ->flatMap(fn (WorkflowStep $step) => collect($step->task_cards)
+                ->filter(fn (mixed $task): bool => is_array($task) && filled($task['key'] ?? null))
+                ->map(fn (array $task): array => [
+                    'value' => $step->id.':'.trim((string) $task['key']),
+                    'label' => $step->name.' — '.(($task['title'] ?? null) ?: $task['key']),
+                ]))
+            ->values()
+            ->all();
+    }
+
     protected function quickPreviewRun(Workflow $workflow): ?WorkflowRun
     {
         $activeRun = $workflow->runs()
-            ->whereIn('status', ['queued', 'running', 'waiting', 'stop_requested', 'unreachable'])
+            ->whereIn('status', ['queued', 'running', 'waiting', 'paused', 'stop_requested', 'unreachable'])
             ->latest('updated_at')
             ->latest('id')
             ->first();

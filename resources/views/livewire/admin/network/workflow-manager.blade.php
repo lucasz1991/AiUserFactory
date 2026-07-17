@@ -993,6 +993,39 @@
                     @endif
 
                     @if($previewWorkflowRun)
+                        @if(! $activeCopilotSession && in_array($previewWorkflowRun->status, ['running', 'waiting', 'paused'], true))
+                            <section class="rounded-xl border border-amber-200 bg-amber-50 p-4">
+                                <div class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+                                    <div class="min-w-0">
+                                        <p class="text-xs font-black uppercase tracking-[.12em] text-amber-700">Interaktiver Debug-Lauf</p>
+                                        @if($previewWorkflowRun->status === 'paused')
+                                            <p class="mt-1 text-sm text-amber-950">Der Browser-, Variablen- und Routingzustand ist eingefroren. Du kannst den Workflow jetzt bearbeiten und danach ab einem Task fortsetzen.</p>
+                                        @else
+                                            <p class="mt-1 text-sm text-amber-950">Die Pause greift am naechsten sicheren Task- bzw. Step-Checkpoint.</p>
+                                        @endif
+                                    </div>
+                                    @if($previewWorkflowRun->status === 'paused')
+                                        <label class="block min-w-0 lg:w-[30rem]">
+                                            <span class="mb-1 block text-xs font-bold text-amber-900">Optional ab diesem Task fortsetzen</span>
+                                            <select wire:model="manualResumeCursor" class="w-full rounded-md border-amber-300 bg-white text-sm focus:border-amber-500 focus:ring-amber-500">
+                                                <option value="">Gespeicherten Cursor verwenden</option>
+                                                @foreach($manualResumeOptions as $resumeOption)
+                                                    <option value="{{ $resumeOption['value'] }}">{{ $resumeOption['label'] }}</option>
+                                                @endforeach
+                                            </select>
+                                        </label>
+                                    @endif
+                                </div>
+
+                                @if($previewWorkflowRun->status === 'paused')
+                                    <div class="mt-3 grid gap-2 text-xs sm:grid-cols-3">
+                                        <div class="rounded-lg bg-white/80 p-2"><span class="block font-semibold text-amber-700">Naechster Step</span><code>{{ data_get($previewWorkflowRun->context_json, 'manual_pause_checkpoint.next_step_action_key') ?: '-' }}</code></div>
+                                        <div class="rounded-lg bg-white/80 p-2"><span class="block font-semibold text-amber-700">Naechster Task</span><code>{{ data_get($previewWorkflowRun->context_json, 'manual_pause_checkpoint.next_task_key') ?: '-' }}</code></div>
+                                        <div class="rounded-lg bg-white/80 p-2"><span class="block font-semibold text-amber-700">Variablen</span>{{ count((array) data_get($previewWorkflowRun->context_json, 'manual_pause_checkpoint.workflow_variables', [])) }} gespeichert</div>
+                                    </div>
+                                @endif
+                            </section>
+                        @endif
                         <x-workflows.run-preview :workflow-run="$previewWorkflowRun" />
                     @elseif($activeCopilotSession)
                         <div class="rounded-md border border-dashed border-cyan-300 bg-cyan-50 p-4 text-sm text-cyan-900">
@@ -1256,7 +1289,19 @@
                         Loeschen
                     </button>
                 @elseif($previewWorkflowRun && in_array($previewWorkflowRun->status, ['running', 'waiting'], true))
+                    @if(! $activeCopilotSession)
+                        <button type="button" wire:click="pausePreviewWorkflowRun" class="rounded-md border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-800 shadow-sm hover:bg-amber-100">
+                            Pausieren
+                        </button>
+                    @endif
                     <button type="button" wire:click="cancelPreviewWorkflowRun" wire:confirm="Workflow-Test wirklich stoppen?" class="rounded-md border border-red-300 bg-white px-4 py-2 text-sm font-semibold text-red-700 shadow-sm hover:bg-red-50">
+                        Stoppen
+                    </button>
+                @elseif($previewWorkflowRun && $previewWorkflowRun->status === 'paused' && ! $activeCopilotSession)
+                    <button type="button" wire:click="resumePreviewWorkflowRun" wire:loading.attr="disabled" wire:target="resumePreviewWorkflowRun" class="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50">
+                        {{ $manualResumeCursor !== '' ? 'Ab Task fortsetzen' : 'Fortsetzen' }}
+                    </button>
+                    <button type="button" wire:click="cancelPreviewWorkflowRun" wire:confirm="Pausierten Workflow-Test wirklich stoppen?" class="rounded-md border border-red-300 bg-white px-4 py-2 text-sm font-semibold text-red-700 shadow-sm hover:bg-red-50">
                         Stoppen
                     </button>
                 @endif

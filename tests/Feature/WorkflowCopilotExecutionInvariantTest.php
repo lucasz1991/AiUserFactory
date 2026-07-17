@@ -76,6 +76,36 @@ class WorkflowCopilotExecutionInvariantTest extends TestCase
         $this->assertSame('wait.seconds', $segment[0]['task_key']);
     }
 
+    public function test_manual_run_can_pause_with_persisted_runtime_context_and_resume_at_selected_task(): void
+    {
+        Queue::fake();
+        [$workflow, $step] = $this->workflow();
+        $execution = app(WorkflowExecutionService::class);
+        $run = $execution->start($workflow, [
+            'execution_target' => 'system',
+            'workflow_variables' => ['collected' => ['one']],
+            'browser_windows' => ['main' => ['currentUrl' => 'https://example.test']],
+        ]);
+
+        $pause = $execution->requestManualPause($run);
+        $paused = $run->fresh();
+
+        $this->assertTrue($pause['ok']);
+        $this->assertSame('paused', $paused->status);
+        $this->assertSame(['one'], data_get($paused->context_json, 'manual_pause_checkpoint.workflow_variables.collected'));
+        $this->assertSame('https://example.test', data_get($paused->context_json, 'manual_pause_checkpoint.browser_windows.main.currentUrl'));
+
+        $resume = $execution->resumeManualPause($paused, $step->id, 'second-task');
+        $resumed = $run->fresh();
+
+        $this->assertTrue($resume['ok']);
+        $this->assertSame('running', $resumed->status);
+        $this->assertSame($step->id, $resumed->current_workflow_step_id);
+        $this->assertSame('second-task', data_get($resumed->context_json, 'next_task_key'));
+        $this->assertNull(data_get($resumed->context_json, 'manual_pause_checkpoint'));
+        Queue::assertPushed(RunWorkflowJob::class, fn (RunWorkflowJob $job): bool => $job->workflowRunId === $run->id);
+    }
+
     public function test_supervised_runtime_keeps_a_paired_dom_loop_atomic_and_continues_after_its_end(): void
     {
         [, $step] = $this->workflow();

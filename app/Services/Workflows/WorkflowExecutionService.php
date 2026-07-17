@@ -283,6 +283,18 @@ class WorkflowExecutionService
             return;
         }
 
+        if ($run->status === 'paused') {
+            return;
+        }
+
+        $runContext = is_array($run->context_json) ? $run->context_json : [];
+        if ((bool) ($runContext['manual_pause_requested'] ?? false)
+            && ! $run->stepRuns()->whereIn('status', ['running', 'waiting'])->exists()) {
+            $this->holdManualPause($run, $runContext);
+
+            return;
+        }
+
         if ($this->usesClientController($run) && ! $this->assignClientExecutionTarget($run)) {
             return;
         }
@@ -375,6 +387,102 @@ class WorkflowExecutionService
         }
 
         $this->advance($run);
+    }
+
+    public function requestManualPause(int|WorkflowRun $workflowRun): array
+    {
+        $run = $this->loadRun($workflowRun);
+
+        if ($this->isFinalStatus((string) $run->status)) {
+            return ['ok' => false, 'message' => 'Der Workflow-Lauf ist bereits beendet.'];
+        }
+
+        if ($run->status === 'paused') {
+            return ['ok' => true, 'message' => 'Der Workflow-Lauf ist bereits pausiert.'];
+        }
+
+        $context = is_array($run->context_json) ? $run->context_json : [];
+        $context['manual_pause_requested'] = true;
+        $context['manual_pause_requested_at'] = now()->toIso8601String();
+        $run->forceFill(['context_json' => $context])->save();
+
+        if (! $run->stepRuns()->whereIn('status', ['running', 'waiting'])->exists()
+            && ! $this->hasActiveClientWorkflowBundleJob($run)) {
+            $this->holdManualPause($run, $context);
+
+            return ['ok' => true, 'message' => 'Workflow-Lauf wurde pausiert.'];
+        }
+
+        return ['ok' => true, 'message' => 'Pause ist angefordert und greift am naechsten sicheren Task-Checkpoint.'];
+    }
+
+    public function resumeManualPause(
+        int|WorkflowRun $workflowRun,
+        ?int $workflowStepId = null,
+        ?string $taskKey = null,
+    ): array {
+        $run = $this->loadRun($workflowRun);
+
+        if ($run->status !== 'paused') {
+            return ['ok' => false, 'message' => 'Nur ein pausierter Workflow-Lauf kann fortgesetzt werden.'];
+        }
+
+        $context = is_array($run->context_json) ? $run->context_json : [];
+        unset(
+            $context['manual_pause_requested'],
+            $context['manual_pause_requested_at'],
+            $context['manual_pause_checkpoint'],
+        );
+
+        $taskKey = trim((string) $taskKey);
+        if ($workflowStepId && $taskKey !== '') {
+            $step = $run->workflow->steps->firstWhere('id', $workflowStepId);
+            $taskExists = $step && collect($step->task_cards)->contains(
+                fn (array $task): bool => trim((string) ($task['key'] ?? '')) === $taskKey,
+            );
+
+            if (! $taskExists) {
+                throw new \InvalidArgumentException('Der ausgewaehlte Fortsetzungs-Task existiert nicht mehr.');
+            }
+
+            $context['next_task_key'] = $taskKey;
+            unset($context['next_step_action_key']);
+            $run->current_workflow_step_id = $workflowStepId;
+
+            $run->stepRuns()
+                ->where('workflow_step_id', $workflowStepId)
+                ->update([
+                    'status' => 'queued',
+                    'external_run_type' => null,
+                    'external_run_id' => null,
+                    'finished_at' => null,
+                    'duration_ms' => null,
+                    'error_message' => null,
+                ]);
+        } elseif ((int) $run->current_workflow_step_id > 0 && trim((string) ($context['next_task_key'] ?? '')) !== '') {
+            $run->stepRuns()
+                ->where('workflow_step_id', (int) $run->current_workflow_step_id)
+                ->where('status', 'waiting')
+                ->update([
+                    'status' => 'queued',
+                    'external_run_type' => null,
+                    'external_run_id' => null,
+                    'finished_at' => null,
+                    'duration_ms' => null,
+                    'error_message' => null,
+                ]);
+        }
+
+        $run->forceFill([
+            'status' => 'running',
+            'context_json' => $context,
+            'finished_at' => null,
+            'error_message' => null,
+        ])->save();
+
+        RunWorkflowJob::dispatch($run->id);
+
+        return ['ok' => true, 'message' => $taskKey !== '' ? 'Workflow-Lauf wird ab dem ausgewaehlten Task fortgesetzt.' : 'Workflow-Lauf wird fortgesetzt.'];
     }
 
     public function cancel(int|WorkflowRun $workflowRun, string $message = 'Workflow-Lauf wurde manuell gestoppt.'): array
@@ -607,6 +715,16 @@ class WorkflowExecutionService
 
         if (in_array($stepRun->external_run_type, ['workflow-task', 'client-controller-workflow-task'], true)) {
             $this->applyWorkflowVariablesResult($stepRun->workflowRun, $result);
+        }
+
+        if ((bool) data_get($stepRun->workflowRun->context_json, 'interactive_debug', false)) {
+            $this->continueInteractiveDebugTask(
+                $stepRun,
+                $result,
+                $this->externalSucceeded($stepRun->workflowStep, $status, $result),
+            );
+
+            return;
         }
 
         if ($this->isCopilotSupervisedRun($stepRun->workflowRun)) {
@@ -1156,6 +1274,77 @@ class WorkflowExecutionService
             : ['complete_step', null];
     }
 
+    protected function continueInteractiveDebugTask(
+        WorkflowStepRun $stepRun,
+        array $result,
+        bool $successful,
+    ): void {
+        $run = $stepRun->workflowRun->fresh();
+        $step = $stepRun->workflowStep;
+        $context = is_array($run->context_json) ? $run->context_json : [];
+        $currentTaskKey = trim((string) (
+            $result['completedTaskKey']
+            ?? $result['completed_task_key']
+            ?? $result['failedTaskKey']
+            ?? $result['failed_task_key']
+            ?? $context['next_task_key']
+            ?? data_get($step->task_cards, '0.key', '')
+        ));
+
+        if ($successful) {
+            $result = $this->applyExternalResult($stepRun, $result);
+            [$nextAction, $nextTaskKey] = $this->successfulCheckpointContinuation($step, $currentTaskKey, $result);
+        } else {
+            $nextAction = 'next_task';
+            $nextTaskKey = $currentTaskKey;
+        }
+
+        if ($nextAction === 'complete_step' && $successful) {
+            unset($context['next_task_key']);
+            $run->forceFill(['context_json' => $context])->save();
+            $this->completeStepRun($stepRun, $result, 'completed');
+            $this->continueAfterStep($run, $stepRun, $result, $this->resultOutcome($result), max(0, (int) $step->wait_after_seconds));
+
+            return;
+        }
+
+        if ($nextTaskKey === '') {
+            throw new \RuntimeException('Der interaktive Debug-Lauf besitzt keinen gueltigen Fortsetzungs-Task.');
+        }
+
+        $context['next_task_key'] = $nextTaskKey;
+        $context['manual_debug_last_task'] = [
+            'task_key' => $currentTaskKey,
+            'successful' => $successful,
+            'recorded_at' => now()->toIso8601String(),
+        ];
+        $pauseNow = ! $successful || (bool) ($context['manual_pause_requested'] ?? false);
+
+        $stepRun->forceFill([
+            'status' => $pauseNow ? 'waiting' : 'queued',
+            'external_run_type' => null,
+            'external_run_id' => null,
+            'result_json' => $this->publicRunSnapshot($result),
+            'logs_json' => $this->logsFromExternalStatus($result),
+            'finished_at' => null,
+            'duration_ms' => null,
+            'error_message' => $successful ? null : (string) ($result['statusMessage'] ?? $result['message'] ?? 'Task fehlgeschlagen.'),
+        ])->save();
+        $run->forceFill([
+            'status' => $pauseNow ? 'paused' : 'running',
+            'current_workflow_step_id' => $step->id,
+            'context_json' => $context,
+        ])->save();
+
+        if ($pauseNow) {
+            $this->holdManualPause($run, $context, $stepRun);
+
+            return;
+        }
+
+        RunWorkflowJob::dispatch($run->id);
+    }
+
     public function expireTimedOutRuns(): void
     {
         $this->reconcileClientWorkflowJobs();
@@ -1207,6 +1396,7 @@ class WorkflowExecutionService
     {
         if (
             ! $this->usesClientController($run)
+            || (bool) data_get($run->context_json, 'interactive_debug', false)
             || data_get($run->context_json, 'client_bundle_fallback_reasons')
         ) {
             return false;
@@ -2160,6 +2350,16 @@ class WorkflowExecutionService
             unset($context['next_task_route_outcome'], $context['next_task_route_source_key']);
         }
 
+        if ((bool) ($context['manual_pause_requested'] ?? false)) {
+            $run->forceFill([
+                'current_workflow_step_id' => null,
+                'context_json' => $context,
+            ])->save();
+            $this->holdManualPause($run, $context, $stepRun);
+
+            return;
+        }
+
         $run->forceFill([
             'status' => $delaySeconds > 0 ? 'waiting' : 'running',
             'current_workflow_step_id' => null,
@@ -2171,6 +2371,26 @@ class WorkflowExecutionService
         if ($delaySeconds > 0) {
             $pendingDispatch->delay(now()->addSeconds($delaySeconds));
         }
+    }
+
+    protected function holdManualPause(WorkflowRun $run, array $context, ?WorkflowStepRun $afterStepRun = null): void
+    {
+        $context['manual_pause_requested'] = false;
+        $context['manual_pause_checkpoint'] = [
+            'paused_at' => now()->toIso8601String(),
+            'after_workflow_step_run_id' => $afterStepRun?->id,
+            'after_workflow_step_id' => $afterStepRun?->workflow_step_id,
+            'next_step_action_key' => $context['next_step_action_key'] ?? null,
+            'next_task_key' => $context['next_task_key'] ?? null,
+            'workflow_variables' => is_array($context['workflow_variables'] ?? null) ? $context['workflow_variables'] : [],
+            'browser_windows' => is_array($context['browser_windows'] ?? null) ? $context['browser_windows'] : [],
+            'loop_state' => is_array($context['loop_state'] ?? null) ? $context['loop_state'] : [],
+        ];
+
+        $run->forceFill([
+            'status' => 'paused',
+            'context_json' => $context,
+        ])->save();
     }
 
     protected function routeForOutcome(WorkflowStep $step, string $outcome): ?array
@@ -3442,8 +3662,8 @@ class WorkflowExecutionService
             'next_task_route_source_key' => trim((string) data_get($run->context_json, 'next_task_route_source_key', '')) ?: null,
             'workflowCopilotSessionId' => (int) data_get($run->context_json, 'workflow_copilot_session_id', 0) ?: null,
             'workflow_copilot_session_id' => (int) data_get($run->context_json, 'workflow_copilot_session_id', 0) ?: null,
-            'copilotSupervised' => (bool) data_get($run->context_json, 'copilot_supervised', false),
-            'copilot_supervised' => (bool) data_get($run->context_json, 'copilot_supervised', false),
+            'copilotSupervised' => (bool) data_get($run->context_json, 'copilot_supervised', false) || (bool) data_get($run->context_json, 'interactive_debug', false),
+            'copilot_supervised' => (bool) data_get($run->context_json, 'copilot_supervised', false) || (bool) data_get($run->context_json, 'interactive_debug', false),
             'copilotTransientTask' => data_get($run->context_json, 'copilot_transient_task'),
             'copilot_transient_task' => data_get($run->context_json, 'copilot_transient_task'),
             'personId' => data_get($run->context_json, 'person_id'),
