@@ -1,0 +1,559 @@
+<?php
+
+namespace App\Services\Workflows;
+
+use App\Models\Workflow;
+use App\Models\WorkflowCopilotSession;
+use App\Models\WorkflowStep;
+use Illuminate\Support\Arr;
+use Illuminate\Support\Str;
+
+class WorkflowCopilotPromptContextService
+{
+    private const ROUTE_FIELDS = [
+        'next',
+        'on_partial',
+        'on_error',
+        'status_routes',
+    ];
+
+    private const VALUE_FIELDS = [
+        'value',
+        'input',
+        'value_fallback',
+        'fallback_value',
+    ];
+
+    public function __construct(
+        protected WorkflowTaskCatalog $catalog,
+    ) {}
+
+    public function forWorkflow(
+        Workflow $workflow,
+        ?WorkflowCopilotSession $session = null,
+        ?WorkflowStep $currentStep = null,
+        array $checkpoint = [],
+    ): array {
+        $workflow->loadMissing(['steps' => fn ($query) => $query->ordered()]);
+
+        $context = [
+            'execution_contract' => $this->executionContract(),
+            'workflow' => $this->workflowSnapshot($workflow),
+            'workflow_task_catalog' => $this->taskCatalogSnapshot(),
+            'workflow_diagnostics' => $this->workflowDiagnostics($workflow),
+        ];
+
+        if ($session instanceof WorkflowCopilotSession) {
+            $context['copilot_session'] = $this->sessionSnapshot($session);
+        }
+
+        if ($currentStep instanceof WorkflowStep) {
+            $context['current_execution'] = [
+                'step_action_key' => (string) $currentStep->action_key,
+                'step_name' => (string) $currentStep->name,
+                'task_key' => trim((string) ($checkpoint['task_key'] ?? '')) ?: null,
+                'outcome' => trim((string) ($checkpoint['outcome'] ?? '')) ?: null,
+                'successful' => array_key_exists('successful', $checkpoint)
+                    ? (bool) $checkpoint['successful']
+                    : null,
+            ];
+        }
+
+        return (array) $this->sanitizeContext($context);
+    }
+
+    public function forInitialPlanning(
+        Workflow $workflow,
+        string $goal,
+        array $successCriteria,
+        array $workflowInputs,
+    ): array {
+        return (array) $this->sanitizeContext([
+            'execution_contract' => $this->executionContract(),
+            'workflow' => [
+                'id' => (int) $workflow->id,
+                'name' => (string) $workflow->name,
+                'description' => (string) $workflow->description,
+                'trigger_type' => (string) $workflow->trigger_type,
+            ],
+            'goal' => Str::limit(trim($goal), 4000, ''),
+            'success_criteria' => $successCriteria,
+            'workflow_inputs' => $this->inputSchema($workflowInputs),
+            'workflow_task_catalog' => $this->taskCatalogSnapshot(),
+        ]);
+    }
+
+    public function executionContract(): array
+    {
+        return [
+            'ordering' => [
+                'steps' => 'Aktivierte Steps laufen nach position und id, ausser eine Route waehlt ein anderes Ziel.',
+                'tasks' => 'Tasks laufen innerhalb eines Steps nach order_id/position. Eine ausdrueckliche Task-Route unterbricht die lineare Reihenfolge.',
+                'task_checkpoint' => 'Der Copilot beobachtet an Task-Grenzen. Eine erfolgreiche Probe muss danach als Ergebnis der Original-Task fortgesetzt werden.',
+            ],
+            'outcomes' => [
+                'success' => 'Task fachlich erfolgreich.',
+                'failed' => 'Task fehlgeschlagen oder eine IF-Bedingung wie decision.element_exists ist nicht erfuellt.',
+                'timeout' => 'Task hat ihr Zeitlimit erreicht.',
+                'partial' => 'Task lieferte nur ein Teilergebnis.',
+                'blocked' => 'Task war technisch erfolgreich, aber der sichtbare Seitenzustand blockiert das Workflow-Ziel.',
+            ],
+            'routing_precedence' => [
+                'Task next bei success hat Vorrang vor Step success.',
+                'Task on_error beziehungsweise status_routes.failed/timeout hat bei Fehlern Vorrang vor Step failed/timeout.',
+                'Task on_partial beziehungsweise status_routes.partial hat bei Teilergebnissen Vorrang vor Step partial.',
+                'Fehlt eine Erfolgsroute, wird im Step linear zur naechsten Task und danach zum naechsten Step fortgesetzt.',
+                'Fehlt bei einem Fehler jede explizite Route, ist der Lauf terminal fehlgeschlagen.',
+            ],
+            'route_types' => [
+                'card' => 'Springt zu card_key/card. action_key/step ist optional fuer denselben Step und Pflicht fuer einen anderen Step.',
+                'step' => 'Springt zu action_key/step. Das reservierte Ziel next bedeutet den naechsten aktivierten Step.',
+                'end' => 'Beendet den Workflow erfolgreich. Dies ist kein Sprung zu einer weiteren Task.',
+                'fail' => 'Beendet den gesamten Workflow sofort als fehlgeschlagen. fail niemals fuer einen behebbaren oder optionalen Fehler verwenden.',
+            ],
+            'route_guards' => [
+                'Rueckwaerts- und Selbstspruenge brauchen ein kleines max_attempts und eine belegbare Zustandsaenderung.',
+                'Wiederholt eine Fehlerroute denselben Seitenzustand zu oft, beendet der Same-State-Guard den Lauf.',
+                'Optionale UI-Hindernisse werden als echte Verzweigung modelliert: IF-Erfolg zum Handler, IF-Fehler zur normalen Fortsetzung; Handler-Erfolg und ein bereits verschwundenes Hindernis ebenfalls zur normalen Fortsetzung.',
+                'Ein reparierbarer Fehler soll eine card- oder step-Route benutzen. type=fail ist ausschliesslich fuer bewusst terminale Fachfehler.',
+            ],
+            'task_semantics' => [
+                'decision.element_exists' => 'Element gefunden ergibt success; nicht gefunden ergibt den Branch failed, obwohl die technische Pruefung selbst ausgefuehrt wurde. Deshalb next und on_error fachlich getrennt konfigurieren.',
+                'input.fill_field' => 'value_source=fixed nutzt value/input. value_source=workflow_variable nutzt workflow_variable; value_fallback ist nur der optionale Ersatzwert. Ein Variablenname darf nie als Literal in das Feld geschrieben werden.',
+                'loop.for_each_element' => 'Loop-Start und loop.end sind ein atomares Paar. Reader und Consumer stehen dazwischen. empty_target behandelt eine leere Trefferliste; error_target einen technischen Fehler.',
+                'data.append_to_array' => 'Haengt den Wert aus value_from_variable an array_name an. Der Producer der Variable muss innerhalb desselben Loop-Durchlaufs vor dem Consumer liegen.',
+                'data.workflow_return' => 'Setzt den expliziten Rueckgabewert des Workflows. Erfolgskriterien fuer einen Rueckgabewert pruefen diesen Wert, nicht irgendeine zufaellige interne Variable.',
+                'browser.open_browser_session' => 'Laedt Cookies/Storage und oeffnet standardmaessig die letzte gespeicherte URL; eine konfigurierte URL ueberschreibt dieses Ziel.',
+            ],
+            'selector_policy' => [
+                'Stabile sichtbare Semantik hat Vorrang: data-testid/data-test, aria-label, title, placeholder, name, role/type und sichtbarer Text.',
+                'Generierte oder wechselnde IDs, Positionsselector und lange Hash-Klassen nur als letzte Notloesung verwenden.',
+                'Fuer Eingabefelder den Text aus Label, aria-label, title oder placeholder verwenden. Selector werden serverseitig aus beobachteter DOM-Evidenz uebernommen.',
+                'Fuer Sammlungen einen Selector verwenden, der alle fachlich gleichen Treffer umfasst, nicht nur den ersten konkreten Link.',
+            ],
+            'variables' => [
+                'Workflow-Eingaben werden unter workflow_inputs und als Workflow-Variablen bereitgestellt.',
+                'Neue Task-Ausgaben muessen einen benannten output_variable-, array_name- oder Rueckgabepfad besitzen, wenn spaetere Tasks oder Erfolgskriterien sie benoetigen.',
+                'Passwoerter, Tokens, Cookies und feste Eingabewerte werden im Modellkontext redigiert.',
+            ],
+            'verification' => [
+                'Die Endverifikation ist unveraenderlich: keine Reparatur, kein Skip und keine Mutation waehrend des Kontrolllaufs.',
+                'Jeder optionale Pfad muss deshalb bereits statisch ohne Copilot-Sonderbehandlung bis zum Ziel laufen.',
+                'Technischer Erfolg, deterministische Erfolgskriterien und der visuelle Zielzustand muessen gemeinsam bestehen.',
+                'Ein technisch beendeter Lauf ohne verlangten Rueckgabewert oder ohne erforderliche Sammlung ist nicht erfolgreich.',
+            ],
+        ];
+    }
+
+    public function taskCatalogSnapshot(): array
+    {
+        return collect($this->catalog->all())
+            ->mapWithKeys(function (array $definition, string $taskKey): array {
+                return [$taskKey => [
+                    'label' => (string) ($definition['label'] ?? $taskKey),
+                    'description' => (string) ($definition['description'] ?? ''),
+                    'kind' => (string) ($definition['kind'] ?? 'data'),
+                    'runner' => (string) ($definition['runner'] ?? 'node'),
+                    'timeout_seconds' => max(0, (int) ($definition['timeout_seconds'] ?? 0)),
+                    'parameters' => $this->catalogFields($definition),
+                    'routing_fields' => self::ROUTE_FIELDS,
+                    'hidden_from_library' => (bool) ($definition['hidden_from_library'] ?? false),
+                ]];
+            })
+            ->all();
+    }
+
+    protected function workflowSnapshot(Workflow $workflow): array
+    {
+        return [
+            'id' => (int) $workflow->id,
+            'name' => (string) $workflow->name,
+            'description' => (string) $workflow->description,
+            'trigger_type' => (string) $workflow->trigger_type,
+            'copilot_revision' => (int) $workflow->copilot_revision,
+            'steps' => $workflow->steps
+                ->map(fn (WorkflowStep $step): array => [
+                    'id' => (int) $step->id,
+                    'name' => (string) $step->name,
+                    'type' => (string) $step->type,
+                    'action_key' => (string) $step->action_key,
+                    'position' => (int) $step->position,
+                    'enabled' => (bool) $step->is_enabled,
+                    'retry_attempts' => (int) $step->retry_attempts,
+                    'wait_after_seconds' => (int) $step->wait_after_seconds,
+                    'routes' => is_array(data_get($step->config_json, 'routes'))
+                        ? data_get($step->config_json, 'routes')
+                        : [],
+                    'tasks' => collect($step->task_cards)
+                        ->map(fn (array $task): array => $this->taskSnapshot($task))
+                        ->values()
+                        ->all(),
+                ])
+                ->values()
+                ->all(),
+        ];
+    }
+
+    protected function sessionSnapshot(WorkflowCopilotSession $session): array
+    {
+        $state = is_array($session->state_json) ? $session->state_json : [];
+
+        return [
+            'id' => (int) $session->id,
+            'goal' => Str::limit(trim((string) $session->goal), 4000, ''),
+            'success_criteria' => is_array($session->success_criteria_json) ? $session->success_criteria_json : [],
+            'workflow_inputs' => $this->inputSchema(
+                is_array($session->workflow_inputs_json) ? $session->workflow_inputs_json : [],
+            ),
+            'active_user_instructions' => array_slice(
+                is_array($state['active_instructions'] ?? null) ? $state['active_instructions'] : [],
+                -20,
+            ),
+            'status' => (string) $session->status,
+            'phase' => (string) $session->phase,
+            'current_revision' => (int) $session->current_revision,
+        ];
+    }
+
+    protected function inputSchema(array $inputs): array
+    {
+        return collect($inputs)
+            ->map(fn (mixed $value, string|int $key): array => [
+                'name' => (string) $key,
+                'type' => get_debug_type($value),
+                'provided' => $value !== null,
+            ])
+            ->values()
+            ->all();
+    }
+
+    protected function taskSnapshot(array $task): array
+    {
+        $taskKey = trim((string) ($task['task_key'] ?? ''));
+        $definition = $taskKey !== '' ? $this->catalog->task($taskKey) : null;
+        $parameterNames = collect(is_array($definition) ? $this->catalogFields($definition) : [])
+            ->pluck('name')
+            ->merge([
+                'selector',
+                'element_selector',
+                'input_selector',
+                'url',
+                'browser_window',
+                'browser_window_name',
+                'timeout_seconds',
+                'value_source',
+                'workflow_variable',
+                'value_fallback',
+                'fallback_value',
+                'value',
+                'input',
+                'loop_pair_id',
+                'loop_pair_segment',
+                'loop_start_key',
+                'loop_end_key',
+            ])
+            ->filter()
+            ->unique()
+            ->values();
+        $parameters = [];
+
+        foreach ($parameterNames as $name) {
+            if (! array_key_exists($name, $task) || $task[$name] === null || $task[$name] === '') {
+                continue;
+            }
+
+            if (in_array($name, self::VALUE_FIELDS, true)) {
+                $parameters[$name.'_configuration'] = [
+                    'configured' => true,
+                    'type' => get_debug_type($task[$name]),
+                    'redacted' => true,
+                ];
+
+                continue;
+            }
+
+            $parameters[$name] = $task[$name];
+        }
+
+        return array_filter([
+            'key' => trim((string) ($task['key'] ?? '')),
+            'task_key' => $taskKey,
+            'title' => trim((string) ($task['title'] ?? '')),
+            'description' => trim((string) ($task['description'] ?? '')),
+            'kind' => trim((string) ($task['kind'] ?? '')),
+            'status' => trim((string) ($task['status'] ?? '')),
+            'parameters' => $parameters,
+            'next' => is_array($task['next'] ?? null) ? $task['next'] : null,
+            'on_partial' => is_array($task['on_partial'] ?? null) ? $task['on_partial'] : null,
+            'on_error' => is_array($task['on_error'] ?? null) ? $task['on_error'] : null,
+            'status_routes' => is_array($task['status_routes'] ?? null) ? $task['status_routes'] : [],
+        ], static fn (mixed $value): bool => $value !== null && $value !== '' && $value !== []);
+    }
+
+    protected function catalogFields(array $definition): array
+    {
+        $form = is_array($definition['form'] ?? null) ? $definition['form'] : [];
+        $fields = [];
+
+        foreach ([
+            'selector' => ['label' => 'Selector', 'required_key' => 'selector_required'],
+            'value' => ['label' => 'Wert', 'required_key' => 'value_required'],
+            'url' => ['label' => 'URL', 'required_key' => 'url_required'],
+            'browser_window' => ['label' => 'Browserfenster', 'required_key' => 'browser_window_required'],
+            'mailbox_source' => ['label' => 'Mailbox-Quelle', 'required_key' => 'mailbox_source_required'],
+        ] as $name => $metadata) {
+            if (! (bool) ($form[$name] ?? false)) {
+                continue;
+            }
+
+            $fields[] = array_filter([
+                'name' => $name,
+                'label' => (string) ($form[$name.'_label'] ?? $metadata['label']),
+                'required' => (bool) ($form[$metadata['required_key']] ?? false),
+                'placeholder' => (string) ($form[$name.'_placeholder'] ?? ''),
+                'options' => is_array($form[$name.'_options'] ?? null) ? $form[$name.'_options'] : null,
+            ], static fn (mixed $value): bool => $value !== null && $value !== '');
+        }
+
+        foreach (is_array($form['extra_fields'] ?? null) ? $form['extra_fields'] : [] as $field) {
+            if (! is_array($field)) {
+                continue;
+            }
+
+            $name = trim((string) ($field['name'] ?? ''));
+
+            if ($name === '') {
+                continue;
+            }
+
+            $fields[] = array_filter(Arr::only($field, [
+                'name',
+                'label',
+                'type',
+                'required',
+                'default',
+                'placeholder',
+                'help',
+                'options',
+                'min',
+                'max',
+                'step',
+            ]), static fn (mixed $value): bool => $value !== null && $value !== '');
+        }
+
+        return collect($fields)
+            ->unique('name')
+            ->values()
+            ->all();
+    }
+
+    protected function workflowDiagnostics(Workflow $workflow): array
+    {
+        $diagnostics = [];
+
+        foreach ($workflow->steps as $step) {
+            $tasks = collect($step->task_cards)->values();
+
+            foreach ($tasks as $index => $task) {
+                $taskKey = trim((string) ($task['key'] ?? ''));
+                $catalogKey = trim((string) ($task['task_key'] ?? ''));
+
+                foreach ([
+                    'next' => $task['next'] ?? null,
+                    'on_partial' => $task['on_partial'] ?? null,
+                    'on_error' => $task['on_error'] ?? null,
+                ] as $field => $route) {
+                    if (! is_array($route)) {
+                        continue;
+                    }
+
+                    $routeType = $this->routeType($route);
+                    $targetTask = trim((string) ($route['card_key'] ?? $route['card'] ?? ''));
+
+                    if ($routeType === 'fail') {
+                        $diagnostics[] = [
+                            'severity' => 'warning',
+                            'code' => 'terminal_task_route',
+                            'step_action_key' => (string) $step->action_key,
+                            'task_key' => $taskKey,
+                            'field' => $field,
+                            'message' => 'Diese Route beendet den gesamten Workflow und ist nur fuer einen bewusst terminalen Fehler geeignet.',
+                        ];
+                    }
+
+                    if ($targetTask === $taskKey && ($route['action_key'] ?? $route['step'] ?? $step->action_key) === $step->action_key) {
+                        $diagnostics[] = [
+                            'severity' => 'warning',
+                            'code' => 'self_route',
+                            'step_action_key' => (string) $step->action_key,
+                            'task_key' => $taskKey,
+                            'field' => $field,
+                            'message' => 'Die Route springt auf dieselbe Task und kann den Same-State-Guard ausloesen.',
+                        ];
+                    }
+                }
+
+                if ($catalogKey === 'decision.element_exists') {
+                    $nextTarget = $this->routeTarget($task['next'] ?? null);
+                    $errorTarget = $this->routeTarget($task['on_error'] ?? null);
+
+                    if ($errorTarget === '') {
+                        $diagnostics[] = [
+                            'severity' => 'warning',
+                            'code' => 'condition_without_false_route',
+                            'step_action_key' => (string) $step->action_key,
+                            'task_key' => $taskKey,
+                            'message' => 'Wenn das Element fehlt, existiert keine ausdrueckliche fachliche Fehlerroute.',
+                        ];
+                    } elseif ($nextTarget !== '' && $nextTarget === $errorTarget) {
+                        $diagnostics[] = [
+                            'severity' => 'warning',
+                            'code' => 'condition_routes_same_target',
+                            'step_action_key' => (string) $step->action_key,
+                            'task_key' => $taskKey,
+                            'message' => 'Gefunden und nicht gefunden fuehren zum selben Ziel; die IF-Verzweigung ist wirkungslos.',
+                        ];
+                    }
+                }
+
+                if ($catalogKey === 'input.fill_field') {
+                    $valueSource = trim((string) ($task['value_source'] ?? 'fixed'));
+
+                    if ($valueSource === 'workflow_variable' && blank($task['workflow_variable'] ?? null)) {
+                        $diagnostics[] = [
+                            'severity' => 'error',
+                            'code' => 'workflow_variable_name_missing',
+                            'step_action_key' => (string) $step->action_key,
+                            'task_key' => $taskKey,
+                            'message' => 'Workflow-Variable ist als Wertquelle gewaehlt, aber der Variablenname fehlt.',
+                        ];
+                    }
+                }
+
+                if ($catalogKey === 'loop.for_each_element') {
+                    $pairId = trim((string) ($task['loop_pair_id'] ?? ''));
+                    $endExists = $pairId !== '' && $tasks->contains(
+                        fn (array $candidate): bool => trim((string) ($candidate['loop_pair_id'] ?? '')) === $pairId
+                            && (string) ($candidate['task_key'] ?? '') === 'loop.end',
+                    );
+
+                    if (! $endExists) {
+                        $diagnostics[] = [
+                            'severity' => 'error',
+                            'code' => 'loop_end_missing',
+                            'step_action_key' => (string) $step->action_key,
+                            'task_key' => $taskKey,
+                            'message' => 'Zum Loop-Start wurde kein gekoppeltes Loop-Ende gefunden.',
+                        ];
+                    }
+                }
+
+                $onErrorTarget = $this->routeTarget($task['on_error'] ?? null);
+
+                if ($onErrorTarget !== '') {
+                    $targetIndex = $tasks->search(
+                        fn (array $candidate): bool => (string) ($candidate['key'] ?? '') === $onErrorTarget,
+                    );
+
+                    if ($targetIndex !== false && (int) $targetIndex <= (int) $index) {
+                        $diagnostics[] = [
+                            'severity' => 'warning',
+                            'code' => 'backward_error_route',
+                            'step_action_key' => (string) $step->action_key,
+                            'task_key' => $taskKey,
+                            'target_task_key' => $onErrorTarget,
+                            'message' => 'Die Fehlerroute springt rueckwaerts und braucht eine nachweisbare Zustandsaenderung sowie ein enges max_attempts.',
+                        ];
+                    }
+                }
+            }
+
+            foreach (is_array(data_get($step->config_json, 'routes')) ? data_get($step->config_json, 'routes') : [] as $outcome => $route) {
+                if (is_array($route) && $this->routeType($route) === 'fail') {
+                    $diagnostics[] = [
+                        'severity' => 'warning',
+                        'code' => 'terminal_step_route',
+                        'step_action_key' => (string) $step->action_key,
+                        'outcome' => (string) $outcome,
+                        'message' => 'Diese Step-Route beendet den gesamten Workflow und ist nur fuer einen bewusst terminalen Fehler geeignet.',
+                    ];
+                }
+            }
+        }
+
+        return array_slice($diagnostics, 0, 100);
+    }
+
+    protected function routeType(array $route): string
+    {
+        $type = Str::lower(trim((string) ($route['type'] ?? '')));
+        $step = Str::lower(trim((string) ($route['action_key'] ?? $route['step'] ?? '')));
+        $card = trim((string) ($route['card_key'] ?? $route['card'] ?? ''));
+
+        if ($type !== '') {
+            return $type;
+        }
+
+        if ($card !== '') {
+            return 'card';
+        }
+
+        return in_array($step, ['end', 'fail'], true) ? $step : 'step';
+    }
+
+    protected function routeTarget(mixed $route): string
+    {
+        if (! is_array($route)) {
+            return '';
+        }
+
+        return trim((string) (
+            $route['card_key']
+            ?? $route['card']
+            ?? $route['action_key']
+            ?? $route['step']
+            ?? ''
+        ));
+    }
+
+    protected function sanitizeContext(mixed $value, int $depth = 0): mixed
+    {
+        if ($depth > 10) {
+            return '[TRUNCATED]';
+        }
+
+        if (is_string($value)) {
+            $value = preg_replace('/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/', '[TOKEN REDACTED]', $value) ?: $value;
+            $value = preg_replace('/\b[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}\b/i', '[EMAIL REDACTED]', $value) ?: $value;
+            $value = preg_replace('/\bwss?:\/\/\S+/i', '[WEBSOCKET REDACTED]', $value) ?: $value;
+
+            return Str::limit($value, 4000, '');
+        }
+
+        if (! is_array($value)) {
+            return $value;
+        }
+
+        $safe = [];
+
+        foreach (array_slice($value, 0, 200, true) as $key => $item) {
+            $normalizedKey = Str::lower(preg_replace('/[^a-z0-9]+/i', '', (string) $key) ?: '');
+
+            if ($this->sensitiveContextKey($normalizedKey)) {
+                $safe[$key] = '[REDACTED]';
+
+                continue;
+            }
+
+            $safe[$key] = $this->sanitizeContext($item, $depth + 1);
+        }
+
+        return $safe;
+    }
+
+    protected function sensitiveContextKey(string $key): bool
+    {
+        return (bool) preg_match('/(?:password|passwd|pwd|secret|token|authorization|cookievalue|sessionstorage|localstorage|storagestate|sessionid|apikey|accesskey|credential|browserws|wsendpoint|websocket|outerhtml|innerhtml|fullhtml|htmlsource|rawhtml|(?:input|form|field)value)/', $key)
+            || in_array($key, ['html', 'cookies', 'session', 'signature', 'input', 'value'], true);
+    }
+}

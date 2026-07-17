@@ -1374,6 +1374,97 @@ class WorkflowCopilotSupervisorTest extends TestCase
         ]);
     }
 
+    public function test_text_success_criterion_supports_array_workflow_return_type(): void
+    {
+        $service = app(WorkflowCopilotSupervisorService::class);
+        $method = new \ReflectionMethod($service, 'evaluateSuccessCriteria');
+        $run = (new WorkflowRun)->forceFill([
+            'result_json' => [
+                'workflow_return' => [
+                    ['title' => 'Erster Treffer'],
+                ],
+            ],
+        ]);
+        $criteria = ['assertions' => ['Rückgabewert = array']];
+        $observation = ['page' => [], 'dom' => [], 'interaction_map' => []];
+
+        $passing = $method->invoke($service, $criteria, $run, $observation);
+        $run->result_json = ['workflow_return' => null];
+        $failing = $method->invoke($service, $criteria, $run, $observation);
+
+        $this->assertTrue($passing['pass']);
+        $this->assertSame('result_type', data_get($passing, 'assertions.0.type'));
+        $this->assertSame('type_is', data_get($passing, 'assertions.0.operator'));
+        $this->assertFalse($failing['pass']);
+    }
+
+    public function test_empty_result_loop_is_a_business_gap_when_workflow_requires_an_array(): void
+    {
+        $workflow = Workflow::query()->create([
+            'name' => 'Leere Ergebnisliste',
+            'slug' => 'leere-ergebnisliste',
+            'description' => '',
+            'category' => 'test',
+            'is_active' => true,
+            'is_locked' => false,
+            'trigger_type' => 'manual',
+            'settings_json' => [],
+        ]);
+        $step = $workflow->steps()->create([
+            'name' => 'Ergebnisse sammeln',
+            'type' => WorkflowStep::TYPE_DATA_PROCESSING,
+            'action_key' => 'ergebnisse-sammeln',
+            'position' => 10,
+            'is_enabled' => true,
+            'config_json' => ['tasks' => [[
+                'key' => 'result-loop',
+                'task_key' => 'loop.for_each_element',
+                'title' => 'Ergebnisse durchlaufen',
+                'selector' => '#search a:has(div[data-rpos])',
+            ], [
+                'key' => 'append-result',
+                'task_key' => 'data.append_to_array',
+                'title' => 'Ergebnis anhaengen',
+                'array_name' => 'top_results',
+                'value_from_variable' => 'current_result',
+            ]]],
+        ]);
+        $session = app(WorkflowCopilotSessionService::class)->start($workflow, [
+            'goal' => 'Google-Ergebnisse als Array zurueckgeben.',
+            'success_criteria' => ['assertions' => ['Rückgabewert = array']],
+        ]);
+        $checkpoint = [
+            'task_key' => 'result-loop',
+            'successful' => true,
+            'result' => [
+                'tasks' => [[
+                    'key' => 'result-loop',
+                    'task_key' => 'loop.for_each_element',
+                    'matched_count' => 0,
+                    'status' => 'loop_complete',
+                ]],
+            ],
+        ];
+        $service = app(WorkflowCopilotSupervisorService::class);
+        $method = new \ReflectionMethod($service, 'successfulCheckpointBusinessGap');
+
+        $gap = $method->invoke($service, $session, $step, $checkpoint);
+
+        $this->assertSame('required_collection_empty', data_get($gap, 'payload.reason_code'));
+        $this->assertSame(['top_results'], data_get($gap, 'payload.array_consumers'));
+        $this->assertStringContainsString('keinen einzigen Treffer', $gap['message']);
+
+        $checkpoint['result']['tasks'][0]['matched_count'] = 2;
+        $checkpoint['result']['workflow_variables']['top_results'] = [
+            ['title' => 'Erster Treffer'],
+            ['title' => 'Zweiter Treffer'],
+        ];
+        $returnGap = $method->invoke($service, $session, $step, $checkpoint);
+
+        $this->assertSame('required_workflow_return_missing', data_get($returnGap, 'payload.reason_code'));
+        $this->assertSame('top_results', data_get($returnGap, 'payload.source_array'));
+    }
+
     private function workflowWithBrokenSelector(): array
     {
         $workflow = Workflow::query()->create([

@@ -73,6 +73,7 @@ class WorkflowCopilotRepairService
         protected AiConnectionService $ai,
         protected WorkflowCopilotObservationService $observations,
         protected WorkflowTaskOrderingService $taskOrdering,
+        protected WorkflowCopilotPromptContextService $promptContexts,
     ) {}
 
     public function plan(
@@ -111,7 +112,7 @@ class WorkflowCopilotRepairService
             return $consentPlan;
         }
 
-        $resolvedConsentPlan = $this->resolvedConsentObstaclePlan($task, $checkpoint, $observation, $vision);
+        $resolvedConsentPlan = $this->resolvedConsentObstaclePlan($step, $task, $checkpoint, $observation, $vision);
 
         if ($resolvedConsentPlan !== []) {
             return $resolvedConsentPlan;
@@ -133,6 +134,23 @@ class WorkflowCopilotRepairService
 
         if ($collectionDependencyPlan !== []) {
             return $collectionDependencyPlan;
+        }
+
+        $missingWorkflowReturnPlan = $this->missingWorkflowReturnPlan($step, $task, $checkpoint);
+
+        if ($missingWorkflowReturnPlan !== []) {
+            return $missingWorkflowReturnPlan;
+        }
+
+        $emptyCollectionSelectorPlan = $this->emptyCollectionSelectorPlan(
+            $step,
+            $task,
+            $checkpoint,
+            $observation,
+        );
+
+        if ($emptyCollectionSelectorPlan !== []) {
+            return $emptyCollectionSelectorPlan;
         }
 
         $requiresVisualTarget = $this->taskRequiresVisualTarget($taskCatalogKey);
@@ -196,7 +214,10 @@ class WorkflowCopilotRepairService
         try {
             $decision = $this->ai->json(
                 $this->plannerPrompt($session, $step, $task, $checkpoint, $observation, $vision),
-                'Du bist das Datenanalyse- und Planungsmodell des Workflow-Copiloten. Der strukturierte Bildbefund wurde zuvor von einem getrennten Bildverstehen-Modell aus Screenshot und DOM erzeugt. Plane und repariere ausschliesslich Workflow-Konfigurationen. Antworte nur als JSON. Keine Quellcode-Aenderungen, kein JavaScript und keine Aktionen ausserhalb des vorhandenen WorkflowTaskCatalog.',
+                'Du bist das Datenanalyse- und Planungsmodell des Workflow-Copiloten. Der strukturierte Bildbefund wurde zuvor von einem getrennten Bildverstehen-Modell aus Screenshot und DOM erzeugt. '
+                    .'Der gelieferte Ausfuehrungsvertrag, der vollstaendige Task-Katalog und der aktuelle Workflow-Graph sind verbindlich. Plane und repariere ausschliesslich Workflow-Konfigurationen. '
+                    .'Task-Routen haben Vorrang vor Step-Routen; type=fail beendet den gesamten Workflow und ist keine normale Fehlerfortsetzung. Eine Reparatur muss auch im unveraenderlichen Kontrolllauf ohne Skip oder weitere Mutation funktionieren. '
+                    .'Antworte nur als JSON. Keine Quellcode-Aenderungen, kein JavaScript und keine Aktionen ausserhalb des vorhandenen WorkflowTaskCatalog.',
                 ['temperature' => 0.1, 'max_completion_tokens' => 2200, '_timeout' => 30],
             );
             $decision = $this->observations->sanitizeForModel($decision);
@@ -763,6 +784,135 @@ class WorkflowCopilotRepairService
         ];
     }
 
+    protected function missingWorkflowReturnPlan(
+        WorkflowStep $step,
+        array $task,
+        array $checkpoint,
+    ): array {
+        if (data_get($checkpoint, 'result.businessGap.reason_code') !== 'required_workflow_return_missing') {
+            return [];
+        }
+
+        $sourceArray = trim((string) data_get($checkpoint, 'result.businessGap.source_array', ''));
+
+        if ($sourceArray === '' || preg_match('/^[A-Za-z_][A-Za-z0-9_.-]{0,119}$/', $sourceArray) !== 1) {
+            return [];
+        }
+
+        $workflow = Workflow::query()
+            ->with(['steps' => fn ($query) => $query->ordered()])
+            ->find($step->workflow_id);
+
+        if (! $workflow
+            || $workflow->steps->contains(fn (WorkflowStep $candidateStep): bool => collect($candidateStep->task_cards)
+                ->contains(fn (array $candidate): bool => (string) ($candidate['task_key'] ?? '') === 'data.workflow_return'))) {
+            return [];
+        }
+
+        return [
+            'action' => 'restart_with_workflow_changes',
+            'task_key' => (string) ($task['key'] ?? ''),
+            'operations' => [[
+                'type' => 'insert_task',
+                'purpose' => 'required_workflow_return',
+                'step_action_key' => (string) $step->action_key,
+                'task_catalog_key' => 'data.workflow_return',
+                'card_key' => $this->uniqueStructuralTaskKey($step, 'Workflow Rueckgabewert'),
+                'title' => 'Ergebnis-Array zurueckgeben',
+                'description' => 'Setzt das erzeugte Array `'.$sourceArray.'` als expliziten Workflow-Rueckgabewert.',
+                'parameters' => [
+                    'selector' => $sourceArray,
+                ],
+                'insert_position' => count($step->task_cards),
+            ]],
+            'reason' => 'Das geforderte Ergebnis-Array ist bereits erzeugt, wird aber noch nicht als Workflow-Rueckgabewert gesetzt. Eine kataloggebundene data.workflow_return-Task wird hinter der Sammlung eingefuegt und danach von Anfang an verifiziert.',
+            'planning_handoff' => [
+                'planner_profile' => 'deterministic_required_workflow_return',
+                'source_array' => $sourceArray,
+            ],
+            'decision_trace' => [
+                'source' => 'deterministic_required_workflow_return',
+                'requested_action' => 'structural_update',
+                'requested_operation_count' => 1,
+                'accepted_operation_count' => 1,
+                'rejected_operation_count' => 0,
+                'rejected_operations' => [],
+            ],
+        ];
+    }
+
+    protected function emptyCollectionSelectorPlan(
+        WorkflowStep $step,
+        array $task,
+        array $checkpoint,
+        array $observation,
+    ): array {
+        if ((string) ($task['task_key'] ?? '') !== 'loop.for_each_element'
+            || data_get($checkpoint, 'result.businessGap.reason_code') !== 'required_collection_empty') {
+            return [];
+        }
+
+        $pageState = Str::lower(trim((string) (
+            data_get($observation, 'page.state')
+            ?? data_get($observation, 'dom.ui_state')
+            ?? ''
+        )));
+        $pageUrl = Str::lower(trim((string) data_get($observation, 'page.url', '')));
+
+        if ($pageState !== 'search_results' && ! str_contains($pageUrl, '/search')) {
+            return [];
+        }
+
+        $selector = $this->preferredSelectorFrom(
+            collect($observation['interaction_map'] ?? [])
+                ->filter(fn (mixed $element): bool => is_array($element)
+                    && ($element['visible'] ?? null) === true
+                    && ($element['enabled'] ?? true) !== false
+                    && (string) ($element['tag'] ?? '') === 'a')
+                ->flatMap(fn (array $element): array => is_array($element['selector_candidates'] ?? null)
+                    ? $element['selector_candidates']
+                    : [])
+                ->filter(fn (mixed $candidate): bool => is_string($candidate)
+                    && preg_match('/:has\(h[1-3]\)/i', $candidate) === 1)
+                ->values()
+                ->all(),
+        );
+
+        if ($selector === null
+            || $selector === trim((string) ($task['selector'] ?? $task['element_selector'] ?? ''))) {
+            return [];
+        }
+
+        $changes = $this->normalizeChanges($step, $task, [
+            'selector' => $selector,
+            'element_selector' => $selector,
+        ], false, $this->observationDomains($observation));
+
+        if ($changes === []) {
+            return [];
+        }
+
+        return [
+            'action' => 'probe_update',
+            'task_key' => (string) ($task['key'] ?? ''),
+            'task_catalog_key' => 'loop.for_each_element',
+            'changes' => $changes,
+            'probe_task' => array_replace($task, $changes, [
+                'key' => (string) ($task['key'] ?? '').'--copilot-probe',
+                'title' => ($task['title'] ?? 'Ergebnis-Loop').' (Copilot-Probe)',
+            ]),
+            'reason' => 'Der bisherige Sammlungsselector lieferte trotz sichtbarer Suchergebnisse keine Treffer. Die DOM-Beobachtung weist einen stabilen, ueberschriftenbasierten Selector fuer die sichtbaren Ergebnislinks aus; dieser wird vor einer Revision als Loop-Probe ausgefuehrt.',
+            'selector_candidates' => [$selector],
+            'original_task_key' => (string) ($task['key'] ?? ''),
+            'decision_trace' => [
+                'source' => 'deterministic_empty_collection_selector',
+                'page_state' => $pageState,
+                'previous_selector' => $task['selector'] ?? $task['element_selector'] ?? null,
+                'selected_selector' => $selector,
+            ],
+        ];
+    }
+
     /**
      * @param  array<string, mixed>  $producer
      * @return array<string, mixed>
@@ -1004,6 +1154,7 @@ class WorkflowCopilotRepairService
      * @return array<string, mixed>
      */
     protected function resolvedConsentObstaclePlan(
+        WorkflowStep $step,
         array $task,
         array $checkpoint,
         array $observation,
@@ -1024,6 +1175,83 @@ class WorkflowCopilotRepairService
             return [];
         }
 
+        $continuationRoute = $this->resolvedConsentContinuationRoute($step, $task);
+        $operations = [];
+
+        if (($task['next'] ?? null) !== $continuationRoute || ($task['on_error'] ?? null) !== $continuationRoute) {
+            $operations[] = [
+                'type' => 'update_task_routes',
+                'step_action_key' => (string) $step->action_key,
+                'task_key' => (string) ($task['key'] ?? ''),
+                'changes' => [
+                    'next' => $continuationRoute,
+                    'on_error' => $continuationRoute,
+                ],
+            ];
+        }
+
+        $decisionTask = collect($step->task_cards)
+            ->filter(fn (array $candidate): bool => (string) ($candidate['task_key'] ?? '') === 'decision.element_exists')
+            ->filter(function (array $candidate) use ($task): bool {
+                $target = trim((string) data_get($candidate, 'next.card_key', data_get($candidate, 'next.card', '')))
+                    ?: trim((string) data_get($candidate, 'on_error.card_key', data_get($candidate, 'on_error.card', '')));
+
+                return $target === (string) ($task['key'] ?? '')
+                    || $this->taskLooksLikeConsentCondition($candidate);
+            })
+            ->sortByDesc(function (array $candidate) use ($task): int {
+                $target = trim((string) data_get($candidate, 'next.card_key', data_get($candidate, 'next.card', '')))
+                    ?: trim((string) data_get($candidate, 'on_error.card_key', data_get($candidate, 'on_error.card', '')));
+
+                return $target === (string) ($task['key'] ?? '') ? 10 : 0;
+            })
+            ->first();
+
+        if (is_array($decisionTask)) {
+            $clickRoute = [
+                'type' => 'card',
+                'action_key' => (string) $step->action_key,
+                'step' => (string) $step->action_key,
+                'card_key' => (string) ($task['key'] ?? ''),
+                'card' => (string) ($task['key'] ?? ''),
+                'label' => trim((string) ($task['title'] ?? 'Consent behandeln')),
+            ];
+
+            if (($decisionTask['next'] ?? null) !== $clickRoute
+                || ($decisionTask['on_error'] ?? null) !== $continuationRoute) {
+                $operations[] = [
+                    'type' => 'update_task_routes',
+                    'step_action_key' => (string) $step->action_key,
+                    'task_key' => (string) ($decisionTask['key'] ?? ''),
+                    'changes' => [
+                        'next' => $clickRoute,
+                        'on_error' => $continuationRoute,
+                    ],
+                ];
+            }
+        }
+
+        if ($operations !== []) {
+            return [
+                'action' => 'restart_with_workflow_changes',
+                'task_key' => (string) ($task['key'] ?? ''),
+                'reason' => 'Der Consent-Dialog ist nicht mehr sichtbar, aber die statischen IF-/Klick-Routen bilden eine Ruecksprungschleife. Gefunden fuehrt kuenftig zum Consent-Klick; nicht gefunden sowie ein bereits erledigter Klick fuehren zur normalen Workflow-Fortsetzung. Damit funktioniert derselbe Pfad auch im unveraenderlichen Kontrolllauf.',
+                'operations' => array_slice($operations, 0, 4),
+                'planning_handoff' => [
+                    'vision_profile' => 'image_understanding',
+                    'vision_model' => $vision['model'] ?? null,
+                    'planner_profile' => 'deterministic_optional_obstacle_routing',
+                ],
+                'evidence' => [
+                    'page_state' => data_get($observation, 'page.state'),
+                    'dom_state' => data_get($observation, 'dom.ui_state'),
+                    'vision_state' => $vision['ui_state'] ?? null,
+                    'vision_confidence' => (float) $confidence,
+                    'vision_verdict' => $vision['verdict'] ?? null,
+                ],
+            ];
+        }
+
         return [
             'action' => 'skip_resolved_obstacle',
             'task_key' => (string) ($task['key'] ?? ''),
@@ -1036,6 +1264,47 @@ class WorkflowCopilotRepairService
                 'vision_verdict' => $vision['verdict'] ?? null,
             ],
         ];
+    }
+
+    protected function resolvedConsentContinuationRoute(WorkflowStep $step, array $task): array
+    {
+        $taskNext = is_array($task['next'] ?? null) ? $task['next'] : null;
+
+        if (is_array($taskNext)
+            && ! $this->routeTargetsConsentClick($step, $taskNext)
+            && ! $this->routeLoopsToSourceTask($step, $task, $taskNext)
+            && Str::lower(trim((string) ($taskNext['type'] ?? ''))) !== 'fail') {
+            return $taskNext;
+        }
+
+        $stepSuccess = data_get($step->config_json, 'routes.success');
+
+        if (is_array($stepSuccess)
+            && ! $this->routeTargetsConsentClick($step, $stepSuccess)
+            && Str::lower(trim((string) ($stepSuccess['type'] ?? ''))) !== 'fail') {
+            return $stepSuccess;
+        }
+
+        return [
+            'type' => 'step',
+            'action_key' => 'next',
+            'step' => 'next',
+            'label' => 'Naechste Liste',
+        ];
+    }
+
+    protected function taskLooksLikeConsentCondition(array $task): bool
+    {
+        if (($task['task_key'] ?? null) !== 'decision.element_exists') {
+            return false;
+        }
+
+        return $this->canonicalConsentAction(implode(' ', array_filter([
+            $task['title'] ?? null,
+            $task['description'] ?? null,
+            $task['selector'] ?? null,
+            $task['element_selector'] ?? null,
+        ], static fn (mixed $value): bool => is_scalar($value)))) !== null;
     }
 
     /**
@@ -1111,6 +1380,7 @@ class WorkflowCopilotRepairService
             ->map(fn (mixed $selector): string => trim((string) $selector))
             ->filter(fn (string $selector): bool => $this->isSafeSelector($selector))
             ->unique()
+            ->sortByDesc(fn (string $selector): int => $this->selectorStabilityPriority($selector))
             ->values();
     }
 
@@ -1714,6 +1984,38 @@ class WorkflowCopilotRepairService
         return true;
     }
 
+    protected function preferredSelectorFrom(array $selectors): ?string
+    {
+        $selector = collect($selectors)
+            ->map(fn (mixed $candidate): string => trim((string) $candidate))
+            ->filter(fn (string $candidate): bool => $this->isSafeSelector($candidate))
+            ->unique()
+            ->sortByDesc(fn (string $candidate): int => $this->selectorStabilityPriority($candidate))
+            ->first();
+
+        return is_string($selector) && $selector !== '' ? $selector : null;
+    }
+
+    protected function selectorStabilityPriority(string $selector): int
+    {
+        $lower = Str::lower($selector);
+
+        return match (true) {
+            str_contains($lower, '[title=') => 1000,
+            str_contains($lower, '[aria-label=') => 990,
+            str_contains($lower, '[placeholder=') => 980,
+            preg_match('/\[data-(?:testid|test|cy|qa)=/i', $selector) === 1 => 970,
+            str_contains($lower, '[name=') => 900,
+            str_contains($lower, ':has-text('), str_starts_with($lower, 'text=') => 880,
+            str_contains($lower, ':has(h1'), str_contains($lower, ':has(h2'), str_contains($lower, ':has(h3') => 860,
+            str_contains($lower, '[role='), str_contains($lower, '[type=') => 820,
+            preg_match('/(?:^|[\s>+~,])#[A-Za-z0-9_-]+/', $selector) === 1,
+            str_contains($lower, '[id=') => 100,
+            preg_match('/(?:nth-child|nth-of-type)/i', $selector) === 1 => 50,
+            default => 700,
+        };
+    }
+
     protected function hostMatchesTrustedDomains(string $host, array $trustedDomains): bool
     {
         if ($trustedDomains === []) {
@@ -1773,46 +2075,14 @@ class WorkflowCopilotRepairService
         $workflow = Workflow::query()
             ->with(['steps' => fn ($query) => $query->ordered()])
             ->find($step->workflow_id);
-        $workflowStructure = $workflow?->steps
-            ->map(fn (WorkflowStep $workflowStep): array => [
-                'id' => (int) $workflowStep->id,
-                'name' => (string) $workflowStep->name,
-                'action_key' => (string) $workflowStep->action_key,
-                'position' => (int) $workflowStep->position,
-                'routes' => is_array(data_get($workflowStep->config_json, 'routes'))
-                    ? data_get($workflowStep->config_json, 'routes')
-                    : [],
-                'tasks' => collect($workflowStep->task_cards)->map(fn (array $candidate): array => array_filter([
-                    'key' => $candidate['key'] ?? null,
-                    'task_key' => $candidate['task_key'] ?? null,
-                    'title' => $candidate['title'] ?? null,
-                    'url' => $candidate['url'] ?? null,
-                    'selector' => $candidate['selector'] ?? $candidate['element_selector'] ?? null,
-                    'scope_variable' => $candidate['scope_variable'] ?? null,
-                    'output_variable' => $candidate['output_variable'] ?? null,
-                    'value_from_variable' => $candidate['value_from_variable'] ?? null,
-                    'array_name' => $candidate['array_name'] ?? null,
-                    'store_current_element_as' => $candidate['store_current_element_as'] ?? null,
-                    'loop_pair_id' => $candidate['loop_pair_id'] ?? null,
-                    'loop_pair_segment' => $candidate['loop_pair_segment'] ?? null,
-                    'next' => $candidate['next'] ?? null,
-                    'on_error' => $candidate['on_error'] ?? null,
-                    'status_routes' => $candidate['status_routes'] ?? null,
-                ], static fn (mixed $value): bool => $value !== null && $value !== ''))->values()->all(),
-            ])
-            ->values()
-            ->all() ?? [];
-        $catalog = collect($this->catalog->options())
-            ->reject(fn (array $definition): bool => (string) ($definition['key'] ?? '') === 'loop.end')
-            ->map(fn (array $definition): array => [
-                'task_key' => $definition['key'] ?? null,
-                'label' => $definition['label'] ?? null,
-                'kind' => $definition['kind'] ?? null,
-                'mutable_fields' => $this->mutableFieldsForDefinition($definition),
-                'requires_visible_target' => $this->taskRequiresVisualTarget((string) ($definition['key'] ?? '')),
-            ])
-            ->values()
-            ->all();
+        $workflowContext = $workflow
+            ? $this->promptContexts->forWorkflow($workflow, $session, $step, $checkpoint)
+            : [
+                'execution_contract' => $this->promptContexts->executionContract(),
+                'workflow_task_catalog' => $this->promptContexts->taskCatalogSnapshot(),
+            ];
+        $workflowStructure = data_get($workflowContext, 'workflow.steps', []);
+        $catalog = data_get($workflowContext, 'workflow_task_catalog', []);
         $payload = $this->observations->sanitizeForModel([
             'goal' => $session->goal,
             'success_criteria' => $session->success_criteria_json,
@@ -1824,6 +2094,7 @@ class WorkflowCopilotRepairService
             ),
             'step' => ['id' => $step->id, 'name' => $step->name, 'action_key' => $step->action_key],
             'task' => Arr::except($task, ['value', 'input']),
+            'workflow_context' => $workflowContext,
             'workflow_structure' => $workflowStructure,
             'current_step_execution' => $this->stepExecutionTrace($step, $checkpoint),
             'failure' => Arr::only($checkpoint, ['outcome', 'result', 'task_key']),
@@ -1855,7 +2126,17 @@ class WorkflowCopilotRepairService
             ),
         ]);
 
-        return 'Waehle die kleinste sichere Reparatur, die den Workflow autonom weiter zum Ziel bringt. Als configured_but_not_executed markierte Tasks sind vorhanden und wurden nur noch nicht ausgefuehrt; fuege sie nicht doppelt ein, sondern repariere zuerst Fortsetzung, Reihenfolge oder Routen. Wenn der aktuelle Bildschirm Folge fehlender oder falsch gerouteter Workflow-Logik ist, verwende structural_update statt pause. Fuer input.fill_field setzt eine Workflow-Variable immer gemeinsam changes.value_source=workflow_variable und changes.workflow_variable; ein fester Wert setzt changes.value_source=fixed sowie changes.value und changes.input. Schema: {"action":"retry|update_task|continue_route|structural_update|pause","element_ref":"el_... oder leer","changes":{},"operations":[],"reason":"konkreter Befund"}. Nach structural_update wird der Workflow revisioniert von Anfang an getestet. Zustandsveraendernde Tasks und entsprechende insert_task-Operationen duerfen nur eine passende trusted_vision_element_ref verwenden; deren Selector wird nicht vom Modell uebernommen. Daten: '.json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        return 'Waehle die kleinste sichere Reparatur, die den Workflow autonom weiter zum Ziel bringt. '
+            .'Lies zuerst execution_contract, workflow_diagnostics, den vollstaendigen workflow_task_catalog und danach den aktuellen Workflow-Graph. '
+            .'Als configured_but_not_executed markierte Tasks sind vorhanden und wurden nur noch nicht ausgefuehrt; fuege sie nicht doppelt ein, sondern repariere zuerst Fortsetzung, Reihenfolge oder Routen. '
+            .'Wenn der aktuelle Bildschirm Folge fehlender oder falsch gerouteter Workflow-Logik ist, verwende structural_update statt pause. '
+            .'Eine optionale IF-Pruefung braucht getrennte Found-/Not-Found-Routen; ein Handler darf bei bereits verschwundenem Hindernis nicht zur IF-Pruefung zurueckspringen. '
+            .'Verwende type=fail nur, wenn der gesamte Workflow bewusst terminal scheitern soll. Behebbare Fehler routen zu einer vorhandenen card oder einem step. '
+            .'Fuer input.fill_field setzt eine Workflow-Variable immer gemeinsam changes.value_source=workflow_variable und changes.workflow_variable; ein fester Wert setzt changes.value_source=fixed sowie changes.value und changes.input. '
+            .'Schema: {"action":"retry|update_task|continue_route|structural_update|pause","element_ref":"el_... oder leer","changes":{},"operations":[],"reason":"konkreter Befund"}. '
+            .'Nach structural_update wird der Workflow revisioniert von Anfang an getestet. Die Aenderung muss danach auch im unveraenderlichen Kontrolllauf ohne Copilot-Skip funktionieren. '
+            .'Zustandsveraendernde Tasks und entsprechende insert_task-Operationen duerfen nur eine passende trusted_vision_element_ref verwenden; deren Selector wird nicht vom Modell uebernommen. '
+            .'Daten: '.json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
     }
 
     protected function normalizeStructuralOperations(
@@ -2263,14 +2544,12 @@ class WorkflowCopilotRepairService
             return [];
         }
 
-        $selector = collect([
+        $selector = $this->preferredSelectorFrom([
             ...(is_array($observed['selector_candidates'] ?? null) ? $observed['selector_candidates'] : []),
             $observed['selector'] ?? null,
-        ])
-            ->map(fn (mixed $candidate): string => trim((string) $candidate))
-            ->first(fn (string $candidate): bool => $this->isSafeSelector($candidate));
+        ]);
 
-        if (! is_string($selector) || $selector === '') {
+        if ($selector === null) {
             return [];
         }
 
@@ -2297,14 +2576,12 @@ class WorkflowCopilotRepairService
             return [];
         }
 
-        $selector = collect([
+        $selector = $this->preferredSelectorFrom([
             ...(is_array($element['selector_candidates'] ?? null) ? $element['selector_candidates'] : []),
             $element['selector'] ?? null,
-        ])
-            ->map(fn (mixed $candidate): string => trim((string) $candidate))
-            ->first(fn (string $candidate): bool => $this->isSafeSelector($candidate));
+        ]);
 
-        return is_string($selector) && $selector !== ''
+        return $selector !== null
             ? [
                 'element_ref' => $elementRef,
                 'selector' => $selector,

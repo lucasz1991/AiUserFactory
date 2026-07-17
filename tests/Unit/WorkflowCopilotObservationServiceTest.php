@@ -295,6 +295,55 @@ HTML);
         );
     }
 
+    public function test_google_search_field_uses_semantic_selectors_and_keeps_reference_when_generated_id_changes(): void
+    {
+        $run = (new WorkflowRun)->forceFill([
+            'id' => 5,
+            'result_json' => [
+                'interaction_map' => [[
+                    'tag' => 'textarea',
+                    'id' => 'APjFqb',
+                    'role' => 'combobox',
+                    'title' => 'Suche',
+                    'ariaLabel' => 'Suche',
+                    'name' => 'q',
+                    'selector' => '#APjFqb',
+                    'visible' => true,
+                    'enabled' => true,
+                ]],
+            ],
+        ]);
+        $run->setRelation('stepRuns', collect());
+        $run->setRelation('artifacts', collect());
+        $service = new WorkflowCopilotObservationService(Mockery::mock(WorkflowDebugArtifactService::class));
+        $first = $service->observe($run);
+
+        $run->result_json = [
+            'interaction_map' => [[
+                'tag' => 'textarea',
+                'id' => 'gLFyf-new-generated-id',
+                'role' => 'combobox',
+                'title' => 'Suche',
+                'ariaLabel' => 'Suche',
+                'name' => 'q',
+                'selector' => '#gLFyf-new-generated-id',
+                'visible' => true,
+                'enabled' => true,
+            ]],
+        ];
+        $second = $service->observe($run);
+
+        $this->assertSame(
+            data_get($first, 'interaction_map.0.element_ref'),
+            data_get($second, 'interaction_map.0.element_ref'),
+        );
+        $this->assertSame('Suche', data_get($second, 'interaction_map.0.semantic_label'));
+        $this->assertSame('textarea[title="Suche"]', data_get($second, 'interaction_map.0.selector_candidates.0'));
+        $this->assertSame('textarea[aria-label="Suche"]', data_get($second, 'interaction_map.0.selector_candidates.1'));
+        $this->assertContains('textarea[name="q"]', data_get($second, 'interaction_map.0.selector_candidates'));
+        $this->assertNotSame('#gLFyf-new-generated-id', data_get($second, 'interaction_map.0.selector_candidates.0'));
+    }
+
     public function test_explicitly_hidden_elements_are_removed_from_the_model_interaction_map(): void
     {
         $run = (new WorkflowRun)->forceFill([
@@ -320,7 +369,7 @@ HTML);
         $serialized = json_encode($observation['interaction_map'], JSON_UNESCAPED_SLASHES);
 
         $this->assertCount(1, $observation['interaction_map']);
-        $this->assertSame('#visible-action', data_get($observation, 'interaction_map.0.selector_candidates.0'));
+        $this->assertSame('button:has-text("Visible action")', data_get($observation, 'interaction_map.0.selector_candidates.0'));
         $this->assertSame(1, data_get($observation, 'interaction_map.0.element_number'));
         $this->assertStringNotContainsString('hidden-admin-action', $serialized);
     }
@@ -343,7 +392,10 @@ HTML);
 
         $observation = (new WorkflowCopilotObservationService(Mockery::mock(WorkflowDebugArtifactService::class)))->observe($run);
 
-        $this->assertSame([], data_get($observation, 'interaction_map.0.selector_candidates'));
+        $this->assertSame(
+            ['button:has-text("Continue")'],
+            data_get($observation, 'interaction_map.0.selector_candidates'),
+        );
         $this->assertStringNotContainsString(
             '0123456789abcdefghijklmnop',
             json_encode($observation['interaction_map'], JSON_UNESCAPED_SLASHES),

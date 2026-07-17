@@ -428,6 +428,8 @@ class WorkflowCopilotObservationService
         $aria = $this->safeString($candidate['aria'] ?? $candidate['aria_label'] ?? $candidate['ariaLabel'] ?? '', 180);
         $name = $this->safeString($candidate['name'] ?? '', 160);
         $placeholder = $this->safeString($candidate['placeholder'] ?? '', 180);
+        $title = $this->safeString($candidate['title'] ?? $candidate['element_title'] ?? $candidate['elementTitle'] ?? '', 180);
+        $label = $this->safeString($candidate['label'] ?? $candidate['field_label'] ?? $candidate['fieldLabel'] ?? '', 180);
         $visible = $this->boolOrNull($candidate['visible'] ?? $candidate['is_visible'] ?? $candidate['isVisible'] ?? null);
 
         if ($visible === false) {
@@ -440,16 +442,27 @@ class WorkflowCopilotObservationService
         $text = $isInput
             ? $this->redactedInputValue($candidate)
             : $this->safeString($candidate['text'] ?? $candidate['label'] ?? $candidate['visible_text'] ?? $candidate['visibleText'] ?? '', 240);
-        $selectors = $this->selectorCandidates($candidate, $tag, $aria, $name);
+        $selectors = $this->selectorCandidates($candidate, $tag, $role, $type, $aria, $title, $placeholder, $name, $label, $text);
         $frame = $this->safeString($candidate['frame'] ?? $candidate['frame_url'] ?? $candidate['frameUrl'] ?? '', 240);
         $window = $this->safeString($candidate['window'] ?? $candidate['browser_window'] ?? $candidate['browserWindow'] ?? $defaultWindow, 120) ?: 'main';
 
-        if ($tag === '' && $role === '' && $selectors === [] && $text === '' && $aria === '') {
+        if ($tag === '' && $role === '' && $selectors === [] && $text === '' && $aria === '' && $title === '' && $placeholder === '') {
             return null;
         }
 
         $explicitRef = trim((string) ($candidate['element_ref'] ?? $candidate['elementRef'] ?? $candidate['ref'] ?? ''));
-        $stableIdentity = $selectors[0] ?? implode('|', [$role, $name, $aria, $text]);
+        $semanticLabel = collect([$title, $aria, $placeholder, $label, $name, $text])
+            ->first(fn (string $value): bool => $value !== '') ?? '';
+        $stableIdentity = implode('|', array_filter([
+            $role,
+            $type,
+            $title,
+            $aria,
+            $placeholder,
+            $label,
+            $name,
+        ]));
+        $stableIdentity = $stableIdentity !== '' ? $stableIdentity : ($selectors[0] ?? $text);
         $elementRef = preg_match('/^(?:el|element|node)[_.:-][A-Za-z0-9_.:-]{1,70}$/', $explicitRef)
             ? $explicitRef
             : 'el_'.substr(hash('sha256', implode('|', [
@@ -468,6 +481,9 @@ class WorkflowCopilotObservationService
             'aria' => $aria ?: null,
             'name' => $name ?: null,
             'placeholder' => $placeholder ?: null,
+            'title' => $title ?: null,
+            'label' => $label ?: null,
+            'semantic_label' => $semanticLabel ?: null,
             'visible' => $visible,
             'enabled' => $this->boolOrNull($candidate['enabled'] ?? $candidate['is_enabled'] ?? $candidate['isEnabled'] ?? null),
             'focused' => $this->boolOrNull($candidate['focused'] ?? $candidate['is_focused'] ?? $candidate['isFocused'] ?? null),
@@ -492,49 +508,125 @@ class WorkflowCopilotObservationService
         return '';
     }
 
-    protected function selectorCandidates(array $candidate, string $tag, string $aria, string $name): array
-    {
-        $raw = [];
+    protected function selectorCandidates(
+        array $candidate,
+        string $tag,
+        string $role,
+        string $type,
+        string $aria,
+        string $title,
+        string $placeholder,
+        string $name,
+        string $label,
+        string $text,
+    ): array {
+        $ranked = [];
+        $sequence = 0;
+        $add = function (mixed $selector, ?int $priority = null) use (&$ranked, &$sequence): void {
+            $selector = preg_replace('/\s*\/\*.*?\*\/\s*/s', '', trim((string) $selector)) ?: '';
 
-        foreach (['selector', 'css_selector', 'cssSelector'] as $key) {
-            if (filled($candidate[$key] ?? null)) {
-                $raw[] = $candidate[$key];
+            if (! $this->safeSelector($selector)) {
+                return;
             }
+
+            $ranked[] = [
+                'selector' => Str::limit($selector, 300, ''),
+                'priority' => $priority ?? $this->selectorStabilityPriority($selector),
+                'sequence' => $sequence++,
+            ];
+        };
+
+        $tagSelector = $tag ?: '*';
+
+        if ($title !== '') {
+            $add($tagSelector.'[title="'.$this->escapeCssAttribute($title).'"]', 1000);
         }
 
-        foreach (['selector_candidates', 'selectorCandidates', 'selectors'] as $key) {
-            if (is_array($candidate[$key] ?? null)) {
-                $raw = [...$raw, ...$candidate[$key]];
-            }
+        if ($aria !== '') {
+            $add($tagSelector.'[aria-label="'.$this->escapeCssAttribute($aria).'"]', 990);
         }
 
-        if (filled($candidate['id'] ?? null)) {
-            $raw[] = '[id="'.$this->escapeCssAttribute((string) $candidate['id']).'"]';
+        if ($placeholder !== '') {
+            $add($tagSelector.'[placeholder="'.$this->escapeCssAttribute($placeholder).'"]', 980);
         }
 
         foreach (['data-testid', 'data_testid', 'dataTestId', 'data-test', 'data-cy', 'data-qa'] as $attribute) {
             if (filled($candidate[$attribute] ?? null)) {
                 $cssAttribute = str_replace('_', '-', Str::snake($attribute, '-'));
-                $raw[] = ($tag ?: '*').'['.$cssAttribute.'="'.$this->escapeCssAttribute((string) $candidate[$attribute]).'"]';
+                $add($tagSelector.'['.$cssAttribute.'="'.$this->escapeCssAttribute((string) $candidate[$attribute]).'"]', 970);
             }
         }
 
-        if ($aria !== '') {
-            $raw[] = ($tag ?: '*').'[aria-label="'.$this->escapeCssAttribute($aria).'"]';
-        }
-
         if ($name !== '') {
-            $raw[] = ($tag ?: '*').'[name="'.$this->escapeCssAttribute($name).'"]';
+            $add($tagSelector.'[name="'.$this->escapeCssAttribute($name).'"]', 900);
         }
 
-        return collect($raw)
-            ->map(fn (mixed $selector): string => preg_replace('/\s*\/\*.*?\*\/\s*/s', '', trim((string) $selector)) ?: '')
-            ->filter(fn (string $selector): bool => $this->safeSelector($selector))
-            ->map(fn (string $selector): string => Str::limit($selector, 300, ''))
-            ->unique()
+        $visibleLabel = $label !== '' ? $label : ($text !== '[REDACTED]' ? $text : '');
+
+        if ($visibleLabel !== '' && in_array($tag, ['a', 'button', 'label', 'option'], true)) {
+            $add($tagSelector.':has-text("'.$this->escapeSelectorText($visibleLabel).'")', 880);
+        }
+
+        if ($role !== '' && $type !== '') {
+            $add($tagSelector.'[role="'.$this->escapeCssAttribute($role).'"][type="'.$this->escapeCssAttribute($type).'"]', 840);
+        } elseif ($role !== '') {
+            $add($tagSelector.'[role="'.$this->escapeCssAttribute($role).'"]', 820);
+        } elseif ($type !== '') {
+            $add($tagSelector.'[type="'.$this->escapeCssAttribute($type).'"]', 800);
+        }
+
+        foreach (['selector', 'css_selector', 'cssSelector'] as $key) {
+            if (filled($candidate[$key] ?? null)) {
+                $add($candidate[$key]);
+            }
+        }
+
+        foreach (['selector_candidates', 'selectorCandidates', 'selectors'] as $key) {
+            if (is_array($candidate[$key] ?? null)) {
+                foreach ($candidate[$key] as $selector) {
+                    $add($selector);
+                }
+            }
+        }
+
+        if (filled($candidate['id'] ?? null)) {
+            $add('[id="'.$this->escapeCssAttribute((string) $candidate['id']).'"]', 100);
+        }
+
+        return collect($ranked)
+            ->sortBy([
+                ['priority', 'desc'],
+                ['sequence', 'asc'],
+            ])
+            ->unique('selector')
             ->take(8)
+            ->pluck('selector')
             ->values()
             ->all();
+    }
+
+    protected function selectorStabilityPriority(string $selector): int
+    {
+        $lower = Str::lower($selector);
+
+        return match (true) {
+            str_contains($lower, '[title=') => 1000,
+            str_contains($lower, '[aria-label=') => 990,
+            str_contains($lower, '[placeholder=') => 980,
+            preg_match('/\[data-(?:testid|test|cy|qa)=/i', $selector) === 1 => 970,
+            str_contains($lower, '[name=') => 900,
+            str_contains($lower, ':has-text('), str_starts_with($lower, 'text=') => 880,
+            str_contains($lower, '[role='), str_contains($lower, '[type=') => 820,
+            preg_match('/(?:^|[\s>+~,])#[A-Za-z0-9_-]+/', $selector) === 1,
+            str_contains($lower, '[id=') => 100,
+            preg_match('/(?:nth-child|nth-of-type)/i', $selector) === 1 => 50,
+            default => 700,
+        };
+    }
+
+    protected function escapeSelectorText(string $value): string
+    {
+        return str_replace(['\\', '"'], ['\\\\', '\\"'], $value);
     }
 
     protected function safeSelector(string $selector): bool

@@ -1346,6 +1346,8 @@ async function devDomSnapshot(targetPage) {
         .join(' ')).toLowerCase();
       const hasVisibleSearchInput = Array.from(document.querySelectorAll('input[type="search"], input[name="q"], textarea[name="q"], [role="searchbox"]'))
         .some((element) => isVisible(element));
+      const hasVisibleSearchResults = Array.from(document.querySelectorAll('#search a:has(h2), #search a:has(h3), main a:has(h2), main a:has(h3), [role="main"] a:has(h2), [role="main"] a:has(h3)'))
+        .some((element) => isVisible(element));
       const hasVisiblePasswordInput = Array.from(document.querySelectorAll('input[type="password"]'))
         .some((element) => isVisible(element));
       const hasConsentContext = /(?:consent|cookie|einwilligung|datenschutz|privacy)/i.test(haystack);
@@ -1353,6 +1355,7 @@ async function devDomSnapshot(targetPage) {
 
       if (haystack.includes('captcha')) return 'captcha_blocked';
       if (hasConsentContext && hasConsentAction) return 'consent_blocked';
+      if (hasVisibleSearchResults) return 'search_results';
       if (hasVisibleSearchInput) return 'search_input';
       if (locationAndTitle.includes('register') || locationAndTitle.includes('signup') || locationAndTitle.includes('registr')) return 'registration_form';
       if (hasVisiblePasswordInput || locationAndTitle.includes('login') || locationAndTitle.includes('signin') || locationAndTitle.includes('anmeld')) return 'login_page';
@@ -1375,24 +1378,36 @@ async function devDomSnapshot(targetPage) {
       const escapeText = (value) => String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 
       if (!tag) return '';
-      if (element.id) return `#${escapeCss(element.id)}`;
 
-      for (const attribute of ['data-testid', 'data-test', 'data-cy', 'data-qa', 'aria-label', 'name']) {
+      if (tag === 'a' && element.querySelector('h1, h2, h3')) {
+        const searchRoot = element.closest('#search, main, [role="main"]');
+
+        if (searchRoot?.id === 'search') return '#search a:has(h3), #search a:has(h2)';
+        if (searchRoot?.matches?.('main')) return 'main a:has(h3), main a:has(h2)';
+        if (searchRoot?.getAttribute?.('role') === 'main') return '[role="main"] a:has(h3), [role="main"] a:has(h2)';
+
+        return 'a:has(h3), a:has(h2)';
+      }
+
+      for (const attribute of ['title', 'aria-label', 'placeholder', 'data-testid', 'data-test', 'data-cy', 'data-qa', 'name']) {
         const value = element.getAttribute(attribute);
 
         if (value) return `${tag}[${attribute}="${escapeCss(value)}"]`;
       }
 
       const role = element.getAttribute('role');
+      const type = element.getAttribute('type');
       const text = normalize(element.innerText || element.textContent || '').slice(0, 80);
 
+      if (role && type) return `${tag}[role="${escapeCss(role)}"][type="${escapeCss(type)}"]`;
       if (role) return `${tag}[role="${escapeCss(role)}"]${text ? `:has-text("${escapeText(text)}")` : ''}`;
       if (text && ['a', 'button', 'label', 'span', 'div'].includes(tag)) return `${tag}:has-text("${escapeText(text)}")`;
+      if (element.id) return `#${escapeCss(element.id)}`;
 
       return tag;
     };
     const interactionPriority = (item) => {
-      const haystack = normalize(`${item.text} ${item.ariaLabel} ${item.name} ${item.selector}`).toLowerCase();
+      const haystack = normalize(`${item.text} ${item.title} ${item.ariaLabel} ${item.placeholder} ${item.name} ${item.selector}`).toLowerCase();
       const controlPriority = item.tag === 'button' || item.role === 'button' ? 20 : 0;
 
       if (/(?:alle\s+ablehnen|reject\s+all|decline\s+all|refuse\s+all|nur\s+(?:notwendige|erforderliche)|only\s+(?:necessary|required)|\bablehnen\b|\breject\b|\bdecline\b)/i.test(haystack)) {
@@ -1409,7 +1424,7 @@ async function devDomSnapshot(targetPage) {
 
       return controlPriority;
     };
-    const selectorSuggestions = Array.from(document.querySelectorAll('button,a,input,textarea,select,[role],[aria-label],[data-testid],[data-test],[data-cy],[data-qa]'))
+    const selectorSuggestions = Array.from(document.querySelectorAll('button,a,input,textarea,select,[role],[title],[aria-label],[data-testid],[data-test],[data-cy],[data-qa]'))
       .map((element) => {
         const tag = String(element.tagName || '').toLowerCase();
         const rect = element.getBoundingClientRect();
@@ -1429,6 +1444,7 @@ async function devDomSnapshot(targetPage) {
           text: formControl ? '' : normalize(element.innerText || element.textContent || '').slice(0, 120),
           id: element.id || '',
           role: element.getAttribute('role') || '',
+          title: element.getAttribute('title') || '',
           ariaLabel: element.getAttribute('aria-label') || '',
           name: element.getAttribute('name') || '',
           placeholder: element.getAttribute('placeholder') || '',

@@ -5,6 +5,7 @@ namespace App\Services\Workflows;
 use App\Models\Workflow;
 use App\Models\WorkflowStep;
 use App\Services\Ai\AiConnectionService;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use RuntimeException;
@@ -27,6 +28,7 @@ class WorkflowCopilotPlanningService
         protected AiConnectionService $ai,
         protected WorkflowTaskCatalog $catalog,
         protected WorkflowTaskOrderingService $taskOrdering,
+        protected WorkflowCopilotPromptContextService $promptContexts,
     ) {}
 
     public function needsInitialPlan(Workflow $workflow): bool
@@ -60,6 +62,8 @@ class WorkflowCopilotPlanningService
                 'Antworte nur als JSON. Erfinde keine Task-Keys, Quellcode-Skripte oder nicht vorhandenen Funktionen.',
                 'Verwende Workflow-Eingaben als Variablennamen und uebernimm keine geheimen Werte in die Definition.',
                 'Plane einen linearen, testbaren Ablauf mit kleinen fachlichen Steps und genau den benoetigten Tasks.',
+                'Nutze fuer Verzweigungen ausschliesslich die dokumentierten Task- und Step-Routen. type=fail ist terminal.',
+                'Der Workflow muss nach der Planung ohne Copilot-Skip in einem unveraenderlichen Kontrolllauf ausfuehrbar sein.',
             ]),
             [
                 'temperature' => 0.1,
@@ -101,13 +105,13 @@ class WorkflowCopilotPlanningService
                 $step = $lockedWorkflow->steps()->create([
                     'name' => $stepDefinition['name'],
                     'type' => $stepDefinition['type'],
-                    'action_key' => $this->uniqueStepActionKey($lockedWorkflow, $stepDefinition['name']),
+                    'action_key' => $stepDefinition['action_key'],
                     'position' => ($index + 1) * 10,
                     'is_enabled' => true,
                     'config_json' => [
                         'description' => $stepDefinition['description'],
                         'tasks' => [],
-                        'routes' => [],
+                        'routes' => $stepDefinition['routes'],
                     ],
                 ]);
 
@@ -126,48 +130,20 @@ class WorkflowCopilotPlanningService
         array $successCriteria,
         array $workflowInputs,
     ): string {
-        $catalog = collect($this->catalog->options())
-            ->map(function (array $task): array {
-                $form = is_array($task['form'] ?? null) ? $task['form'] : [];
-                $fields = collect([
-                    ($form['selector'] ?? false) ? 'selector' : null,
-                    ($form['value'] ?? false) ? 'value' : null,
-                    ($form['url'] ?? false) ? 'url' : null,
-                    ($form['browser_window'] ?? false) ? 'browser_window' : null,
-                    ($form['mailbox_source'] ?? false) ? 'mailbox_source' : null,
-                    ...collect($form['extra_fields'] ?? [])
-                        ->filter(fn (mixed $field): bool => is_array($field))
-                        ->map(fn (array $field): string => (string) ($field['name'] ?? ''))
-                        ->all(),
-                ])->filter()->unique()->values()->all();
-
-                return [
-                    'task_key' => $task['key'],
-                    'label' => $task['label'],
-                    'kind' => $task['kind'],
-                    'description' => $task['description'],
-                    'parameters' => $fields,
-                ];
-            })
-            ->values()
-            ->all();
-        $inputSchema = collect($workflowInputs)
-            ->map(fn (mixed $value, string|int $key): array => [
-                'name' => (string) $key,
-                'type' => get_debug_type($value),
-            ])
-            ->values()
-            ->all();
+        $context = $this->promptContexts->forInitialPlanning(
+            $workflow,
+            $goal,
+            $successCriteria,
+            $workflowInputs,
+        );
 
         return implode("\n", [
             'Erstelle die vollstaendige Erstdefinition fuer einen derzeit leeren Workflow.',
-            'Workflow: '.json_encode(['id' => $workflow->id, 'name' => $workflow->name], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
-            'Ziel: '.trim($goal),
-            'Feste Erfolgskriterien: '.json_encode($successCriteria, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
-            'Verfuegbare Workflow-Eingaben (nur Name und Typ): '.json_encode($inputSchema, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
-            'WorkflowTaskCatalog: '.json_encode($catalog, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
-            'Erwartetes JSON-Schema: {"summary":"...","assumptions":["..."],"steps":[{"name":"...","type":"browser_task|data_task|preparation|data_processing|browser_control|interaction|decision|cleanup|wait","description":"...","tasks":[{"task_key":"catalog.key","title":"...","description":"...","parameters":{"url":"...","selector":"...","value":"variablenname","browser_window":"main"}}]}]}',
-            'Felder in parameters duerfen nur aus der parameters-Liste des jeweiligen Katalogeintrags stammen. Nutze bei unbekannten Selektoren robuste leere/default Werte, damit die Live-Optimierung sie anhand der echten Seite pruefen kann.',
+            'Verbindlicher Task-, Routing- und Workflow-Kontext: '.json_encode($context, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+            'Erwartetes JSON-Schema: {"summary":"...","assumptions":["..."],"steps":[{"name":"...","action_key":"stabiler-step-key","type":"browser_task|data_task|preparation|data_processing|browser_control|interaction|decision|cleanup|wait","description":"...","routes":{"success":{"type":"step","step":"next"},"failed":{"type":"step","step":"fehlerbehandlung"}},"tasks":[{"key":"stabiler-task-key","task_key":"catalog.key","title":"...","description":"...","parameters":{"url":"...","selector":"...","workflow_variable":"...","browser_window":"main"},"next":{"type":"card","card":"naechste-task"},"on_error":{"type":"step","step":"fehlerbehandlung"}}]}]}',
+            'Felder in parameters duerfen nur aus der parameters-Liste des jeweiligen Katalogeintrags stammen. next, on_partial, on_error und status_routes sind Routingfelder und keine normalen parameters.',
+            'decision.element_exists braucht fuer den gefundenen und den nicht gefundenen Fall unterschiedliche Ziele. Optionales Fehlen darf nicht zu einem Klick auf das fehlende Element oder in eine Selbstschleife routen.',
+            'Nutze bei unbekannten Selektoren robuste leere/default Werte, damit die Live-Optimierung sie anhand der echten Seite pruefen kann. Fuer bekannte Eingabefelder semantische Attribute wie title, aria-label, placeholder oder name statt generierter IDs verwenden.',
         ]);
     }
 
@@ -178,11 +154,18 @@ class WorkflowCopilotPlanningService
     {
         $steps = [];
         $taskCount = 0;
+        $usedStepActionKeys = [];
 
         foreach (collect($plan['steps'] ?? [])->filter(fn (mixed $step): bool => is_array($step))->take(40) as $stepIndex => $stepDefinition) {
             $name = Str::limit(trim((string) ($stepDefinition['name'] ?? 'Step '.($stepIndex + 1))), 160, '');
             $type = trim((string) ($stepDefinition['type'] ?? WorkflowStep::TYPE_PREPARATION));
             $type = in_array($type, self::STEP_TYPES, true) ? $type : WorkflowStep::TYPE_PREPARATION;
+            $actionKey = $this->uniquePlanKey(
+                $usedStepActionKeys,
+                (string) ($stepDefinition['action_key'] ?? $stepDefinition['actionKey'] ?? $name),
+                'step',
+            );
+            $usedStepActionKeys[] = $actionKey;
             $tasks = [];
 
             foreach (collect($stepDefinition['tasks'] ?? [])->filter(fn (mixed $task): bool => is_array($task))->take(80) as $taskIndex => $taskDefinition) {
@@ -195,7 +178,11 @@ class WorkflowCopilotPlanningService
 
                 $parameters = is_array($taskDefinition['parameters'] ?? null) ? $taskDefinition['parameters'] : [];
                 $baseKey = Str::slug((string) ($taskDefinition['title'] ?? $catalogDefinition['label'] ?? $taskKey)) ?: 'task';
-                $cardKey = $this->uniqueTaskKey($tasks, $baseKey.'-'.($taskIndex + 1));
+                $requestedKey = trim((string) ($taskDefinition['key'] ?? ''));
+                $cardKey = $this->uniqueTaskKey(
+                    $tasks,
+                    $requestedKey !== '' ? $requestedKey : $baseKey.'-'.($taskIndex + 1),
+                );
                 $overrides = [
                     ...$parameters,
                     'key' => $cardKey,
@@ -203,6 +190,12 @@ class WorkflowCopilotPlanningService
                     'description' => Str::limit(trim((string) ($taskDefinition['description'] ?? $catalogDefinition['description'] ?? '')), 1000, ''),
                 ];
                 $card = $this->catalog->cardFromDefinition($taskKey, $overrides);
+                $card['__planned_routing'] = Arr::only($taskDefinition, [
+                    'next',
+                    'on_partial',
+                    'on_error',
+                    'status_routes',
+                ]);
 
                 if ($taskKey === 'loop.for_each_element') {
                     $pairId = 'loop-'.(string) Str::uuid();
@@ -240,11 +233,87 @@ class WorkflowCopilotPlanningService
 
             $steps[] = [
                 'name' => $name !== '' ? $name : 'Step '.(count($steps) + 1),
+                'action_key' => $actionKey,
                 'type' => $type,
                 'description' => Str::limit(trim((string) ($stepDefinition['description'] ?? '')), 1000, ''),
                 'tasks' => $tasks,
+                '__planned_routes' => is_array($stepDefinition['routes'] ?? null) ? $stepDefinition['routes'] : [],
             ];
         }
+
+        $taskKeysByStep = collect($steps)
+            ->mapWithKeys(fn (array $step): array => [
+                $step['action_key'] => collect($step['tasks'])
+                    ->pluck('key')
+                    ->filter()
+                    ->map(fn (mixed $key): string => (string) $key)
+                    ->values()
+                    ->all(),
+            ])
+            ->all();
+        $steps = collect($steps)
+            ->map(function (array $step) use ($taskKeysByStep): array {
+                $sourceStep = (string) $step['action_key'];
+                $routes = [];
+
+                foreach ($step['__planned_routes'] as $outcome => $route) {
+                    $outcome = Str::lower(trim((string) $outcome));
+
+                    if (! in_array($outcome, ['success', 'failed', 'timeout', 'partial', 'default'], true)) {
+                        continue;
+                    }
+
+                    $normalizedRoute = $this->normalizePlannedRoute($route, $sourceStep, $taskKeysByStep);
+
+                    if ($normalizedRoute !== null) {
+                        $routes[$outcome] = $normalizedRoute;
+                    }
+                }
+
+                $tasks = collect($step['tasks'])
+                    ->map(function (array $task) use ($sourceStep, $taskKeysByStep): array {
+                        $plannedRouting = is_array($task['__planned_routing'] ?? null) ? $task['__planned_routing'] : [];
+                        unset($task['__planned_routing']);
+
+                        foreach (['next', 'on_partial', 'on_error'] as $field) {
+                            $route = $this->normalizePlannedRoute(
+                                $plannedRouting[$field] ?? null,
+                                $sourceStep,
+                                $taskKeysByStep,
+                            );
+
+                            if ($route !== null) {
+                                $task[$field] = $route;
+                            }
+                        }
+
+                        $statusRoutes = [];
+
+                        foreach (is_array($plannedRouting['status_routes'] ?? null) ? $plannedRouting['status_routes'] : [] as $outcome => $route) {
+                            $normalizedRoute = $this->normalizePlannedRoute($route, $sourceStep, $taskKeysByStep);
+
+                            if ($normalizedRoute !== null) {
+                                $statusRoutes[Str::lower(trim((string) $outcome))] = $normalizedRoute;
+                            }
+                        }
+
+                        if ($statusRoutes !== []) {
+                            $task['status_routes'] = $statusRoutes;
+                        }
+
+                        return $task;
+                    })
+                    ->values()
+                    ->all();
+
+                unset($step['__planned_routes']);
+                $step['routes'] = $routes;
+                $step['tasks'] = $tasks;
+
+                return $step;
+            })
+            ->values()
+            ->all();
 
         return [
             'summary' => Str::limit(trim((string) ($plan['summary'] ?? 'Autonom geplante Workflow-Erstdefinition.')), 4000, ''),
@@ -285,5 +354,99 @@ class WorkflowCopilotPlanningService
         }
 
         return $candidate;
+    }
+
+    protected function uniquePlanKey(array $existing, string $base, string $fallback): string
+    {
+        $base = Str::slug($base) ?: $fallback;
+        $candidate = $base;
+        $suffix = 2;
+
+        while (in_array($candidate, $existing, true)) {
+            $candidate = $base.'-'.$suffix++;
+        }
+
+        return $candidate;
+    }
+
+    protected function normalizePlannedRoute(
+        mixed $route,
+        string $sourceStep,
+        array $taskKeysByStep,
+    ): ?array {
+        if (is_string($route)) {
+            $target = Str::slug($route);
+
+            if (in_array($target, ['next', 'end', 'fail'], true)) {
+                $route = ['type' => $target === 'next' ? 'step' : $target, 'step' => $target];
+            } elseif (in_array($target, $taskKeysByStep[$sourceStep] ?? [], true)) {
+                $route = ['type' => 'card', 'step' => $sourceStep, 'card' => $target];
+            } elseif (array_key_exists($target, $taskKeysByStep)) {
+                $route = ['type' => 'step', 'step' => $target];
+            } else {
+                return null;
+            }
+        }
+
+        if (! is_array($route)) {
+            return null;
+        }
+
+        $type = Str::lower(trim((string) ($route['type'] ?? '')));
+        $step = Str::slug((string) ($route['action_key'] ?? $route['step'] ?? ''));
+        $card = Str::slug((string) ($route['card_key'] ?? $route['card'] ?? ''));
+
+        if ($type === '') {
+            $type = $card !== ''
+                ? 'card'
+                : (in_array($step, ['end', 'fail'], true) ? $step : 'step');
+        }
+
+        if (in_array($type, ['end', 'fail'], true)) {
+            return [
+                'type' => $type,
+                'step' => $type,
+                'label' => Str::limit(trim((string) ($route['label'] ?? ($type === 'end' ? 'Workflow abschliessen' : 'Workflow fehlschlagen'))), 180, ''),
+            ];
+        }
+
+        if ($type === 'step') {
+            if ($step === '' || ($step !== 'next' && ! array_key_exists($step, $taskKeysByStep))) {
+                return null;
+            }
+
+            return array_filter([
+                'type' => 'step',
+                'action_key' => $step,
+                'step' => $step,
+                'label' => Str::limit(trim((string) ($route['label'] ?? $step)), 180, ''),
+                'max_attempts' => isset($route['max_attempts'])
+                    ? min(20, max(1, (int) $route['max_attempts']))
+                    : null,
+            ], static fn (mixed $value): bool => $value !== null && $value !== '');
+        }
+
+        if ($type !== 'card' || $card === '') {
+            return null;
+        }
+
+        $targetStep = $step !== '' ? $step : $sourceStep;
+
+        if (! array_key_exists($targetStep, $taskKeysByStep)
+            || ! in_array($card, $taskKeysByStep[$targetStep], true)) {
+            return null;
+        }
+
+        return array_filter([
+            'type' => 'card',
+            'action_key' => $targetStep,
+            'step' => $targetStep,
+            'card_key' => $card,
+            'card' => $card,
+            'label' => Str::limit(trim((string) ($route['label'] ?? $card)), 180, ''),
+            'max_attempts' => isset($route['max_attempts'])
+                ? min(20, max(1, (int) $route['max_attempts']))
+                : null,
+        ], static fn (mixed $value): bool => $value !== null && $value !== '');
     }
 }

@@ -71,7 +71,30 @@ class WorkflowCopilotVisionServiceTest extends TestCase
         };
         $service = $this->visionService($ai, ['vision-primary', 'vision-fallback']);
 
-        $result = $service->analyze($this->visualObservation(), 'Erfolgreich anmelden.');
+        $result = $service->analyze(
+            $this->visualObservation(),
+            'Erfolgreich anmelden.',
+            [
+                'execution_contract' => [
+                    'route_types' => [
+                        'fail' => 'Beendet den gesamten Workflow.',
+                    ],
+                    'verification' => [
+                        'Unveraenderlicher Kontrolllauf ohne Mutation.',
+                    ],
+                ],
+                'workflow' => [
+                    'steps' => [[
+                        'action_key' => 'login',
+                        'tasks' => [[
+                            'key' => 'login-click',
+                            'task_key' => 'browser.click',
+                            'on_error' => ['type' => 'step', 'step' => 'login-fehler'],
+                        ]],
+                    ]],
+                ],
+            ],
+        );
 
         $this->assertSame('vision', $result['analysis_source']);
         $this->assertSame('vision-fallback', $result['model']);
@@ -87,6 +110,18 @@ class WorkflowCopilotVisionServiceTest extends TestCase
         $requests = Http::recorded();
         $this->assertSame('vision-primary', data_get($requests[0][0]->data(), 'model'));
         $this->assertSame('vision-fallback', data_get($requests[1][0]->data(), 'model'));
+        $this->assertStringContainsString(
+            'Vollstaendiger Task-, Routing- und Workflow-Kontext',
+            (string) data_get($requests[1][0]->data(), 'messages.0.content.0.text'),
+        );
+        $this->assertStringContainsString(
+            'Beendet den gesamten Workflow',
+            (string) data_get($requests[1][0]->data(), 'messages.0.content.0.text'),
+        );
+        $this->assertStringContainsString(
+            '"on_error":{"type":"step","step":"login-fehler"}',
+            (string) data_get($requests[1][0]->data(), 'messages.0.content.0.text'),
+        );
         $this->assertStringStartsWith(
             'data:image/png;base64,',
             (string) data_get($requests[1][0]->data(), 'messages.0.content.1.image_url.url'),

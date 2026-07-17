@@ -34,6 +34,7 @@ class WorkflowCopilotSupervisorService
         protected WorkflowCopilotObservationService $observations,
         protected WorkflowCopilotVisionService $vision,
         protected WorkflowCopilotRepairService $repairs,
+        protected WorkflowCopilotPromptContextService $promptContexts,
         protected WorkflowRevisionService $revisions,
         protected WorkflowCopilotAiUsageTracker $aiUsage,
     ) {}
@@ -526,9 +527,15 @@ class WorkflowCopilotSupervisorService
                 false,
             );
             $session = $session->fresh() ?? $session;
+            $workflowContext = $this->promptContexts->forWorkflow(
+                $session->workflow,
+                $session,
+                $stepRun->workflowStep,
+                $checkpoint,
+            );
             $vision = $this->captureCopilotAiUsage(
                 $session,
-                fn (): array => $this->vision->analyze($observation, (string) $session->goal),
+                fn (): array => $this->vision->analyze($observation, (string) $session->goal, $workflowContext),
                 $isVerificationCheckpoint ? 'verification_vision' : 'checkpoint_vision',
             );
         }
@@ -630,6 +637,48 @@ class WorkflowCopilotSupervisorService
             return;
         }
 
+        $businessGap = $this->successfulCheckpointBusinessGap(
+            $session,
+            $stepRun->workflowStep,
+            $checkpoint,
+        );
+
+        if ($businessGap !== []) {
+            $this->sessions->appendEvent(
+                $session,
+                'checkpoint.business_gap',
+                (string) $businessGap['message'],
+                [
+                    'workflow_run_id' => (int) $run->id,
+                    'task_attempt_id' => (int) $attempt->id,
+                    'checkpoint_id' => (int) $storedCheckpoint->id,
+                    'task_key' => $checkpoint['task_key'] ?? null,
+                    ...$businessGap['payload'],
+                ],
+                'repairing',
+                'warning',
+                true,
+            );
+            $gapCheckpoint = $checkpoint;
+            $gapCheckpoint['successful'] = false;
+            $gapCheckpoint['outcome'] = 'failed';
+            $gapResult = is_array($gapCheckpoint['result'] ?? null) ? $gapCheckpoint['result'] : [];
+            $gapResult['technicalSuccess'] = true;
+            $gapResult['businessGap'] = $businessGap['payload'];
+            $gapResult['statusMessage'] = $businessGap['message'];
+            $gapCheckpoint['result'] = $gapResult;
+            $this->repairFailedCheckpoint(
+                $session->fresh() ?? $session,
+                $run->fresh() ?? $run,
+                $stepRun->workflowStep,
+                $gapCheckpoint,
+                $observation,
+                $vision,
+            );
+
+            return;
+        }
+
         if ((bool) ($checkpoint['successful'] ?? false)) {
             if ($this->timeBudgetExceeded($session->fresh() ?? $session)) {
                 $this->exhaustBudget($session->fresh() ?? $session);
@@ -680,6 +729,116 @@ class WorkflowCopilotSupervisorService
         }
 
         $this->repairFailedCheckpoint($session->fresh() ?? $session, $run->fresh() ?? $run, $stepRun->workflowStep, $checkpoint, $observation, $vision);
+    }
+
+    protected function successfulCheckpointBusinessGap(
+        WorkflowCopilotSession $session,
+        WorkflowStep $step,
+        array $checkpoint,
+    ): array {
+        if (! (bool) ($checkpoint['successful'] ?? false)) {
+            return [];
+        }
+
+        $taskKey = trim((string) ($checkpoint['task_key'] ?? ''));
+        $task = collect($step->task_cards)->firstWhere('key', $taskKey);
+
+        if (! is_array($task) || (string) ($task['task_key'] ?? '') !== 'loop.for_each_element') {
+            return $this->missingRequiredWorkflowReturnGap($session, $checkpoint);
+        }
+
+        $result = is_array($checkpoint['result'] ?? null) ? $checkpoint['result'] : [];
+        $taskResult = collect(is_array($result['tasks'] ?? null) ? $result['tasks'] : [])
+            ->first(fn (mixed $candidate): bool => is_array($candidate)
+                && (string) ($candidate['key'] ?? '') === $taskKey);
+        $matchedCount = is_array($taskResult) && is_numeric($taskResult['matched_count'] ?? null)
+            ? (int) $taskResult['matched_count']
+            : (is_numeric($result['matched_count'] ?? null) ? (int) $result['matched_count'] : null);
+
+        if ($matchedCount !== 0) {
+            return $this->missingRequiredWorkflowReturnGap($session, $checkpoint);
+        }
+
+        $collectsArray = collect($step->task_cards)->contains(
+            fn (array $candidate): bool => (string) ($candidate['task_key'] ?? '') === 'data.append_to_array',
+        );
+        $expectation = Str::lower(implode(' ', array_filter([
+            (string) $session->goal,
+            json_encode($session->success_criteria_json, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+        ], static fn (mixed $value): bool => is_scalar($value))));
+        $expectsCollection = preg_match('/(?:array|liste|list|treffer|ergebnis|result)/u', $expectation) === 1;
+
+        if (! $collectsArray || ! $expectsCollection) {
+            return [];
+        }
+
+        return [
+            'message' => 'Der Ergebnis-Loop wurde technisch beendet, hat aber keinen einzigen Treffer gefunden. Da dieser Step ein Ergebnis-Array erzeugen soll, wird der leere Loop als fachlicher Fehler repariert statt als Erfolg fortgesetzt.',
+            'payload' => [
+                'reason_code' => 'required_collection_empty',
+                'matched_count' => 0,
+                'selector' => $task['selector'] ?? $task['element_selector'] ?? null,
+                'array_consumers' => collect($step->task_cards)
+                    ->filter(fn (array $candidate): bool => (string) ($candidate['task_key'] ?? '') === 'data.append_to_array')
+                    ->pluck('array_name')
+                    ->filter()
+                    ->values()
+                    ->all(),
+            ],
+        ];
+    }
+
+    protected function missingRequiredWorkflowReturnGap(
+        WorkflowCopilotSession $session,
+        array $checkpoint,
+    ): array {
+        $expectation = Str::lower(implode(' ', array_filter([
+            (string) $session->goal,
+            json_encode($session->success_criteria_json, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+        ], static fn (mixed $value): bool => is_scalar($value))));
+
+        if (preg_match('/(?:rueckgabewert|rückgabewert|return).*?(?:array|liste|list)/u', $expectation) !== 1) {
+            return [];
+        }
+
+        $result = is_array($checkpoint['result'] ?? null) ? $checkpoint['result'] : [];
+
+        if (is_array($result['workflow_return'] ?? $result['workflowReturn'] ?? null)) {
+            return [];
+        }
+
+        $workflow = $session->workflow;
+        $workflow?->loadMissing(['steps' => fn ($query) => $query->ordered()]);
+        $tasks = $workflow
+            ? $workflow->steps->flatMap(fn (WorkflowStep $workflowStep) => collect($workflowStep->task_cards))
+            : collect();
+
+        if ($tasks->contains(fn (array $candidate): bool => (string) ($candidate['task_key'] ?? '') === 'data.workflow_return')) {
+            return [];
+        }
+
+        $sourceArray = $tasks
+            ->filter(fn (array $candidate): bool => (string) ($candidate['task_key'] ?? '') === 'data.append_to_array')
+            ->pluck('array_name')
+            ->map(fn (mixed $name): string => trim((string) $name))
+            ->filter()
+            ->first(function (string $name) use ($result): bool {
+                return is_array(data_get($result, 'workflow_variables.'.$name))
+                    || is_array(data_get($result, 'workflowVariables.'.$name));
+            });
+
+        if (! is_string($sourceArray) || $sourceArray === '') {
+            return [];
+        }
+
+        return [
+            'message' => 'Das Ergebnis-Array `'.$sourceArray.'` ist vorhanden, aber der Workflow setzt keinen expliziten Rueckgabewert. Fuer die feste Array-Erfolgsaussage wird eine kataloggebundene Rueckgabe-Task benoetigt.',
+            'payload' => [
+                'reason_code' => 'required_workflow_return_missing',
+                'source_array' => $sourceArray,
+                'expected_type' => 'array',
+            ],
+        ];
     }
 
     protected function processVerificationCheckpoint(
@@ -1452,9 +1611,22 @@ class WorkflowCopilotSupervisorService
         $session = $binding['session'];
         $run = $binding['run'];
         $criteria = $binding['criteria'];
-        $observation = $this->observations->observe($run, $run->stepRuns()->latest('id')->first());
+        $latestStepRun = $run->stepRuns()->with('workflowStep')->latest('id')->first();
+        $observation = $this->observations->observe($run, $latestStepRun);
         $criteriaEvaluation = $this->evaluateSuccessCriteria($criteria, $run, $observation);
-        $vision = $this->vision->analyze($observation, $this->verificationGoal($session, $criteria));
+        $workflowContext = $this->promptContexts->forWorkflow(
+            $session->workflow,
+            $session,
+            $latestStepRun?->workflowStep,
+            is_array(data_get($run->context_json, 'copilot_checkpoint'))
+                ? data_get($run->context_json, 'copilot_checkpoint')
+                : [],
+        );
+        $vision = $this->vision->analyze(
+            $observation,
+            $this->verificationGoal($session, $criteria),
+            $workflowContext,
+        );
         $technicalPass = $run->status === 'completed'
             && (bool) data_get($run->result_json, 'ok', false)
             && data_get($run->result_json, 'technical_status') === 'success'
@@ -1770,6 +1942,7 @@ class WorkflowCopilotSupervisorService
                 'title' => ['type' => 'title', 'operator' => 'contains', 'value' => $value],
                 'page_state' => ['type' => 'page_state', 'operator' => 'equals', 'value' => $value],
                 'technical_status', 'business_status' => ['type' => $key, 'operator' => 'equals', 'value' => $value],
+                'return_type', 'workflow_return_type' => ['type' => 'result_type', 'operator' => 'type_is', 'path' => 'workflow_return', 'value' => $value],
                 default => ['type' => 'unsupported', 'key' => $key, 'value' => $value],
             };
             $assertions[] = $definition;
@@ -1839,6 +2012,19 @@ class WorkflowCopilotSupervisorService
                 $operator = $operator ?: 'equals';
                 $type = 'result';
                 break;
+            case 'result_type':
+            case 'return_type':
+            case 'workflow_return_type':
+                $path = trim((string) ($assertion['path'] ?? $assertion['key'] ?? 'workflow_return')) ?: 'workflow_return';
+                $actual = data_get($run->result_json, $path);
+
+                if ($actual === null && $path === 'workflow_return') {
+                    $actual = data_get($run->result_json, 'workflowReturn');
+                }
+
+                $operator = $operator ?: 'type_is';
+                $type = 'result_type';
+                break;
             default:
                 return $this->assertionResult(
                     $index,
@@ -1869,6 +2055,16 @@ class WorkflowCopilotSupervisorService
     protected function parseTextAssertion(string $assertion): array
     {
         $assertion = trim($assertion);
+
+        if (preg_match('/^(?:rueckgabewert|rückgabewert|workflow[-\s]?rueckgabewert|workflow[-\s]?rückgabewert|return\s+value)\s*(?:=|ist|gleich|equals)\s*(array|liste|list|object|objekt|string|text|number|zahl|integer|boolean|bool|null)$/iu', $assertion, $matches) === 1) {
+            return [
+                'type' => 'result_type',
+                'operator' => 'type_is',
+                'path' => 'workflow_return',
+                'value' => trim($matches[1]),
+            ];
+        }
+
         $patterns = [
             '/^(?:finale?\s+)?url\s+(?:enth(?:ae|ä)lt|contains)\s+(.+)$/iu' => ['url', 'contains'],
             '/^(?:finale?\s+)?url\s+(?:endet\s+mit|ends\s+with)\s+(.+)$/iu' => ['url', 'ends_with'],
@@ -1887,7 +2083,7 @@ class WorkflowCopilotSupervisorService
             }
         }
 
-        if (preg_match('/^([A-Za-z0-9_.-]+)\s+(?:ist|gleich|equals)\s+(.+)$/u', $assertion, $matches) === 1) {
+        if (preg_match('/^([A-Za-z0-9_.-]+)\s+(?:=|ist|gleich|equals)\s+(.+)$/u', $assertion, $matches) === 1) {
             return [
                 'type' => 'result',
                 'operator' => 'equals',
@@ -1901,6 +2097,29 @@ class WorkflowCopilotSupervisorService
 
     protected function compareAssertionValue(mixed $actual, mixed $expected, string $operator): bool
     {
+        if ($operator === 'type_is') {
+            $expectedType = Str::lower(trim((string) $expected));
+            $expectedType = match ($expectedType) {
+                'liste', 'list' => 'array',
+                'objekt' => 'object',
+                'text' => 'string',
+                'zahl' => 'number',
+                'bool' => 'boolean',
+                default => $expectedType,
+            };
+
+            return match ($expectedType) {
+                'array' => is_array($actual),
+                'object' => is_object($actual) || (is_array($actual) && ! array_is_list($actual)),
+                'string' => is_string($actual),
+                'number' => is_int($actual) || is_float($actual),
+                'integer' => is_int($actual),
+                'boolean' => is_bool($actual),
+                'null' => $actual === null,
+                default => false,
+            };
+        }
+
         if ($operator === 'equals') {
             if (is_bool($actual) || is_bool($expected)) {
                 return filter_var($actual, FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE)
@@ -1934,7 +2153,7 @@ class WorkflowCopilotSupervisorService
                 continue;
             }
 
-            foreach (['text', 'aria', 'aria_label', 'label', 'name', 'placeholder'] as $key) {
+            foreach (['text', 'semantic_label', 'title', 'aria', 'aria_label', 'label', 'name', 'placeholder'] as $key) {
                 if (is_scalar($element[$key] ?? null)) {
                     $parts[] = (string) $element[$key];
                 }
@@ -2686,7 +2905,10 @@ class WorkflowCopilotSupervisorService
                 'tag' => $element['tag'] ?? null,
                 'text' => Str::limit(trim((string) ($element['text'] ?? '')), 160, ''),
                 'aria' => Str::limit(trim((string) ($element['aria'] ?? '')), 160, ''),
+                'title' => Str::limit(trim((string) ($element['title'] ?? '')), 160, ''),
+                'placeholder' => Str::limit(trim((string) ($element['placeholder'] ?? '')), 160, ''),
                 'name' => Str::limit(trim((string) ($element['name'] ?? '')), 120, ''),
+                'semantic_label' => Str::limit(trim((string) ($element['semantic_label'] ?? '')), 160, ''),
                 'visible' => $element['visible'] ?? null,
                 'enabled' => $element['enabled'] ?? null,
                 'selector_candidates' => array_slice(
@@ -2860,28 +3082,69 @@ class WorkflowCopilotSupervisorService
         array $vision,
     ): void {
         $runtimeCheckpointId = $this->runtimeCheckpointId($run, $checkpoint);
+        $observedElements = collect(is_array($observation['interaction_map'] ?? null) ? $observation['interaction_map'] : [])
+            ->filter(fn (mixed $element): bool => is_array($element))
+            ->keyBy(fn (array $element): string => trim((string) ($element['element_ref'] ?? '')));
         $elements = collect(is_array($vision['relevant_elements'] ?? null) ? $vision['relevant_elements'] : [])
             ->take(8)
-            ->map(fn (mixed $element): array => [
-                'element_ref' => Str::limit(trim((string) data_get($element, 'element_ref', '')), 191, ''),
-                'reason' => Str::limit(trim((string) data_get($element, 'reason', '')), 300, ''),
-                'confidence' => is_numeric(data_get($element, 'confidence'))
-                    ? round(max(0, min(1, (float) data_get($element, 'confidence'))), 3)
-                    : null,
-            ])
+            ->map(function (mixed $element) use ($observedElements): array {
+                $elementRef = Str::limit(trim((string) data_get($element, 'element_ref', '')), 191, '');
+                $observed = $observedElements->get($elementRef);
+
+                return [
+                    'element_ref' => $elementRef,
+                    'reason' => Str::limit(trim((string) data_get($element, 'reason', '')), 300, ''),
+                    'confidence' => is_numeric(data_get($element, 'confidence'))
+                        ? round(max(0, min(1, (float) data_get($element, 'confidence'))), 3)
+                        : null,
+                    'semantic_label' => is_array($observed)
+                        ? Str::limit(trim((string) (
+                            $observed['semantic_label']
+                            ?? $observed['title']
+                            ?? $observed['aria']
+                            ?? $observed['placeholder']
+                            ?? $observed['name']
+                            ?? $observed['text']
+                            ?? ''
+                        )), 180, '')
+                        : null,
+                    'selector' => is_array($observed)
+                        ? Str::limit(trim((string) data_get($observed, 'selector_candidates.0', '')), 300, '')
+                        : null,
+                ];
+            })
             ->filter(fn (array $element): bool => $element['element_ref'] !== '')
             ->values()
             ->all();
         $actions = collect(is_array($vision['suggested_task_actions'] ?? null) ? $vision['suggested_task_actions'] : [])
             ->take(8)
-            ->map(fn (mixed $action): array => [
-                'task_key' => Str::limit(trim((string) data_get($action, 'task_key', '')), 191, ''),
-                'element_ref' => Str::limit(trim((string) data_get($action, 'element_ref', '')), 191, ''),
-                'reason' => Str::limit(trim((string) data_get($action, 'reason', '')), 300, ''),
-                'confidence' => is_numeric(data_get($action, 'confidence'))
-                    ? round(max(0, min(1, (float) data_get($action, 'confidence'))), 3)
-                    : null,
-            ])
+            ->map(function (mixed $action) use ($observedElements): array {
+                $elementRef = Str::limit(trim((string) data_get($action, 'element_ref', '')), 191, '');
+                $observed = $observedElements->get($elementRef);
+
+                return [
+                    'task_key' => Str::limit(trim((string) data_get($action, 'task_key', '')), 191, ''),
+                    'element_ref' => $elementRef,
+                    'reason' => Str::limit(trim((string) data_get($action, 'reason', '')), 300, ''),
+                    'confidence' => is_numeric(data_get($action, 'confidence'))
+                        ? round(max(0, min(1, (float) data_get($action, 'confidence'))), 3)
+                        : null,
+                    'target_label' => is_array($observed)
+                        ? Str::limit(trim((string) (
+                            $observed['semantic_label']
+                            ?? $observed['title']
+                            ?? $observed['aria']
+                            ?? $observed['placeholder']
+                            ?? $observed['name']
+                            ?? $observed['text']
+                            ?? ''
+                        )), 180, '')
+                        : null,
+                    'target_selector' => is_array($observed)
+                        ? Str::limit(trim((string) data_get($observed, 'selector_candidates.0', '')), 300, '')
+                        : null,
+                ];
+            })
             ->filter(fn (array $action): bool => $action['task_key'] !== '')
             ->values()
             ->all();
@@ -2975,7 +3238,16 @@ class WorkflowCopilotSupervisorService
             'Entscheidung: '.$verdict.'.',
         ];
         $elements = collect($analysis['relevant_elements'] ?? [])
-            ->map(fn (array $element): string => trim((string) ($element['reason'] ?? '')) ?: '`'.$element['element_ref'].'`')
+            ->map(function (array $element): string {
+                $label = trim((string) ($element['semantic_label'] ?? ''));
+                $selector = trim((string) ($element['selector'] ?? ''));
+                $reason = trim((string) ($element['reason'] ?? ''));
+                $target = $label !== '' ? '`'.$label.'`' : '`'.($element['element_ref'] ?? 'Element').'`';
+
+                return $target
+                    .($selector !== '' ? ' ueber `'.$selector.'`' : '')
+                    .($reason !== '' ? ' ('.$reason.')' : '');
+            })
             ->filter()
             ->take(4)
             ->implode('; ');
@@ -2986,9 +3258,12 @@ class WorkflowCopilotSupervisorService
 
         $actions = collect($analysis['suggested_task_actions'] ?? [])
             ->map(function (array $action): string {
-                $target = trim((string) ($action['element_ref'] ?? ''));
+                $target = trim((string) ($action['target_label'] ?? $action['element_ref'] ?? ''));
+                $selector = trim((string) ($action['target_selector'] ?? ''));
 
-                return '`'.$action['task_key'].'`'.($target !== '' ? ' an `'.$target.'`' : '');
+                return '`'.$action['task_key'].'`'
+                    .($target !== '' ? ' an `'.$target.'`' : '')
+                    .($selector !== '' ? ' ueber `'.$selector.'`' : '');
             })
             ->filter()
             ->take(4)

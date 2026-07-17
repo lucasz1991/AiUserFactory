@@ -26,6 +26,7 @@ class WorkflowCopilotVisionService
         'browser.read_element_fields',
         'input.fill_field',
         'input.submit',
+        'loop.for_each_element',
     ];
 
     public function __construct(
@@ -34,14 +35,14 @@ class WorkflowCopilotVisionService
         protected WorkflowCopilotObservationService $observations,
     ) {}
 
-    public function analyze(array $observation, string $goal = ''): array
+    public function analyze(array $observation, string $goal = '', array $workflowContext = []): array
     {
         $startedAt = microtime(true);
         $attempts = [];
         $models = $this->configuredModels();
         $image = $this->validImageDataUrl($observation['screenshot_data_url'] ?? null);
         $safeObservation = $this->safeObservation($observation, $image !== null);
-        $prompt = $this->prompt($safeObservation, $goal, $image !== null);
+        $prompt = $this->prompt($safeObservation, $goal, $image !== null, $workflowContext);
 
         if ($image !== null) {
             foreach ($models as $index => $model) {
@@ -109,7 +110,7 @@ class WorkflowCopilotVisionService
 
             try {
                 $decoded = $this->ai->json(
-                    $this->domOnlyPrompt($safeObservation, $goal),
+                    $this->domOnlyPrompt($safeObservation, $goal, $workflowContext),
                     'Du analysierst ausschliesslich die bereitgestellte, redigierte DOM-Interaktionskarte. '
                         .'Erfinde keine sichtbaren Elemente und fuehre keine Aktion aus. Antworte nur als JSON-Objekt.',
                     array_filter([
@@ -234,12 +235,15 @@ class WorkflowCopilotVisionService
         ]);
     }
 
-    protected function prompt(array $observation, string $goal, bool $hasImage): string
+    protected function prompt(array $observation, string $goal, bool $hasImage, array $workflowContext = []): string
     {
         return implode("\n\n", [
             'Analysiere den aktuellen Workflow-Bildschirm anhand '.($hasImage ? 'des Screenshots und ' : '').'der nummerierbaren DOM-Interaktionskarte. '
                 .'Das Bild dient nur zur Beobachtung. Du fuehrst keine Aktion aus, erfindest keine Elemente und gibst keine internen Gedankengaenge aus.',
             'Workflow-Ziel: '.$this->safeGoal($goal),
+            'Nutze den gelieferten Workflow-Kontext als verbindliches Ausfuehrungsmodell. Pruefe insbesondere die aktuelle Task, noch nicht ausgefuehrte Tasks, '
+                .'Task- und Step-Routen, Variablenproduzenten, Loop-Paare und die unveraenderliche Endverifikation. type=fail ist terminal und darf nicht als '
+                .'normale Fehlerfortsetzung interpretiert werden. Ein fehlendes optionales Element braucht eine False-Route zur normalen Fortsetzung.',
             'Erlaubte Task-Keys: '.implode(', ', array_keys($this->taskCatalog->all())),
             'Antworte als JSON-Objekt mit exakt diesen Feldern: '
                 .'page_type (string), ui_state (string), goal_progress (Zahl 0..1 oder kurze Beschreibung), '
@@ -248,13 +252,14 @@ class WorkflowCopilotVisionService
                 .'needs_screenshot (boolean), verdict (pass|continue|pause). '
                 .'Verwende nur element_ref-Werte aus interaction_map und nur erlaubte Task-Keys. '
                 .'Rohwerte fuer Passwort, Token, Cookie oder Eingabefelder duerfen nicht vorgeschlagen werden; nutze allenfalls value_reference.',
+            'Vollstaendiger Task-, Routing- und Workflow-Kontext: '.$this->encodeWorkflowContext($workflowContext),
             'Redigierte Beobachtung: '.$this->encode($observation),
         ]);
     }
 
-    protected function domOnlyPrompt(array $observation, string $goal): string
+    protected function domOnlyPrompt(array $observation, string $goal, array $workflowContext = []): string
     {
-        return $this->prompt($observation, $goal, false)
+        return $this->prompt($observation, $goal, false, $workflowContext)
             ."\n\nEs gibt keinen verlaesslichen Screenshot. Wenn DOM und URL den Zustand nicht eindeutig belegen, setze verdict=pause, needs_screenshot=true und suggested_task_actions=[].";
     }
 
@@ -562,6 +567,14 @@ class WorkflowCopilotVisionService
         $encoded = json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
 
         return Str::limit(is_string($encoded) ? $encoded : '{}', WorkflowCopilotObservationService::MAX_OBSERVATION_BYTES, '');
+    }
+
+    protected function encodeWorkflowContext(array $value): string
+    {
+        $safe = $this->observations->sanitizeForModel($value);
+        $encoded = json_encode($safe, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+
+        return Str::limit(is_string($encoded) ? $encoded : '{}', 196_608, '');
     }
 
     protected function durationMs(float $startedAt): int
