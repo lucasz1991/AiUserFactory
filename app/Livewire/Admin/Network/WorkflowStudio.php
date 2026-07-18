@@ -11,7 +11,10 @@ use App\Models\Workflow;
 use App\Models\WorkflowCopilotSession;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowStudioSession;
+use App\Services\Workflows\WorkflowCopilotLaunchRequest;
+use App\Services\Workflows\WorkflowCopilotLaunchService;
 use App\Services\Workflows\WorkflowCopilotSessionService;
+use App\Services\Workflows\WorkflowDefinitionValidator;
 use App\Services\Workflows\WorkflowExecutionService;
 use App\Services\Workflows\WorkflowStudioAuthorizationService;
 use App\Services\Workflows\WorkflowStudioRevisionService;
@@ -467,26 +470,32 @@ class WorkflowStudio extends Component
             if ($active && ! in_array($active->status, ['completed', 'failed', 'cancelled', 'timed_out', 'lost'], true)) {
                 throw new DomainException('Beenden Sie den manuellen Lauf, bevor die autonome Optimierung gestartet wird.');
             }
-            $copilot = app(WorkflowCopilotSessionService::class)->start($this->workflow(), [
-                'person_id' => $this->personId !== '' ? (int) $this->personId : null,
-                'goal' => trim($this->goal),
-                'success_criteria' => collect(preg_split('/\r\n|\r|\n/', $this->successCriteria) ?: [])->filter()->values()->all(),
-                'workflow_inputs' => $this->decodeObject($this->workflowInputs, 'Workflow-Eingaben'),
-                'budget' => [
-                    ...WorkflowCopilotSessionService::DEFAULT_BUDGET,
-                    'auto_execute_workflow_actions' => $session->permission_mode !== WorkflowCopilotPermissionMode::ASK_ALL->value,
+            $launch = app(WorkflowCopilotLaunchService::class)->start(
+                $this->workflow(),
+                WorkflowCopilotLaunchRequest::fromArray([
+                    'person_id' => $this->personId !== '' ? (int) $this->personId : null,
+                    'goal' => trim($this->goal),
+                    'success_criteria' => collect(preg_split('/\r\n|\r|\n/', $this->successCriteria) ?: [])->filter()->values()->all(),
+                    'workflow_inputs' => $this->decodeObject($this->workflowInputs, 'Workflow-Eingaben'),
                     'permission_mode' => $session->permission_mode,
-                ],
-            ]);
+                    'source' => 'workflow-studio',
+                    'budget' => [
+                        ...WorkflowCopilotSessionService::DEFAULT_BUDGET,
+                        'auto_execute_workflow_actions' => $session->permission_mode !== WorkflowCopilotPermissionMode::ASK_ALL->value,
+                    ],
+                ]),
+            );
+            $copilot = $launch['session'];
             $session->forceFill([
                 'workflow_copilot_session_id' => $copilot->getKey(),
                 'mode' => 'autonomous',
                 'status' => 'running',
                 'started_at' => now(),
             ])->save();
-            WorkflowCopilotSupervisorJob::dispatch($copilot->getKey());
 
-            return $this->result('running', 'Copilot-Optimierung wurde gestartet.');
+            return $this->result('running', $launch['initial_plan']
+                ? 'Leerer Workflow wurde geplant, validiert und die Copilot-Optimierung gestartet.'
+                : 'Copilot-Optimierung wurde nach erfolgreicher Workflow-Validierung gestartet.');
         });
     }
 
@@ -598,6 +607,8 @@ class WorkflowStudio extends Component
             'browserWindows' => $this->browserWindowCards($workflow, $run),
             'steps' => $workflow->steps,
             'events' => $session->events()->latest('sequence')->limit(40)->get()->reverse()->values(),
+            'checkpoints' => $run?->checkpoints()->latest('sequence')->limit(30)->get() ?? collect(),
+            'taskAttempts' => $run?->taskAttempts()->latest('id')->limit(30)->get() ?? collect(),
             'persons' => Person::query()->orderBy('sort_order')->orderBy('id')->limit(500)->get(),
             'networkNodes' => NetworkNode::query()->available()->orderBy('name')->get(),
             'permissionModes' => WorkflowCopilotPermissionMode::cases(),
@@ -724,10 +735,11 @@ class WorkflowStudio extends Component
         if (! is_array($runtimeWindows) || $runtimeWindows === []) {
             $runtimeWindows = data_get($context, 'manual_pause_checkpoint.browser_windows', []);
         }
+        $activeWindow = trim((string) ($context['activeBrowserWindow'] ?? $context['active_browser_window'] ?? 'main')) ?: 'main';
 
         $cards = collect(is_array($runtimeWindows) ? $runtimeWindows : [])
             ->filter(fn (mixed $window): bool => is_array($window))
-            ->mapWithKeys(function (array $window, string|int $key): array {
+            ->mapWithKeys(function (array $window, string|int $key) use ($activeWindow): array {
                 $name = trim((string) ($window['key'] ?? $window['name'] ?? $key)) ?: 'main';
 
                 return [$name => [
@@ -736,6 +748,7 @@ class WorkflowStudio extends Component
                     'url' => trim((string) ($window['url'] ?? $window['currentUrl'] ?? '')),
                     'target_id' => trim((string) ($window['targetId'] ?? $window['target_id'] ?? '')),
                     'connected' => filled($window['targetId'] ?? $window['target_id'] ?? null),
+                    'active' => $name === $activeWindow,
                     'runtime' => true,
                     'task_count' => 0,
                 ]];
@@ -755,6 +768,7 @@ class WorkflowStudio extends Component
                     'url' => '',
                     'target_id' => '',
                     'connected' => false,
+                    'active' => $name === $activeWindow,
                     'runtime' => false,
                     'task_count' => 0,
                 ]);
@@ -770,6 +784,7 @@ class WorkflowStudio extends Component
                 'url' => '',
                 'target_id' => '',
                 'connected' => false,
+                'active' => true,
                 'runtime' => false,
                 'task_count' => 0,
             ]);
@@ -790,6 +805,7 @@ class WorkflowStudio extends Component
         }
 
         $workflow = $this->workflow()->load('steps');
+        $this->validateWorkflowDefinition($workflow);
         $inputs = $this->decodeObject($this->workflowInputs, 'Workflow-Eingaben');
         $context = [
             'workflow_studio_session_id' => $session->getKey(),
@@ -930,7 +946,9 @@ class WorkflowStudio extends Component
 
     private function rebasePausedRunRevision(WorkflowRun $run): void
     {
-        $currentRevision = (int) $this->workflow()->copilot_revision;
+        $workflow = $this->workflow()->load('steps');
+        $this->validateWorkflowDefinition($workflow);
+        $currentRevision = (int) $workflow->copilot_revision;
 
         if ((int) $run->workflow_revision === $currentRevision) {
             return;
@@ -963,6 +981,21 @@ class WorkflowStudio extends Component
             'Pausierter Lauf wurde auf Revision '.$currentRevision.' aktualisiert und behält seinen Runtime-Zustand.',
             ['workflow_run_id' => (int) $run->getKey(), 'revision' => $currentRevision],
             'warning',
+        );
+    }
+
+    private function validateWorkflowDefinition(Workflow $workflow): void
+    {
+        $criteria = collect(preg_split('/\r\n|\r|\n/', $this->successCriteria) ?: [])
+            ->map(fn (string $criterion): string => trim($criterion))
+            ->filter()
+            ->values()
+            ->all();
+
+        app(WorkflowDefinitionValidator::class)->assertValid(
+            $workflow,
+            $criteria,
+            $this->decodeObject($this->workflowInputs, 'Workflow-Eingaben'),
         );
     }
 }

@@ -44,12 +44,13 @@ class WorkflowCopilotObservationService
         $domArtifact = $this->latestSuccessfulArtifact($artifacts, ['dom', 'dom_snapshot']);
         $screenshotArtifact = $this->latestSuccessfulArtifact($artifacts, ['screenshot', 'screen']);
         $payloads = $this->resultPayloads($run, $stepRun, $artifacts);
+        $interactionPayloads = $this->resultPayloads($run, $stepRun, $artifacts, $stepRun === null);
 
         $domFile = $domArtifact ? $this->artifactPath($domArtifact) : null;
         $domSnapshot = $domFile ? $this->readDomSnapshot($domFile, $domArtifact) : [];
         $candidates = [];
 
-        foreach ($payloads as $payload) {
+        foreach ($interactionPayloads as $payload) {
             $this->collectInteractionCandidates($payload, $candidates);
         }
 
@@ -81,10 +82,12 @@ class WorkflowCopilotObservationService
             ], JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE) ?: '');
         }
 
+        $capturedAt = now()->toIso8601String();
         $observation = [
             'workflow_run_id' => $run->getKey() ? (int) $run->getKey() : null,
             'workflow_step_run_id' => $stepRun?->getKey() ? (int) $stepRun->getKey() : null,
-            'captured_at' => now()->toIso8601String(),
+            'captured_at' => $capturedAt,
+            'workflow_revision' => $run->workflow_revision !== null ? (int) $run->workflow_revision : null,
             'state_signature' => Str::limit(trim((string) $stateSignature), 128, ''),
             'page' => $page,
             'page_state' => $dom['ui_state'],
@@ -92,6 +95,15 @@ class WorkflowCopilotObservationService
             'browser_windows' => $this->browserWindows($artifacts),
             'interaction_map' => $interactionMap,
             'screenshot_artifact_id' => $screenshot['artifact_id'],
+            'dom_artifact_id' => $domArtifact?->getKey() ? (int) $domArtifact->getKey() : null,
+            'evidence_provenance' => [
+                'workflow_run_id' => $run->getKey() ? (int) $run->getKey() : null,
+                'workflow_step_run_id' => $stepRun?->getKey() ? (int) $stepRun->getKey() : null,
+                'workflow_revision' => $run->workflow_revision !== null ? (int) $run->workflow_revision : null,
+                'captured_at' => $capturedAt,
+                'dom_artifact_id' => $domArtifact?->getKey() ? (int) $domArtifact->getKey() : null,
+                'screenshot_artifact_id' => $screenshot['artifact_id'],
+            ],
             'screenshot_relative_path' => $screenshot['relative_path'],
             'screenshot_url' => $screenshot['url'],
             'screenshot_data_url' => $screenshot['data_url'],
@@ -148,6 +160,14 @@ class WorkflowCopilotObservationService
             ? $run->artifacts
             : ($run->exists ? $run->artifacts()->latest('id')->limit(200)->get() : collect());
 
+        if ($stepRun) {
+            $stepRunId = (int) $stepRun->getKey();
+            $artifacts = $artifacts->filter(
+                fn (mixed $artifact): bool => $artifact instanceof WorkflowRunArtifact
+                    && (int) $artifact->workflow_step_run_id === $stepRunId,
+            );
+        }
+
         if ($stepRun?->relationLoaded('artifacts')) {
             $artifacts = $artifacts->concat($stepRun->artifacts);
         }
@@ -178,11 +198,20 @@ class WorkflowCopilotObservationService
             ->last();
     }
 
-    protected function resultPayloads(WorkflowRun $run, ?WorkflowStepRun $stepRun, Collection $artifacts): array
-    {
+    protected function resultPayloads(
+        WorkflowRun $run,
+        ?WorkflowStepRun $stepRun,
+        Collection $artifacts,
+        bool $includeRunResult = true,
+    ): array {
         $payloads = [];
 
-        foreach ([$stepRun?->result_json, $run->result_json] as $payload) {
+        $resultPayloads = [$stepRun?->result_json];
+        if ($includeRunResult) {
+            $resultPayloads[] = $run->result_json;
+        }
+
+        foreach ($resultPayloads as $payload) {
             if (is_array($payload)) {
                 $payloads[] = $payload;
             }

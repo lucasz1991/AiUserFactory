@@ -2966,23 +2966,37 @@ class WorkflowCopilotRepairService
             data_get($observation, 'page.state'),
             $observation['page_state'] ?? null,
             data_get($observation, 'dom.ui_state'),
-            $vision['ui_state'] ?? null,
-            $vision['page_state'] ?? null,
         ];
 
-        if (collect($states)->contains(
+        $interactionEvidence = collect($observation['interaction_map'] ?? [])
+            ->filter(fn (mixed $element): bool => is_array($element)
+                && ($element['visible'] ?? null) === true
+                && ($element['enabled'] ?? true) !== false)
+            ->map(fn (array $element): string => implode(' ', array_filter([
+                $element['text'] ?? null,
+                $element['aria'] ?? null,
+                $element['name'] ?? null,
+                ...(is_array($element['selector_candidates'] ?? null) ? $element['selector_candidates'] : []),
+            ], static fn (mixed $value): bool => is_scalar($value))))
+            ->implode(' ');
+        $domEvidence = (string) data_get($observation, 'dom.visible_text_excerpt', '');
+        $currentEvidence = Str::lower(trim($interactionEvidence.' '.$domEvidence));
+        $stateSaysConsent = collect($states)->contains(
             fn (mixed $state): bool => str_contains(Str::lower(trim((string) $state)), 'consent'),
-        )) {
+        );
+        $hasCurrentConsentAction = $this->canonicalConsentAction($currentEvidence) !== null
+            && ($stateSaysConsent
+                || preg_match('/(?:consent|cookie|einwilligung|datenschutz|privacy)/u', $currentEvidence) === 1);
+
+        if (! $hasCurrentConsentAction) {
+            return false;
+        }
+
+        if ($stateSaysConsent) {
             return true;
         }
 
-        $evidence = Str::lower(implode(' ', [
-            (string) data_get($observation, 'dom.visible_text_excerpt', ''),
-            (string) json_encode($vision, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
-        ]));
-
-        return preg_match('/(?:consent|cookie|einwilligung|datenschutz|privacy)/u', $evidence) === 1
-            && $this->canonicalConsentAction($evidence) !== null;
+        return true;
     }
 
     /** @return array<string, mixed> */
@@ -3045,15 +3059,6 @@ class WorkflowCopilotRepairService
             '',
             'visible_text',
         );
-        $this->appendConsentTargetCandidate(
-            $candidates,
-            (string) json_encode($vision, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
-            [],
-            (string) data_get($observation, 'page.window', 'main'),
-            '',
-            'vision',
-        );
-
         usort($candidates, static function (array $left, array $right): int {
             return ((int) $right['score']) <=> ((int) $left['score']);
         });

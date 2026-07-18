@@ -12,10 +12,8 @@ use App\Models\WorkflowCopilotSession;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowStep;
 use App\Models\WorkflowStudioSession;
-use App\Services\Ai\WorkflowCopilotAiUsageTracker;
 use App\Services\Workflows\PersonaActionWorkflowCatalog;
 use App\Services\Workflows\WorkflowCopilotLogExportService;
-use App\Services\Workflows\WorkflowCopilotPlanningService;
 use App\Services\Workflows\WorkflowCopilotSessionService;
 use App\Services\Workflows\WorkflowExecutionService;
 use App\Services\Workflows\WorkflowRunDebugPackageService;
@@ -1275,8 +1273,12 @@ class WorkflowManager extends Component
 
             $this->showRunModal = false;
             $this->previewWorkflowRunId = $run->id;
-            $this->showRunPreviewModal = true;
             session()->flash('success', 'Workflow-Lauf wurde eingeplant: '.$run->run_uuid);
+            $this->redirectRoute('network.workflows.studio', [
+                'workflow' => $workflow->id,
+                'mode' => 'manual',
+                'run' => $run->id,
+            ], navigate: true);
         } catch (\Throwable $exception) {
             session()->flash('success', 'Workflow konnte nicht gestartet werden: '.$exception->getMessage());
         }
@@ -1284,21 +1286,29 @@ class WorkflowManager extends Component
 
     public function openCopilotOptimization(): void
     {
+        $workflow = $this->selectedWorkflow();
+        if (! $workflow) {
+            return;
+        }
+
         if ($session = $this->activeCopilotSession()) {
-            $this->activeCopilotSessionId = (int) $session->getKey();
-            $this->previewWorkflowRunId = $session->active_workflow_run_id
-                ? (int) $session->active_workflow_run_id
-                : null;
-            $this->showCopilotPreviewModal = false;
-            $this->showRunPreviewModal = true;
-            $this->refreshCopilotSession();
-            $this->dispatch('workflow-copilot-session-activated', sessionId: (int) $session->getKey());
+            $parameters = [
+                'workflow' => $workflow->id,
+                'mode' => 'autonomous',
+                'session' => $session->id,
+            ];
+            if ($session->active_workflow_run_id) {
+                $parameters['run'] = $session->active_workflow_run_id;
+            }
+            $this->redirectRoute('network.workflows.studio', $parameters, navigate: true);
 
             return;
         }
 
-        $this->resetErrorBag();
-        $this->showCopilotModal = true;
+        $this->redirectRoute('network.workflows.studio', [
+            'workflow' => $workflow->id,
+            'mode' => 'assisted',
+        ], navigate: true);
     }
 
     public function startCopilotOptimization(): void
@@ -1345,70 +1355,38 @@ class WorkflowManager extends Component
         $successCriteria = $this->parseCopilotSuccessCriteria($validated['copilotSuccessCriteria']);
 
         try {
-            $initialPlan = null;
-            $initialAiUsage = [];
-            $planner = app(WorkflowCopilotPlanningService::class);
-
-            if ($planner->needsInitialPlan($workflow)) {
-                $usageTracker = app(WorkflowCopilotAiUsageTracker::class);
-                $usageTracker->beginCapture();
-
-                try {
-                    $initialPlan = $planner->planAndApply(
-                        $workflow,
-                        trim($validated['copilotGoal']),
-                        $successCriteria,
-                        $workflowInputs,
-                    );
-                } finally {
-                    $initialAiUsage = $usageTracker->finishCapture();
-                }
-                $workflow = $workflow->fresh(['steps']) ?? $workflow;
-            }
-
-            $sessionService = app(WorkflowCopilotSessionService::class);
-            $session = $sessionService->start($workflow, [
-                'person_id' => $validated['copilotPersonId'] ?: null,
-                'execution_target' => 'system',
-                'goal' => trim($validated['copilotGoal']),
-                'success_criteria' => $successCriteria,
-                'workflow_inputs' => $workflowInputs,
-                'state' => $initialPlan ? ['initial_plan' => $initialPlan] : [],
-                'budget' => [
-                    'max_minutes' => (int) $validated['copilotMaxMinutes'],
-                    'max_repair_iterations' => (int) $validated['copilotMaxRepairIterations'],
-                    'max_probe_actions' => (int) $validated['copilotMaxProbeActions'],
-                    'max_same_state_repeats' => (int) $validated['copilotMaxSameStateRepeats'],
-                    'max_cost_usd' => round((float) $validated['copilotMaxCostUsd'], 4),
-                    'auto_execute_workflow_actions' => true,
-                ],
-            ]);
-
-            if ($initialAiUsage !== []) {
-                $session = $sessionService->recordAiUsage($session, $initialAiUsage, 'initial_planning');
-            }
-
-            if ($initialPlan) {
-                $sessionService->appendEvent(
-                    $session,
-                    'plan.applied',
-                    'Der leere Workflow wurde aus Zielbeschreibung und Katalogdaten geplant und aufgebaut.',
-                    ['plan' => $initialPlan],
-                    'planning',
-                    'success',
-                    true,
-                );
-            }
-
-            WorkflowCopilotSupervisorJob::dispatch((int) $session->getKey());
+            $launch = app(\App\Services\Workflows\WorkflowCopilotLaunchService::class)->start(
+                $workflow,
+                \App\Services\Workflows\WorkflowCopilotLaunchRequest::fromArray([
+                    'person_id' => $validated['copilotPersonId'] ?: null,
+                    'goal' => trim($validated['copilotGoal']),
+                    'success_criteria' => $successCriteria,
+                    'workflow_inputs' => $workflowInputs,
+                    'permission_mode' => 'unrestricted',
+                    'source' => 'workflow-manager',
+                    'budget' => [
+                        'max_minutes' => (int) $validated['copilotMaxMinutes'],
+                        'max_repair_iterations' => (int) $validated['copilotMaxRepairIterations'],
+                        'max_probe_actions' => (int) $validated['copilotMaxProbeActions'],
+                        'max_same_state_repeats' => (int) $validated['copilotMaxSameStateRepeats'],
+                        'max_cost_usd' => round((float) $validated['copilotMaxCostUsd'], 4),
+                        'auto_execute_workflow_actions' => true,
+                    ],
+                ]),
+            );
+            $session = $launch['session'];
             $this->activeCopilotSessionId = (int) $session->getKey();
             $this->showCopilotModal = false;
             $this->showCopilotPreviewModal = false;
             $this->previewWorkflowRunId = null;
-            $this->showRunPreviewModal = true;
             $this->refreshCopilotSession();
             $this->dispatch('workflow-copilot-session-activated', sessionId: (int) $session->getKey());
             session()->flash('success', 'Autonome Workflow-Optimierung wurde in der System-Ausfuehrung gestartet.');
+            $this->redirectRoute('network.workflows.studio', [
+                'workflow' => $workflow->id,
+                'mode' => 'autonomous',
+                'session' => $session->id,
+            ], navigate: true);
         } catch (\Throwable $exception) {
             $this->addError('copilotGoal', $exception->getMessage());
         }
@@ -1587,8 +1565,16 @@ class WorkflowManager extends Component
             }
         }
 
-        $this->showCopilotPreviewModal = false;
-        $this->showRunPreviewModal = true;
+        $workflow = $this->selectedWorkflow();
+        if (! $workflow) {
+            return;
+        }
+        $this->redirectRoute('network.workflows.studio', array_filter([
+            'workflow' => $workflow->id,
+            'mode' => $sessionId > 0 ? 'autonomous' : 'manual',
+            'run' => $this->previewWorkflowRunId,
+            'session' => $sessionId > 0 ? $sessionId : null,
+        ], fn (mixed $value): bool => $value !== null && $value !== 0), navigate: true);
     }
 
     public function refreshRunPreview(): void
@@ -1726,7 +1712,11 @@ class WorkflowManager extends Component
         }
 
         $this->previewWorkflowRunId = $run->id;
-        $this->showRunPreviewModal = true;
+        $this->redirectRoute('network.workflows.studio', [
+            'workflow' => $workflow->id,
+            'mode' => $run->workflow_copilot_session_id ? 'autonomous' : 'manual',
+            'run' => $run->id,
+        ], navigate: true);
     }
 
     public function downloadLatestRunDebugPackage(WorkflowRunDebugPackageService $debugPackages): mixed

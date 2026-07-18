@@ -8,7 +8,6 @@ use App\Models\Workflow;
 use App\Models\WorkflowCopilotSession;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowStep;
-use App\Services\Workflows\WorkflowCopilotPlanningService;
 use App\Services\Workflows\WorkflowCopilotSessionService;
 use App\Services\Workflows\WorkflowExecutionService;
 use App\Services\Workflows\WorkflowTaskCatalog;
@@ -1560,9 +1559,10 @@ class WorkflowAssistantToolService
                         'type' => 'open_workflow_run_preview',
                         'workflow_id' => (int) $workflow->id,
                         'run_id' => (int) $run->id,
-                        'url' => route('network.workflows.manage', [
+                        'url' => route('network.workflows.studio', [
                             'workflow' => $workflow->id,
-                            'runPreview' => $run->id,
+                            'mode' => 'manual',
+                            'run' => $run->id,
                         ]),
                     ]
                     : null),
@@ -1607,57 +1607,26 @@ class WorkflowAssistantToolService
                 ->values()
                 ->all();
             $workflowInputs = is_array($arguments['workflow_inputs'] ?? null) ? $arguments['workflow_inputs'] : [];
-            $initialPlan = null;
-            $initialAiUsage = [];
-            $planner = app(WorkflowCopilotPlanningService::class);
-
-            if ($planner->needsInitialPlan($workflow)) {
-                $usageTracker = app(WorkflowCopilotAiUsageTracker::class);
-                $usageTracker->beginCapture();
-
-                try {
-                    $initialPlan = $planner->planAndApply($workflow, $goal, $successCriteria, $workflowInputs);
-                } finally {
-                    $initialAiUsage = $usageTracker->finishCapture();
-                }
-                $workflow = $workflow->fresh(['steps']) ?? $workflow;
-            }
-
-            $sessionService = app(WorkflowCopilotSessionService::class);
-            $session = $sessionService->start($workflow, [
-                'person_id' => $this->positiveInteger($arguments['person_id'] ?? null),
-                'execution_target' => WorkflowCopilotSession::EXECUTION_TARGET_SYSTEM,
-                'goal' => $goal,
-                'success_criteria' => $successCriteria,
-                'workflow_inputs' => $workflowInputs,
-                'state' => $initialPlan ? ['initial_plan' => $initialPlan] : [],
-                'budget' => [
-                    'max_minutes' => max(5, min(1440, (int) ($arguments['max_minutes'] ?? $optimizationDefaults['max_minutes'] ?? 90))),
-                    'max_repair_iterations' => max(1, min(100, (int) ($arguments['max_repair_iterations'] ?? $optimizationDefaults['max_repair_iterations'] ?? 15))),
-                    'max_probe_actions' => max(1, min(500, (int) ($arguments['max_probe_actions'] ?? $optimizationDefaults['max_probe_actions'] ?? 60))),
-                    'max_same_state_repeats' => max(1, min(10, (int) ($arguments['max_same_state_repeats'] ?? $optimizationDefaults['max_same_state_repeats'] ?? 2))),
-                    'max_cost_usd' => max(0, min(10000, (float) ($arguments['max_cost_usd'] ?? $optimizationDefaults['max_cost_usd'] ?? 0))),
-                    'auto_execute_workflow_actions' => true,
-                ],
-            ]);
-
-            if ($initialAiUsage !== []) {
-                $session = $sessionService->recordAiUsage($session, $initialAiUsage, 'initial_planning');
-            }
-
-            if ($initialPlan) {
-                $sessionService->appendEvent(
-                    $session,
-                    'plan.applied',
-                    'Der leere Workflow wurde aus Zielbeschreibung und Katalogdaten geplant und aufgebaut.',
-                    ['plan' => $initialPlan],
-                    'planning',
-                    'success',
-                    true,
-                );
-            }
-
-            WorkflowCopilotSupervisorJob::dispatch($session->id);
+            $launch = app(\App\Services\Workflows\WorkflowCopilotLaunchService::class)->start(
+                $workflow,
+                \App\Services\Workflows\WorkflowCopilotLaunchRequest::fromArray([
+                    'person_id' => $this->positiveInteger($arguments['person_id'] ?? null),
+                    'goal' => $goal,
+                    'success_criteria' => $successCriteria,
+                    'workflow_inputs' => $workflowInputs,
+                    'permission_mode' => (string) ($optimizationDefaults['permission_mode'] ?? 'ask_critical'),
+                    'source' => 'assistant-tool',
+                    'budget' => [
+                        'max_minutes' => max(5, min(1440, (int) ($arguments['max_minutes'] ?? $optimizationDefaults['max_minutes'] ?? 90))),
+                        'max_repair_iterations' => max(1, min(100, (int) ($arguments['max_repair_iterations'] ?? $optimizationDefaults['max_repair_iterations'] ?? 15))),
+                        'max_probe_actions' => max(1, min(500, (int) ($arguments['max_probe_actions'] ?? $optimizationDefaults['max_probe_actions'] ?? 60))),
+                        'max_same_state_repeats' => max(1, min(10, (int) ($arguments['max_same_state_repeats'] ?? $optimizationDefaults['max_same_state_repeats'] ?? 2))),
+                        'max_cost_usd' => max(0, min(10000, (float) ($arguments['max_cost_usd'] ?? $optimizationDefaults['max_cost_usd'] ?? 0))),
+                        'auto_execute_workflow_actions' => true,
+                    ],
+                ]),
+            );
+            $session = $launch['session'];
         } catch (\Throwable $exception) {
             return $this->error('WORKFLOW_OPTIMIZE_START_FAILED', $exception->getMessage());
         }
@@ -1672,10 +1641,11 @@ class WorkflowAssistantToolService
                 'session_id' => (int) $session->id,
                 'workflow_id' => (int) $workflow->id,
                 'run_id' => $session->active_workflow_run_id ? (int) $session->active_workflow_run_id : null,
-                'url' => route('network.workflows.manage', [
+                'url' => route('network.workflows.studio', [
                     'workflow' => $workflow->id,
-                    'copilotSession' => $session->id,
-                    'openPreview' => 1,
+                    'mode' => 'autonomous',
+                    'session' => $session->id,
+                    'run' => $session->active_workflow_run_id,
                 ]),
             ],
         ];

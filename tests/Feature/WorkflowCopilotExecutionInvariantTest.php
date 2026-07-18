@@ -12,6 +12,7 @@ use App\Services\Workflows\WorkflowExecutionService;
 use App\Services\Workflows\WorkflowTaskRunner;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
+use Mockery;
 use ReflectionClass;
 use ReflectionMethod;
 use RuntimeException;
@@ -74,6 +75,45 @@ class WorkflowCopilotExecutionInvariantTest extends TestCase
         $this->assertCount(1, $segment);
         $this->assertSame('second-task', $segment[0]['key']);
         $this->assertSame('wait.seconds', $segment[0]['task_key']);
+    }
+
+    public function test_wait_step_with_task_cards_executes_the_cards_instead_of_the_wait_fallback(): void
+    {
+        Queue::fake();
+        [$workflow, $step] = $this->workflow();
+        $step->forceFill(['type' => WorkflowStep::TYPE_WAIT])->save();
+        $run = WorkflowRun::query()->create([
+            'run_uuid' => (string) str()->uuid(),
+            'workflow_id' => $workflow->id,
+            'status' => 'running',
+            'context_json' => ['execution_target' => 'system'],
+            'result_json' => [],
+        ]);
+        $stepRun = WorkflowStepRun::query()->create([
+            'workflow_run_id' => $run->id,
+            'workflow_step_id' => $step->id,
+            'status' => 'pending',
+            'result_json' => [],
+        ]);
+        $runner = Mockery::mock(WorkflowTaskRunner::class);
+        $runner->shouldReceive('start')
+            ->once()
+            ->withArgs(fn (WorkflowRun $runArg, WorkflowStep $stepArg, WorkflowStepRun $stepRunArg): bool => $runArg->is($run)
+                && $stepArg->is($step)
+                && $stepRunArg->is($stepRun))
+            ->andReturn([
+                'runId' => 'wait-task-run',
+                'status' => 'running',
+                'livePreviewPollIntervalSeconds' => 1,
+            ]);
+        $this->app->instance(WorkflowTaskRunner::class, $runner);
+        $method = new ReflectionMethod(WorkflowExecutionService::class, 'executeStep');
+
+        $status = $method->invoke(app(WorkflowExecutionService::class), $run, $step, $stepRun);
+
+        $this->assertSame('waiting', $status);
+        $this->assertSame('workflow-task', $stepRun->fresh()->external_run_type);
+        $this->assertSame('wait-task-run', $stepRun->fresh()->external_run_id);
     }
 
     public function test_manual_run_can_pause_with_persisted_runtime_context_and_resume_at_selected_task(): void
@@ -662,6 +702,64 @@ class WorkflowCopilotExecutionInvariantTest extends TestCase
         $this->assertSame('waiting', $stepRun->fresh()->status);
         $this->assertSame('checkpoint-first-task', data_get($run->fresh()->context_json, 'copilot_checkpoint.id'));
         $this->assertNull($stepRun->fresh()->finished_at);
+    }
+
+    public function test_single_task_dynamic_loop_route_is_returned_to_the_php_cursor(): void
+    {
+        [, $step] = $this->workflow();
+        $method = new ReflectionMethod(WorkflowExecutionService::class, 'routeForResult');
+        $method->setAccessible(true);
+
+        $route = $method->invoke(
+            app(WorkflowExecutionService::class),
+            $step,
+            'success',
+            [
+                'routeRequested' => true,
+                'completedTaskKey' => 'loop-end',
+                'routeOutcome' => 'loop',
+                'routeTargetKey' => 'loop-start',
+            ],
+        );
+
+        $this->assertSame('card', $route['type']);
+        $this->assertSame('loop-start', $route['card_key']);
+        $this->assertSame($step->action_key, $route['action_key']);
+    }
+
+    public function test_task_result_persists_arrays_loop_cursor_and_null_scope_values(): void
+    {
+        [$workflow] = $this->workflow();
+        $run = WorkflowRun::query()->create([
+            'run_uuid' => (string) str()->uuid(),
+            'workflow_id' => $workflow->id,
+            'workflow_revision' => 0,
+            'status' => 'running',
+            'context_json' => [
+                'workflow_variables' => ['current_element' => ['index' => 0]],
+                'loop_state' => [],
+            ],
+            'result_json' => [],
+        ]);
+        $method = new ReflectionMethod(WorkflowExecutionService::class, 'applyWorkflowVariablesResult');
+        $method->setAccessible(true);
+        $method->invoke(app(WorkflowExecutionService::class), $run, [
+            'workflow_variables' => [
+                'results' => [['title' => 'One'], ['title' => 'Two']],
+                'current_element' => null,
+                '__workflow_loop_state_collect' => [
+                    'cursor' => 2,
+                    'processed' => 2,
+                    'active' => false,
+                ],
+            ],
+        ]);
+
+        $context = $run->fresh()->context_json;
+        $this->assertCount(2, data_get($context, 'workflow_variables.results'));
+        $this->assertNull(data_get($context, 'workflow_variables.current_element'));
+        $this->assertSame(2, data_get($context, 'loop_state.collect.cursor'));
+        $this->assertSame(2, data_get($context, 'loop_state.collect.processed'));
     }
 
     private function putRunAtCheckpoint(

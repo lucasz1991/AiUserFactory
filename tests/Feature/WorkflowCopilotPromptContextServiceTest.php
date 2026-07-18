@@ -65,23 +65,23 @@ class WorkflowCopilotPromptContextServiceTest extends TestCase
         );
         $serialized = json_encode($context, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
 
-        $this->assertCount(
+        $this->assertSame(2, data_get($context, 'context_version'));
+        $this->assertLessThan(
             count(app(WorkflowTaskCatalog::class)->all()),
-            data_get($context, 'workflow_task_catalog'),
+            count(data_get($context, 'workflow_task_catalog')),
         );
-        $this->assertArrayHasKey('loop.end', data_get($context, 'workflow_task_catalog'));
-        $this->assertNotEmpty(data_get($context, 'workflow_task_catalog_index'));
+        $this->assertSame(
+            count(app(WorkflowTaskCatalog::class)->all()),
+            collect(data_get($context, 'workflow_task_catalog_index'))->sum('count'),
+        );
+        $this->assertArrayHasKey('input.fill_field', data_get($context, 'workflow_task_catalog'));
         $this->assertStringContainsString('leerer Workflow', data_get($context, 'workflow_authoring_capabilities.empty_workflow'));
-        $loopCatalog = data_get($context, 'workflow_task_catalog')['loop.for_each_element'];
-        $loopDocumentation = $loopCatalog['documentation'];
-        $this->assertNotEmpty($loopCatalog['parameters']);
-        $this->assertArrayHasKey('configuration', $loopCatalog);
-        $this->assertArrayHasKey('defaults', $loopCatalog);
-        $this->assertNotEmpty($loopDocumentation['purpose']);
-        $this->assertStringContainsString(
-            'collect_to_array',
-            $loopDocumentation['outputs'][1],
-        );
+        $taskCatalog = data_get($context, 'workflow_task_catalog')['input.fill_field'];
+        $this->assertNotEmpty($taskCatalog['parameters']);
+        $this->assertArrayHasKey('configuration', $taskCatalog);
+        $this->assertArrayHasKey('defaults', $taskCatalog);
+        $this->assertNotEmpty($taskCatalog['documentation']['purpose']);
+        $this->assertArrayHasKey('failure_modes', $taskCatalog['documentation']);
         $this->assertStringContainsString('Workflow-Step', data_get($context, 'workflow_structure.lists'));
         $this->assertCount(5, data_get($context, 'workflow_structure.loop_recipe'));
         $this->assertSame(
@@ -111,6 +111,10 @@ class WorkflowCopilotPromptContextServiceTest extends TestCase
             [['name' => 'query', 'type' => 'string', 'provided' => true]],
             data_get($context, 'copilot_session.workflow_inputs'),
         );
+        $inputProvenance = collect(data_get($context, 'variable_provenance'))->firstWhere('name', 'query');
+        $this->assertSame('workflow_input', $inputProvenance['origin']);
+        $this->assertTrue($inputProvenance['set']);
+        $this->assertArrayNotHasKey('value', $inputProvenance);
         $this->assertSame('suchfeld-fuellen', data_get($context, 'runtime_state.checkpoint.task_key'));
         $this->assertStringNotContainsString('never-leak-this-fixed-value', $serialized);
         $this->assertStringNotContainsString('private query', $serialized);

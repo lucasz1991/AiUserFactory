@@ -47,6 +47,8 @@ class Chatbot extends Component
 
     public array $copilotEventFeed = [];
 
+    public array $pendingCopilotControl = [];
+
     public bool $isLoading = false;
 
     public bool $assistantEnabled = true;
@@ -155,25 +157,24 @@ class Chatbot extends Component
                     ['content' => $userMessage, 'user_id' => Auth::id(), 'source' => 'workflow-copilot-chat'],
                     'conversation',
                 );
-                $sessionService->instruction($copilotSession, $userMessage, [
-                    'user_id' => Auth::id(),
-                    'source' => 'workflow-copilot-chat',
-                ]);
-                WorkflowCopilotSupervisorJob::dispatch((int) $copilotSession->getKey());
-                $acknowledgement = 'Die Anweisung wurde gespeichert und wird am naechsten sicheren Checkpoint beruecksichtigt.';
-                $sessionService->appendEvent(
-                    $copilotSession,
-                    'chat.assistant',
-                    'Workflow-Copilot hat die Benutzeranweisung bestaetigt.',
-                    ['content' => $acknowledgement],
-                    'conversation',
-                );
-                $this->appendDisplayMessage(
-                    'assistant',
-                    $acknowledgement,
-                    'success',
-                );
-                $this->pollCopilotSession();
+                $control = $this->copilotControlIntent($userMessage);
+                if ($control !== null) {
+                    $this->handleCopilotControl($copilotSession, $control);
+
+                    return;
+                }
+
+                $metadata = ['user_id' => Auth::id(), 'source' => 'workflow-copilot-chat'];
+                if ($copilotSession->status === WorkflowCopilotSession::STATUS_PAUSED) {
+                    $copilotSession = $sessionService->requestReplan($copilotSession, $userMessage, $metadata);
+                    WorkflowCopilotSupervisorJob::dispatch((int) $copilotSession->getKey());
+                    $acknowledgement = 'Die Anweisung wurde gespeichert und die pausierte Sitzung sofort fuer eine neue Reparaturplanung fortgesetzt.';
+                } else {
+                    $sessionService->instruction($copilotSession, $userMessage, $metadata);
+                    WorkflowCopilotSupervisorJob::dispatch((int) $copilotSession->getKey());
+                    $acknowledgement = 'Die Anweisung wurde gespeichert und wird am naechsten sicheren Task-Uebergang verarbeitet.';
+                }
+                $this->appendCopilotAcknowledgement($copilotSession, $acknowledgement);
 
                 return;
             }
@@ -406,6 +407,136 @@ class Chatbot extends Component
                 'error',
             );
         }
+    }
+
+    private function copilotControlIntent(string $message): ?array
+    {
+        $message = trim($message);
+        if (preg_match('/^__copilot_confirm_(stop|restart):([a-f0-9-]+)$/i', $message, $match) === 1) {
+            return ['action' => strtolower($match[1]), 'confirmed' => true, 'token' => $match[2]];
+        }
+        if (preg_match('/^__copilot_cancel_control:([a-f0-9-]+)$/i', $message, $match) === 1) {
+            return ['action' => 'cancel', 'confirmed' => true, 'token' => $match[1]];
+        }
+
+        $normalized = Str::lower($message);
+        if (preg_match('/\b(neu\s*start|neustart|restart|stoppen\s+und\s+neu)/u', $normalized) === 1) {
+            return ['action' => 'restart', 'confirmed' => false];
+        }
+        if (preg_match('/\b(stop|stoppen|beenden|abbrechen)\b/u', $normalized) === 1) {
+            return ['action' => 'stop', 'confirmed' => false];
+        }
+        if (preg_match('/\b(neu\s*plan|neuplanung|replan|nochmal\s+plan)/u', $normalized) === 1) {
+            return ['action' => 'replan', 'confirmed' => true];
+        }
+        if (preg_match('/\b(fortsetzen|weiterlaufen|resume|weiter\s+machen)\b/u', $normalized) === 1) {
+            return ['action' => 'resume', 'confirmed' => true];
+        }
+        if (preg_match('/\b(pause|pausier|anhalten)\w*/u', $normalized) === 1) {
+            return ['action' => 'pause', 'confirmed' => true];
+        }
+
+        return null;
+    }
+
+    private function handleCopilotControl(WorkflowCopilotSession $session, array $control): void
+    {
+        $action = (string) ($control['action'] ?? '');
+        if ($action === 'cancel') {
+            if (($control['token'] ?? null) === ($this->pendingCopilotControl['token'] ?? null)) {
+                $this->pendingCopilotControl = [];
+            }
+            $this->appendCopilotAcknowledgement($session, 'Die angeforderte Statusaenderung wurde verworfen.', 'neutral');
+
+            return;
+        }
+
+        if (in_array($action, ['stop', 'restart'], true) && ! (bool) ($control['confirmed'] ?? false)) {
+            $token = (string) Str::uuid();
+            $this->pendingCopilotControl = ['action' => $action, 'token' => $token, 'session_id' => (int) $session->getKey()];
+            $label = $action === 'restart' ? 'Copilot vollstaendig neu starten?' : 'Copilot und aktuellen Testlauf stoppen?';
+            $this->appendDisplayMessage('assistant', $label, 'neutral', [
+                ['label' => $action === 'restart' ? 'Neu starten' : 'Stoppen', 'prompt' => '__copilot_confirm_'.$action.':'.$token],
+                ['label' => 'Abbrechen', 'prompt' => '__copilot_cancel_control:'.$token],
+            ]);
+
+            return;
+        }
+
+        if (in_array($action, ['stop', 'restart'], true)) {
+            $validConfirmation = ($control['token'] ?? null) === ($this->pendingCopilotControl['token'] ?? null)
+                && (int) ($this->pendingCopilotControl['session_id'] ?? 0) === (int) $session->getKey()
+                && ($this->pendingCopilotControl['action'] ?? null) === $action;
+            if (! $validConfirmation) {
+                $this->appendCopilotAcknowledgement($session, 'Die Bestaetigung ist abgelaufen. Bitte den Befehl erneut senden.', 'error');
+
+                return;
+            }
+            $this->pendingCopilotControl = [];
+        }
+
+        $service = app(WorkflowCopilotSessionService::class);
+        if ($action === 'pause') {
+            $service->pause($session, 'Per Chat-Befehl pausiert.');
+            $message = 'Die Copilot-Sitzung wurde pausiert.';
+        } elseif ($action === 'resume') {
+            $resumed = $service->resume($session);
+            WorkflowCopilotSupervisorJob::dispatch((int) $resumed->getKey());
+            $message = 'Die Copilot-Sitzung wird fortgesetzt.';
+        } elseif ($action === 'replan') {
+            $replanned = $service->requestReplan(
+                $session,
+                'Workflow anhand des aktuellen Zustands und der letzten Benutzeranweisungen neu planen.',
+                ['source' => 'workflow-copilot-chat-control', 'user_id' => Auth::id()],
+            );
+            WorkflowCopilotSupervisorJob::dispatch((int) $replanned->getKey());
+            $message = 'Die Neuplanung wurde sofort gestartet.';
+        } elseif ($action === 'stop') {
+            $message = $this->executeStopCopilotControl($session);
+        } elseif ($action === 'restart') {
+            $message = $this->executeRestartCopilotControl($session);
+        } else {
+            $message = 'Der Chat-Befehl wurde nicht erkannt.';
+        }
+        $active = $this->activeCopilotSession() ?? $session;
+        $this->appendCopilotAcknowledgement($active, $message, str_contains($message, 'nicht') ? 'error' : 'success');
+    }
+
+    private function executeStopCopilotControl(WorkflowCopilotSession $session): string
+    {
+        $session->loadMissing('activeRun');
+        if ($session->activeRun) {
+            app(WorkflowExecutionService::class)->cancel($session->activeRun, 'Workflow-Test wurde per Chat-Befehl gestoppt.');
+        }
+        app(WorkflowCopilotSessionService::class)->stop($session, 'Per bestaetigtem Chat-Befehl gestoppt.');
+
+        return 'Die Copilot-Sitzung und der aktuelle Testlauf wurden gestoppt.';
+    }
+
+    private function executeRestartCopilotControl(WorkflowCopilotSession $session): string
+    {
+        $restarted = app(WorkflowCopilotSessionService::class)->restart($session, 'Per bestaetigtem Chat-Befehl neu gestartet.');
+        WorkflowCopilotSupervisorJob::dispatch((int) $restarted->getKey());
+        $this->activeCopilotSessionId = (int) $restarted->getKey();
+        $this->copilotLastEventSequence = 0;
+        Session::put(self::COPILOT_SESSION_KEY, $this->activeCopilotSessionId);
+        $this->dispatch('workflow-copilot-session-activated', sessionId: (int) $restarted->getKey());
+
+        return 'Die Copilot-Optimierung wurde vollstaendig neu gestartet.';
+    }
+
+    private function appendCopilotAcknowledgement(WorkflowCopilotSession $session, string $message, string $tone = 'success'): void
+    {
+        app(WorkflowCopilotSessionService::class)->appendEvent(
+            $session,
+            'chat.assistant',
+            'Workflow-Copilot hat den Chat-Befehl verarbeitet.',
+            ['content' => $message],
+            'conversation',
+            $tone === 'error' ? 'error' : 'info',
+        );
+        $this->appendDisplayMessage('assistant', $message, $tone);
+        $this->pollCopilotSession();
     }
 
     public function openCopilotRunPreview(): void
@@ -1438,6 +1569,16 @@ class Chatbot extends Component
 
     private function displayMessageForUserPrompt(string $prompt): string
     {
+        if (preg_match('/^__copilot_confirm_stop:/i', $prompt) === 1) {
+            return 'Stoppen bestaetigen';
+        }
+        if (preg_match('/^__copilot_confirm_restart:/i', $prompt) === 1) {
+            return 'Neustart bestaetigen';
+        }
+        if (preg_match('/^__copilot_cancel_control:/i', $prompt) === 1) {
+            return 'Statusaenderung abbrechen';
+        }
+
         return str_replace(
             ['[WORKFLOW_ANALYZE_LAST_RUN]', '[WORKFLOW_CREATE_PLAN]'],
             ['Letzten Workflow-Lauf analysieren', 'Neuen Workflow planen'],

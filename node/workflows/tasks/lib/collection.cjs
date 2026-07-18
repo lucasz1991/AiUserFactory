@@ -275,6 +275,11 @@ async function readField(scope, field = {}, pageUrl = '') {
     }
   }
 
+  if (candidates.length === 0 && bool(field.scope_self_fallback ?? field.scopeSelfFallback, false)) {
+    candidates = [scope];
+    usedSelector = ':scope';
+  }
+
   if (type === 'exists') {
     return { value: candidates.length > 0, usedSelector, empty: candidates.length === 0 };
   }

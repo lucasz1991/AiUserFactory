@@ -503,15 +503,11 @@ class WorkflowCopilotSupervisorService
         $isVerificationCheckpoint = (bool) ($runContext['copilot_verification_run'] ?? false)
             && ($runContext['copilot_mutations_allowed'] ?? null) === false;
         $pageState = Str::lower(trim((string) data_get($observation, 'page.state', data_get($observation, 'page_state', ''))));
-        $stateSignature = trim((string) ($observation['state_signature'] ?? ''));
-        $previousStateSignature = trim((string) data_get($session->state_json, 'last_state_signature', ''));
         $shouldAnalyze = ! (bool) ($checkpoint['successful'] ?? false)
             || (string) ($checkpoint['kind'] ?? '') === 'probe'
             || $isVerificationCheckpoint
-            || (bool) ($observation['screenshot_changed'] ?? false)
             || str_ends_with($pageState, '_blocked')
-            || in_array($pageState, ['', 'unknown', 'unknown_browser_state'], true)
-            || ($stateSignature !== '' && $stateSignature === $previousStateSignature);
+            || in_array($pageState, ['', 'unknown', 'unknown_browser_state'], true);
 
         if ($shouldAnalyze) {
             $this->sessions->appendEvent(
@@ -743,7 +739,9 @@ class WorkflowCopilotSupervisorService
             return [];
         }
 
-        $taskKey = trim((string) ($checkpoint['task_key'] ?? ''));
+        $resumeTaskKey = trim((string) ($checkpoint['resume_task_key'] ?? $checkpoint['task_key'] ?? ''));
+        $failureTaskKey = trim((string) ($checkpoint['failure_task_key'] ?? ''));
+        $taskKey = $failureTaskKey !== '' ? $failureTaskKey : $resumeTaskKey;
         $task = collect($step->task_cards)->firstWhere('key', $taskKey);
 
         if (! is_array($task) || (string) ($task['task_key'] ?? '') !== 'loop.for_each_element') {
@@ -992,6 +990,53 @@ class WorkflowCopilotSupervisorService
                 'repair_planning',
             );
         $session = $session->fresh() ?? $session;
+        $planFingerprint = $this->repairPlanFingerprint($session, $step, $checkpoint, $observation, $plan);
+        $state = is_array($session->state_json) ? $session->state_json : [];
+        $planHistory = collect(is_array($state['repair_plan_fingerprints'] ?? null) ? $state['repair_plan_fingerprints'] : []);
+        $duplicatePlan = $planFingerprint !== '' && $planHistory->contains(
+            fn (mixed $entry): bool => is_array($entry)
+                && hash_equals((string) ($entry['fingerprint'] ?? ''), $planFingerprint)
+                && ($pendingStudioPlan === []
+                    || (string) ($entry['runtime_checkpoint_id'] ?? '') !== $runtimeCheckpointId),
+        );
+
+        if ($duplicatePlan) {
+            $this->sessions->appendEvent(
+                $session,
+                'repair.plan_rejected_duplicate',
+                'Derselbe Reparaturplan wurde im unveraenderten Fehlerzustand bereits versucht und wird nicht erneut angewendet.',
+                [
+                    'repair_plan_fingerprint' => $planFingerprint,
+                    'runtime_checkpoint_id' => $runtimeCheckpointId,
+                    'task_key' => $checkpoint['failure_task_key'] ?? $checkpoint['task_key'] ?? null,
+                    'state_signature' => $observation['state_signature'] ?? null,
+                ],
+                'repairing',
+                'error',
+                true,
+            );
+            $this->sessions->pause(
+                $session->fresh() ?? $session,
+                'Die Reparatur wurde pausiert, weil derselbe wirkungslose Plan ohne neue Evidenz erneut vorgeschlagen wurde.',
+            );
+
+            return;
+        }
+
+        if ($planFingerprint !== '') {
+            $state['repair_plan_fingerprints'] = $planHistory
+                ->push([
+                    'fingerprint' => $planFingerprint,
+                    'runtime_checkpoint_id' => $runtimeCheckpointId,
+                    'recorded_at' => now()->toIso8601String(),
+                ])
+                ->take(-30)
+                ->values()
+                ->all();
+            $session->forceFill(['state_json' => $state, 'last_activity_at' => now()])->save();
+            $plan['repair_plan_fingerprint'] = $planFingerprint;
+        }
+
         $decisionSummary = $this->repairDecisionSummary($plan, $vision);
         $this->sessions->appendEvent(
             $session,
@@ -2457,7 +2502,10 @@ class WorkflowCopilotSupervisorService
     ): array {
         $runtimeCheckpointId = $this->runtimeCheckpointId($run, $checkpoint);
         $taskKey = trim((string) ($checkpoint['task_key'] ?? ''));
-        $task = collect($step->task_cards)->firstWhere('key', $taskKey);
+        $resumeTaskKey = trim((string) ($checkpoint['resume_task_key'] ?? $taskKey)) ?: $taskKey;
+        $failureTaskKey = trim((string) ($checkpoint['failure_task_key'] ?? data_get($checkpoint, 'result.failedTaskKey', '')));
+        $definitionTaskKey = $failureTaskKey !== '' ? $failureTaskKey : $taskKey;
+        $task = collect($step->task_cards)->firstWhere('key', $definitionTaskKey);
         $stored = $this->storedCheckpointForRuntime($session, $run, $runtimeCheckpointId);
         $attempt = $stored?->taskAttempt;
 
@@ -2479,7 +2527,9 @@ class WorkflowCopilotSupervisorService
                 'kind' => (string) ($checkpoint['kind'] ?? 'regular'),
                 'status' => 'running',
                 'task_key' => $taskKey,
-                'task_title' => (string) ($checkpoint['task_title'] ?? data_get($task, 'title', $taskKey)),
+                'resume_task_key' => $resumeTaskKey,
+                'failure_task_key' => $failureTaskKey !== '' ? $failureTaskKey : null,
+                'task_title' => (string) data_get($task, 'title', $checkpoint['task_title'] ?? $definitionTaskKey),
                 'task_definition_json' => is_array($task) ? $this->safeTask($task) : [],
                 'input_json' => [
                     'execution_target' => 'system',
@@ -2520,12 +2570,16 @@ class WorkflowCopilotSupervisorService
             'screenshot_artifact_id' => data_get($observation, 'screenshot.artifact_id'),
             'phase' => (bool) ($checkpoint['successful'] ?? false) ? 'observing' : 'repairing',
             'task_key' => $taskKey,
+            'resume_task_key' => $resumeTaskKey,
+            'failure_task_key' => $failureTaskKey !== '' ? $failureTaskKey : null,
             'cursor_json' => [
                 'runtime_checkpoint_id' => $runtimeCheckpointId,
                 'step_id' => $step->id,
                 'step_action_key' => $step->action_key,
                 'step_name' => $step->name,
                 'task_key' => $taskKey,
+                'resume_task_key' => $resumeTaskKey,
+                'failure_task_key' => $failureTaskKey !== '' ? $failureTaskKey : null,
                 'next_action' => $checkpoint['next_action'] ?? null,
                 'next_task_key' => $checkpoint['next_task_key'] ?? null,
             ],
@@ -2533,11 +2587,14 @@ class WorkflowCopilotSupervisorService
             'browser_state_json' => [
                 'windows' => $observation['browser_windows'] ?? [],
                 'page' => $observation['page'] ?? [],
+                'evidence_provenance' => $observation['evidence_provenance'] ?? [],
             ],
             'dom_snapshot_json' => [
                 'interaction_map' => $observation['interaction_map'] ?? [],
                 'sensitive_fields_removed' => $observation['sensitive_fields_removed'] ?? [],
                 'vision' => Arr::except($vision, ['raw_response']),
+                'captured_at' => $observation['captured_at'] ?? null,
+                'evidence_provenance' => $observation['evidence_provenance'] ?? [],
             ],
             'state_signature' => $observation['state_signature'] ?? null,
             'side_effect_ledger_json' => is_array(data_get($checkpoint, 'result.sideEffects')) ? data_get($checkpoint, 'result.sideEffects') : [],
@@ -2560,6 +2617,32 @@ class WorkflowCopilotSupervisorService
         );
 
         return [$attempt, $stored];
+    }
+
+    protected function repairPlanFingerprint(
+        WorkflowCopilotSession $session,
+        WorkflowStep $step,
+        array $checkpoint,
+        array $observation,
+        array $plan,
+    ): string {
+        if (($plan['action'] ?? 'pause') === 'pause') {
+            return '';
+        }
+
+        return hash('sha256', json_encode([
+            'workflow_revision' => (int) $session->current_revision,
+            'step_action_key' => (string) $step->action_key,
+            'resume_task_key' => (string) ($checkpoint['resume_task_key'] ?? $checkpoint['task_key'] ?? ''),
+            'failure_task_key' => (string) ($checkpoint['failure_task_key'] ?? ''),
+            'failure_reason_code' => (string) ($checkpoint['failure_reason_code'] ?? data_get($checkpoint, 'result.reason_code', '')),
+            'state_signature' => (string) ($observation['state_signature'] ?? ''),
+            'action' => (string) ($plan['action'] ?? ''),
+            'task_key' => (string) ($plan['task_key'] ?? ''),
+            'changes' => $plan['changes'] ?? null,
+            'operations' => $plan['operations'] ?? null,
+            'probe_task' => $plan['probe_task'] ?? null,
+        ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION) ?: '');
     }
 
     protected function markCheckpointObserved(

@@ -35,16 +35,35 @@ class WorkflowCopilotPromptContextService
         array $checkpoint = [],
     ): array {
         $workflow->loadMissing(['steps' => fn ($query) => $query->ordered()]);
+        $relevantTaskKeys = $this->relevantTaskKeys($workflow, $currentStep, $checkpoint);
 
         $context = [
+            'context_version' => 2,
             'execution_contract' => $this->executionContract(),
             'workflow_structure' => $this->workflowStructureDocumentation(),
             'workflow_authoring_capabilities' => $this->authoringCapabilities(),
             'workflow' => $this->workflowSnapshot($workflow),
-            'workflow_task_catalog' => $this->taskCatalogSnapshot(),
+            'workflow_task_catalog' => $this->taskCatalogSnapshot($relevantTaskKeys),
             'workflow_task_catalog_index' => $this->taskCatalogIndex(),
+            'workflow_task_catalog_scope' => [
+                'mode' => 'relevant_subset',
+                'included_task_keys' => $relevantTaskKeys,
+                'lookup_instruction' => 'Weitere Task-Details bei Bedarf ueber list_task_catalog abrufen; keine nicht dokumentierten Felder erfinden.',
+            ],
             'workflow_diagnostics' => $this->workflowDiagnostics($workflow),
         ];
+
+        $sessionInputs = $session instanceof WorkflowCopilotSession && is_array($session->workflow_inputs_json)
+            ? $session->workflow_inputs_json
+            : [];
+        $runtimeVariables = [];
+        if ($session instanceof WorkflowCopilotSession) {
+            $session->loadMissing('activeRun');
+            $runtimeVariables = is_array(data_get($session->activeRun?->context_json, 'workflow_variables'))
+                ? data_get($session->activeRun?->context_json, 'workflow_variables')
+                : [];
+        }
+        $context['variable_provenance'] = $this->variableProvenance($workflow, $sessionInputs, $runtimeVariables);
 
         if ($session instanceof WorkflowCopilotSession) {
             $context['copilot_session'] = $this->sessionSnapshot($session);
@@ -56,6 +75,10 @@ class WorkflowCopilotPromptContextService
                 'step_action_key' => (string) $currentStep->action_key,
                 'step_name' => (string) $currentStep->name,
                 'task_key' => trim((string) ($checkpoint['task_key'] ?? '')) ?: null,
+                'resume_task_key' => trim((string) ($checkpoint['resume_task_key'] ?? $checkpoint['task_key'] ?? '')) ?: null,
+                'failure_task_key' => trim((string) ($checkpoint['failure_task_key'] ?? '')) ?: null,
+                'completed_task_key' => trim((string) ($checkpoint['completed_task_key'] ?? '')) ?: null,
+                'failure_reason_code' => trim((string) ($checkpoint['failure_reason_code'] ?? data_get($checkpoint, 'result.reason_code', ''))) ?: null,
                 'outcome' => trim((string) ($checkpoint['outcome'] ?? '')) ?: null,
                 'successful' => array_key_exists('successful', $checkpoint)
                     ? (bool) $checkpoint['successful']
@@ -73,6 +96,7 @@ class WorkflowCopilotPromptContextService
         array $workflowInputs,
     ): array {
         return (array) $this->sanitizeContext([
+            'context_version' => 2,
             'execution_contract' => $this->executionContract(),
             'workflow_structure' => $this->workflowStructureDocumentation(),
             'workflow_authoring_capabilities' => $this->authoringCapabilities(),
@@ -85,6 +109,7 @@ class WorkflowCopilotPromptContextService
             'goal' => Str::limit(trim($goal), 4000, ''),
             'success_criteria' => $successCriteria,
             'workflow_inputs' => $this->inputSchema($workflowInputs),
+            'variable_provenance' => $this->variableProvenance($workflow, $workflowInputs),
             'workflow_task_catalog' => $this->taskCatalogSnapshot(),
             'workflow_task_catalog_index' => $this->taskCatalogIndex(),
         ]);
@@ -127,7 +152,7 @@ class WorkflowCopilotPromptContextService
             'task_semantics' => [
                 'decision.element_exists' => 'Element gefunden ergibt success; nicht gefunden ergibt den Branch failed, obwohl die technische Pruefung selbst ausgefuehrt wurde. Deshalb next und on_error fachlich getrennt konfigurieren.',
                 'input.fill_field' => 'value_source=fixed nutzt value/input. value_source=workflow_variable nutzt workflow_variable; value_fallback ist nur der optionale Ersatzwert. Ein Variablenname darf nie als Literal in das Feld geschrieben werden.',
-                'loop.for_each_element' => 'Loop-Start und loop.end sind ein atomares Paar. Reader und Consumer stehen dazwischen. collect_to_array sammelt die Reader-Ausgabe automatisch; completion_target behandelt den normalen Abschluss, empty_target nur null Treffer und error_target technische Fehler.',
+                'loop.for_each_element' => 'Automatische Laeufe behandeln Loop-Start bis loop.end als wiederholbares Segment. Im Studio ist jede Karte einzeln testbar; Scope, Cursor und Array-Zustand werden zwischen den Klicks persistiert. Reader und Consumer stehen zwischen Start und Ende.',
                 'data.append_to_array' => 'Haengt den Wert aus value_from_variable dauerhaft an workflow_variables[array_name] an. Der Producer der Variable muss innerhalb desselben Loop-Durchlaufs vor dem Consumer liegen; nicht gleichzeitig mit collect_to_array fuer dasselbe Array verwenden.',
                 'data.validate_inputs' => 'Nur ein fehlender Wert mit required=true fuehrt zum failed-Zweig. Fehlen ausschliesslich optionale Werte oder existieren keine Definitionen, ist die Task erfolgreich. Die Ausgabegruppe enthaelt Direktwerte, _inputs mit set/present/used_default und _summary.',
                 'data.workflow_return' => 'Setzt den expliziten Rueckgabewert des Workflows. Erfolgskriterien fuer einen Rueckgabewert pruefen diesen Wert, nicht irgendeine zufaellige interne Variable.',
@@ -205,9 +230,14 @@ class WorkflowCopilotPromptContextService
         ];
     }
 
-    public function taskCatalogSnapshot(): array
+    public function taskCatalogSnapshot(?array $taskKeys = null): array
     {
-        return collect($this->catalog->all())
+        $catalog = collect($this->catalog->all());
+        if (is_array($taskKeys)) {
+            $catalog = $catalog->only($taskKeys);
+        }
+
+        return $catalog
             ->mapWithKeys(function (array $definition, string $taskKey): array {
                 return [$taskKey => [
                     'label' => (string) ($definition['label'] ?? $taskKey),
@@ -320,6 +350,12 @@ class WorkflowCopilotPromptContextService
             'workflow_variables' => $this->inputSchema($variables),
             'loop_state' => $this->sanitizeContext(data_get($context, 'loop_state', [])),
             'checkpoint' => $this->sanitizeContext($checkpoint),
+            'repair_plan_fingerprints' => array_slice(
+                is_array(data_get($session->state_json, 'repair_plan_fingerprints'))
+                    ? data_get($session->state_json, 'repair_plan_fingerprints')
+                    : [],
+                -10,
+            ),
         ];
     }
 
@@ -365,6 +401,106 @@ class WorkflowCopilotPromptContextService
             ])
             ->values()
             ->all();
+    }
+
+    protected function variableProvenance(Workflow $workflow, array $workflowInputs = [], array $runtimeVariables = []): array
+    {
+        $entries = collect();
+
+        foreach ($workflowInputs as $name => $value) {
+            $entries->push([
+                'name' => (string) $name,
+                'type' => get_debug_type($value),
+                'set' => $value !== null,
+                'origin' => 'workflow_input',
+                'step_action_key' => null,
+                'task_key' => null,
+                'catalog_task_key' => null,
+            ]);
+        }
+
+        foreach ($workflow->steps as $step) {
+            foreach (collect($step->task_cards)->filter(fn (mixed $task): bool => is_array($task)) as $task) {
+                foreach ($this->taskVariableOutputs($task) as $output) {
+                    $name = (string) $output['name'];
+                    $entries->push([
+                        'name' => $name,
+                        'type' => array_key_exists($name, $runtimeVariables)
+                            ? get_debug_type($runtimeVariables[$name])
+                            : (string) $output['type'],
+                        'set' => array_key_exists($name, $runtimeVariables) && $runtimeVariables[$name] !== null,
+                        'origin' => 'task_output',
+                        'step_action_key' => (string) $step->action_key,
+                        'task_key' => (string) ($task['key'] ?? ''),
+                        'catalog_task_key' => (string) ($task['task_key'] ?? ''),
+                    ]);
+                }
+            }
+        }
+
+        $knownNames = $entries->pluck('name')->all();
+        foreach ($runtimeVariables as $name => $value) {
+            if (in_array((string) $name, $knownNames, true)) {
+                continue;
+            }
+            $entries->push([
+                'name' => (string) $name,
+                'type' => get_debug_type($value),
+                'set' => $value !== null,
+                'origin' => 'runtime',
+                'step_action_key' => null,
+                'task_key' => null,
+                'catalog_task_key' => null,
+            ]);
+        }
+
+        return $entries
+            ->filter(fn (array $entry): bool => trim((string) $entry['name']) !== '')
+            ->unique(fn (array $entry): string => implode(':', [
+                $entry['origin'],
+                $entry['step_action_key'] ?? '',
+                $entry['task_key'] ?? '',
+                $entry['name'],
+            ]))
+            ->take(300)
+            ->values()
+            ->all();
+    }
+
+    protected function taskVariableOutputs(array $task): array
+    {
+        $catalogKey = (string) ($task['task_key'] ?? '');
+        $outputs = collect();
+        $push = function (mixed $name, string $type) use ($outputs): void {
+            $name = trim((string) $name);
+            if ($name !== '') {
+                $outputs->push(['name' => $name, 'type' => $type]);
+            }
+        };
+
+        $push($task['output_variable'] ?? $task['outputVariable'] ?? null, 'object');
+        $push($task['output_group'] ?? $task['outputGroup'] ?? null, 'object');
+        $push($task['output_array_name'] ?? $task['outputArrayName'] ?? null, 'array');
+
+        if ($catalogKey === 'loop.for_each_element') {
+            $push($task['store_current_element_as'] ?? $task['storeCurrentElementAs'] ?? 'current_result', 'element_scope');
+            $push($task['store_index_as'] ?? $task['storeIndexAs'] ?? 'result_index', 'int');
+            $push($task['collect_to_array'] ?? $task['collectToArray'] ?? null, 'array');
+        }
+        if ($catalogKey === 'data.append_to_array') {
+            $push($task['array_name'] ?? $task['arrayName'] ?? null, 'array');
+        }
+        if (in_array($catalogKey, ['browser.read_element_fields', 'browser.read_searchengine_result'], true)
+            && blank($task['output_variable'] ?? $task['outputVariable'] ?? null)
+        ) {
+            $push('current_result', 'object');
+        }
+        if ($catalogKey === 'data.workflow_return') {
+            $push('workflow_return', 'mixed');
+            $push('workflow_return_ok', 'bool');
+        }
+
+        return $outputs->unique('name')->values()->all();
     }
 
     protected function taskSnapshot(array $task): array
@@ -491,14 +627,60 @@ class WorkflowCopilotPromptContextService
     {
         $documentation = is_array($definition['documentation'] ?? null) ? $definition['documentation'] : [];
 
-        return array_filter(Arr::only($documentation, [
+        return Arr::only($documentation, [
             'purpose',
             'use_when',
             'workflow_role',
             'outputs',
             'routing',
             'important_notes',
-        ]), static fn (mixed $value): bool => $value !== null && $value !== '' && $value !== []);
+            'scope_behavior',
+            'compatibility',
+            'failure_modes',
+            'recipes',
+        ]);
+    }
+
+    protected function relevantTaskKeys(Workflow $workflow, ?WorkflowStep $currentStep, array $checkpoint): array
+    {
+        $keys = $workflow->steps
+            ->flatMap(fn (WorkflowStep $step): array => collect($step->task_cards)
+                ->filter(fn (mixed $task): bool => is_array($task))
+                ->pluck('task_key')
+                ->filter()
+                ->all())
+            ->merge([
+                'browser.find_element',
+                'browser.click',
+                'wait.selector',
+                'decision.element_exists',
+                'loop.for_each_element',
+                'loop.end',
+                'browser.read_element_fields',
+                'browser.read_searchengine_result',
+                'data.append_to_array',
+                'decision.array_length',
+                'data.workflow_return',
+            ]);
+
+        if ($currentStep) {
+            foreach (['failure_task_key', 'resume_task_key', 'task_key'] as $field) {
+                $cardKey = trim((string) ($checkpoint[$field] ?? ''));
+                $catalogKey = $cardKey !== ''
+                    ? data_get(collect($currentStep->task_cards)->firstWhere('key', $cardKey), 'task_key')
+                    : null;
+                if (filled($catalogKey)) {
+                    $keys->push((string) $catalogKey);
+                }
+            }
+        }
+
+        return $keys->map(fn (mixed $key): string => trim((string) $key))
+            ->filter(fn (string $key): bool => $key !== '' && $this->catalog->task($key) !== null)
+            ->unique()
+            ->take(60)
+            ->values()
+            ->all();
     }
 
     protected function workflowDiagnostics(Workflow $workflow): array

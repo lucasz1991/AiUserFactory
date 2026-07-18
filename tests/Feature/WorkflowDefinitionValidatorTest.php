@@ -1,0 +1,170 @@
+<?php
+
+namespace Tests\Feature;
+
+use App\Models\Workflow;
+use App\Models\WorkflowStep;
+use App\Services\Workflows\WorkflowDefinitionValidator;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Tests\TestCase;
+
+class WorkflowDefinitionValidatorTest extends TestCase
+{
+    use RefreshDatabase;
+
+    public function test_validator_returns_structured_diagnostics_for_invalid_graphs(): void
+    {
+        $workflow = $this->workflow();
+        $workflow->steps()->create([
+            'name' => 'Invalid',
+            'type' => WorkflowStep::TYPE_BROWSER_TASK,
+            'action_key' => 'invalid',
+            'position' => 10,
+            'is_enabled' => true,
+            'config_json' => ['tasks' => [[
+                'key' => 'unknown',
+                'task_key' => 'missing.catalog.task',
+                'next' => ['type' => 'step', 'action_key' => 'missing-step'],
+            ], [
+                'key' => 'orphan-end',
+                'task_key' => 'loop.end',
+                'loop_start_key' => 'missing-loop',
+            ]]],
+        ]);
+
+        $result = app(WorkflowDefinitionValidator::class)->validate($workflow, ['Array als Ausgabe zurueckgeben']);
+        $codes = collect($result['diagnostics'])->pluck('code');
+
+        $this->assertFalse($result['valid']);
+        $this->assertContains('unknown_catalog_task', $codes);
+        $this->assertContains('orphan_loop_end', $codes);
+        $this->assertContains('workflow_return_missing', $codes);
+        $diagnostic = collect($result['diagnostics'])->firstWhere('code', 'unknown_catalog_task');
+        $this->assertSame('error', $diagnostic['severity']);
+        $this->assertSame('invalid', $diagnostic['step_action_key']);
+        $this->assertSame('unknown', $diagnostic['task_key']);
+        $this->assertNotEmpty($diagnostic['repair_hint']);
+    }
+
+    public function test_bounded_self_retry_is_valid_but_unbounded_self_route_is_rejected(): void
+    {
+        $workflow = $this->workflow();
+        $step = $workflow->steps()->create([
+            'name' => 'Retry',
+            'type' => WorkflowStep::TYPE_WAIT,
+            'action_key' => 'retry',
+            'position' => 10,
+            'is_enabled' => true,
+            'config_json' => ['tasks' => [[
+                'key' => 'wait',
+                'task_key' => 'wait.seconds',
+                'value' => 1,
+                'on_error' => [
+                    'type' => 'card',
+                    'action_key' => 'retry',
+                    'card_key' => 'wait',
+                    'max_attempts' => 2,
+                ],
+            ]]],
+        ]);
+
+        $this->assertTrue(app(WorkflowDefinitionValidator::class)->validate($workflow)['valid']);
+
+        $config = $step->config_json;
+        unset($config['tasks'][0]['on_error']['max_attempts']);
+        $step->forceFill(['config_json' => $config])->save();
+        $result = app(WorkflowDefinitionValidator::class)->validate($workflow->fresh('steps'));
+
+        $this->assertFalse($result['valid']);
+        $this->assertContains('unsafe_self_route', collect($result['diagnostics'])->pluck('code'));
+    }
+
+    public function test_collection_requires_a_producer_array_target_and_returnable_array(): void
+    {
+        $workflow = $this->workflow();
+        $workflow->steps()->create([
+            'name' => 'Collection',
+            'type' => WorkflowStep::TYPE_DATA_TASK,
+            'action_key' => 'collection',
+            'position' => 10,
+            'is_enabled' => true,
+            'config_json' => ['tasks' => [[
+                'key' => 'append',
+                'task_key' => 'data.append_to_array',
+                'array_name' => 'results',
+                'value_from_variable' => 'missing_result',
+            ], [
+                'key' => 'check-array',
+                'task_key' => 'decision.array_length',
+                'array_name' => 'never_created',
+                'compare_value' => 1,
+            ], [
+                'key' => 'return-results',
+                'task_key' => 'data.workflow_return',
+                'selector' => 'missing_array',
+            ]]],
+        ]);
+
+        $result = app(WorkflowDefinitionValidator::class)->validate(
+            $workflow,
+            ['Rueckgabewert = array'],
+        );
+        $codes = collect($result['diagnostics'])->pluck('code');
+
+        $this->assertFalse($result['valid']);
+        $this->assertContains('collection_producer_missing', $codes);
+        $this->assertContains('array_producer_missing', $codes);
+        $this->assertContains('workflow_return_source_missing', $codes);
+        $this->assertContains('workflow_return_array_source_missing', $codes);
+    }
+
+    public function test_loop_collection_requires_a_matching_body_producer(): void
+    {
+        $workflow = $this->workflow();
+        $workflow->steps()->create([
+            'name' => 'Loop',
+            'type' => WorkflowStep::TYPE_BROWSER_TASK,
+            'action_key' => 'loop',
+            'position' => 10,
+            'is_enabled' => true,
+            'config_json' => ['tasks' => [[
+                'key' => 'loop-start',
+                'task_key' => 'loop.for_each_element',
+                'selector' => '.result',
+                'collect_to_array' => 'results',
+                'collect_from_variable' => 'result_data',
+            ], [
+                'key' => 'wait-only',
+                'task_key' => 'wait.seconds',
+                'value' => 1,
+            ], [
+                'key' => 'loop-end',
+                'task_key' => 'loop.end',
+                'loop_start_key' => 'loop-start',
+            ], [
+                'key' => 'return-results',
+                'task_key' => 'data.workflow_return',
+                'selector' => 'results',
+            ]]],
+        ]);
+
+        $result = app(WorkflowDefinitionValidator::class)->validate($workflow, ['Rueckgabewert = array']);
+
+        $this->assertFalse($result['valid']);
+        $this->assertContains('loop_collection_producer_missing', collect($result['diagnostics'])->pluck('code'));
+    }
+
+    private function workflow(): Workflow
+    {
+        return Workflow::query()->create([
+            'name' => 'Validator '.str()->random(6),
+            'slug' => 'validator-'.str()->random(10),
+            'description' => '',
+            'category' => 'test',
+            'is_active' => true,
+            'is_locked' => false,
+            'trigger_type' => 'manual',
+            'settings_json' => [],
+        ]);
+    }
+}

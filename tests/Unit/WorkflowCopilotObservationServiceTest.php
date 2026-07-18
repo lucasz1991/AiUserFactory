@@ -161,6 +161,56 @@ HTML);
         $this->assertStringNotContainsString('<html', $serialized);
     }
 
+    public function test_current_step_observation_excludes_interactions_from_older_step_artifacts(): void
+    {
+        $oldArtifact = $this->artifact(31, 'json', 'debug/old.json', [
+            'interaction_map' => [[
+                'tag' => 'button',
+                'text' => 'Alle ablehnen',
+                'selector' => '#W0wltc',
+                'visible' => true,
+            ]],
+        ]);
+        $oldArtifact->workflow_step_run_id = 8;
+        $currentArtifact = $this->artifact(32, 'json', 'debug/current.json', [
+            'interaction_map' => [[
+                'tag' => 'a',
+                'text' => 'Aktuelles Suchergebnis',
+                'selector' => '#search a:has(h3)',
+                'visible' => true,
+            ]],
+        ]);
+        $stepRun = (new WorkflowStepRun)->forceFill([
+            'id' => 9,
+            'workflow_run_id' => 5,
+            'result_json' => [],
+        ]);
+        $run = (new WorkflowRun)->forceFill([
+            'id' => 5,
+            'workflow_revision' => 24,
+            'result_json' => ['interaction_map' => [[
+                'tag' => 'button',
+                'text' => 'Alle ablehnen',
+                'selector' => '#stale-run-result',
+                'visible' => true,
+            ]]],
+        ]);
+        $run->setRelation('stepRuns', collect([$stepRun]));
+        $run->setRelation('artifacts', collect([$oldArtifact, $currentArtifact]));
+        $stepRun->setRelation('artifacts', collect([$currentArtifact]));
+        $artifacts = Mockery::mock(WorkflowDebugArtifactService::class);
+        $artifacts->shouldReceive('absolutePath')->andReturnNull();
+
+        $observation = (new WorkflowCopilotObservationService($artifacts))->observe($run, $stepRun);
+        $serialized = json_encode($observation['interaction_map'], JSON_UNESCAPED_SLASHES);
+
+        $this->assertStringContainsString('Aktuelles Suchergebnis', $serialized);
+        $this->assertStringNotContainsString('Alle ablehnen', $serialized);
+        $this->assertSame(9, data_get($observation, 'evidence_provenance.workflow_step_run_id'));
+        $this->assertSame(24, data_get($observation, 'evidence_provenance.workflow_revision'));
+        $this->assertSame($observation['captured_at'], data_get($observation, 'evidence_provenance.captured_at'));
+    }
+
     public function test_identical_consecutive_screenshots_are_not_reported_as_changed(): void
     {
         $image = base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', true);

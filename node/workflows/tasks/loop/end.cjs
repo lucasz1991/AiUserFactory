@@ -1,6 +1,6 @@
 'use strict';
 
-const { cleanName, privateRegistry, text } = require('../lib/collection.cjs');
+const { cleanName, privateRegistry, resolveVariable, text } = require('../lib/collection.cjs');
 
 function routeResult(target, outcome) {
   const normalized = text(target);
@@ -33,7 +33,8 @@ async function run(context = {}) {
   }
 
   const states = privateRegistry(context, '__workflowLoopStates');
-  const state = states[loopStartKey] || null;
+  const state = states[loopStartKey]
+    || resolveVariable(context, `__workflow_loop_state_${loopStartKey}`, null);
 
   if (!state || state.complete || !state.active) {
     return {

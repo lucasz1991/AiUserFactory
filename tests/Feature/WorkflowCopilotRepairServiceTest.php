@@ -608,6 +608,7 @@ class WorkflowCopilotRepairServiceTest extends TestCase
                 'result' => ['password' => 'checkpoint-secret'],
             ],
             [
+                'dom' => ['ui_state' => 'login', 'visible_text_excerpt' => 'Login'],
                 'interaction_map' => [],
                 'nested' => ['authorization' => 'Bearer planner-secret'],
             ],
@@ -915,7 +916,16 @@ class WorkflowCopilotRepairServiceTest extends TestCase
             [
                 'page' => ['url' => 'https://www.google.com', 'state' => 'consent_blocked', 'window' => 'main'],
                 'page_state' => 'consent_blocked',
-                'interaction_map' => [],
+                'dom' => ['ui_state' => 'consent_blocked', 'visible_text_excerpt' => 'Alle ablehnen'],
+                'interaction_map' => [[
+                    'element_ref' => 'el_reject',
+                    'tag' => 'button',
+                    'text' => 'Alle ablehnen',
+                    'visible' => true,
+                    'enabled' => true,
+                    'selector_candidates' => ['button:has-text("Alle ablehnen")'],
+                    'window' => 'main',
+                ]],
                 'copilot_checkpoint' => [
                     'task_key' => 'check-consent',
                     'result' => [],

@@ -1020,7 +1020,7 @@ class WorkflowCopilotSupervisorTest extends TestCase
         $observations = Mockery::mock(WorkflowCopilotObservationService::class);
         $observations->shouldReceive('observe')->once()->andReturn($this->observation());
         $visionService = Mockery::mock(WorkflowCopilotVisionService::class);
-        $visionService->shouldReceive('analyze')->once()->andReturn($this->visionResult('continue'));
+        $visionService->shouldNotReceive('analyze');
         $execution = Mockery::mock(WorkflowExecutionService::class);
         $execution->shouldReceive('resumeCopilotCheckpoint')->once()->andReturn(true);
         $this->app->instance(WorkflowCopilotObservationService::class, $observations);
@@ -1031,7 +1031,7 @@ class WorkflowCopilotSupervisorTest extends TestCase
         $this->assertSame(0, data_get($session->fresh()->usage_json, 'same_state_repeats'));
     }
 
-    public function test_successful_checkpoint_reports_vision_once_and_recovers_without_reanalysis_when_resume_is_deferred(): void
+    public function test_successful_checkpoint_skips_vision_and_recovers_when_resume_is_deferred(): void
     {
         Queue::fake();
         [$workflow, $step] = $this->workflowWithBrokenSelector();
@@ -1065,7 +1065,7 @@ class WorkflowCopilotSupervisorTest extends TestCase
         $observations = Mockery::mock(WorkflowCopilotObservationService::class);
         $observations->shouldReceive('observe')->once()->andReturn($observation);
         $visionService = Mockery::mock(WorkflowCopilotVisionService::class);
-        $visionService->shouldReceive('analyze')->once()->andReturn($vision);
+        $visionService->shouldNotReceive('analyze');
         $execution = Mockery::mock(WorkflowExecutionService::class);
         $execution->shouldReceive('resumeCopilotCheckpoint')->once()->andReturn(false);
         $this->app->instance(WorkflowCopilotObservationService::class, $observations);
@@ -1074,13 +1074,10 @@ class WorkflowCopilotSupervisorTest extends TestCase
 
         app(WorkflowCopilotSupervisorService::class)->supervise($session->id);
 
-        $analysisEvent = $session->events()->where('event_type', 'vision.analysis_completed')->firstOrFail();
-        $this->assertTrue((bool) $analysisEvent->is_milestone);
-        $this->assertStringContainsString('Bildanalyse abgeschlossen', $analysisEvent->message);
-        $this->assertStringContainsString('Workflow fortsetzen', $analysisEvent->message);
-        $this->assertSame('login_form', data_get($analysisEvent->payload_json, 'ui_state'));
-        $this->assertSame('el_submit', data_get($analysisEvent->payload_json, 'relevant_elements.0.element_ref'));
-        $this->assertSame('browser.click', data_get($analysisEvent->payload_json, 'suggested_task_actions.0.task_key'));
+        $this->assertDatabaseMissing('workflow_copilot_events', [
+            'workflow_copilot_session_id' => $session->id,
+            'event_type' => 'vision.analysis_completed',
+        ]);
         $this->assertDatabaseHas('workflow_copilot_events', [
             'workflow_copilot_session_id' => $session->id,
             'event_type' => 'checkpoint.continuation_deferred',
@@ -1110,7 +1107,7 @@ class WorkflowCopilotSupervisorTest extends TestCase
 
         app(WorkflowCopilotSupervisorService::class)->supervise($session->id);
 
-        $this->assertSame(1, $session->events()->where('event_type', 'vision.analysis_completed')->count());
+        $this->assertSame(0, $session->events()->where('event_type', 'vision.analysis_completed')->count());
         $this->assertDatabaseHas('workflow_copilot_events', [
             'workflow_copilot_session_id' => $session->id,
             'event_type' => 'checkpoint.continuation_recovered',
@@ -1154,7 +1151,7 @@ class WorkflowCopilotSupervisorTest extends TestCase
         $observations = Mockery::mock(WorkflowCopilotObservationService::class);
         $observations->shouldReceive('observe')->once()->andReturn($observation);
         $visionService = Mockery::mock(WorkflowCopilotVisionService::class);
-        $visionService->shouldReceive('analyze')->once()->andReturn($this->visionResult('continue'));
+        $visionService->shouldNotReceive('analyze');
         $this->app->instance(WorkflowCopilotObservationService::class, $observations);
         $this->app->instance(WorkflowCopilotVisionService::class, $visionService);
 
@@ -1168,7 +1165,7 @@ class WorkflowCopilotSupervisorTest extends TestCase
             'runtime-session-11-race',
             data_get($session->fresh()->state_json, 'continuation_applied_checkpoint_id'),
         );
-        $this->assertDatabaseHas('workflow_copilot_events', [
+        $this->assertDatabaseMissing('workflow_copilot_events', [
             'workflow_copilot_session_id' => $session->id,
             'event_type' => 'vision.analysis_completed',
         ]);
@@ -1525,6 +1522,159 @@ class WorkflowCopilotSupervisorTest extends TestCase
 
         $this->assertSame('required_workflow_return_missing', data_get($returnGap, 'payload.reason_code'));
         $this->assertSame('top_results', data_get($returnGap, 'payload.source_array'));
+    }
+
+    public function test_failed_reader_inside_loop_persists_distinct_resume_and_failure_task_keys(): void
+    {
+        $workflow = Workflow::query()->create([
+            'name' => 'Loop attribution',
+            'slug' => 'loop-attribution-'.str()->random(8),
+            'description' => '',
+            'category' => 'test',
+            'is_active' => true,
+            'is_locked' => false,
+            'trigger_type' => 'manual',
+            'settings_json' => [],
+        ]);
+        $step = $workflow->steps()->create([
+            'name' => 'Search results',
+            'type' => WorkflowStep::TYPE_BROWSER_TASK,
+            'action_key' => 'search-results',
+            'position' => 10,
+            'is_enabled' => true,
+            'config_json' => ['tasks' => [[
+                'key' => 'result-loop',
+                'task_key' => 'loop.for_each_element',
+                'title' => 'Ergebnisse durchlaufen',
+                'source_variable' => 'search_results',
+                'item_variable' => 'search_result',
+            ], [
+                'key' => 'read-result',
+                'task_key' => 'browser.read_searchengine_result',
+                'title' => 'Suchergebnis lesen',
+                'scope_variable' => 'search_result',
+                'output_variable' => 'result',
+            ], [
+                'key' => 'result-loop-end',
+                'task_key' => 'loop.end',
+                'title' => 'Naechstes Ergebnis',
+                'loop_start_key' => 'result-loop',
+            ]]],
+        ]);
+        $sessions = app(WorkflowCopilotSessionService::class);
+        $session = $sessions->start($workflow, ['goal' => 'Suchergebnisse sammeln.']);
+        $checkpoint = [
+            'id' => 'reader-failed-in-loop',
+            'kind' => 'regular',
+            'workflow_step_id' => $step->id,
+            'workflow_step_name' => $step->name,
+            'task_key' => 'result-loop',
+            'resume_task_key' => 'result-loop',
+            'failure_task_key' => 'read-result',
+            'task_title' => 'Suchergebnisse durchlaufen',
+            'successful' => false,
+            'outcome' => 'failed',
+            'next_action' => 'repair',
+            'result' => [
+                'ok' => false,
+                'failedTaskKey' => 'read-result',
+                'statusMessage' => 'Keine URL im aktuellen Suchergebnis gefunden.',
+            ],
+        ];
+        [$run] = $this->waitingRun($session, $step, $checkpoint);
+        $session = $sessions->attachRun($session, $run);
+        $method = new \ReflectionMethod(WorkflowCopilotSupervisorService::class, 'storeCheckpoint');
+        $method->invoke(
+            app(WorkflowCopilotSupervisorService::class),
+            $session,
+            $run,
+            $step,
+            $checkpoint,
+            $this->observation(),
+            $this->visionResult('pause'),
+        );
+
+        $this->assertDatabaseHas('workflow_task_attempts', [
+            'workflow_copilot_session_id' => $session->id,
+            'task_key' => 'result-loop',
+            'resume_task_key' => 'result-loop',
+            'failure_task_key' => 'read-result',
+            'task_title' => 'Suchergebnis lesen',
+        ]);
+        $this->assertDatabaseHas('workflow_run_checkpoints', [
+            'workflow_copilot_session_id' => $session->id,
+            'task_key' => 'result-loop',
+            'resume_task_key' => 'result-loop',
+            'failure_task_key' => 'read-result',
+        ]);
+    }
+
+    public function test_identical_repair_plan_is_rejected_in_the_same_browser_state(): void
+    {
+        [$workflow, $step] = $this->workflowWithBrokenSelector();
+        $sessions = app(WorkflowCopilotSessionService::class);
+        $session = $sessions->start($workflow);
+        $checkpoint = [
+            'id' => 'duplicate-repair-plan',
+            'kind' => 'regular',
+            'workflow_step_id' => $step->id,
+            'workflow_step_name' => $step->name,
+            'task_key' => 'login-click',
+            'failure_task_key' => 'login-click',
+            'task_title' => 'Login klicken',
+            'successful' => false,
+            'outcome' => 'failed',
+            'next_action' => 'repair',
+            'failure_reason_code' => 'element_not_found',
+            'result' => ['ok' => false, 'statusMessage' => 'Element nicht gefunden.'],
+        ];
+        [$run] = $this->waitingRun($session, $step, $checkpoint);
+        $session = $sessions->attachRun($session, $run);
+        $observation = $this->observation();
+        $plan = [
+            'action' => 'retry_task',
+            'task_key' => 'login-click',
+            'changes' => ['selector' => 'button[type="submit"]'],
+            'reason' => 'Aktuellen sichtbaren Login-Button verwenden.',
+        ];
+        $fingerprintMethod = new \ReflectionMethod(WorkflowCopilotSupervisorService::class, 'repairPlanFingerprint');
+        $fingerprint = $fingerprintMethod->invoke(
+            app(WorkflowCopilotSupervisorService::class),
+            $session,
+            $step,
+            $checkpoint,
+            $observation,
+            $plan,
+        );
+        $state = is_array($session->state_json) ? $session->state_json : [];
+        $state['repair_plan_fingerprints'] = [[
+            'fingerprint' => $fingerprint,
+            'runtime_checkpoint_id' => 'previous-checkpoint',
+            'recorded_at' => now()->subMinute()->toIso8601String(),
+        ]];
+        $session->forceFill(['state_json' => $state])->save();
+
+        $observations = Mockery::mock(WorkflowCopilotObservationService::class);
+        $observations->shouldReceive('observe')->once()->andReturn($observation);
+        $visionService = Mockery::mock(WorkflowCopilotVisionService::class);
+        $visionService->shouldReceive('analyze')->once()->andReturn($this->visionResult('continue'));
+        $repairs = Mockery::mock(WorkflowCopilotRepairService::class);
+        $repairs->shouldReceive('plan')->once()->andReturn($plan);
+        $execution = Mockery::mock(WorkflowExecutionService::class);
+        $execution->shouldNotReceive('retryCopilotTask');
+        $execution->shouldNotReceive('start');
+        $this->app->instance(WorkflowCopilotObservationService::class, $observations);
+        $this->app->instance(WorkflowCopilotVisionService::class, $visionService);
+        $this->app->instance(WorkflowCopilotRepairService::class, $repairs);
+        $this->app->instance(WorkflowExecutionService::class, $execution);
+
+        app(WorkflowCopilotSupervisorService::class)->supervise($session->id);
+
+        $this->assertSame(WorkflowCopilotSession::STATUS_PAUSED, $session->fresh()->status);
+        $this->assertDatabaseHas('workflow_copilot_events', [
+            'workflow_copilot_session_id' => $session->id,
+            'event_type' => 'repair.plan_rejected_duplicate',
+        ]);
     }
 
     private function workflowWithBrokenSelector(): array

@@ -43,6 +43,43 @@
                 @empty
                     <div class="px-3 py-8 text-center text-xs text-slate-500">Noch keine Studio-Aktionen protokolliert.</div>
                 @endforelse
+
+                @if($taskAttempts->isNotEmpty())
+                    <div class="pt-3">
+                        <h4 class="px-1 text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">Task-Versuche</h4>
+                        <div class="mt-2 space-y-2">
+                            @foreach($taskAttempts as $attempt)
+                                <details class="rounded-lg border border-slate-200 bg-white p-3 text-xs">
+                                    <summary class="cursor-pointer font-bold text-slate-800">{{ $attempt->failure_task_key ?: $attempt->task_key ?: 'Task' }} <span class="font-normal text-slate-400">{{ $attempt->status }}</span></summary>
+                                    <dl class="mt-2 grid grid-cols-2 gap-2 text-[10px] text-slate-600">
+                                        <div><dt class="font-bold text-slate-400">Resume</dt><dd class="break-all">{{ $attempt->resume_task_key ?: $attempt->task_key ?: '-' }}</dd></div>
+                                        <div><dt class="font-bold text-slate-400">Fehler-Task</dt><dd class="break-all">{{ $attempt->failure_task_key ?: '-' }}</dd></div>
+                                    </dl>
+                                </details>
+                            @endforeach
+                        </div>
+                    </div>
+                @endif
+
+                @if($checkpoints->isNotEmpty())
+                    <div class="pt-3">
+                        <h4 class="px-1 text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">Technische Checkpoints</h4>
+                        <p class="mt-1 px-1 text-[10px] leading-4 text-slate-500">Nur fuer Diagnose, Resume und Einzelschritt sichtbar.</p>
+                        <div class="mt-2 space-y-2">
+                            @foreach($checkpoints as $checkpoint)
+                                <details class="rounded-lg border border-slate-200 bg-white p-3 text-xs">
+                                    <summary class="cursor-pointer font-bold text-slate-800">#{{ $checkpoint->sequence }} {{ $checkpoint->phase ?: 'checkpoint' }}</summary>
+                                    <dl class="mt-2 grid grid-cols-2 gap-2 text-[10px] text-slate-600">
+                                        <div><dt class="font-bold text-slate-400">Resume</dt><dd class="break-all">{{ $checkpoint->resume_task_key ?: $checkpoint->task_key ?: '-' }}</dd></div>
+                                        <div><dt class="font-bold text-slate-400">Fehler-Task</dt><dd class="break-all">{{ $checkpoint->failure_task_key ?: '-' }}</dd></div>
+                                        <div><dt class="font-bold text-slate-400">Revision</dt><dd>{{ data_get($checkpoint->cursor_json, 'workflow_revision', $workflow->copilot_revision) }}</dd></div>
+                                        <div><dt class="font-bold text-slate-400">Reproduzierbar</dt><dd>{{ $checkpoint->is_reproducible ? 'ja' : 'nein' }}</dd></div>
+                                    </dl>
+                                </details>
+                            @endforeach
+                        </div>
+                    </div>
+                @endif
             </div>
         </aside>
     </div>

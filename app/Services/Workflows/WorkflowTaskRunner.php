@@ -32,6 +32,7 @@ class WorkflowTaskRunner
             $step,
             trim((string) ($runtimeContext['nextTaskKey'] ?? $runtimeContext['next_task_key'] ?? '')) ?: null,
             (bool) ($runtimeContext['copilotSupervised'] ?? $runtimeContext['copilot_supervised'] ?? false),
+            ! (bool) ($runtimeContext['studioSingleTask'] ?? $runtimeContext['studio_single_task'] ?? false),
         );
         $transientTask = $runtimeContext['copilotTransientTask'] ?? $runtimeContext['copilot_transient_task'] ?? null;
         if (is_array($transientTask) && $transientTask !== []) {
@@ -90,6 +91,7 @@ class WorkflowTaskRunner
             $step,
             trim((string) ($runtimeContext['nextTaskKey'] ?? $runtimeContext['next_task_key'] ?? '')) ?: null,
             (bool) ($runtimeContext['copilotSupervised'] ?? $runtimeContext['copilot_supervised'] ?? false),
+            ! (bool) ($runtimeContext['studioSingleTask'] ?? $runtimeContext['studio_single_task'] ?? false),
         );
 
         $transientTask = $runtimeContext['copilotTransientTask'] ?? $runtimeContext['copilot_transient_task'] ?? null;
@@ -430,8 +432,12 @@ class WorkflowTaskRunner
             ->toArray();
     }
 
-    protected function runtimeTasks(WorkflowStep $step, ?string $startTaskKey = null, bool $singleTask = false): array
-    {
+    protected function runtimeTasks(
+        WorkflowStep $step,
+        ?string $startTaskKey = null,
+        bool $singleTask = false,
+        bool $atomicLoop = true,
+    ): array {
         $tasks = $step->task_cards;
 
         if ($startTaskKey !== null) {
@@ -449,7 +455,7 @@ class WorkflowTaskRunner
         if ($singleTask) {
             $firstTask = $tasks[0] ?? null;
 
-            if (is_array($firstTask) && (string) ($firstTask['task_key'] ?? '') === 'loop.for_each_element') {
+            if ($atomicLoop && is_array($firstTask) && (string) ($firstTask['task_key'] ?? '') === 'loop.for_each_element') {
                 $endKey = trim((string) ($firstTask['loop_end_key'] ?? $firstTask['loopEndKey'] ?? ''));
                 $pairId = trim((string) ($firstTask['loop_pair_id'] ?? $firstTask['loopPairId'] ?? ''));
                 $endIndex = collect($tasks)->search(function (array $task) use ($endKey, $pairId): bool {

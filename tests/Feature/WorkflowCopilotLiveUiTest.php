@@ -68,9 +68,14 @@ class WorkflowCopilotLiveUiTest extends TestCase
         });
         $this->app->instance(AiConnectionService::class, $ai);
 
-        $component = Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
+        Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
             ->call('openCopilotOptimization')
-            ->assertSet('showCopilotModal', true)
+            ->assertRedirect(route('network.workflows.studio', [
+                'workflow' => $workflow->id,
+                'mode' => 'assisted',
+            ]));
+
+        $component = Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
             ->set('copilotGoal', 'Der Workflow erreicht vollstaendig die Erfolgsseite.')
             ->set('copilotSuccessCriteria', "Finale URL enthaelt /success\nText Fertig ist sichtbar")
             ->set('copilotWorkflowInputs', '{"browser_window":"main"}')
@@ -82,7 +87,6 @@ class WorkflowCopilotLiveUiTest extends TestCase
             ->assertHasNoErrors()
             ->assertSet('showCopilotModal', false)
             ->assertSet('showCopilotPreviewModal', false)
-            ->assertSet('showRunPreviewModal', true)
             ->assertDispatched('workflow-copilot-session-activated');
 
         $session = WorkflowCopilotSession::query()->sole();
@@ -102,6 +106,11 @@ class WorkflowCopilotLiveUiTest extends TestCase
             WorkflowCopilotSupervisorJob::class,
             fn (WorkflowCopilotSupervisorJob $job): bool => $job->workflowCopilotSessionId === $session->id,
         );
+        $component->assertRedirect(route('network.workflows.studio', [
+            'workflow' => $workflow->id,
+            'mode' => 'autonomous',
+            'session' => $session->id,
+        ]));
 
         $component->call('pauseCopilotOptimization')->call('resumeCopilotOptimization');
         Queue::assertPushed(WorkflowCopilotSupervisorJob::class, 2);
@@ -130,12 +139,11 @@ class WorkflowCopilotLiveUiTest extends TestCase
         $workflow = $this->workflow('copilot-disabled');
 
         Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
-            ->call('openCopilotOptimization')
             ->set('copilotGoal', 'Der Workflow soll funktionieren.')
             ->set('copilotSuccessCriteria', 'Erfolgsseite sichtbar')
             ->call('startCopilotOptimization')
             ->assertHasErrors(['copilotAutoExecute'])
-            ->assertSet('showCopilotModal', true);
+            ->assertSet('showCopilotModal', false);
 
         $this->assertDatabaseCount('workflow_copilot_sessions', 0);
         Queue::assertNothingPushed();
@@ -242,6 +250,67 @@ class WorkflowCopilotLiveUiTest extends TestCase
         Queue::assertPushed(
             WorkflowCopilotSupervisorJob::class,
             fn (WorkflowCopilotSupervisorJob $job): bool => $job->workflowCopilotSessionId === $session->id,
+        );
+    }
+
+    public function test_chat_control_commands_apply_immediately_and_stop_requires_confirmation(): void
+    {
+        Queue::fake();
+        $workflow = $this->workflow('copilot-chat-controls');
+        $session = app(WorkflowCopilotSessionService::class)->start($workflow, [
+            'goal' => 'Workflow kontrolliert testen.',
+            'success_criteria' => ['assertions' => ['Workflow beendet sich erfolgreich']],
+        ]);
+
+        $chat = Livewire::test(Chatbot::class)
+            ->call('updatePageContext', ['workflow_id' => $workflow->id])
+            ->set('message', 'Bitte pausieren')
+            ->call('sendMessage');
+        $this->assertSame(WorkflowCopilotSession::STATUS_PAUSED, $session->fresh()->status);
+
+        $chat->set('message', 'Bitte fortsetzen')->call('sendMessage');
+        $this->assertSame(WorkflowCopilotSession::STATUS_RUNNING, $session->fresh()->status);
+
+        $chat->set('message', 'Bitte neu planen')->call('sendMessage');
+        $this->assertNotEmpty(data_get($session->fresh()->state_json, 'replan_requested_at'));
+
+        $chat->set('message', 'Copilot stoppen')->call('sendMessage');
+        $pending = $chat->get('pendingCopilotControl');
+        $this->assertSame('stop', $pending['action'] ?? null);
+        $this->assertSame(WorkflowCopilotSession::STATUS_RUNNING, $session->fresh()->status);
+
+        $chat->call('sendMessage', '__copilot_confirm_stop:'.($pending['token'] ?? ''));
+        $this->assertSame(WorkflowCopilotSession::STATUS_STOPPED, $session->fresh()->status);
+        $this->assertStringNotContainsString(
+            '__copilot_confirm_stop',
+            collect($chat->get('chatHistory'))->pluck('content')->implode("\n"),
+        );
+    }
+
+    public function test_chat_restart_requires_confirmation_and_attaches_the_new_session(): void
+    {
+        Queue::fake();
+        $workflow = $this->workflow('copilot-chat-restart');
+        $session = app(WorkflowCopilotSessionService::class)->start($workflow, [
+            'goal' => 'Workflow kontrolliert neu starten.',
+            'success_criteria' => ['assertions' => ['Workflow beendet sich erfolgreich']],
+        ]);
+        $chat = Livewire::test(Chatbot::class)
+            ->call('updatePageContext', ['workflow_id' => $workflow->id])
+            ->set('message', 'Komplett neu starten')
+            ->call('sendMessage');
+        $pending = $chat->get('pendingCopilotControl');
+
+        $this->assertSame('restart', $pending['action'] ?? null);
+        $this->assertSame($session->id, $chat->get('activeCopilotSessionId'));
+
+        $chat->call('sendMessage', '__copilot_confirm_restart:'.($pending['token'] ?? ''));
+        $restarted = WorkflowCopilotSession::query()->where('id', '!=', $session->id)->sole();
+        $this->assertSame($restarted->id, $chat->get('activeCopilotSessionId'));
+        $this->assertContains($restarted->status, WorkflowCopilotSession::ACTIVE_STATUSES);
+        $this->assertStringNotContainsString(
+            '__copilot_confirm_restart',
+            collect($chat->get('chatHistory'))->pluck('content')->implode("\n"),
         );
     }
 
@@ -372,14 +441,20 @@ class WorkflowCopilotLiveUiTest extends TestCase
             ->assertSet('activeCopilotSessionId', $session->id)
             ->assertSet('copilotStatus.verification_report.pass', true)
             ->call('openCopilotOptimization')
-            ->assertSet('showCopilotPreviewModal', false)
-            ->assertSet('showRunPreviewModal', true)
-            ->assertSee('Finaler Verifikationsbericht')
-            ->assertDontSee('wire:poll.2s="refreshCopilotSession"', false)
+            ->assertRedirect(route('network.workflows.studio', [
+                'workflow' => $workflow->id,
+                'mode' => 'autonomous',
+                'session' => $session->id,
+            ]));
+
+        $manager = Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
             ->call('closeCopilotPreview')
             ->assertSet('activeCopilotSessionId', null)
             ->call('openCopilotOptimization')
-            ->assertSet('showCopilotModal', true);
+            ->assertRedirect(route('network.workflows.studio', [
+                'workflow' => $workflow->id,
+                'mode' => 'assisted',
+            ]));
     }
 
     public function test_clear_chat_hides_old_copilot_events_locally_without_deleting_the_audit_log(): void

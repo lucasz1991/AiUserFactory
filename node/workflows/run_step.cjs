@@ -2509,6 +2509,7 @@ async function run() {
   let taskIndex = 0;
   let requestedSuccessRouteTask = null;
   let requestedFailureRouteTask = null;
+  let requestedDynamicRoute = null;
   let requestedRouteMessage = null;
   let routeTransitions = 0;
   const routeAttemptCounts = new Map();
@@ -2845,6 +2846,15 @@ async function run() {
         });
         taskIndex = dynamicTargetIndex;
         continue;
+      }
+
+      if (ok) {
+        requestedDynamicRoute = {
+          sourceTaskKey: task.route_source_task_key || task.parent_task_key || task.key,
+          targetTaskKey: dynamicRouteTarget,
+          outcome: String(result.route_outcome || result.routeOutcome || 'success').trim() || 'success',
+        };
+        break;
       }
     }
 
@@ -3192,7 +3202,16 @@ async function run() {
     },
     events,
     finishedAt: now(),
-    ...((requestedFailureRouteTask || requestedSuccessRouteTask) ? {
+    ...(requestedDynamicRoute ? {
+      routeRequested: true,
+      route_requested: true,
+      completedTaskKey: requestedDynamicRoute.sourceTaskKey,
+      completed_task_key: requestedDynamicRoute.sourceTaskKey,
+      routeOutcome: requestedDynamicRoute.outcome,
+      route_outcome: requestedDynamicRoute.outcome,
+      routeTargetKey: requestedDynamicRoute.targetTaskKey,
+      route_target_key: requestedDynamicRoute.targetTaskKey,
+    } : (requestedFailureRouteTask || requestedSuccessRouteTask) ? {
       routeRequested: true,
       completedTaskKey: (requestedFailureRouteTask || requestedSuccessRouteTask).key,
       routeOutcome: requestedFailureRouteTask ? 'failed' : 'success',

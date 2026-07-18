@@ -1517,6 +1517,10 @@ class WorkflowTaskCatalog
             'routing' => $this->routingDocumentation($taskKey),
             'example_configuration' => $this->exampleConfiguration($definition),
             'important_notes' => $this->documentationNotes($taskKey),
+            'scope_behavior' => $this->scopeBehaviorDocumentation($taskKey),
+            'compatibility' => $this->compatibilityDocumentation($taskKey),
+            'failure_modes' => $this->failureModeDocumentation($taskKey),
+            'recipes' => $this->recipeDocumentation($taskKey),
         ];
 
         return $definition;
@@ -1530,7 +1534,7 @@ class WorkflowTaskCatalog
             str_starts_with($taskKey, 'input.') => 'Veraendert Formulardaten im Browser. Die Task sollte nach einer passenden Browser-/Find-Task und vor einer Submit- oder Pruef-Task stehen.',
             str_starts_with($taskKey, 'wait.') => 'Synchronisiert den Workflow mit Zeit oder sichtbarem Seitenzustand, ohne eigenstaendige Fachdaten zu erzeugen.',
             str_starts_with($taskKey, 'decision.') => 'Erzeugt eine fachliche Verzweigung. Erfolg und nicht erfuellte Bedingung muessen auf unterschiedliche, nachvollziehbare Ziele zeigen.',
-            str_starts_with($taskKey, 'loop.') => 'Steuert einen wiederholten Task-Block. Loop-Start, Body und gekoppeltes Loop-Ende bilden eine untrennbare Einheit.',
+            str_starts_with($taskKey, 'loop.') => 'Steuert einen wiederholten Task-Block. Automatische Laeufe behandeln das Paar als wiederholbares Segment; im Studio koennen Start, Body und Ende einzeln getestet werden.',
             str_starts_with($taskKey, 'mail.') || str_starts_with($taskKey, 'webmail.') => 'Verarbeitet Mailbox-/Webmail-Daten und stellt Treffer oder Status als Workflow-Daten fuer spaetere Tasks bereit.',
             str_starts_with($taskKey, 'data.persist_') || $taskKey === 'data.delete_browser_session' => 'Schreibt oder entfernt dauerhafte Anwendungsdaten. Vorher muessen alle benoetigten Werte validiert und auf die richtige Person bzw. Session bezogen sein.',
             str_starts_with($taskKey, 'data.') => 'Liest, transformiert oder speichert Workflow-Daten. Benannte Ausgaben bleiben fuer nachfolgende Tasks und Listen verfuegbar.',
@@ -1605,6 +1609,12 @@ class WorkflowTaskCatalog
                 'collect_from_variable und output_variable des Readers muessen denselben Namen verwenden.',
                 'Loop-Limit begrenzt Durchlaeufe; collect_max_items begrenzt nur die gespeicherte Array-Laenge.',
                 'Das DOM-Element wird vor jeder Iteration anhand einer stabilen Identitaet frisch aufgeloest.',
+                'Im Studio wird der aktuelle Scope als Selector, Offset und Index serialisiert, damit die folgende Reader-Task in einem separaten Einzelschritt fortsetzen kann.',
+            ],
+            'browser.read_searchengine_result' => [
+                'Alle Selektoren werden relativ zum aktuellen Loop-Scope ausgewertet.',
+                'Ist der Scope selbst ein Link und link_selector findet keinen untergeordneten Link, wird die href des Scope-Elements verwendet.',
+                'Fuer Google-Ergebnisse ist beispielsweise #search a:has(h3) als Loop-Selector mit h3 als title_selector kompatibel.',
             ],
             'loop.end' => ['Diese interne Task wird vom Studio automatisch mit loop_pair_id und loop_start_key erzeugt und gemeinsam mit dem Loop-Start verwaltet.'],
             'data.append_to_array' => [
@@ -1622,6 +1632,75 @@ class WorkflowTaskCatalog
             'input.fill_field' => ['Bei value_source=workflow_variable wird der Variablenname aufgeloest; er darf nicht als sichtbarer Literaltext in das Formular geschrieben werden.'],
             'browser.click', 'input.submit' => ['Nach Navigation oder deutlicher DOM-Aenderung sollte eine Wait- oder Find-Task den neuen Seitenzustand bestaetigen.'],
             default => ['Verwende stabile Kartenschluessel und benannte Workflow-Variablen, damit Copilot, Routing und Laufdiagnose dieselben Referenzen benutzen.'],
+        };
+    }
+
+    protected function scopeBehaviorDocumentation(string $taskKey): array
+    {
+        return match ($taskKey) {
+            'loop.for_each_element' => [
+                'produces_scope' => true,
+                'scope_variable_field' => 'store_current_element_as',
+                'scope_is_persistable' => true,
+            ],
+            'browser.read_element_fields', 'browser.read_searchengine_result' => [
+                'consumes_scope' => true,
+                'scope_variable_field' => 'scope_variable',
+                'selectors_are_relative' => true,
+                'scope_self_supported' => true,
+            ],
+            default => [],
+        };
+    }
+
+    protected function compatibilityDocumentation(string $taskKey): array
+    {
+        return match ($taskKey) {
+            'loop.for_each_element' => [
+                'body_producers' => ['browser.read_element_fields', 'browser.read_searchengine_result'],
+                'body_consumers' => ['data.append_to_array'],
+                'paired_with' => ['loop.end'],
+                'collection_modes' => ['collect_to_array', 'data.append_to_array'],
+            ],
+            'browser.read_element_fields', 'browser.read_searchengine_result' => [
+                'requires_preceding' => ['loop.for_each_element'],
+                'compatible_consumers' => ['data.append_to_array', 'data.workflow_return'],
+            ],
+            'data.append_to_array' => [
+                'requires_variable_producer' => true,
+                'compatible_producers' => ['browser.read_element_fields', 'browser.read_searchengine_result'],
+            ],
+            'data.workflow_return' => ['accepts' => ['scalar', 'object', 'array', 'boolean']],
+            default => [],
+        };
+    }
+
+    protected function failureModeDocumentation(string $taskKey): array
+    {
+        return match ($taskKey) {
+            'loop.for_each_element' => ['selector_missing', 'loop_element_missing_after_refresh', 'array_not_array', 'value_missing'],
+            'browser.read_searchengine_result' => ['scope_missing', 'required_title_missing', 'required_url_missing'],
+            'data.append_to_array' => ['array_not_array', 'value_missing'],
+            default => [],
+        };
+    }
+
+    protected function recipeDocumentation(string $taskKey): array
+    {
+        return match ($taskKey) {
+            'loop.for_each_element' => [[
+                'name' => 'Suchergebnisse als Array sammeln',
+                'sequence' => ['loop.for_each_element', 'browser.read_searchengine_result', 'data.append_to_array', 'loop.end', 'data.workflow_return'],
+                'invariant' => 'Reader output_variable entspricht append value_from_variable; Loop limit entspricht der gewuenschten Maximalzahl.',
+            ]],
+            'browser.read_searchengine_result' => [[
+                'name' => 'Google Ergebnislink als Scope',
+                'loop_selector' => '#search a:has(h3)',
+                'title_selector' => 'h3',
+                'link_selector' => 'a',
+                'link_fallback' => ':scope',
+            ]],
+            default => [],
         };
     }
 

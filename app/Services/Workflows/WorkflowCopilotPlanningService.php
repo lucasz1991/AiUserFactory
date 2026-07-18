@@ -29,6 +29,7 @@ class WorkflowCopilotPlanningService
         protected WorkflowTaskCatalog $catalog,
         protected WorkflowTaskOrderingService $taskOrdering,
         protected WorkflowCopilotPromptContextService $promptContexts,
+        protected WorkflowDefinitionValidator $validator,
     ) {}
 
     public function needsInitialPlan(Workflow $workflow): bool
@@ -78,7 +79,7 @@ class WorkflowCopilotPlanningService
             throw new RuntimeException('Die Planungs-KI hat keinen ausfuehrbaren Workflow mit katalogkonformen Tasks geliefert.');
         }
 
-        DB::transaction(function () use ($workflow, $goal, $normalized): void {
+        DB::transaction(function () use ($workflow, $goal, $normalized, $successCriteria, $workflowInputs): void {
             $lockedWorkflow = Workflow::query()->lockForUpdate()->findOrFail($workflow->id);
 
             if (! $this->needsInitialPlan($lockedWorkflow)) {
@@ -120,6 +121,7 @@ class WorkflowCopilotPlanningService
             }
 
             $lockedWorkflow->syncIncludedWorkflowReferences();
+            $this->validator->assertValid($lockedWorkflow->fresh(['steps']) ?? $lockedWorkflow, $successCriteria, $workflowInputs);
         });
 
         return $normalized;
@@ -170,20 +172,38 @@ class WorkflowCopilotPlanningService
             );
             $usedStepActionKeys[] = $actionKey;
             $tasks = [];
+            $openLoopEnd = null;
 
             foreach (collect($stepDefinition['tasks'] ?? [])->filter(fn (mixed $task): bool => is_array($task))->take(80) as $taskIndex => $taskDefinition) {
                 $taskKey = trim((string) ($taskDefinition['task_key'] ?? ''));
+
+                if ($taskKey === 'loop.end') {
+                    if (is_array($openLoopEnd)) {
+                        $tasks[] = $openLoopEnd;
+                        $taskCount++;
+                        $openLoopEnd = null;
+                    }
+
+                    continue;
+                }
+
                 $catalogDefinition = $taskKey !== '' ? $this->catalog->task($taskKey) : null;
 
-                if (! $catalogDefinition || $taskKey === 'loop.end') {
+                if (! $catalogDefinition) {
                     continue;
+                }
+
+                if ($taskKey === 'loop.for_each_element' && is_array($openLoopEnd)) {
+                    $tasks[] = $openLoopEnd;
+                    $taskCount++;
+                    $openLoopEnd = null;
                 }
 
                 $parameters = is_array($taskDefinition['parameters'] ?? null) ? $taskDefinition['parameters'] : [];
                 $baseKey = Str::slug((string) ($taskDefinition['title'] ?? $catalogDefinition['label'] ?? $taskKey)) ?: 'task';
                 $requestedKey = trim((string) ($taskDefinition['key'] ?? ''));
                 $cardKey = $this->uniqueTaskKey(
-                    $tasks,
+                    is_array($openLoopEnd) ? [...$tasks, $openLoopEnd] : $tasks,
                     $requestedKey !== '' ? $requestedKey : $baseKey.'-'.($taskIndex + 1),
                 );
                 $overrides = [
@@ -210,7 +230,7 @@ class WorkflowCopilotPlanningService
                         'loop_end_key' => $endKey,
                     ]);
                     $tasks[] = $card;
-                    $tasks[] = $this->catalog->cardFromDefinition('loop.end', [
+                    $openLoopEnd = $this->catalog->cardFromDefinition('loop.end', [
                         'key' => $endKey,
                         'title' => 'Loop-Ende: '.$card['title'],
                         'description' => 'Automatisches Endsegment fuer '.$card['title'].'.',
@@ -221,12 +241,17 @@ class WorkflowCopilotPlanningService
                         'loop_start_key' => $cardKey,
                         'loop_end_key' => $endKey,
                     ]);
-                    $taskCount += 2;
+                    $taskCount++;
 
                     continue;
                 }
 
                 $tasks[] = $card;
+                $taskCount++;
+            }
+
+            if (is_array($openLoopEnd)) {
+                $tasks[] = $openLoopEnd;
                 $taskCount++;
             }
 

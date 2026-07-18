@@ -308,6 +308,27 @@ class WorkflowCopilotSessionService
         });
     }
 
+    public function requestReplan(WorkflowCopilotSession $session, string $instruction, array $metadata = []): WorkflowCopilotSession
+    {
+        $this->instruction($session, $instruction, $metadata);
+        $session = $this->updateState(
+            $session,
+            [
+                'active_repair_plan' => null,
+                'processed_checkpoint_id' => null,
+                'repair_counted_checkpoint_id' => null,
+                'replan_requested_at' => now()->toIso8601String(),
+                'replan_reason' => Str::limit(trim($instruction), 2000, ''),
+            ],
+            'repairing',
+            'Die Benutzeranweisung wird sofort in einer neuen Reparaturplanung verarbeitet.',
+        );
+
+        return $session->status === WorkflowCopilotSession::STATUS_PAUSED
+            ? $this->resume($session)
+            : ($session->fresh() ?? $session);
+    }
+
     public function pause(WorkflowCopilotSession $session, ?string $reason = null): WorkflowCopilotSession
     {
         return $this->transition(

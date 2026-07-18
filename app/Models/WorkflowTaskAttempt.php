@@ -20,6 +20,8 @@ class WorkflowTaskAttempt extends Model
         'kind',
         'status',
         'task_key',
+        'resume_task_key',
+        'failure_task_key',
         'task_title',
         'task_definition_json',
         'input_json',

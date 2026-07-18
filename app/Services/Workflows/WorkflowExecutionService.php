@@ -1210,21 +1210,28 @@ class WorkflowExecutionService
             ->firstOrFail();
         $step = $stepRun->workflowStep;
         $context = is_array($run->context_json) ? $run->context_json : [];
-        $currentTaskKey = trim((string) ($context['copilot_current_task_key'] ?? ''));
+        $resumeTaskKey = trim((string) ($context['copilot_current_task_key'] ?? ''));
         $transientTask = is_array($context['copilot_transient_task'] ?? null) ? $context['copilot_transient_task'] : [];
         $isProbe = $transientTask !== [];
 
-        if ($currentTaskKey === '') {
-            $currentTaskKey = trim((string) (
+        if ($resumeTaskKey === '') {
+            $resumeTaskKey = trim((string) (
                 $result['failedTaskKey']
                 ?? $result['completedTaskKey']
                 ?? data_get($step->task_cards, '0.key', $step->action_key ?: 'step-'.$step->id)
             ));
         }
 
+        $failureTaskKey = trim((string) ($result['failedTaskKey'] ?? $result['failed_task_key'] ?? ''));
+        $completedTaskKey = trim((string) ($result['completedTaskKey'] ?? $result['completed_task_key'] ?? ''));
+
         if ($successful) {
             $result = $this->applyExternalResult($stepRun, $result);
+        } elseif (in_array($stepRun->external_run_type, ['workflow-task', 'client-controller-workflow-task', 'client-controller-workflow-run'], true)) {
+            $this->applyWorkflowVariablesResult($run, $result);
         }
+        $run = $run->fresh();
+        $context = is_array($run->context_json) ? $run->context_json : [];
 
         $outcome = $this->resultOutcome($result);
         $hasFailureOutcome = in_array($outcome, ['failed', 'timeout'], true);
@@ -1245,7 +1252,7 @@ class WorkflowExecutionService
         } elseif ($workflowMayContinue) {
             [$nextAction, $nextTaskKey] = $this->successfulCheckpointContinuation(
                 $step,
-                $currentTaskKey,
+                $resumeTaskKey,
                 $result,
             );
         }
@@ -1263,7 +1270,8 @@ class WorkflowExecutionService
             && (int) ($existingCheckpoint['workflow_step_run_id'] ?? 0) === (int) $stepRun->id
             && (int) ($existingCheckpoint['workflow_step_id'] ?? 0) === (int) $step->id
             && (string) ($existingCheckpoint['external_run_id'] ?? '') === (string) $stepRun->external_run_id
-            && (string) ($existingCheckpoint['task_key'] ?? '') === $currentTaskKey
+            && (string) ($existingCheckpoint['resume_task_key'] ?? $existingCheckpoint['task_key'] ?? '') === $resumeTaskKey
+            && (string) ($existingCheckpoint['failure_task_key'] ?? '') === $failureTaskKey
             && (bool) ($existingCheckpoint['successful'] ?? false) === $workflowMayContinue
             && (string) ($existingCheckpoint['outcome'] ?? '') === $outcome
             && (string) ($existingCheckpoint['result_signature'] ?? '') === $resultSignature;
@@ -1273,8 +1281,12 @@ class WorkflowExecutionService
             'workflow_step_id' => (int) $step->id,
             'workflow_step_run_id' => (int) $stepRun->id,
             'workflow_step_name' => (string) $step->name,
-            'task_key' => $currentTaskKey,
-            'task_title' => (string) (collect($step->task_cards)->firstWhere('key', $currentTaskKey)['title'] ?? $transientTask['title'] ?? $currentTaskKey),
+            'task_key' => $resumeTaskKey,
+            'resume_task_key' => $resumeTaskKey,
+            'failure_task_key' => $failureTaskKey !== '' ? $failureTaskKey : null,
+            'completed_task_key' => $completedTaskKey !== '' ? $completedTaskKey : null,
+            'failure_reason_code' => $result['reason_code'] ?? $result['reasonCode'] ?? null,
+            'task_title' => (string) (collect($step->task_cards)->firstWhere('key', $failureTaskKey ?: $resumeTaskKey)['title'] ?? $transientTask['title'] ?? ($failureTaskKey ?: $resumeTaskKey)),
             'successful' => $workflowMayContinue,
             'task_successful' => $taskSuccessful,
             'routed_failure' => $routedFailure,
@@ -1358,6 +1370,7 @@ class WorkflowExecutionService
         WorkflowStep $step,
         string $currentTaskKey,
         array $result,
+        bool $skipAtomicLoopBody = true,
     ): array {
         $route = $this->routeForResult($step, $this->resultOutcome($result), $result);
         $taskRequestedRoute = trim((string) ($route['_source_card_key'] ?? '')) !== '';
@@ -1385,7 +1398,7 @@ class WorkflowExecutionService
         if ($currentIndex !== false) {
             $currentTask = $tasks->get((int) $currentIndex);
 
-            if (is_array($currentTask) && (string) ($currentTask['task_key'] ?? '') === 'loop.for_each_element') {
+            if ($skipAtomicLoopBody && is_array($currentTask) && (string) ($currentTask['task_key'] ?? '') === 'loop.for_each_element') {
                 $endKey = trim((string) ($currentTask['loop_end_key'] ?? $currentTask['loopEndKey'] ?? ''));
                 $pairId = trim((string) ($currentTask['loop_pair_id'] ?? $currentTask['loopPairId'] ?? ''));
                 $endIndex = $tasks->search(function (array $task) use ($endKey, $pairId): bool {
@@ -1437,17 +1450,27 @@ class WorkflowExecutionService
 
         if ($successful) {
             $result = $this->applyExternalResult($stepRun, $result);
+        } elseif (in_array($stepRun->external_run_type, ['workflow-task', 'client-controller-workflow-task', 'client-controller-workflow-run'], true)) {
+            $this->applyWorkflowVariablesResult($run, $result);
         }
+        $run = $run->fresh();
+        $context = is_array($run->context_json) ? $run->context_json : [];
+
+        $studioSingleTask = (bool) ($context['studio_single_task'] ?? false);
 
         if ($workflowMayContinue) {
-            [$nextAction, $nextTaskKey] = $this->successfulCheckpointContinuation($step, $currentTaskKey, $result);
+            [$nextAction, $nextTaskKey] = $this->successfulCheckpointContinuation(
+                $step,
+                $currentTaskKey,
+                $result,
+                ! $studioSingleTask,
+            );
         } else {
             $nextAction = 'next_task';
             $nextTaskKey = $currentTaskKey;
         }
 
-        $pauseAfterTask = (bool) ($context['manual_pause_requested'] ?? false)
-            || (bool) ($context['studio_single_task'] ?? false);
+        $pauseAfterTask = (bool) ($context['manual_pause_requested'] ?? false) || $studioSingleTask;
         unset($context['studio_single_task']);
 
         if ($nextAction === 'complete_step' && $workflowMayContinue) {
@@ -1684,13 +1707,11 @@ class WorkflowExecutionService
             'current_workflow_step_id' => $step->id,
         ])->save();
 
-        $hasTaskCursor = trim((string) data_get($run->context_json, 'next_task_key', '')) !== '';
-
         if ($this->usesClientController($run) && $step->task_cards !== []) {
             return $this->startClientControllerWorkflowTask($run, $step, $stepRun);
         }
 
-        if ($hasTaskCursor && $step->task_cards !== []) {
+        if ($step->task_cards !== []) {
             return $this->startWorkflowTaskStep($run, $step, $stepRun);
         }
 
@@ -1698,7 +1719,7 @@ class WorkflowExecutionService
             WorkflowStep::TYPE_MAIL_ACCOUNT_REGISTRATION => $this->startMailRegistrationStep($run, $step, $stepRun),
             WorkflowStep::TYPE_WEBMAIL_LOGIN => $this->startWebmailLoginStep($run, $step, $stepRun),
             WorkflowStep::TYPE_WAIT => $this->completeWaitStep($run, $step, $stepRun),
-            default => $step->task_cards !== [] ? $this->startWorkflowTaskStep($run, $step, $stepRun) : $this->completePlannedActionStep($run, $step, $stepRun),
+            default => $this->completePlannedActionStep($run, $step, $stepRun),
         };
     }
 
@@ -2724,6 +2745,16 @@ class WorkflowExecutionService
 
     protected function routeForResult(WorkflowStep $step, string $outcome, array $result): ?array
     {
+        $dynamicTarget = trim((string) ($result['routeTargetKey'] ?? $result['route_target_key'] ?? ''));
+        if ((bool) ($result['routeRequested'] ?? $result['route_requested'] ?? false) && $dynamicTarget !== '') {
+            return $this->normalizeRoute($step, [
+                'type' => 'card',
+                'action_key' => $step->action_key,
+                'card_key' => $dynamicTarget,
+                '_source_card_key' => trim((string) ($result['completedTaskKey'] ?? $result['completed_task_key'] ?? '')),
+            ]);
+        }
+
         if ((bool) ($result['routeRequested'] ?? false)) {
             $completedTaskKey = trim((string) (
                 $result['completedTaskKey']
@@ -3489,10 +3520,10 @@ class WorkflowExecutionService
 
     protected function applyWorkflowVariablesResult(WorkflowRun $run, array $result): void
     {
-        $variables = array_filter([
+        $variables = [
             ...(is_array($result['workflow_variables'] ?? null) ? $result['workflow_variables'] : []),
             ...(is_array($result['workflowVariables'] ?? null) ? $result['workflowVariables'] : []),
-        ], fn (mixed $value): bool => $value !== null);
+        ];
 
         if (array_key_exists('workflow_return', $result) || array_key_exists('workflowReturn', $result)) {
             $variables['workflow_return'] = array_key_exists('workflow_return', $result)
@@ -3519,6 +3550,13 @@ class WorkflowExecutionService
             is_array($context['workflowVariables'] ?? null) ? $context['workflowVariables'] : [],
             $variables,
         );
+        $loopState = is_array($context['loop_state'] ?? null) ? $context['loop_state'] : [];
+        foreach ($variables as $name => $value) {
+            if (is_string($name) && str_starts_with($name, '__workflow_loop_state_') && is_array($value)) {
+                $loopState[substr($name, strlen('__workflow_loop_state_'))] = $value;
+            }
+        }
+        $context['loop_state'] = $loopState;
 
         if (array_key_exists('workflow_return', $variables)) {
             $context['workflow_return'] = $variables['workflow_return'];

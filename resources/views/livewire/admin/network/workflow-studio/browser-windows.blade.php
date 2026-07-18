@@ -11,7 +11,7 @@
                     <span class="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full border-2 border-slate-900 {{ $window['connected'] ? 'bg-emerald-400' : 'bg-slate-500' }}"></span>
                 </span>
                 <div class="min-w-0 flex-1">
-                    <div class="flex items-center gap-2"><strong class="truncate text-xs text-white">{{ $window['name'] }}</strong><span class="rounded-full bg-white/10 px-1.5 py-0.5 text-[8px] font-bold text-slate-300">{{ $window['runtime'] ? 'live' : $window['task_count'].' Tasks' }}</span></div>
+                    <div class="flex items-center gap-2"><strong class="truncate text-xs text-white">{{ $window['name'] }}</strong><span class="rounded-full bg-white/10 px-1.5 py-0.5 text-[8px] font-bold text-slate-300">{{ $window['runtime'] ? 'live' : $window['task_count'].' Tasks' }}</span>@if($window['active'])<span class="rounded-full bg-cyan-300 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wide text-slate-950">aktiv</span>@endif</div>
                     <p class="mt-1 truncate text-[10px] text-slate-400">{{ $window['title'] ?: ($window['url'] ?: 'Noch kein Browserzustand') }}</p>
                 </div>
                 <button type="button" wire:click="openSelectorProbe(@js($window['name']))" class="shrink-0 rounded-lg border border-cyan-300/20 bg-cyan-300/10 px-2.5 py-1.5 text-[9px] font-bold text-cyan-200 transition hover:border-cyan-300/50 hover:bg-cyan-300/20">Selector prüfen</button>

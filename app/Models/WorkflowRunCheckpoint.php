@@ -22,6 +22,8 @@ class WorkflowRunCheckpoint extends Model
         'sequence',
         'phase',
         'task_key',
+        'resume_task_key',
+        'failure_task_key',
         'cursor_json',
         'context_json',
         'browser_state_json',

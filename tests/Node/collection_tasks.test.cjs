@@ -367,6 +367,80 @@ test('search result wrapper supports fallback selectors and optional fields', as
   });
 });
 
+test('search result wrapper reads the href from an anchor loop scope after process resume', async () => {
+  const resultAnchor = new FakeHandle({ href: '/profile' }, {
+    h3: [new FakeHandle({ text: 'Profile result' })],
+  });
+  const page = {
+    $$: async (selector) => (selector === '#search a:has(h3)' ? [resultAnchor] : []),
+    url: () => 'https://search.example/query',
+  };
+  const loopContext = {
+    page,
+    workflow_variables: {},
+    input: {
+      key: 'result-loop',
+      selector: '#search a:has(h3)',
+      limit: 1,
+      store_current_element_as: 'current_result',
+      store_index_as: 'result_index',
+    },
+  };
+
+  const active = await loopTask.run(loopContext);
+  assert.equal(active.current_index, 0);
+
+  const resumedContext = {
+    page,
+    workflow_variables: structuredClone(loopContext.workflow_variables),
+    input: {
+      scope_variable: 'current_result',
+      output_variable: 'current_result',
+      title_selector: 'h3',
+      link_selector: 'a',
+    },
+  };
+  const result = await readSearchResultTask.run(resumedContext);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.result.titel, 'Profile result');
+  assert.equal(result.result.url, 'https://search.example/profile');
+  assert.equal(result.selectors_used.url, ':scope');
+});
+
+test('loop cursor survives isolated single-task runner processes', async () => {
+  const handles = [
+    new FakeHandle({ identity: 'item:one', text: 'One' }),
+    new FakeHandle({ identity: 'item:two', text: 'Two' }),
+  ];
+  const page = { $$: async () => handles };
+  const input = {
+    key: 'isolated-loop',
+    selector: '.item',
+    store_current_element_as: 'current_item',
+    store_index_as: 'item_index',
+  };
+  const firstContext = { page, workflow_variables: {}, input };
+  const first = await loopTask.run(firstContext);
+  assert.equal(first.current_index, 0);
+
+  const endContext = {
+    workflow_variables: structuredClone(firstContext.workflow_variables),
+    input: { loop_start_key: 'isolated-loop' },
+  };
+  const end = await loopEndTask.run(endContext);
+  assert.equal(end.route_target_key, 'isolated-loop');
+
+  const secondContext = {
+    page,
+    workflow_variables: structuredClone(endContext.workflow_variables),
+    input,
+  };
+  const second = await loopTask.run(secondContext);
+  assert.equal(second.current_index, 1);
+  assert.equal(second.processed_count, 1);
+});
+
 test('array length branches and workflow return expose the requested status payload', async () => {
   const context = { workflow_variables: { top_results: [{ url: 'a' }, { url: 'b' }, { url: 'c' }] } };
   context.input = {

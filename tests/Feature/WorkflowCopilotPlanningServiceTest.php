@@ -72,6 +72,11 @@ class WorkflowCopilotPlanningServiceTest extends TestCase
                         'task_key' => 'wait.selector',
                         'title' => 'Suchfeld abwarten',
                         'parameters' => ['selector' => 'textarea[title="Suche"]'],
+                    ], [
+                        'key' => 'ergebnis-zurueckgeben',
+                        'task_key' => 'data.workflow_return',
+                        'title' => 'Ergebnis zurueckgeben',
+                        'parameters' => ['selector' => 'search_results'],
                     ]],
                 ]],
             ]);
@@ -81,10 +86,10 @@ class WorkflowCopilotPlanningServiceTest extends TestCase
             $workflow,
             'Eine Google-Suche ohne Cookie-Schleife ausfuehren.',
             ['assertions' => ['Rückgabewert = array']],
-            ['query' => 'OpenAI'],
+            ['query' => 'OpenAI', 'search_results' => []],
         );
 
-        $this->assertSame(3, $result['task_count']);
+        $this->assertSame(4, $result['task_count']);
         $steps = $workflow->fresh()->steps()->ordered()->get();
         $this->assertSame(['cookie-pruefen', 'suche'], $steps->pluck('action_key')->all());
         $cookieTasks = $steps->first()->task_cards;

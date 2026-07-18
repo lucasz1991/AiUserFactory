@@ -6,7 +6,9 @@ const {
   isObject,
   parseJson,
   privateRegistry,
+  queryElements,
   readFields,
+  resolveVariable,
   setWorkflowVariable,
 } = require('../lib/collection.cjs');
 
@@ -19,8 +21,22 @@ async function run(context = {}) {
   const input = context.input || {};
   const scopeName = cleanName(input.scope_variable ?? input.scopeVariable, 'current_result');
   const outputName = cleanName(input.output_variable ?? input.outputVariable, scopeName);
-  const scope = privateRegistry(context, '__workflowElementScopes')[scopeName];
+  let scope = privateRegistry(context, '__workflowElementScopes')[scopeName];
   const fallbacks = parseJson(input.fallbacks, {});
+
+  if (!scope) {
+    const descriptor = resolveVariable(context, scopeName, null);
+    if (isObject(descriptor) && typeof context.page?.$$ === 'function') {
+      const queried = await queryElements(
+        context.page,
+        descriptor.selector,
+        bool(descriptor.only_visible ?? descriptor.onlyVisible, true),
+      );
+      const offset = Math.max(0, Number(descriptor.offset || 0));
+      const index = Math.max(0, Number(descriptor.index || 0));
+      scope = queried.elements[offset + index] || null;
+    }
+  }
 
   if (!scope) {
     return { ok: false, status: 'failed', statusMessage: `Suchtreffer-Scope "${scopeName}" ist nicht aktiv.` };
@@ -33,7 +49,7 @@ async function run(context = {}) {
   };
   const fields = [
     { name: 'titel', selector: input.title_selector ?? input.titleSelector ?? 'h3', fallback_selectors: fallbackList(fallbacks, 'title'), type: 'text', required: true, ...common },
-    { name: 'url', selector: input.link_selector ?? input.linkSelector ?? 'a', fallback_selectors: fallbackList(fallbacks, 'link'), type: 'href', required: true, normalize_url: bool(input.normalize_url ?? input.normalizeUrl, true), ...common },
+    { name: 'url', selector: input.link_selector ?? input.linkSelector ?? 'a', fallback_selectors: fallbackList(fallbacks, 'link'), scope_self_fallback: true, type: 'href', required: true, normalize_url: bool(input.normalize_url ?? input.normalizeUrl, true), ...common },
     { name: 'description', selector: input.description_selector ?? input.descriptionSelector, fallback_selectors: fallbackList(fallbacks, 'description'), type: 'text', required: false, ...common },
     { name: 'site_name', selector: input.site_name_selector ?? input.siteNameSelector, fallback_selectors: fallbackList(fallbacks, 'site_name'), type: 'text', required: false, ...common },
     { name: 'breadcrumb', selector: input.breadcrumb_selector ?? input.breadcrumbSelector, fallback_selectors: fallbackList(fallbacks, 'breadcrumb'), type: 'text', required: false, ...common },

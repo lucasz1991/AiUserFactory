@@ -7,6 +7,7 @@ const {
   number,
   privateRegistry,
   queryElements,
+  resolveVariable,
   setWorkflowVariable,
   text,
 } = require('../lib/collection.cjs');
@@ -19,6 +20,14 @@ function routeResult(target, outcome) {
     route_outcome: outcome,
     routeOutcome: outcome,
   };
+}
+
+function stateVariableName(taskKey) {
+  return `__workflow_loop_state_${taskKey}`;
+}
+
+function persistState(context, taskKey, state) {
+  setWorkflowVariable(context, stateVariableName(taskKey), { ...state });
 }
 
 async function elementIdentity(handle, index) {
@@ -95,6 +104,14 @@ async function run(context = {}) {
     let currentSelection = null;
 
     if (!state) {
+      const persistedState = resolveVariable(context, stateVariableName(taskKey), null);
+      if (persistedState && typeof persistedState === 'object' && persistedState.selector === selector) {
+        state = { ...persistedState };
+        states[taskKey] = state;
+      }
+    }
+
+    if (!state) {
       const offset = Math.floor(number(input.offset, 0, 0, 10000));
       const limit = Math.floor(number(input.limit, 0, 0, 10000));
       state = {
@@ -120,6 +137,7 @@ async function run(context = {}) {
       state.skipped = state.hiddenCount + Math.min(offset, currentSelection.queried.elements.length);
       state.identityKeys = currentSelection.identityKeys;
       states[taskKey] = state;
+      persistState(context, taskKey, state);
     } else if (state.active) {
       const skipped = Boolean(skippedScopes[scopeName]);
       const collectToArray = text(input.collect_to_array ?? input.collectToArray);
@@ -157,12 +175,14 @@ async function run(context = {}) {
       }
       state.cursor += 1;
       state.active = false;
+      persistState(context, taskKey, state);
     }
 
     if (state.cursor >= state.selectedCount) {
       state.complete = true;
       delete scopes[scopeName];
       setWorkflowVariable(context, indexName, null);
+      persistState(context, taskKey, state);
       const empty = state.selectedCount === 0;
       const exitTarget = empty
         ? (emptyTarget || completionTarget || loopEndKey)
@@ -211,9 +231,12 @@ async function run(context = {}) {
     setWorkflowVariable(context, scopeName, {
       index: currentIndex,
       selector,
+      offset: state.offset,
+      only_visible: state.onlyVisible,
       identity: identityKey || null,
     });
     setWorkflowVariable(context, indexName, currentIndex);
+    persistState(context, taskKey, state);
 
     return {
       ok: true,

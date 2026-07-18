@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Enums\WorkflowCopilotPermissionMode;
 use App\Jobs\RunWorkflowJob;
+use App\Jobs\WorkflowCopilotSupervisorJob;
 use App\Livewire\Admin\Network\WorkflowManager;
 use App\Livewire\Admin\Network\WorkflowsIndex;
 use App\Livewire\Admin\Network\WorkflowStudio;
@@ -253,7 +254,7 @@ class WorkflowStudioTest extends TestCase
             ->assertSee('So funktionieren Workflow, Listen, Tasks und Weiterleitungen')
             ->assertSee('Browserfenster')
             ->assertSee('Selector prüfen')
-            ->assertSee('Daten & Log')
+            ->assertSee('Daten & Logs', false)
             ->assertSee('Copilot & Ziele', false)
             ->assertSee('Kritisch nachfragen')
             ->assertSeeHtml('data-studio-selected-task="true"')
@@ -662,6 +663,55 @@ class WorkflowStudioTest extends TestCase
         $this->assertSame(1, $workflow->steps()->count());
         $this->assertSame(0, $workflow->runs()->count());
         $this->assertSame([0, 1], $workflow->studioRevisions()->pluck('revision_number')->all());
+    }
+
+    public function test_empty_workflow_is_planned_validated_and_started_from_the_studio(): void
+    {
+        Queue::fake();
+        $workflow = Workflow::query()->create([
+            'name' => 'Leerer Studio Workflow',
+            'slug' => 'leerer-studio-workflow',
+            'description' => '',
+            'category' => 'test',
+            'is_active' => true,
+            'is_locked' => false,
+            'trigger_type' => 'manual',
+            'settings_json' => [],
+        ]);
+        $ai = Mockery::mock(AiConnectionService::class);
+        $ai->shouldReceive('json')->once()->andReturn([
+            'summary' => 'Katalogkonformen Startschritt erstellen.',
+            'assumptions' => [],
+            'steps' => [[
+                'name' => 'Start',
+                'action_key' => 'start',
+                'type' => WorkflowStep::TYPE_WAIT,
+                'routes' => ['success' => ['type' => 'end']],
+                'tasks' => [[
+                    'key' => 'kurz-warten',
+                    'task_key' => 'wait.seconds',
+                    'title' => 'Kurz warten',
+                    'parameters' => ['value' => 1],
+                ]],
+            ]],
+        ]);
+        $this->app->instance(AiConnectionService::class, $ai);
+
+        Livewire::test(WorkflowStudio::class, ['workflow' => $workflow])
+            ->set('goal', 'Einen gueltigen Testlauf vorbereiten.')
+            ->set('successCriteria', 'Der Workflow wird erfolgreich beendet')
+            ->set('workflowInputs', '{"browser_window":"main"}')
+            ->call('startCopilot')
+            ->assertHasNoErrors();
+
+        $copilot = $workflow->fresh()->copilotSessions()->sole();
+        $this->assertSame('wait.seconds', data_get($workflow->fresh()->steps()->first()?->task_cards, '0.task_key'));
+        $this->assertNotEmpty(data_get($copilot->state_json, 'definition_validation'));
+        $this->assertSame('workflow-studio', data_get($copilot->state_json, 'launch_source'));
+        Queue::assertPushed(
+            WorkflowCopilotSupervisorJob::class,
+            fn (WorkflowCopilotSupervisorJob $job): bool => $job->workflowCopilotSessionId === $copilot->id,
+        );
     }
 
     private function workflow(): array
