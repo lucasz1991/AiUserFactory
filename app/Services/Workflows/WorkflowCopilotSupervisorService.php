@@ -33,6 +33,7 @@ class WorkflowCopilotSupervisorService
         protected WorkflowCopilotSessionService $sessions,
         protected WorkflowCopilotObservationService $observations,
         protected WorkflowCopilotVisionService $vision,
+        protected WorkflowCopilotPlanningService $planning,
         protected WorkflowCopilotRepairService $repairs,
         protected WorkflowCopilotPromptContextService $promptContexts,
         protected WorkflowRevisionService $revisions,
@@ -98,6 +99,7 @@ class WorkflowCopilotSupervisorService
         }
 
         if (! $run) {
+            $session = $this->createInitialWorkflowDefinition($session);
             $this->startRepairRun($session);
 
             return;
@@ -1098,12 +1100,15 @@ class WorkflowCopilotSupervisorService
                     $session,
                     (int) $session->current_revision,
                     (string) ($plan['reason'] ?? 'Kataloggebundene strukturelle Workflow-Reparatur.'),
-                    function (Workflow $workflow) use ($operations, $session, $observation, $checkpoint): void {
+                    function (Workflow $workflow) use ($operations, $session, $observation, $checkpoint, $vision): void {
                         $this->repairs->applyStructuralOperations(
                             $workflow,
                             $operations,
                             $session,
-                            array_replace($observation, ['copilot_checkpoint' => $checkpoint]),
+                            array_replace($observation, [
+                                'copilot_checkpoint' => $checkpoint,
+                                'copilot_vision' => $vision,
+                            ]),
                         );
                     },
                 );
@@ -1618,6 +1623,78 @@ class WorkflowCopilotSupervisorService
             'executing',
             'info',
             true,
+        );
+    }
+
+    protected function createInitialWorkflowDefinition(WorkflowCopilotSession $session): WorkflowCopilotSession
+    {
+        $workflow = $session->workflow()->with('steps')->firstOrFail();
+
+        if (! $this->planning->needsInitialPlan($workflow)) {
+            return $session;
+        }
+
+        $this->sessions->appendEvent(
+            $session,
+            'planning.started',
+            'Der leere Workflow wird aus Ziel, Eingaben und Task-Katalog vollstaendig mit Listen, Tasks und Routen aufgebaut.',
+            ['workflow_id' => (int) $workflow->id],
+            'planning',
+            'info',
+            true,
+        );
+        $plan = [];
+        $revision = $this->captureCopilotAiUsage(
+            $session,
+            function () use ($session, &$plan): array {
+                $revision = $this->revisions->apply(
+                    $session,
+                    (int) $session->current_revision,
+                    'Vollstaendige kataloggebundene Erstdefinition fuer den leeren Workflow.',
+                    function (Workflow $workflow) use ($session, &$plan): void {
+                        $plan = $this->planning->planAndApply(
+                            $workflow,
+                            (string) $session->goal,
+                            is_array($session->success_criteria_json) ? $session->success_criteria_json : [],
+                            is_array($session->workflow_inputs_json) ? $session->workflow_inputs_json : [],
+                        );
+                    },
+                );
+
+                return [
+                    'workflow_revision_id' => (int) $revision->id,
+                    'revision_number' => (int) $revision->revision_number,
+                ];
+            },
+            'initial_planning',
+        );
+        $session = $session->fresh(['workflow.steps']) ?? $session;
+        $this->sessions->appendEvent(
+            $session,
+            'planning.completed',
+            'Der leere Workflow wurde als ausfuehrbare Erstdefinition gespeichert; der erste System-Test startet jetzt.',
+            [
+                ...$revision,
+                'step_count' => count($plan['steps'] ?? []),
+                'task_count' => (int) ($plan['task_count'] ?? 0),
+                'summary' => $plan['summary'] ?? null,
+            ],
+            'planning',
+            'success',
+            true,
+        );
+
+        return $this->sessions->transition(
+            $session,
+            WorkflowCopilotSession::STATUS_RUNNING,
+            'executing',
+            [
+                'current_step_name' => data_get($plan, 'steps.0.name'),
+                'current_task_key' => data_get($plan, 'steps.0.tasks.0.key'),
+                'last_action' => 'Workflow-Erstdefinition erstellt',
+                'next_action' => 'Ersten System-Test starten',
+            ],
+            'Die automatisch erstellte Workflow-Erstdefinition wird jetzt getestet.',
         );
     }
 

@@ -70,6 +70,8 @@ class WorkflowStudio extends Component
 
     public bool $showCopilotSettingsModal = false;
 
+    public bool $showSelectorProbeModal = false;
+
     public string $observedCursorSignature = '';
 
     public function mount(Workflow $workflow): void
@@ -78,7 +80,10 @@ class WorkflowStudio extends Component
         $this->mode = in_array((string) request()->query('mode'), ['manual', 'assisted', 'autonomous'], true)
             ? (string) request()->query('mode')
             : 'manual';
-        $requestedSessionId = (int) request()->query('session', 0);
+        $requestedRun = WorkflowRun::query()
+            ->where('workflow_id', $workflow->getKey())
+            ->find((int) request()->query('run', 0));
+        $requestedSessionId = (int) request()->query('session', $requestedRun?->workflow_studio_session_id ?? 0);
         $session = $requestedSessionId > 0
             ? WorkflowStudioSession::query()
                 ->where('workflow_id', $workflow->getKey())
@@ -91,8 +96,20 @@ class WorkflowStudio extends Component
         );
         app(WorkflowStudioRevisionService::class)->ensureBaseline($session);
 
+        if ($requestedRun) {
+            app(WorkflowStudioSessionService::class)->attachRun($session, $requestedRun);
+
+            if ($requestedRun->workflow_copilot_session_id && ! $session->workflow_copilot_session_id) {
+                $session->forceFill([
+                    'workflow_copilot_session_id' => $requestedRun->workflow_copilot_session_id,
+                ])->save();
+            }
+        }
+
         $this->studioSessionId = (int) $session->getKey();
-        $this->activeRunId = $session->active_workflow_run_id ? (int) $session->active_workflow_run_id : null;
+        $this->activeRunId = $requestedRun
+            ? (int) $requestedRun->id
+            : ($session->active_workflow_run_id ? (int) $session->active_workflow_run_id : null);
         $this->permissionMode = $session->permission_mode;
         $this->goal = (string) $session->goal;
         $this->successCriteria = collect($session->success_criteria_json ?: [])
@@ -473,6 +490,72 @@ class WorkflowStudio extends Component
         });
     }
 
+    public function pauseCopilot(): void
+    {
+        $this->perform('copilot.paused', function (): array {
+            $copilot = $this->copilotSessionOrFail();
+            app(WorkflowCopilotSessionService::class)->pause($copilot, 'Im Workflow Studio pausiert.');
+
+            return $this->result('paused', 'Copilot-Optimierung wurde pausiert.');
+        });
+    }
+
+    public function resumeCopilot(): void
+    {
+        $this->perform('copilot.resumed', function (): array {
+            $copilot = app(WorkflowCopilotSessionService::class)->resume($this->copilotSessionOrFail());
+            WorkflowCopilotSupervisorJob::dispatch((int) $copilot->getKey());
+
+            return $this->result('running', 'Copilot-Optimierung wird fortgesetzt.');
+        });
+    }
+
+    public function restartCopilot(): void
+    {
+        $this->perform('copilot.restarted', function (): array {
+            $copilot = app(WorkflowCopilotSessionService::class)->restart(
+                $this->copilotSessionOrFail(),
+                'Vollstaendiger Neustart wurde im Workflow Studio angefordert.',
+            );
+            $this->session()->forceFill([
+                'workflow_copilot_session_id' => $copilot->getKey(),
+                'mode' => 'autonomous',
+                'status' => 'running',
+                'started_at' => now(),
+                'finished_at' => null,
+            ])->save();
+            WorkflowCopilotSupervisorJob::dispatch((int) $copilot->getKey());
+
+            return $this->result('running', 'Copilot-Optimierung und Testlauf wurden vollstaendig neu gestartet.');
+        });
+    }
+
+    public function stopCopilot(): void
+    {
+        $this->perform('copilot.stopped', function (): array {
+            $copilot = $this->copilotSessionOrFail();
+            $copilot->loadMissing('activeRun');
+
+            if ($copilot->activeRun) {
+                app(WorkflowExecutionService::class)->cancel(
+                    $copilot->activeRun,
+                    'Workflow-Test wurde mit der Copilot-Sitzung gestoppt.',
+                );
+            }
+
+            app(WorkflowCopilotSessionService::class)->stop($copilot, 'Im Workflow Studio gestoppt.');
+
+            return $this->result('stopped', 'Copilot-Optimierung wurde gestoppt.');
+        });
+    }
+
+    public function openSelectorProbe(string $browserWindow): void
+    {
+        $this->probeBrowserWindow = trim($browserWindow) ?: 'main';
+        $this->probeAction = 'selector.search';
+        $this->showSelectorProbeModal = true;
+    }
+
     public function refreshStudio(): void
     {
         $session = $this->session()->fresh();
@@ -497,8 +580,9 @@ class WorkflowStudio extends Component
     public function render()
     {
         $workflow = $this->workflow()->load(['steps', 'studioRevisions']);
-        $session = $this->session()->load('events');
+        $session = $this->session()->load(['events', 'copilotSession']);
         $run = $this->activeRun()?->load(['stepRuns.workflowStep', 'artifacts']);
+        $copilotSession = $session->copilotSession;
         $taskNavigation = $this->taskNavigation($workflow);
         $selectedTaskIndex = $taskNavigation->search(fn (array $task): bool => (int) $task['step_id'] === (int) $this->selectedStepId
             && (string) $task['task_key'] === $this->selectedTaskKey
@@ -508,7 +592,10 @@ class WorkflowStudio extends Component
         return view('livewire.admin.network.workflow-studio', [
             'workflow' => $workflow,
             'session' => $session,
+            'copilotSession' => $copilotSession,
+            'copilotLatestEvent' => $copilotSession?->events()->latest('sequence')->first(),
             'run' => $run,
+            'browserWindows' => $this->browserWindowCards($workflow, $run),
             'steps' => $workflow->steps,
             'events' => $session->events()->latest('sequence')->limit(40)->get()->reverse()->values(),
             'persons' => Person::query()->orderBy('sort_order')->orderBy('id')->limit(500)->get(),
@@ -618,6 +705,77 @@ class WorkflowStudio extends Component
     private function activeRunOrFail(): WorkflowRun
     {
         return $this->activeRun() ?? throw new DomainException('Es ist kein Studio-Lauf aktiv.');
+    }
+
+    private function copilotSessionOrFail(): WorkflowCopilotSession
+    {
+        $session = $this->session();
+
+        return $session->workflow_copilot_session_id
+            ? WorkflowCopilotSession::query()->findOrFail($session->workflow_copilot_session_id)
+            : throw new DomainException('Es ist keine Copilot-Optimierung mit diesem Studio verbunden.');
+    }
+
+    private function browserWindowCards(Workflow $workflow, ?WorkflowRun $run): array
+    {
+        $context = $run && is_array($run->context_json) ? $run->context_json : [];
+        $runtimeWindows = data_get($context, 'browser_windows', []);
+
+        if (! is_array($runtimeWindows) || $runtimeWindows === []) {
+            $runtimeWindows = data_get($context, 'manual_pause_checkpoint.browser_windows', []);
+        }
+
+        $cards = collect(is_array($runtimeWindows) ? $runtimeWindows : [])
+            ->filter(fn (mixed $window): bool => is_array($window))
+            ->mapWithKeys(function (array $window, string|int $key): array {
+                $name = trim((string) ($window['key'] ?? $window['name'] ?? $key)) ?: 'main';
+
+                return [$name => [
+                    'name' => $name,
+                    'title' => trim((string) ($window['title'] ?? '')),
+                    'url' => trim((string) ($window['url'] ?? $window['currentUrl'] ?? '')),
+                    'target_id' => trim((string) ($window['targetId'] ?? $window['target_id'] ?? '')),
+                    'connected' => filled($window['targetId'] ?? $window['target_id'] ?? null),
+                    'runtime' => true,
+                    'task_count' => 0,
+                ]];
+            });
+
+        foreach ($workflow->steps as $step) {
+            foreach ($step->task_cards as $task) {
+                $name = trim((string) ($task['browser_window_name'] ?? $task['browser_window'] ?? ''));
+
+                if ($name === '') {
+                    continue;
+                }
+
+                $card = $cards->get($name, [
+                    'name' => $name,
+                    'title' => '',
+                    'url' => '',
+                    'target_id' => '',
+                    'connected' => false,
+                    'runtime' => false,
+                    'task_count' => 0,
+                ]);
+                $card['task_count']++;
+                $cards->put($name, $card);
+            }
+        }
+
+        if ($cards->isEmpty()) {
+            $cards->put('main', [
+                'name' => 'main',
+                'title' => '',
+                'url' => '',
+                'target_id' => '',
+                'connected' => false,
+                'runtime' => false,
+                'task_count' => 0,
+            ]);
+        }
+
+        return $cards->values()->all();
     }
 
     private function startInteractiveRun(

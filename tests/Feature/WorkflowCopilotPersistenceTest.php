@@ -90,6 +90,36 @@ class WorkflowCopilotPersistenceTest extends TestCase
         $this->assertNull($workflow->fresh()->active_workflow_copilot_session_id);
     }
 
+    public function test_restart_normalizes_a_finished_run_with_a_stale_active_status(): void
+    {
+        $workflow = $this->workflow('restart-stale-finished-run');
+        $service = app(WorkflowCopilotSessionService::class);
+        $session = $service->start($workflow, ['goal' => 'Workflow neu testen.']);
+        $staleRun = WorkflowRun::query()->create([
+            'run_uuid' => (string) str()->uuid(),
+            'workflow_id' => $workflow->id,
+            'workflow_copilot_session_id' => $session->id,
+            'status' => 'running',
+            'context_json' => [
+                'workflow_copilot_session_id' => $session->id,
+                'execution_target' => 'system',
+                'network_node_id' => null,
+                'device_id' => null,
+            ],
+            'finished_at' => now(),
+            'error_message' => 'Workflow-Lauf wurde manuell gestoppt.',
+        ]);
+        $service->attachRun($session, $staleRun);
+
+        $restarted = $service->restart($session->fresh(), 'Erneut starten.');
+
+        $this->assertNotSame($session->id, $restarted->id);
+        $this->assertSame(WorkflowCopilotSession::STATUS_RUNNING, $restarted->status);
+        $this->assertSame('cancelled', $staleRun->fresh()->status);
+        $this->assertNull($staleRun->fresh()->current_workflow_step_id);
+        $this->assertSame($restarted->id, $workflow->fresh()->active_workflow_copilot_session_id);
+    }
+
     public function test_events_are_sequenced_append_only_and_status_transitions_control_the_lock(): void
     {
         $workflow = $this->workflow('copilot-events');

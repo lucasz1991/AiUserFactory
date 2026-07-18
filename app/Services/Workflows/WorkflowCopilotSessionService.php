@@ -128,6 +128,7 @@ class WorkflowCopilotSessionService
             $activeRun = WorkflowRun::query()
                 ->where('workflow_id', $lockedWorkflow->getKey())
                 ->whereIn('status', self::ACTIVE_WORKFLOW_RUN_STATUSES)
+                ->whereNull('finished_at')
                 ->lockForUpdate()
                 ->orderByDesc('id')
                 ->first();
@@ -383,9 +384,25 @@ class WorkflowCopilotSessionService
                 true,
             );
 
-            if ($previous->activeRun) {
+            WorkflowRun::query()
+                ->where('workflow_id', $previous->workflow_id)
+                ->whereIn('status', self::ACTIVE_WORKFLOW_RUN_STATUSES)
+                ->whereNotNull('finished_at')
+                ->update([
+                    'status' => 'cancelled',
+                    'current_workflow_step_id' => null,
+                ]);
+
+            $activeRuns = WorkflowRun::query()
+                ->where('workflow_id', $previous->workflow_id)
+                ->whereIn('status', self::ACTIVE_WORKFLOW_RUN_STATUSES)
+                ->whereNull('finished_at')
+                ->lockForUpdate()
+                ->get();
+
+            foreach ($activeRuns as $activeRun) {
                 $this->workflowExecution->cancel(
-                    $previous->activeRun,
+                    $activeRun,
                     'Workflow-Test wurde fuer den Neustart der Copilot-Optimierung beendet.',
                 );
             }

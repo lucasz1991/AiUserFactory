@@ -912,7 +912,29 @@ class WorkflowCopilotRepairServiceTest extends TestCase
             $workflow->fresh(),
             $plan['operations'],
             $session->fresh(),
-            array_replace($observation, ['copilot_checkpoint' => $checkpoint]),
+            [
+                'page' => ['url' => 'https://www.google.com', 'state' => 'consent_blocked', 'window' => 'main'],
+                'page_state' => 'consent_blocked',
+                'interaction_map' => [],
+                'copilot_checkpoint' => [
+                    'task_key' => 'check-consent',
+                    'result' => [],
+                ],
+                'copilot_vision' => [
+                    ...$vision,
+                    'relevant_elements' => [[
+                        'element_ref' => 'el_reject',
+                        'semantic_label' => 'Alle ablehnen',
+                        'selector' => 'button:has-text("Alle ablehnen")',
+                    ]],
+                    'suggested_task_actions' => [[
+                        'task_key' => 'browser.click',
+                        'element_ref' => 'el_reject',
+                        'target_label' => 'Alle ablehnen',
+                        'target_selector' => 'button:has-text("Alle ablehnen")',
+                    ]],
+                ],
+            ],
         );
 
         $ordered = $workflow->steps()->ordered()->get();

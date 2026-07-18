@@ -9,6 +9,7 @@ use App\Models\WorkflowCopilotSession;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowStep;
 use App\Models\WorkflowStepRun;
+use App\Services\Ai\AiConnectionService;
 use App\Services\Ai\WorkflowCopilotAiUsageTracker;
 use App\Services\Ai\WorkflowCopilotVisionService;
 use App\Services\Workflows\WorkflowCopilotObservationService;
@@ -32,6 +33,67 @@ class WorkflowCopilotSupervisorTest extends TestCase
         parent::setUp();
 
         config(['app.key' => 'base64:MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTI=']);
+    }
+
+    public function test_inactive_empty_workflow_is_planned_with_lists_and_tasks_before_the_first_copilot_run(): void
+    {
+        Queue::fake();
+        $workflow = Workflow::query()->create([
+            'name' => 'Leerer Instagram Login',
+            'slug' => 'leerer-instagram-login',
+            'description' => '',
+            'category' => 'test',
+            'is_active' => false,
+            'is_locked' => false,
+            'trigger_type' => 'manual',
+            'settings_json' => [],
+        ]);
+        $session = app(WorkflowCopilotSessionService::class)->start($workflow, [
+            'goal' => 'Instagram Login vorbereiten.',
+            'success_criteria' => ['Loginseite ist sichtbar'],
+            'workflow_inputs' => ['browser_window' => 'main'],
+        ]);
+        $ai = Mockery::mock(AiConnectionService::class);
+        $ai->shouldReceive('json')
+            ->once()
+            ->withArgs(fn (string $prompt, string $system): bool => str_contains($prompt, 'workflow_authoring_capabilities')
+                && str_contains($prompt, 'workflow_task_catalog_index')
+                && str_contains($prompt, 'Es existieren absichtlich noch keine Listen oder Tasks')
+                && str_contains($system, 'Erstelle selbststaendig alle erforderlichen Listen'))
+            ->andReturn([
+                'summary' => 'Eine erste testbare Liste erstellen.',
+                'assumptions' => [],
+                'steps' => [[
+                    'name' => 'Browser vorbereiten',
+                    'action_key' => 'browser-vorbereiten',
+                    'type' => 'preparation',
+                    'description' => 'Erster autonom erstellter Testschritt.',
+                    'routes' => ['success' => ['type' => 'end']],
+                    'tasks' => [[
+                        'key' => 'kurz-warten',
+                        'task_key' => 'wait.seconds',
+                        'title' => 'Kurz warten',
+                        'parameters' => ['value' => 1],
+                    ]],
+                ]],
+            ]);
+        $this->app->instance(AiConnectionService::class, $ai);
+
+        app(WorkflowCopilotSupervisorService::class)->supervise($session->id);
+
+        $session->refresh();
+        $workflow->refresh();
+        $this->assertFalse((bool) $workflow->is_active);
+        $this->assertSame(1, $workflow->steps()->count());
+        $this->assertSame('wait.seconds', data_get($workflow->steps()->firstOrFail()->task_cards, '0.task_key'));
+        $this->assertSame(1, $workflow->copilot_revision);
+        $this->assertNotNull($session->active_workflow_run_id);
+        $this->assertSame('queued', $session->activeRun()->firstOrFail()->status);
+        $this->assertDatabaseHas('workflow_copilot_events', [
+            'workflow_copilot_session_id' => $session->id,
+            'event_type' => 'planning.completed',
+        ]);
+        Queue::assertPushed(RunWorkflowJob::class, 1);
     }
 
     public function test_failed_task_is_observed_probed_versioned_and_continued_without_duplicate_retry(): void

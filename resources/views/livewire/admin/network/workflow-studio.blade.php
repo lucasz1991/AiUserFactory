@@ -1,6 +1,6 @@
 <div
     x-data="{
-        activeTab: 'browser',
+        activeTab: @js($mode === 'autonomous' ? 'copilot' : 'browser'),
         openTab(tab) {
             this.activeTab = tab;
         },
@@ -55,9 +55,11 @@
             default => 'border-slate-300 bg-white text-slate-700',
         };
         $tabs = [
-            ['id' => 'browser', 'label' => 'Testen', 'description' => 'Einzelschritt & Browser', 'badge' => $isPaused ? 'pausiert' : null],
+            ['id' => 'browser', 'label' => 'Workflow', 'description' => 'Diagramm, Status & Auswahl', 'badge' => $isPaused ? 'pausiert' : null],
             ['id' => 'builder', 'label' => 'Workflow bearbeiten', 'description' => 'Katalog, Listen & Tasks', 'badge' => $taskCount.' Tasks'],
-            ['id' => 'runtime', 'label' => 'Laufdaten', 'description' => 'Variablen & Ereignisse', 'badge' => $run ? '#'.$run->id : null],
+            ['id' => 'copilot', 'label' => 'Copilot', 'description' => 'Ziel, Kontext & Optimierung', 'badge' => $copilotSession ? $copilotSession->status : null],
+            ['id' => 'tools', 'label' => 'Werkzeuge', 'description' => 'Selector & Task-Tests', 'badge' => count($browserWindows).' Fenster'],
+            ['id' => 'runtime', 'label' => 'Daten & Log', 'description' => 'Variablen, Loops & Ereignisse', 'badge' => $run ? '#'.$run->id : null],
         ];
     @endphp
 
@@ -78,9 +80,9 @@
                 <p class="mt-1 text-[10px] text-slate-400">Sitzung #{{ $session->id }} · Revision {{ $workflow->copilot_revision }} · {{ $permissionLabel }}</p>
             </div>
 
-            <button type="button" wire:click="$set('showCopilotSettingsModal', true)" class="inline-flex h-9 items-center gap-2 rounded-lg border border-white/15 bg-white/5 px-3 text-xs font-bold text-slate-200 transition hover:border-cyan-400/50 hover:bg-cyan-400/10 hover:text-cyan-200">
+            <button type="button" x-on:click="openTab('copilot')" class="inline-flex h-9 items-center gap-2 rounded-lg border border-white/15 bg-white/5 px-3 text-xs font-bold text-slate-200 transition hover:border-cyan-400/50 hover:bg-cyan-400/10 hover:text-cyan-200">
                 <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21H9.6v-.1A1.7 1.7 0 0 0 8 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 3.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H2V9.6h.1A1.7 1.7 0 0 0 3.6 8a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 8 3.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V2h4v.1A1.7 1.7 0 0 0 15 3.6a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 8c.16.37.37.7.6 1 .3.35.7.55 1.1.6h.1v4h-.1a1.7 1.7 0 0 0-1.7 1.4Z"></path></svg>
-                Ziele & Rechte
+                Copilot & Ziele
             </button>
         </div>
 
@@ -140,6 +142,8 @@
         @enderror
     </header>
 
+    @include('livewire.admin.network.workflow-studio.browser-windows')
+
     <nav class="relative z-20 shrink-0 overflow-x-auto border-b border-slate-200 bg-white px-3 lg:px-6" role="tablist" aria-label="Workflow-Studio Bereiche">
         <div class="flex min-w-max items-stretch gap-1">
             @foreach($tabs as $tab)
@@ -156,16 +160,16 @@
         <section x-cloak x-show="activeTab === 'builder'" class="h-full" role="tabpanel">
             <livewire:admin.network.workflow-studio-task-editor :workflow="$workflow" :studio-session-id="$session->id" :key="'workflow-studio-builder-'.$workflow->id.'-'.$session->id" />
         </section>
+        <section x-cloak x-show="activeTab === 'copilot'" class="h-full overflow-y-auto" role="tabpanel">
+            <div class="mx-auto max-w-[1500px] rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">@include('livewire.admin.network.workflow-studio.copilot')</div>
+        </section>
+        <section x-cloak x-show="activeTab === 'tools'" class="h-full" role="tabpanel">@include('livewire.admin.network.workflow-studio.tools')</section>
         <section x-cloak x-show="activeTab === 'runtime'" class="h-full" role="tabpanel">@include('livewire.admin.network.workflow-studio.runtime')</section>
 
-        <div wire:loading.delay.flex wire:target="startRun,pauseRun,resumeRun,runSingleTask,stopRun,restartRun,runProbe,commitProbeAsTask,saveSelectedTask,saveSessionDefinition,startCopilot,setPermissionMode" class="pointer-events-none absolute inset-0 z-50 hidden items-center justify-center bg-white/55 backdrop-blur-[1px]">
+        <div wire:loading.delay.flex wire:target="startRun,pauseRun,resumeRun,runSingleTask,stopRun,restartRun,runProbe,commitProbeAsTask,saveSelectedTask,saveSessionDefinition,startCopilot,pauseCopilot,resumeCopilot,restartCopilot,stopCopilot,setPermissionMode" class="pointer-events-none absolute inset-0 z-50 hidden items-center justify-center bg-white/55 backdrop-blur-[1px]">
             <span class="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-700 shadow-xl"><span class="h-3 w-3 animate-spin rounded-full border-2 border-slate-300 border-t-cyan-600"></span>Studio aktualisiert …</span>
         </div>
     </main>
 
-    <x-dialog-modal wire:model="showCopilotSettingsModal" maxWidth="5xl">
-        <x-slot name="title"><div><span class="text-base font-semibold text-slate-950">Copilot, Ziel & Ausführung</span><p class="mt-1 text-xs font-normal text-slate-500">Planungsdaten und Berechtigungen dieser Studio-Sitzung.</p></div></x-slot>
-        <x-slot name="content">@include('livewire.admin.network.workflow-studio.copilot')</x-slot>
-        <x-slot name="footer"><button type="button" x-on:click="$dispatch('close')" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">Schließen</button></x-slot>
-    </x-dialog-modal>
+    @include('livewire.admin.network.workflow-studio.selector-modal')
 </div>

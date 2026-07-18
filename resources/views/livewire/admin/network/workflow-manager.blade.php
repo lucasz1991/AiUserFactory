@@ -160,7 +160,7 @@
                                     Optimierungslaeufe anzeigen
                                     <span class="mt-0.5 block text-xs font-medium text-cyan-600">Kosten, Tests, Logs und Daten</span>
                                 </button>
-                                <button type="button" wire:click="openLatestRunPreview" x-on:click="open = false" @disabled(! $quickPreviewRun) class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-indigo-700 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-40">
+                                <a @if($quickPreviewRun) href="{{ route('network.workflows.studio', ['workflow' => $selectedWorkflow, 'mode' => $activeCopilotSession ? 'autonomous' : 'manual', 'run' => $quickPreviewRun->id]) }}" @endif x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-indigo-700 hover:bg-indigo-50 {{ $quickPreviewRun ? '' : 'pointer-events-none opacity-40' }}">
                                     {{ $quickPreviewRun && in_array($quickPreviewRun->status, ['queued', 'running', 'waiting'], true) ? 'Laufenden Test öffnen' : 'Letzten Test öffnen' }}
                                     @if($quickPreviewDurationLabel)
                                         <span class="mt-0.5 block text-xs font-medium text-indigo-500">Dauer: {{ $quickPreviewDurationLabel }}</span>
@@ -168,7 +168,7 @@
                                     @if($quickPreviewReturnLabel)
                                         <span class="mt-0.5 block break-words text-xs font-medium text-indigo-500">{{ $quickPreviewReturnLabel }}</span>
                                     @endif
-                                </button>
+                                </a>
                                 <button type="button" wire:click="downloadLatestRunDebugPackage" x-on:click="open = false" @disabled(! $quickPreviewRun) class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-40">
                                     Debug-Paket herunterladen
                                     <span class="mt-0.5 block text-xs font-medium text-emerald-500">CSV, letzter Run, DOM</span>

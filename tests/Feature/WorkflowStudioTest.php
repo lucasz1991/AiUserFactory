@@ -251,11 +251,20 @@ class WorkflowStudioTest extends TestCase
             ->assertSee('Workflow bearbeiten')
             ->assertSee('Task-Katalog')
             ->assertSee('So funktionieren Workflow, Listen, Tasks und Weiterleitungen')
-            ->assertSee('Selector-Probe')
+            ->assertSee('Browserfenster')
+            ->assertSee('Selector prüfen')
+            ->assertSee('Daten & Log')
+            ->assertSee('Copilot & Ziele', false)
             ->assertSee('Kritisch nachfragen')
             ->assertSeeHtml('data-studio-selected-task="true"')
             ->assertDontSee('Checkpoints verwalten')
             ->assertDontSeeHtml('wire:model="showCheckpointsModal"');
+
+        Livewire::test(WorkflowStudio::class, ['workflow' => $workflow])
+            ->call('openSelectorProbe', 'main')
+            ->assertSet('probeBrowserWindow', 'main')
+            ->assertSet('showSelectorProbeModal', true)
+            ->assertSee('Selector-Prüfung');
     }
 
     public function test_revision_history_is_opened_from_the_workflow_manager_actions(): void

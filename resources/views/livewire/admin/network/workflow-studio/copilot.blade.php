@@ -1,3 +1,22 @@
+@if($copilotSession)
+    @php
+        $copilotState = is_array($copilotSession->state_json) ? $copilotSession->state_json : [];
+        $copilotActive = in_array($copilotSession->status, ['running', 'repairing', 'verifying'], true);
+        $copilotPaused = $copilotSession->status === 'paused';
+    @endphp
+    <section class="mb-5 overflow-hidden rounded-2xl border border-slate-200 bg-slate-950 text-white shadow-sm" data-studio-copilot-status>
+        <div class="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+            <div class="min-w-0"><div class="flex flex-wrap items-center gap-2"><span class="text-[9px] font-black uppercase tracking-[0.18em] text-cyan-300">Copilot-Sitzung #{{ $copilotSession->id }}</span><span class="rounded-full border border-white/15 bg-white/10 px-2 py-0.5 text-[9px] font-bold">{{ $copilotSession->status }} · {{ $copilotSession->phase }}</span></div><h2 class="mt-2 truncate text-sm font-bold">{{ data_get($copilotState, 'current_step_name', 'Wird vorbereitet') }}</h2><p class="mt-1 truncate text-[11px] text-slate-400">Task: {{ data_get($copilotState, 'current_task_key', '–') }} · Nächste Aktion: {{ data_get($copilotState, 'next_action', 'Analyse fortsetzen') }}</p></div>
+            <div class="flex flex-wrap gap-2">
+                @if($copilotPaused)<button type="button" wire:click="resumeCopilot" class="rounded-lg bg-emerald-500 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-400">Fortsetzen</button>@elseif($copilotActive)<button type="button" wire:click="pauseCopilot" class="rounded-lg border border-amber-300/30 bg-amber-300/10 px-3 py-2 text-xs font-bold text-amber-200">Pausieren</button>@endif
+                <button type="button" wire:click="restartCopilot" wire:confirm="Copilot und aktuellen Testlauf vollständig neu starten?" class="rounded-lg border border-cyan-300/30 bg-cyan-300/10 px-3 py-2 text-xs font-bold text-cyan-200">Neu starten</button>
+                <button type="button" wire:click="stopCopilot" wire:confirm="Copilot-Optimierung stoppen?" class="rounded-lg border border-rose-300/30 bg-rose-300/10 px-3 py-2 text-xs font-bold text-rose-200">Stoppen</button>
+            </div>
+        </div>
+        @if($copilotLatestEvent)<div class="border-t border-white/10 bg-white/5 px-4 py-2 text-[10px] text-slate-300"><strong class="text-white">Letzter Vorgang:</strong> {{ $copilotLatestEvent->message }}</div>@endif
+    </section>
+@endif
+
 <div class="grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
     <div class="space-y-4">
         <div>
@@ -69,7 +88,7 @@
 
         <div class="grid gap-2">
             <button type="button" wire:click="saveSessionDefinition" class="rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-xs font-bold text-slate-700 shadow-sm hover:bg-slate-50">Definition speichern</button>
-            <button type="button" wire:click="startCopilot" wire:confirm="Autonome Copilot-Optimierung starten?" class="rounded-lg bg-sky-600 px-3 py-2.5 text-xs font-bold text-white shadow-sm hover:bg-sky-500">Copilot starten</button>
+            <button type="button" wire:click="startCopilot" wire:confirm="Autonome Copilot-Optimierung starten?" @disabled($copilotSession && ! in_array($copilotSession->status, ['succeeded', 'failed', 'stopped', 'budget_exhausted'], true)) class="rounded-lg bg-sky-600 px-3 py-2.5 text-xs font-bold text-white shadow-sm hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-40">Copilot starten</button>
         </div>
     </aside>
 </div>

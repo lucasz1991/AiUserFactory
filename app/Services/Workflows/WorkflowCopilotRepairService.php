@@ -2798,7 +2798,10 @@ class WorkflowCopilotRepairService
         $checkpoint = is_array($observation['copilot_checkpoint'] ?? null)
             ? $observation['copilot_checkpoint']
             : [];
-        $target = $this->consentTargetFromEvidence($checkpoint, $observation, []);
+        $vision = is_array($observation['copilot_vision'] ?? null)
+            ? $observation['copilot_vision']
+            : [];
+        $target = $this->consentTargetFromEvidence($checkpoint, $observation, $vision);
         $selector = trim((string) ($operation['selector'] ?? ''));
 
         if ($target === []

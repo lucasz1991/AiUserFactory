@@ -124,7 +124,7 @@ class WorkflowExecutionService
                 ]);
             }
 
-            if (! $lockedWorkflow->is_active) {
+            if (! $lockedWorkflow->is_active && ! $copilotSession) {
                 throw new \RuntimeException('Dieser Workflow ist deaktiviert.');
             }
 

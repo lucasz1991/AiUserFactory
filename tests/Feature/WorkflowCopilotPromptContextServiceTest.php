@@ -70,9 +70,13 @@ class WorkflowCopilotPromptContextServiceTest extends TestCase
             data_get($context, 'workflow_task_catalog'),
         );
         $this->assertArrayHasKey('loop.end', data_get($context, 'workflow_task_catalog'));
+        $this->assertNotEmpty(data_get($context, 'workflow_task_catalog_index'));
+        $this->assertStringContainsString('leerer Workflow', data_get($context, 'workflow_authoring_capabilities.empty_workflow'));
         $loopCatalog = data_get($context, 'workflow_task_catalog')['loop.for_each_element'];
         $loopDocumentation = $loopCatalog['documentation'];
         $this->assertNotEmpty($loopCatalog['parameters']);
+        $this->assertArrayHasKey('configuration', $loopCatalog);
+        $this->assertArrayHasKey('defaults', $loopCatalog);
         $this->assertNotEmpty($loopDocumentation['purpose']);
         $this->assertStringContainsString(
             'collect_to_array',
@@ -107,6 +111,7 @@ class WorkflowCopilotPromptContextServiceTest extends TestCase
             [['name' => 'query', 'type' => 'string', 'provided' => true]],
             data_get($context, 'copilot_session.workflow_inputs'),
         );
+        $this->assertSame('suchfeld-fuellen', data_get($context, 'runtime_state.checkpoint.task_key'));
         $this->assertStringNotContainsString('never-leak-this-fixed-value', $serialized);
         $this->assertStringNotContainsString('private query', $serialized);
     }

@@ -64,6 +64,7 @@ class WorkflowCopilotPlanningService
                 'Plane einen linearen, testbaren Ablauf mit kleinen fachlichen Steps und genau den benoetigten Tasks.',
                 'Nutze fuer Verzweigungen ausschliesslich die dokumentierten Task- und Step-Routen. type=fail ist terminal.',
                 'Der Workflow muss nach der Planung ohne Copilot-Skip in einem unveraenderlichen Kontrolllauf ausfuehrbar sein.',
+                'Ein komplett leerer Workflow ist beabsichtigt: Erstelle selbststaendig alle erforderlichen Listen, Tasks, Routen und gekoppelten Loop-Enden.',
             ]),
             [
                 'temperature' => 0.1,
@@ -139,6 +140,7 @@ class WorkflowCopilotPlanningService
 
         return implode("\n", [
             'Erstelle die vollstaendige Erstdefinition fuer einen derzeit leeren Workflow.',
+            'Es existieren absichtlich noch keine Listen oder Tasks. Erzeuge beides selbststaendig aus dem gelieferten Katalog und liefere keinen blossen Vorschlag ohne ausfuehrbare Definition.',
             'Verbindlicher Task-, Routing- und Workflow-Kontext: '.json_encode($context, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
             'Erwartetes JSON-Schema: {"summary":"...","assumptions":["..."],"steps":[{"name":"...","action_key":"stabiler-step-key","type":"browser_task|data_task|preparation|data_processing|browser_control|interaction|decision|cleanup|wait","description":"...","routes":{"success":{"type":"step","step":"next"},"failed":{"type":"step","step":"fehlerbehandlung"}},"tasks":[{"key":"stabiler-task-key","task_key":"catalog.key","title":"...","description":"...","parameters":{"url":"...","selector":"...","workflow_variable":"...","browser_window":"main"},"next":{"type":"card","card":"naechste-task"},"on_error":{"type":"step","step":"fehlerbehandlung"}}]}]}',
             'Felder in parameters duerfen nur aus der parameters-Liste des jeweiligen Katalogeintrags stammen. next, on_partial, on_error und status_routes sind Routingfelder und keine normalen parameters.',

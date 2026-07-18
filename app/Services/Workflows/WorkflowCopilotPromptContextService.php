@@ -39,13 +39,16 @@ class WorkflowCopilotPromptContextService
         $context = [
             'execution_contract' => $this->executionContract(),
             'workflow_structure' => $this->workflowStructureDocumentation(),
+            'workflow_authoring_capabilities' => $this->authoringCapabilities(),
             'workflow' => $this->workflowSnapshot($workflow),
             'workflow_task_catalog' => $this->taskCatalogSnapshot(),
+            'workflow_task_catalog_index' => $this->taskCatalogIndex(),
             'workflow_diagnostics' => $this->workflowDiagnostics($workflow),
         ];
 
         if ($session instanceof WorkflowCopilotSession) {
             $context['copilot_session'] = $this->sessionSnapshot($session);
+            $context['runtime_state'] = $this->runtimeSnapshot($session, $checkpoint);
         }
 
         if ($currentStep instanceof WorkflowStep) {
@@ -72,6 +75,7 @@ class WorkflowCopilotPromptContextService
         return (array) $this->sanitizeContext([
             'execution_contract' => $this->executionContract(),
             'workflow_structure' => $this->workflowStructureDocumentation(),
+            'workflow_authoring_capabilities' => $this->authoringCapabilities(),
             'workflow' => [
                 'id' => (int) $workflow->id,
                 'name' => (string) $workflow->name,
@@ -82,6 +86,7 @@ class WorkflowCopilotPromptContextService
             'success_criteria' => $successCriteria,
             'workflow_inputs' => $this->inputSchema($workflowInputs),
             'workflow_task_catalog' => $this->taskCatalogSnapshot(),
+            'workflow_task_catalog_index' => $this->taskCatalogIndex(),
         ]);
     }
 
@@ -186,6 +191,20 @@ class WorkflowCopilotPromptContextService
         ];
     }
 
+    public function authoringCapabilities(): array
+    {
+        return [
+            'empty_workflow' => 'Ein leerer Workflow ist ein gueltiger Ausgangspunkt. Der Copilot muss selbststaendig die benoetigten Listen, Tasks, Routen und Loop-Paare aus dem Katalog erstellen, bevor ein Testlauf startet.',
+            'lists' => 'Listen duerfen erstellt, benannt, typisiert, sortiert, aktiviert und ueber success/failed/timeout/partial verbunden werden.',
+            'tasks' => 'Tasks duerfen nur aus workflow_task_catalog erzeugt, innerhalb und zwischen Listen verschoben, vollstaendig konfiguriert und mit Task- oder Listenrouten verbunden werden.',
+            'configuration' => 'Jeder Katalogeintrag liefert parameters, configuration, defaults und documentation. Nur diese Felder verwenden; erforderliche Felder muessen vor dem Test gesetzt sein.',
+            'loops' => 'loop.for_each_element erzeugt immer ein gekoppeltes loop.end. Reader liegen im Loop-Body. Arrays werden entweder ueber collect_to_array oder data.append_to_array gesammelt.',
+            'variables' => 'Workflow-Eingaben, Task-Ausgaben, Arrays und workflow_return sind benannte Datenpfade. Der Modellkontext enthaelt aus Sicherheitsgruenden nur Schema und gesetzte Zustandsmerkmale, nicht geheime Werte.',
+            'browser_windows' => 'Browserfenster sind benannte Laufzeitkontexte. Browser-Tasks muessen das passende browser_window verwenden; ein Fenster kann im Studio separat per Selector-Probe untersucht werden.',
+            'safe_iteration' => 'Nach einer Revision startet ein frischer Test. Bereits vorhandene funktionierende Listen oder Tasks werden nicht dupliziert; zuerst aktuellen Workflow, Diagnosen und Laufzeitstatus pruefen.',
+        ];
+    }
+
     public function taskCatalogSnapshot(): array
     {
         return collect($this->catalog->all())
@@ -198,10 +217,25 @@ class WorkflowCopilotPromptContextService
                     'timeout_seconds' => max(0, (int) ($definition['timeout_seconds'] ?? 0)),
                     'documentation' => $this->taskDocumentationSnapshot($definition),
                     'parameters' => $this->catalogFields($definition),
+                    'configuration' => $this->catalogConfiguration($definition),
+                    'defaults' => $this->catalogDefaults($taskKey),
                     'routing_fields' => self::ROUTE_FIELDS,
                     'hidden_from_library' => (bool) ($definition['hidden_from_library'] ?? false),
                 ]];
             })
+            ->all();
+    }
+
+    protected function taskCatalogIndex(): array
+    {
+        return collect($this->catalog->all())
+            ->groupBy(fn (array $definition): string => trim((string) ($definition['kind'] ?? 'data')) ?: 'data')
+            ->map(fn ($definitions, string $kind): array => [
+                'kind' => $kind,
+                'count' => $definitions->count(),
+                'task_keys' => $definitions->keys()->values()->all(),
+            ])
+            ->values()
             ->all();
     }
 
@@ -255,6 +289,70 @@ class WorkflowCopilotPromptContextService
             'phase' => (string) $session->phase,
             'current_revision' => (int) $session->current_revision,
         ];
+    }
+
+    protected function runtimeSnapshot(WorkflowCopilotSession $session, array $checkpoint): array
+    {
+        $session->loadMissing('activeRun');
+        $run = $session->activeRun;
+        $context = $run && is_array($run->context_json) ? $run->context_json : [];
+        $windows = collect(data_get($context, 'browser_windows', []))
+            ->filter(fn (mixed $window): bool => is_array($window))
+            ->map(fn (array $window, string|int $key): array => [
+                'name' => (string) ($window['key'] ?? $key),
+                'title' => Str::limit(trim((string) ($window['title'] ?? '')), 500, ''),
+                'url' => Str::limit(trim((string) ($window['url'] ?? $window['currentUrl'] ?? '')), 1000, ''),
+                'target_available' => filled($window['targetId'] ?? $window['target_id'] ?? null),
+            ])
+            ->values()
+            ->all();
+        $variables = is_array(data_get($context, 'workflow_variables'))
+            ? data_get($context, 'workflow_variables')
+            : [];
+
+        return [
+            'run_id' => $run?->id,
+            'run_status' => $run?->status,
+            'current_step_id' => $run?->current_workflow_step_id,
+            'next_step_action_key' => data_get($context, 'next_step_action_key'),
+            'next_task_key' => data_get($context, 'next_task_key'),
+            'browser_windows' => $windows,
+            'workflow_variables' => $this->inputSchema($variables),
+            'loop_state' => $this->sanitizeContext(data_get($context, 'loop_state', [])),
+            'checkpoint' => $this->sanitizeContext($checkpoint),
+        ];
+    }
+
+    protected function catalogConfiguration(array $definition): array
+    {
+        $form = is_array($definition['form'] ?? null) ? $definition['form'] : [];
+
+        return array_filter([
+            'uses_selector' => (bool) ($form['selector'] ?? false),
+            'selector_required' => (bool) ($form['selector_required'] ?? false),
+            'uses_value' => (bool) ($form['value'] ?? false),
+            'value_required' => (bool) ($form['value_required'] ?? false),
+            'uses_url' => (bool) ($form['url'] ?? false),
+            'url_required' => (bool) ($form['url_required'] ?? false),
+            'uses_browser_window' => (bool) ($form['browser_window'] ?? false),
+            'browser_window_required' => (bool) ($form['browser_window_required'] ?? false),
+            'can_create_browser_window' => (bool) ($form['browser_window_create'] ?? false),
+            'supports_timeout' => (bool) ($form['timeout'] ?? false),
+            'supports_mailbox_source' => (bool) ($form['mailbox_source'] ?? false),
+        ], static fn (mixed $value): bool => $value !== false && $value !== null && $value !== '');
+    }
+
+    protected function catalogDefaults(string $taskKey): array
+    {
+        $card = $this->catalog->cardFromDefinition($taskKey, []);
+
+        return Arr::only($card, [
+            'timeout_seconds',
+            'browser_window',
+            'browser_window_name',
+            'mailbox_source',
+            'script_person_source',
+        ]);
     }
 
     protected function inputSchema(array $inputs): array

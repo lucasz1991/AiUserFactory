@@ -58,7 +58,7 @@
         </div>
     </section>
 
-    <aside x-data="{ probeOpen: false }" class="min-h-0 overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
+    <aside class="min-h-0 overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div class="sticky top-0 z-10 border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur">
             <p class="text-[10px] font-bold uppercase tracking-[0.16em] text-cyan-700">Inspector</p>
             <h2 class="mt-1 text-sm font-bold text-slate-950">Auswahl & Testwerkzeuge</h2>
@@ -105,45 +105,10 @@
                 </div>
             </section>
 
-            <section class="overflow-hidden rounded-xl border border-slate-200">
-                <button type="button" x-on:click="probeOpen = ! probeOpen" class="flex w-full items-center justify-between gap-3 bg-white px-3 py-3 text-left">
-                    <span><span class="block text-xs font-bold text-slate-900">Selector-Probe</span><span class="mt-0.5 block text-[10px] text-slate-500">Browserzustand untersuchen</span></span>
-                    <svg class="h-4 w-4 text-slate-400 transition" x-bind:class="probeOpen ? 'rotate-180' : ''" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"></path></svg>
-                </button>
-                <div x-cloak x-show="probeOpen" x-collapse class="space-y-3 border-t border-slate-200 bg-slate-50 p-3">
-                    <div>
-                        <label class="block text-[10px] font-bold uppercase tracking-wide text-slate-500">Probeaktion</label>
-                        <select wire:model.live="probeAction" class="mt-1 w-full rounded-lg border-slate-300 bg-white text-xs text-slate-800 focus:border-cyan-500 focus:ring-cyan-500">
-                            <option value="selector.search">Selector suchen</option>
-                            <option value="selector.highlight">Element hervorheben</option>
-                            <option value="selector.read">Text / Attribute lesen</option>
-                            <option value="probe.click">Klicken</option>
-                            <option value="probe.fill">Eingabe setzen</option>
-                            <option value="probe.keypress">Taste senden</option>
-                            <option value="probe.submit">Formular absenden</option>
-                            <option value="probe.wait">Warten</option>
-                            <option value="probe.navigate">Navigieren</option>
-                            <option value="probe.screenshot">Screenshot neu erfassen</option>
-                            <option value="probe.dom_refresh">DOM neu erfassen</option>
-                        </select>
-                    </div>
-                    <div><label class="block text-[10px] font-bold uppercase tracking-wide text-slate-500">Browserfenster</label><input type="text" wire:model="probeBrowserWindow" class="mt-1 w-full rounded-lg border-slate-300 bg-white text-xs focus:border-cyan-500 focus:ring-cyan-500" placeholder="main"></div>
-                    <div><label class="block text-[10px] font-bold uppercase tracking-wide text-slate-500">Selector, Text oder Rolle</label><textarea wire:model="probeSelector" rows="3" class="mt-1 w-full rounded-lg border-slate-300 bg-white text-xs focus:border-cyan-500 focus:ring-cyan-500" placeholder="button[type=submit], text=Weiter"></textarea></div>
-                    <div><label class="block text-[10px] font-bold uppercase tracking-wide text-slate-500">Wert, URL oder Wartezeit</label><input type="text" wire:model="probeValue" class="mt-1 w-full rounded-lg border-slate-300 bg-white text-xs focus:border-cyan-500 focus:ring-cyan-500"></div>
-                    <div class="grid grid-cols-2 gap-2">
-                        <button type="button" wire:click="runProbe" @disabled(! $isPaused) class="rounded-lg bg-slate-900 px-3 py-2 text-[11px] font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-35">Probe ausführen</button>
-                        <button type="button" wire:click="commitProbeAsTask" @disabled(! is_array($probeResult)) class="rounded-lg border border-cyan-300 bg-cyan-50 px-3 py-2 text-[11px] font-bold text-cyan-800 hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-35">Als Task einsetzen</button>
-                    </div>
-                    @if(! $isPaused)
-                        <p class="rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-[10px] leading-4 text-amber-800">Proben sind verfügbar, sobald der Lauf pausiert ist.</p>
-                    @endif
-                    @if(is_array($probeResult))
-                        <div class="rounded-lg border p-2.5 {{ data_get($probeResult, 'successful') ? 'border-emerald-200 bg-emerald-50' : 'border-rose-200 bg-rose-50' }}">
-                            <p class="text-[10px] font-bold {{ data_get($probeResult, 'successful') ? 'text-emerald-800' : 'text-rose-800' }}">{{ data_get($probeResult, 'successful') ? 'Probe erfolgreich' : 'Probe fehlgeschlagen' }}</p>
-                            <pre class="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-white/70 p-2 text-[9px] leading-4 text-slate-600">{{ json_encode(data_get($probeResult, 'result'), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) }}</pre>
-                        </div>
-                    @endif
-                </div>
+            <section class="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <h3 class="text-xs font-bold text-slate-900">Browser-Selector prüfen</h3>
+                <p class="mt-1 text-[10px] leading-4 text-slate-500">Öffne die Selector-Prüfung direkt am gewünschten Browserfenster in der oberen Leiste.</p>
+                <button type="button" wire:click="openSelectorProbe(@js($probeBrowserWindow))" class="mt-3 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-[11px] font-bold text-slate-700 hover:border-cyan-300 hover:text-cyan-700">Selector-Modal öffnen</button>
             </section>
         </div>
     </aside>
