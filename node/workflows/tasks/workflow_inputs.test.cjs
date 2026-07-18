@@ -90,10 +90,85 @@ test('declared optional workflow inputs remain known when their value is missing
   assert.equal(Object.prototype.hasOwnProperty.call(result.workflow_variables, 'google_search_url'), true);
   assert.equal(result.workflow_variables.google_search_url, null);
   assert.equal(result.workflow_variables.search_count, 3);
-  assert.deepEqual(result.workflow_variables.workflow_inputs, {
-    google_search_url: null,
-    search_count: 3,
+  assert.equal(result.branchOutcome, undefined);
+  assert.equal(result.workflow_variables.workflow_inputs.google_search_url, null);
+  assert.equal(result.workflow_variables.workflow_inputs.search_count, 3);
+  assert.deepEqual(result.workflow_variables.workflow_inputs._inputs, [
+    {
+      name: 'google_search_url',
+      source: 'google_search_url',
+      type: 'string',
+      required: false,
+      set: false,
+      present: false,
+      used_default: false,
+      browser_window_open: null,
+      value: null,
+    },
+    {
+      name: 'search_count',
+      source: 'search_count',
+      type: 'string',
+      required: false,
+      set: false,
+      present: true,
+      used_default: true,
+      browser_window_open: null,
+      value: 3,
+    },
+  ]);
+  assert.deepEqual(result.workflow_variables.workflow_inputs._summary, {
+    valid: true,
+    has_required_inputs: false,
+    required_count: 0,
+    missing_required_count: 0,
   });
+});
+
+test('input validation only follows the failure branch for missing required values', async () => {
+  const optionalOnly = await validateInputs.run({
+    input: {
+      input_definitions: [
+        { name: 'browser_window', type: 'browser_window', required: false },
+        { name: 'search_pages', required: false },
+      ],
+      output_group: 'search_inputs',
+    },
+    workflow_variables: { search_pages: [] },
+    browserWindows: [],
+  });
+  const requiredMissing = await validateInputs.run({
+    input: {
+      input_definitions: [
+        { name: 'search_pages', required: false },
+        { name: 'google_search_url', required: true },
+      ],
+      output_group: 'search_inputs',
+    },
+    workflow_variables: {},
+  });
+
+  assert.equal(optionalOnly.status, 'success');
+  assert.equal(optionalOnly.branchOutcome, undefined);
+  assert.equal(optionalOnly.workflow_variables.search_inputs._inputs[0].set, false);
+  assert.equal(optionalOnly.workflow_variables.search_inputs._inputs[1].set, true);
+  assert.equal(optionalOnly.workflow_variables.search_inputs._inputs[1].present, false);
+  assert.equal(requiredMissing.status, 'missing_required');
+  assert.equal(requiredMissing.branchOutcome, 'failed');
+  assert.deepEqual(requiredMissing.missing_inputs.map((item) => item.name), ['google_search_url']);
+});
+
+test('input validation with no definitions succeeds because no required input is missing', async () => {
+  const result = await validateInputs.run({
+    input: { input_definitions: [], output_group: 'workflow_inputs' },
+    workflow_variables: {},
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.status, 'success');
+  assert.equal(result.branchOutcome, undefined);
+  assert.deepEqual(result.workflow_variables.workflow_inputs._inputs, []);
+  assert.equal(result.workflow_variables.workflow_inputs._summary.valid, true);
 });
 
 test('mail action loop accepts an ordered JSON click sequence with trailing comma', () => {

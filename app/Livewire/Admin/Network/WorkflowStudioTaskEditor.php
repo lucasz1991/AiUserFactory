@@ -177,7 +177,7 @@ class WorkflowStudioTaskEditor extends WorkflowManager
             'editingTaskWorkflowVariable' => ['nullable', 'string', 'max:4000'],
             'editingTaskValueFallback' => ['nullable', 'string', 'max:4000'],
             'editingTaskExtra' => ['array'],
-            'editingTaskExtra.*' => ['nullable', 'string', 'max:4000'],
+            'editingTaskExtra.*' => ['nullable', 'string', 'max:20000'],
             'editingTaskTimeoutSeconds' => ['required', 'integer', 'min:0', 'max:3600'],
             'editingTaskSuccessTarget' => ['nullable', 'string', 'max:180'],
             'editingTaskFailedTarget' => ['nullable', 'string', 'max:180'],

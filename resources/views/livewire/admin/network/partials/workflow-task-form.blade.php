@@ -480,7 +480,14 @@
                                         @endif
                                     >
                                         <label class="block text-sm font-medium text-gray-700">{{ $fieldLabel }}</label>
-                                        @if($fieldType === 'textarea')
+                                        @if($fieldType === 'workflow_input_definitions')
+                                            @include('livewire.admin.network.partials.workflow-input-definitions-editor', [
+                                                'fieldModel' => $fieldModel,
+                                                'fieldHelp' => $fieldHelp,
+                                                'catalogKey' => $catalogKey,
+                                                'prefix' => $prefix,
+                                            ])
+                                        @elseif($fieldType === 'textarea')
                                             <textarea
                                                 rows="{{ $fieldRows }}"
                                                 wire:key="{{ $prefix }}-extra-{{ $catalogKey }}-{{ $fieldName }}"

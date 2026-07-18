@@ -89,4 +89,14 @@ class WorkflowCollectionTaskCatalogTest extends TestCase
         );
         $this->assertNotNull($fields->get('value_fallback'));
     }
+
+    public function test_validate_inputs_uses_the_structured_variable_editor(): void
+    {
+        $definition = (new WorkflowTaskCatalog)->task('data.validate_inputs');
+        $fields = collect(data_get($definition, 'form.extra_fields'))->keyBy('name');
+
+        $this->assertSame('workflow_input_definitions', data_get($fields->get('input_definitions'), 'type'));
+        $this->assertSame('workflow_inputs', data_get($fields->get('output_group'), 'default'));
+        $this->assertStringContainsString('_inputs', data_get($fields->get('output_group'), 'help'));
+    }
 }

@@ -640,6 +640,36 @@ class WorkflowCompositionTest extends TestCase
         $this->assertArrayNotHasKey('value_fallback', $fixedTask);
     }
 
+    public function test_validate_inputs_editor_persists_the_variable_menu_as_json_definitions(): void
+    {
+        $workflow = $this->workflow('validate-input-variable-editor');
+        $step = $this->step($workflow, 'Workflow inputs', []);
+        $definitions = [
+            ['name' => 'browser_window', 'type' => 'browser_window', 'required' => false],
+            ['name' => 'search_count', 'required' => false, 'default' => 3],
+            ['name' => 'google_search_url', 'required' => true],
+        ];
+
+        Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
+            ->call('prepareTaskFromCatalog', $step->id, 'data.validate_inputs', 0)
+            ->assertSee('Eingabevariablen')
+            ->assertSee('Variablenname')
+            ->assertSee('Nur fehlende Variablen mit aktivierter Pflichtangabe')
+            ->set('newTaskExtra.input_definitions', json_encode($definitions))
+            ->set('newTaskExtra.output_group', 'search_inputs')
+            ->call('addTaskCard')
+            ->assertHasNoErrors();
+
+        $task = $step->fresh()->task_cards[0];
+        $this->assertSame($definitions, json_decode($task['input_definitions'], true));
+        $this->assertSame('search_inputs', $task['output_group']);
+
+        Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
+            ->call('openEditTaskCard', $step->id, $task['key'])
+            ->assertSet('editingTaskExtra.input_definitions', json_encode($definitions, JSON_UNESCAPED_SLASHES))
+            ->assertSee('Quelle und Task-', false);
+    }
+
     public function test_fill_field_editor_requires_the_selected_value_source_configuration(): void
     {
         $workflow = $this->workflow('fill-field-value-source-validation');

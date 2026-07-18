@@ -131,6 +131,8 @@ function normalizeDefinition(value, fallbackName = '') {
     return null;
   }
 
+  const sourceKeys = ['source', 'path', 'input', 'from', 'value'];
+  const hasExplicitSource = sourceKeys.some((key) => Object.prototype.hasOwnProperty.call(value, key) && text(value[key]) !== '');
   const source = value.source
     ?? value.path
     ?? value.input
@@ -141,6 +143,7 @@ function normalizeDefinition(value, fallbackName = '') {
   return {
     name,
     source: Array.isArray(source) ? source.map(text).filter(Boolean) : text(source),
+    hasExplicitSource,
     required: booleanValue(value.required ?? value.is_required ?? value.isRequired, false),
     defaultValue: value.default
       ?? value.default_value
@@ -320,37 +323,43 @@ function hasValue(value) {
   return true;
 }
 
-function resolveValue(context, source) {
+function resolveValue(context, source, allowContextSource = false) {
   const sources = Array.isArray(source) ? source : String(source || '').split(',').map(text).filter(Boolean);
   const root = rootContext(context);
+  let wasSet = false;
 
   for (const item of sources) {
     if (item.startsWith('literal:')) {
-      return item.slice('literal:'.length);
+      const value = item.slice('literal:'.length);
+      return { value: hasValue(value) ? value : undefined, set: true };
     }
 
     if (item.startsWith('json:')) {
       const decoded = parseJson(item.slice('json:'.length));
 
       if (decoded !== null) {
-        return decoded;
+        return { value: hasValue(decoded) ? decoded : undefined, set: true };
       }
     }
 
-    const value = getPath(root, item);
-
-    if (hasValue(value)) {
-      return value;
-    }
-
     const workflowVariable = getPath(root.workflow_variables, item);
+    if (workflowVariable !== undefined) wasSet = true;
 
     if (hasValue(workflowVariable)) {
-      return workflowVariable;
+      return { value: workflowVariable, set: true };
+    }
+
+    if (allowContextSource) {
+      const value = getPath(root, item);
+      if (value !== undefined) wasSet = true;
+
+      if (hasValue(value)) {
+        return { value, set: true };
+      }
     }
   }
 
-  return undefined;
+  return { value: undefined, set: wasSet };
 }
 
 function normalizeBrowserWindowName(value) {
@@ -508,16 +517,9 @@ async function run(context = {}) {
   const missing = [];
   const taskOverrides = [];
 
-  if (definitions.length === 0) {
-    return {
-      ok: false,
-      status: 'failed',
-      statusMessage: 'Keine Eingabewert-Definitionen konfiguriert.',
-    };
-  }
-
   for (const definition of definitions) {
-    const rawValue = resolveValue(context, definition.source || definition.name);
+    const resolvedValue = resolveValue(context, definition.source || definition.name, definition.hasExplicitSource);
+    const rawValue = resolvedValue.value;
     const valueWasProvided = hasValue(rawValue);
     let value = valueWasProvided ? rawValue : undefined;
     let usedDefault = false;
@@ -566,6 +568,8 @@ async function run(context = {}) {
       source: definition.source,
       required: definition.required,
       type: definition.type || 'string',
+      set: resolvedValue.set,
+      provided: valueWasProvided,
       present: hasValue(value),
       usedDefault,
       browserWindowOpen,
@@ -583,11 +587,33 @@ async function run(context = {}) {
       Object.prototype.hasOwnProperty.call(values, outputName) ? values[outputName] : null,
     ];
   }));
+  const inputStates = checked.map((item) => ({
+    name: item.name,
+    source: item.source,
+    type: item.type,
+    required: item.required,
+    set: item.set,
+    present: item.present,
+    used_default: item.usedDefault,
+    browser_window_open: item.browserWindowOpen,
+    value: item.value,
+  }));
+  const requiredCount = checked.filter((item) => item.required).length;
+  const groupOutput = {
+    ...declaredValues,
+    _inputs: inputStates,
+    _summary: {
+      valid: missing.length === 0,
+      has_required_inputs: requiredCount > 0,
+      required_count: requiredCount,
+      missing_required_count: missing.length,
+    },
+  };
   const workflowVariables = {
     ...(context.workflow_variables || {}),
     ...declaredValues,
     ...values,
-    [groupName]: declaredValues,
+    [groupName]: groupOutput,
   };
 
   context.workflow_variables = workflowVariables;
@@ -606,6 +632,10 @@ async function run(context = {}) {
       missingInputs: missing,
       checked_inputs: checked,
       checkedInputs: checked,
+      workflow_input_states: inputStates,
+      workflowInputStates: inputStates,
+      workflow_input_group: groupName,
+      workflowInputGroup: groupName,
       task_overrides: taskOverrides,
       taskOverrides,
       workflow_variables: workflowVariables,
@@ -616,13 +646,19 @@ async function run(context = {}) {
   return {
     ok: true,
     status: 'success',
-    statusMessage: 'Workflow-Eingabewerte wurden geprueft.',
+    statusMessage: requiredCount === 0
+      ? 'Workflow-Eingabewerte wurden geprueft; alle Eingaben sind optional.'
+      : 'Workflow-Eingabewerte wurden geprueft; alle Pflichtwerte sind vorhanden.',
     checked_inputs: checked,
     checkedInputs: checked,
+    workflow_input_states: inputStates,
+    workflowInputStates: inputStates,
+    workflow_input_group: groupName,
+    workflowInputGroup: groupName,
     task_overrides: taskOverrides,
     taskOverrides,
-    workflow_inputs: values,
-    workflowInputs: values,
+    workflow_inputs: declaredValues,
+    workflowInputs: declaredValues,
     workflow_variables: workflowVariables,
     workflowVariables: context.workflowVariables,
   };
