@@ -9,10 +9,18 @@
             revisions: 'Revisionen',
         },
         init() {
+            this.closePanel();
             this.$nextTick(() => window.dispatchEvent(new CustomEvent('workflow-studio-pin-copilot')));
         },
+        isPanelOpen() {
+            return typeof this.activePanel === 'string'
+                && Object.prototype.hasOwnProperty.call(this.panelTitles, this.activePanel);
+        },
         openPanel(panel) {
-            this.activePanel = panel;
+            const normalized = String(panel || '').trim();
+            this.activePanel = Object.prototype.hasOwnProperty.call(this.panelTitles, normalized)
+                ? normalized
+                : null;
         },
         closePanel() {
             this.activePanel = null;
@@ -30,8 +38,8 @@
         }
     "
     x-on:workflow-studio-open-builder.window="openPanel('builder')"
-    x-on:workflow-studio-open-panel.window="openPanel(String($event.detail.panel || ''))"
-    x-on:keydown.escape.window="if (activePanel) closePanel()"
+    x-on:workflow-studio-open-panel.window="openPanel($event.detail.panel)"
+    x-on:keydown.escape.window="closePanel()"
     data-workflow-studio-shell
     class="fixed inset-0 z-[70] flex h-screen flex-col overflow-hidden bg-slate-100 text-slate-900"
     wire:poll.2s="refreshStudio"
@@ -182,7 +190,8 @@
 
     <div
         x-cloak
-        x-show="activePanel"
+        x-show="isPanelOpen()"
+        x-effect="if (activePanel !== null && !isPanelOpen()) closePanel()"
         x-transition.opacity
         x-on:click.self="closePanel()"
         class="absolute inset-0 z-[65] flex items-stretch justify-center bg-slate-950/55 p-2 backdrop-blur-sm sm:p-5"
