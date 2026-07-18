@@ -526,4 +526,50 @@ class ClientControllerReliableWorkflowTest extends TestCase
         app(WorkflowExecutionService::class)->advance($run);
         $this->assertSame(1, NetworkJob::query()->where('workflow_run_id', $run->id)->count());
     }
+
+    public function test_force_termination_requests_a_complete_client_process_tree_stop(): void
+    {
+        $node = NetworkNode::query()->create([
+            'name' => 'Force stop node',
+            'node_uuid' => 'force-stop-node',
+            'api_key' => 'force-stop-key',
+            'status' => 'active',
+        ]);
+        $workflow = Workflow::query()->create([
+            'name' => 'Force stop workflow',
+            'slug' => 'force-stop-workflow',
+            'is_active' => true,
+        ]);
+        $run = WorkflowRun::query()->create([
+            'run_uuid' => (string) Str::uuid(),
+            'workflow_id' => $workflow->id,
+            'status' => 'running',
+            'queued_at' => now()->subMinute(),
+            'started_at' => now()->subMinute(),
+            'context_json' => ['execution_target' => 'client_controller'],
+            'result_json' => [],
+        ]);
+        $job = NetworkJob::query()->create([
+            'job_uuid' => (string) Str::uuid(),
+            'network_node_id' => $node->id,
+            'workflow_run_id' => $run->id,
+            'type' => 'workflow_run',
+            'payload_version' => 2,
+            'payload_json' => ['workflow_bundle' => []],
+            'status' => 'dispatched',
+            'queued_at' => now()->subMinute(),
+            'dispatched_at' => now(),
+            'lease_expires_at' => now()->addMinute(),
+        ]);
+
+        $result = app(WorkflowExecutionService::class)->terminate($run, 'Client-Prozessbaum beenden.');
+
+        $this->assertTrue($result['ok']);
+        $this->assertTrue($result['pendingClientConfirmation']);
+        $this->assertSame('stop_requested', $run->fresh()->status);
+        $this->assertSame('stop_requested', $job->fresh()->status);
+        $this->assertSame('stop', $job->fresh()->control_command);
+        $this->assertTrue((bool) data_get($job->fresh()->control_payload_json, 'force'));
+        $this->assertTrue((bool) data_get($job->fresh()->control_payload_json, 'terminate_process_tree'));
+    }
 }

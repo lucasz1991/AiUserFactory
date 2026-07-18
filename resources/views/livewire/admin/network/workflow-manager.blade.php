@@ -147,10 +147,14 @@
                     <div class="flex flex-wrap justify-end gap-2">
                         <div class="relative" x-data="{ open: false }" x-on:keydown.escape.window="open = false">
                             <button type="button" x-on:click="open = ! open" x-bind:aria-expanded="open" class="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">
-                                Tests
+                                Testen
                                 <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" /></svg>
                             </button>
                             <div x-cloak x-show="open" x-transition x-on:click.outside="open = false" class="absolute right-0 z-50 mt-2 w-56 rounded-lg border border-slate-200 bg-white p-1.5 shadow-xl">
+                                <button type="button" wire:click="$set('showRunModal', true)" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-slate-900 hover:bg-slate-100">
+                                    Normalen Testdurchlauf starten
+                                    <span class="mt-0.5 block text-xs font-medium text-slate-500">Kompletter Lauf mit Eingaben und Ausfuehrungsziel</span>
+                                </button>
                                 <a href="{{ route('network.workflows.studio', ['workflow' => $selectedWorkflow, 'mode' => 'manual']) }}" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-100">Test im Workflow Studio starten</a>
                                 <a href="{{ route('network.workflows.studio', ['workflow' => $selectedWorkflow, 'mode' => 'assisted']) }}" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-cyan-800 hover:bg-cyan-50">
                                     Mit Copilot im Studio optimieren
@@ -851,7 +855,7 @@
             </x-slot>
             <x-slot name="footer">
                 <button type="button" x-on:click="$dispatch('close')" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">Abbrechen</button>
-                <button type="button" wire:click="runWorkflow" wire:loading.attr="disabled" class="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 disabled:opacity-60">Testen</button>
+                <button type="button" wire:click="runWorkflow" wire:loading.attr="disabled" class="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 disabled:opacity-60">Normalen Testdurchlauf starten</button>
             </x-slot>
         </x-dialog-modal>
 
@@ -1286,8 +1290,10 @@
                             <button type="button" wire:click="pauseCopilotOptimization" class="rounded-md border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-800 hover:bg-amber-100">Pausieren</button>
                         @endif
                         <button type="button" wire:click="stopCopilotOptimization" wire:confirm="Autonome Workflow-Optimierung wirklich stoppen?" class="rounded-md border border-rose-300 bg-white px-4 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50">Stoppen</button>
+                        <button type="button" wire:click="terminateCopilotOptimization" wire:confirm="Copilot wirklich beenden und alle Node-Prozesse seiner Testlaeufe erzwungen schliessen?" class="rounded-md bg-rose-700 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-600">Copilot beenden</button>
                     @elseif(in_array(data_get($copilotStatus, 'status'), ['budget_exhausted', 'failed'], true))
                         <button type="button" wire:click="stopCopilotOptimization" wire:confirm="Sitzung beenden und Workflow-Lock freigeben? Die letzte Revision bleibt unverifiziert gespeichert." class="rounded-md border border-rose-300 bg-white px-4 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50">Sitzung beenden und Lock freigeben</button>
+                        <button type="button" wire:click="terminateCopilotOptimization" wire:confirm="Sitzung, Testlaeufe und alle zugeordneten Node-Prozesse erzwungen beenden?" class="rounded-md bg-rose-700 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-600">Alles beenden</button>
                     @endif
                 @endif
                 @if($previewWorkflowRun && $previewWorkflowRun->status === 'queued')
@@ -1309,6 +1315,11 @@
                     </button>
                     <button type="button" wire:click="cancelPreviewWorkflowRun" wire:confirm="Pausierten Workflow-Test wirklich stoppen?" class="rounded-md border border-red-300 bg-white px-4 py-2 text-sm font-semibold text-red-700 shadow-sm hover:bg-red-50">
                         Stoppen
+                    </button>
+                @endif
+                @if($previewWorkflowRun)
+                    <button type="button" wire:click="terminatePreviewWorkflowRun" wire:confirm="Diesen Testlauf wirklich beenden und seinen vollstaendigen Node-Prozessbaum erzwungen schliessen?" class="rounded-md bg-red-700 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-red-600">
+                        Test + Node-Prozesse beenden
                     </button>
                 @endif
                 <button type="button" wire:click="closeRunPreview" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">

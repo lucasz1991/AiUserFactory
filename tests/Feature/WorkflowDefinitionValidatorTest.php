@@ -154,6 +154,45 @@ class WorkflowDefinitionValidatorTest extends TestCase
         $this->assertContains('loop_collection_producer_missing', collect($result['diagnostics'])->pluck('code'));
     }
 
+    public function test_active_embedded_workflows_and_legacy_terminal_routes_are_executable(): void
+    {
+        $embedded = $this->workflow();
+        $embedded->steps()->create([
+            'name' => 'Embedded task',
+            'type' => WorkflowStep::TYPE_WAIT,
+            'action_key' => 'embedded-task',
+            'position' => 10,
+            'is_enabled' => true,
+            'config_json' => ['tasks' => [[
+                'key' => 'embedded-wait',
+                'task_key' => 'wait.seconds',
+                'value' => 0,
+            ]]],
+        ]);
+        $parent = $this->workflow();
+        $parent->steps()->create([
+            'name' => 'Include child',
+            'type' => WorkflowStep::TYPE_BROWSER_TASK,
+            'action_key' => 'include-child',
+            'position' => 10,
+            'is_enabled' => true,
+            'config_json' => ['tasks' => [[
+                'key' => 'include-'.$embedded->id,
+                'task_key' => 'workflow.include.'.$embedded->id,
+                'runner' => 'workflow',
+                'workflow_id' => $embedded->id,
+                'next' => ['step' => 'end'],
+                'on_error' => ['step' => 'fail'],
+            ]]],
+        ]);
+
+        $result = app(WorkflowDefinitionValidator::class)->validate($parent);
+
+        $this->assertTrue($result['valid'], json_encode($result['diagnostics'], JSON_PRETTY_PRINT));
+        $this->assertNotContains('unknown_catalog_task', collect($result['diagnostics'])->pluck('code'));
+        $this->assertNotContains('route_step_missing', collect($result['diagnostics'])->pluck('code'));
+    }
+
     private function workflow(): Workflow
     {
         return Workflow::query()->create([

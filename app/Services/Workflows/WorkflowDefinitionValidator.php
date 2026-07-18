@@ -52,6 +52,12 @@ class WorkflowDefinitionValidator
                 $catalogKey = trim((string) ($task['task_key'] ?? ''));
                 $definition = $catalogKey !== '' ? $this->catalog->task($catalogKey) : null;
 
+                if (! $definition && $this->isValidEmbeddedWorkflowTask($workflow, $task, $catalogKey)) {
+                    // Embedded workflows are stored as synthetic workflow.include.<id>
+                    // cards and therefore intentionally have no catalog entry.
+                    $definition = ['documentation' => ['inputs' => []]];
+                }
+
                 if ($cardKey === '') {
                     $diagnostics[] = $this->diagnostic('error', 'task_key_missing', $step, null, 'key', 'Eine Task besitzt keinen stabilen Karten-Key.', 'Einen eindeutigen key setzen.');
                 }
@@ -310,6 +316,13 @@ class WorkflowDefinitionValidator
         }
         $targetStep = trim((string) ($route['action_key'] ?? $route['step'] ?? ''));
         $targetTask = trim((string) ($route['card_key'] ?? $route['card'] ?? ''));
+
+        // Older cards store terminal routes as {"step":"fail"} or
+        // {"step":"end"} without an explicit type. The runtime accepts both.
+        if ($targetTask === '' && in_array($targetStep, ['end', 'fail'], true)) {
+            return;
+        }
+
         $effectiveStep = $targetStep === '' ? (string) $step->action_key : $targetStep;
 
         if ($targetStep !== '' && $targetStep !== 'next' && ! in_array($targetStep, $stepKeys, true)) {
@@ -352,6 +365,25 @@ class WorkflowDefinitionValidator
             (string) ($route['action_key'] ?? $route['step'] ?? ''),
             (string) ($route['card_key'] ?? $route['card'] ?? ''),
         ]) : '';
+    }
+
+    private function isValidEmbeddedWorkflowTask(Workflow $parent, array $task, string $catalogKey): bool
+    {
+        if (! preg_match('/^workflow\.include\.(\d+)$/', $catalogKey, $matches)) {
+            return false;
+        }
+
+        $referencedId = (int) ($task['workflow_id'] ?? $matches[1]);
+
+        if ($referencedId <= 0 || $referencedId !== (int) $matches[1] || $referencedId === (int) $parent->getKey()) {
+            return false;
+        }
+
+        $embedded = Workflow::query()->find($referencedId);
+
+        return $embedded !== null
+            && (bool) $embedded->is_active
+            && ! $embedded->includesWorkflow((int) $parent->getKey());
     }
 
     private function diagnostic(string $severity, string $code, ?WorkflowStep $step, ?string $taskKey, string $field, string $message, string $repairHint): array

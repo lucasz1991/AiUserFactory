@@ -708,6 +708,170 @@ class WorkflowExecutionService
         return ['ok' => true, 'message' => $message, 'cancelledStepRuns' => $stepRuns->count()];
     }
 
+    public function terminate(int|WorkflowRun $workflowRun, string $message = 'Workflow-Lauf und zugehoerige Node-Prozesse wurden beendet.'): array
+    {
+        $run = $this->loadRun($workflowRun);
+        $terminatedAt = now();
+        $message = trim($message) ?: 'Workflow-Lauf und zugehoerige Node-Prozesse wurden beendet.';
+        $clientJobs = NetworkJob::query()
+            ->where('workflow_run_id', $run->id)
+            ->whereIn('type', ['workflow_task', 'workflow_run'])
+            ->whereIn('status', ['pending', 'dispatched', 'unreachable', 'stop_requested'])
+            ->get();
+        $pendingClientConfirmation = false;
+
+        foreach ($clientJobs as $clientJob) {
+            if ($clientJob->status === 'pending') {
+                $clientJob->forceFill([
+                    'status' => 'cancelled',
+                    'completed_at' => $terminatedAt,
+                    'error_message' => $message,
+                ])->save();
+
+                continue;
+            }
+
+            $this->requestClientJobStop($clientJob, $message, 'cancelled', true);
+            $pendingClientConfirmation = true;
+        }
+
+        $terminatedExternalRuns = 0;
+        $terminationErrors = [];
+        $stepRuns = $run->stepRuns()->get();
+
+        foreach ($stepRuns as $stepRun) {
+            try {
+                if ($this->terminateExternalRun($stepRun, $message)) {
+                    $terminatedExternalRuns++;
+                }
+            } catch (\Throwable $exception) {
+                report($exception);
+                $terminationErrors[] = [
+                    'workflow_step_run_id' => (int) $stepRun->getKey(),
+                    'external_run_type' => (string) $stepRun->external_run_type,
+                    'message' => $exception->getMessage(),
+                ];
+            }
+        }
+
+        if ($pendingClientConfirmation) {
+            if (! $this->isFinalStatus((string) $run->status)) {
+                $run->forceFill([
+                    'status' => 'stop_requested',
+                    'result_json' => array_replace(is_array($run->result_json) ? $run->result_json : [], [
+                        'state' => 'stop_requested',
+                        'statusMessage' => $message,
+                        'source' => 'ai-user-factory-force-control',
+                        'forceStopRequestedAt' => $terminatedAt->toIso8601String(),
+                    ]),
+                    'error_message' => $message,
+                ])->save();
+            }
+
+            return [
+                'ok' => $terminationErrors === [],
+                'message' => 'Beenden wurde an den ClientController uebermittelt; der zugehoerige Prozessbaum wird dort erzwungen beendet.',
+                'pendingClientConfirmation' => true,
+                'terminatedExternalRuns' => $terminatedExternalRuns,
+                'errors' => $terminationErrors,
+            ];
+        }
+
+        $stepRunsToCancel = $stepRuns->filter(fn (WorkflowStepRun $stepRun): bool => in_array(
+            (string) $stepRun->status,
+            ['queued', 'running', 'waiting', 'stop_requested'],
+            true,
+        ));
+
+        foreach ($stepRunsToCancel as $stepRun) {
+            $startedAt = $stepRun->started_at instanceof Carbon ? $stepRun->started_at : $terminatedAt;
+            $stepRun->forceFill([
+                'status' => 'cancelled',
+                'finished_at' => $terminatedAt,
+                'duration_ms' => max(0, $startedAt->diffInMilliseconds($terminatedAt)),
+                'result_json' => $this->publicRunSnapshot(array_replace(
+                    is_array($stepRun->result_json) ? $stepRun->result_json : [],
+                    [
+                        'ok' => false,
+                        'status' => 'cancelled',
+                        'statusLevel' => 'cancelled',
+                        'statusMessage' => $message,
+                        'forceTerminatedAt' => $terminatedAt->toIso8601String(),
+                    ],
+                )),
+                'error_message' => $message,
+            ])->save();
+        }
+
+        $alreadyFinal = $this->isFinalStatus((string) $run->status);
+        $terminationSummary = [
+            'at' => $terminatedAt->toIso8601String(),
+            'message' => $message,
+            'external_runs' => $terminatedExternalRuns,
+            'errors' => $terminationErrors,
+        ];
+
+        if ($alreadyFinal) {
+            $run->forceFill([
+                'result_json' => array_replace(is_array($run->result_json) ? $run->result_json : [], [
+                    'process_termination' => $terminationSummary,
+                ]),
+            ])->save();
+        } else {
+            $durationMs = $this->workflowRunDurationMs($run, $terminatedAt);
+            $run->forceFill([
+                'status' => 'cancelled',
+                'current_workflow_step_id' => null,
+                'finished_at' => $terminatedAt,
+                'duration_ms' => $durationMs,
+                'result_json' => array_replace(is_array($run->result_json) ? $run->result_json : [], [
+                    'ok' => false,
+                    'status' => 'cancelled',
+                    'statusMessage' => $message,
+                    'forceTerminatedAt' => $terminatedAt->toIso8601String(),
+                    'durationMs' => $durationMs,
+                    'duration_ms' => $durationMs,
+                    'process_termination' => $terminationSummary,
+                ], $this->workflowReturnPayload($run)),
+                'error_message' => $message,
+            ])->save();
+        }
+
+        $this->releaseClientReservation($run);
+
+        return [
+            'ok' => $terminationErrors === [],
+            'message' => $alreadyFinal
+                ? 'Zugehoerige Node-Prozesse des bereits beendeten Workflow-Laufs wurden bereinigt.'
+                : $message,
+            'alreadyFinal' => $alreadyFinal,
+            'terminatedExternalRuns' => $terminatedExternalRuns,
+            'cancelledStepRuns' => $stepRunsToCancel->count(),
+            'errors' => $terminationErrors,
+        ];
+    }
+
+    public function terminateCopilotRuns(WorkflowCopilotSession $session, string $message = 'Copilot-Sitzung und zugehoerige Node-Prozesse wurden beendet.'): array
+    {
+        $runIds = $session->runs()->pluck('id')
+            ->when($session->active_workflow_run_id, fn ($ids) => $ids->push((int) $session->active_workflow_run_id))
+            ->filter(fn (mixed $id): bool => (int) $id > 0)
+            ->unique()
+            ->values();
+        $results = $runIds
+            ->map(fn (mixed $runId): array => $this->terminate((int) $runId, $message))
+            ->all();
+
+        return [
+            'ok' => collect($results)->every(fn (array $result): bool => (bool) ($result['ok'] ?? false)),
+            'message' => $runIds->isEmpty()
+                ? 'Copilot-Sitzung wurde beendet; es waren keine zugeordneten Workflow-Laeufe vorhanden.'
+                : $runIds->count().' Copilot-Testlauf/-laeufe und deren zugehoerige Node-Prozesse wurden beendet.',
+            'runCount' => $runIds->count(),
+            'results' => $results,
+        ];
+    }
+
     public function deleteQueued(int|WorkflowRun $workflowRun): array
     {
         $run = $this->loadRun($workflowRun);
@@ -2964,7 +3128,7 @@ class WorkflowExecutionService
         return $stepRun->started_at->copy()->addSeconds($timeoutSeconds)->lte(now());
     }
 
-    protected function requestClientJobStop(NetworkJob $job, string $message, string $resultStatus = 'cancelled'): void
+    protected function requestClientJobStop(NetworkJob $job, string $message, string $resultStatus = 'cancelled', bool $force = false): void
     {
         if (in_array($job->status, ['success', 'failed', 'cancelled', 'timed_out', 'lost'], true)) {
             return;
@@ -2977,6 +3141,8 @@ class WorkflowExecutionService
             'control_payload_json' => [
                 'reason' => $message,
                 'result_status' => $resultStatus,
+                'force' => $force,
+                'terminate_process_tree' => $force,
             ],
             'control_requested_at' => now(),
             'control_acknowledged_at' => null,
@@ -3593,6 +3759,32 @@ class WorkflowExecutionService
                 ->update(['status' => 'cancelled', 'completed_at' => now(), 'error_message' => $message]),
             default => null,
         };
+    }
+
+    protected function terminateExternalRun(WorkflowStepRun $stepRun, string $message): bool
+    {
+        $externalRunId = trim((string) $stepRun->external_run_id);
+
+        if ($externalRunId === '') {
+            return false;
+        }
+
+        $result = match ($stepRun->external_run_type) {
+            'mail-registration' => $this->mailRegistration->cancelRun($externalRunId, true, $message),
+            'webmail-session' => $this->webmailSession->cancelRun($externalRunId, true, $message),
+            'workflow-task' => $this->workflowTasks->cancelRun($externalRunId, true, $message),
+            default => null,
+        };
+
+        if (! is_array($result)) {
+            return false;
+        }
+
+        if (! (bool) ($result['ok'] ?? false)) {
+            throw new \RuntimeException((string) ($result['message'] ?? 'Der externe Prozess konnte nicht beendet werden.'));
+        }
+
+        return true;
     }
 
     protected function applyMailRegistrationResult(WorkflowRun $run, array $result): void

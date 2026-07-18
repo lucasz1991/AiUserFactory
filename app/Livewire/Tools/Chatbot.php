@@ -374,6 +374,18 @@ class Chatbot extends Component
         }
     }
 
+    public function terminateCopilotSession(): void
+    {
+        if ($session = $this->activeCopilotSession()) {
+            app(WorkflowExecutionService::class)->terminateCopilotRuns(
+                $session,
+                'Copilot-Sitzung und alle zugeordneten Node-Prozesse wurden im Workflow-Copilot-Chat beendet.',
+            );
+            app(WorkflowCopilotSessionService::class)->stop($session, 'Mit zugeordneten Node-Prozessen im Workflow-Copilot-Chat beendet.');
+            $this->pollCopilotSession();
+        }
+    }
+
     public function restartCopilotSession(): void
     {
         $session = $this->activeCopilotSession();

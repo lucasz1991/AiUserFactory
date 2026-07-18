@@ -11,6 +11,7 @@
                 @if($copilotPaused)<button type="button" wire:click="resumeCopilot" class="rounded-lg bg-emerald-500 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-400">Fortsetzen</button>@elseif($copilotActive)<button type="button" wire:click="pauseCopilot" class="rounded-lg border border-amber-300/30 bg-amber-300/10 px-3 py-2 text-xs font-bold text-amber-200">Pausieren</button>@endif
                 <button type="button" wire:click="restartCopilot" wire:confirm="Copilot und aktuellen Testlauf vollständig neu starten?" class="rounded-lg border border-cyan-300/30 bg-cyan-300/10 px-3 py-2 text-xs font-bold text-cyan-200">Neu starten</button>
                 <button type="button" wire:click="stopCopilot" wire:confirm="Copilot-Optimierung stoppen?" class="rounded-lg border border-rose-300/30 bg-rose-300/10 px-3 py-2 text-xs font-bold text-rose-200">Stoppen</button>
+                <button type="button" wire:click="terminateCopilot" wire:confirm="Copilot wirklich beenden und alle zugeordneten Node-Prozesse erzwungen schliessen?" class="rounded-lg bg-rose-600 px-3 py-2 text-xs font-bold text-white hover:bg-rose-500">Beenden</button>
             </div>
         </div>
         @if($copilotLatestEvent)<div class="border-t border-white/10 bg-white/5 px-4 py-2 text-[10px] text-slate-300"><strong class="text-white">Letzter Vorgang:</strong> {{ $copilotLatestEvent->message }}</div>@endif

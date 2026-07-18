@@ -84,7 +84,7 @@
             <div class="flex items-center gap-1 rounded-xl border border-slate-200 bg-slate-50 p-1">
                 <button type="button" wire:click="startRun" @disabled($isActive || $isPaused) class="inline-flex h-8 items-center gap-2 rounded-lg bg-slate-900 px-3 text-[11px] font-bold text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-35">
                     <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"></path></svg>
-                    Durchlaufen
+                    Testdurchlauf starten
                 </button>
                 <button type="button" wire:click="runSingleTask" @disabled($isActive || ! $selectedTask) class="inline-flex h-8 items-center gap-2 rounded-lg bg-cyan-600 px-3 text-[11px] font-bold text-white shadow-sm transition hover:bg-cyan-500 disabled:cursor-not-allowed disabled:opacity-35">
                     <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 5v14l11-7z"></path><path d="M20 5v14"></path></svg>
@@ -102,6 +102,7 @@
                 <button type="button" wire:click="pauseRun" @disabled(! $isActive) class="h-9 rounded-lg border border-amber-200 bg-amber-50 px-3 text-[11px] font-bold text-amber-800 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-30">Pausieren</button>
                 <button type="button" wire:click="resumeRun" @disabled(! $isPaused) class="h-9 rounded-lg border border-emerald-200 bg-emerald-50 px-3 text-[11px] font-bold text-emerald-800 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-30">Bis Ende fortsetzen</button>
                 <button type="button" wire:click="stopRun" wire:confirm="Diesen Lauf wirklich stoppen?" @disabled(! $isActive && ! $isPaused) class="h-9 rounded-lg border border-rose-200 bg-white px-3 text-[11px] font-bold text-rose-700 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-30">Stoppen</button>
+                <button type="button" wire:click="terminateRun" wire:confirm="Workflow-Test wirklich beenden und alle zugeordneten Node-Prozesse erzwungen schliessen?" @disabled(! $run) class="h-9 rounded-lg bg-rose-700 px-3 text-[11px] font-bold text-white shadow-sm transition hover:bg-rose-600 disabled:cursor-not-allowed disabled:opacity-30" title="Beendet den Lauf und dessen vollstaendigen Node-Prozessbaum">Beenden</button>
                 <button type="button" wire:click="restartRun" wire:confirm="Aktuellen Lauf beenden und neu starten?" class="h-9 rounded-lg border border-slate-300 bg-white px-3 text-[11px] font-bold text-slate-600 transition hover:bg-slate-100">Neustart</button>
             </div>
 
@@ -160,7 +161,7 @@
     <main class="relative min-h-0 flex-1 overflow-hidden bg-slate-100 p-3">
         <section class="h-full" aria-label="Dauerhaft sichtbarer Workflow-Test">@include('livewire.admin.network.workflow-studio.browser')</section>
 
-        <div wire:loading.delay.flex wire:target="startRun,pauseRun,resumeRun,runSingleTask,stopRun,restartRun,runProbe,commitProbeAsTask,saveSelectedTask,saveSessionDefinition,startCopilot,pauseCopilot,resumeCopilot,restartCopilot,stopCopilot,setPermissionMode" class="pointer-events-none absolute inset-0 z-50 hidden items-center justify-center bg-white/55 backdrop-blur-[1px]">
+        <div wire:loading.delay.flex wire:target="startRun,pauseRun,resumeRun,runSingleTask,stopRun,terminateRun,restartRun,runProbe,commitProbeAsTask,saveSelectedTask,saveSessionDefinition,startCopilot,pauseCopilot,resumeCopilot,restartCopilot,stopCopilot,terminateCopilot,setPermissionMode" class="pointer-events-none absolute inset-0 z-50 hidden items-center justify-center bg-white/55 backdrop-blur-[1px]">
             <span class="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-700 shadow-xl"><span class="h-3 w-3 animate-spin rounded-full border-2 border-slate-300 border-t-cyan-600"></span>Studio aktualisiert …</span>
         </div>
     </main>

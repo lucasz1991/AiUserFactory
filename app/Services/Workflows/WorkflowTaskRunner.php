@@ -255,10 +255,17 @@ class WorkflowTaskRunner
         $status = $this->readJsonFile($statusPath) ?: [];
         $pid = (int) ($status['pid'] ?? 0);
         $browserWindows = $this->browserWindowsFromStatus($status);
+        $processFamilyTerminated = $force
+            ? $this->terminateManagedProcessFamily($runId, true, $message)
+            : false;
 
-        if ($pid > 1) {
+        if ($pid > 1 && ! $processFamilyTerminated) {
             $this->stopProcess($pid, $force);
         }
+
+        $terminationVerified = ! $force
+            || $pid <= 1
+            || ! $this->workflowTaskRootIsRunning($runId, $pid);
 
         $result = [
             'ok' => false,
@@ -290,7 +297,14 @@ class WorkflowTaskRunner
         $this->writeJsonFile($resultPath, $result);
         $this->writeJsonFile($statusPath, $status);
 
-        return ['ok' => true, 'message' => $message, 'pid' => $pid ?: null];
+        return [
+            'ok' => $terminationVerified,
+            'message' => $terminationVerified
+                ? $message
+                : $message.' Der zugehoerige Node-Prozessbaum ist weiterhin aktiv.',
+            'pid' => $pid ?: null,
+            'processFamilyTerminated' => $terminationVerified,
+        ];
     }
 
     public function closeRun(?string $runId, string $message = 'Workflow-Browser wurde nach Abschluss geschlossen.', bool $forceAfterGrace = true): array

@@ -1482,6 +1482,19 @@ class WorkflowManager extends Component
         }
     }
 
+    public function terminateCopilotOptimization(): void
+    {
+        if ($session = $this->activeCopilotSession()) {
+            $result = app(WorkflowExecutionService::class)->terminateCopilotRuns(
+                $session,
+                'Copilot-Optimierung und alle zugeordneten Node-Prozesse wurden im Workflow Manager beendet.',
+            );
+            app(WorkflowCopilotSessionService::class)->stop($session, 'Mit zugeordneten Node-Prozessen im Workflow Manager beendet.');
+            session()->flash(($result['ok'] ?? false) ? 'success' : 'error', (string) $result['message']);
+            $this->refreshCopilotSession();
+        }
+    }
+
     public function restartCopilotOptimization(): void
     {
         $session = $this->activeCopilotSession();
@@ -1610,6 +1623,25 @@ class WorkflowManager extends Component
 
         app(WorkflowExecutionService::class)->cancel($run, 'Workflow-Test wurde im Vorschau-Fenster gestoppt.');
         session()->flash('success', 'Workflow-Test wurde gestoppt.');
+    }
+
+    public function terminatePreviewWorkflowRun(): void
+    {
+        if (! $this->previewWorkflowRunId) {
+            return;
+        }
+
+        $run = WorkflowRun::query()->find($this->previewWorkflowRunId);
+
+        if (! $run) {
+            return;
+        }
+
+        $result = app(WorkflowExecutionService::class)->terminate(
+            $run,
+            'Workflow-Test und alle zugeordneten Node-Prozesse wurden im Vorschau-Fenster beendet.',
+        );
+        session()->flash(($result['ok'] ?? false) ? 'success' : 'error', (string) $result['message']);
     }
 
     public function pausePreviewWorkflowRun(): void

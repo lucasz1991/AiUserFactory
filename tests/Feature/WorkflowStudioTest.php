@@ -22,8 +22,11 @@ use App\Services\Workflows\WorkflowStudioAuthorizationService;
 use App\Services\Workflows\WorkflowStudioCheckpointService;
 use App\Services\Workflows\WorkflowStudioRevisionService;
 use App\Services\Workflows\WorkflowStudioSessionService;
+use App\Services\Workflows\WorkflowTaskRunner;
 use DomainException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Facades\Queue;
 use Livewire\Livewire;
 use Mockery;
@@ -246,21 +249,19 @@ class WorkflowStudioTest extends TestCase
 
         Livewire::test(WorkflowStudio::class, ['workflow' => $workflow])
             ->assertSee('Live-Browser & Ausführung', false)
+            ->assertSee('Testdurchlauf starten')
             ->assertSee('1 Task ausführen')
+            ->assertSeeHtml('wire:click="terminateRun"')
             ->assertSee('Task zurück')
             ->assertSee('Task weiter')
             ->assertSee('Workflow bearbeiten')
             ->assertSee('Task-Katalog')
-            ->assertSee('So funktionieren Workflow, Listen, Tasks und Weiterleitungen')
             ->assertSee('Browserfenster')
             ->assertSee('Selector prüfen')
             ->assertSee('Daten & Logs', false)
             ->assertSee('Copilot & Ziele', false)
             ->assertSee('Kritisch nachfragen')
-            ->assertSeeHtml('x-show="isPanelOpen()"')
-            ->assertSeeHtml('Object.prototype.hasOwnProperty.call(this.panelTitles, this.activePanel)')
-            ->assertSeeHtml('data-workflow-studio-tools-modal')
-            ->assertSeeHtml('style="display: none;"')
+            ->assertDontSeeHtml('data-workflow-studio-tools-modal')
             ->assertSeeHtml('data-studio-selected-task="true"')
             ->assertDontSee('Checkpoints verwalten')
             ->assertDontSeeHtml('wire:model="showCheckpointsModal"');
@@ -272,6 +273,27 @@ class WorkflowStudioTest extends TestCase
             ->assertSee('Selector-Prüfung');
     }
 
+    public function test_tools_modal_is_only_rendered_for_a_valid_server_side_panel_and_can_close(): void
+    {
+        [$workflow] = $this->workflow();
+        $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
+        $this->actingAs($admin);
+
+        Livewire::test(WorkflowStudio::class, ['workflow' => $workflow])
+            ->assertSet('activeStudioPanel', '')
+            ->assertDontSeeHtml('data-workflow-studio-tools-modal')
+            ->call('openStudioPanel', 'tools')
+            ->assertSet('activeStudioPanel', 'tools')
+            ->assertSeeHtml('data-workflow-studio-tools-modal')
+            ->assertSee('Selector & Browser')
+            ->call('closeStudioPanel')
+            ->assertSet('activeStudioPanel', '')
+            ->assertDontSeeHtml('data-workflow-studio-tools-modal')
+            ->call('openStudioPanel', 'invalid-panel')
+            ->assertSet('activeStudioPanel', '')
+            ->assertDontSeeHtml('data-workflow-studio-tools-modal');
+    }
+
     public function test_revision_history_is_opened_from_the_workflow_manager_actions(): void
     {
         [$workflow] = $this->workflow();
@@ -279,6 +301,7 @@ class WorkflowStudioTest extends TestCase
         $this->actingAs($admin);
 
         Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
+            ->assertSee('Normalen Testdurchlauf starten')
             ->assertSee('Revisionen')
             ->call('openRevisionHistory')
             ->assertSet('showRevisionHistoryModal', true)
@@ -716,6 +739,81 @@ class WorkflowStudioTest extends TestCase
             WorkflowCopilotSupervisorJob::class,
             fn (WorkflowCopilotSupervisorJob $job): bool => $job->workflowCopilotSessionId === $copilot->id,
         );
+    }
+
+    public function test_force_termination_cleans_up_a_finished_runs_node_process_without_rewriting_its_result_status(): void
+    {
+        [$workflow, $step] = $this->workflow();
+        $run = WorkflowRun::query()->create([
+            'run_uuid' => (string) str()->uuid(),
+            'workflow_id' => $workflow->id,
+            'status' => 'completed',
+            'requested_by' => 'test',
+            'queued_at' => now()->subMinute(),
+            'started_at' => now()->subMinute(),
+            'finished_at' => now(),
+            'context_json' => [],
+            'result_json' => ['ok' => true],
+        ]);
+        WorkflowStepRun::query()->create([
+            'workflow_run_id' => $run->id,
+            'workflow_step_id' => $step->id,
+            'status' => 'completed',
+            'external_run_type' => 'workflow-task',
+            'external_run_id' => 'node-run-123',
+            'started_at' => now()->subMinute(),
+            'finished_at' => now(),
+            'logs_json' => [],
+            'result_json' => ['ok' => true],
+        ]);
+        $message = 'Testlauf samt Node-Prozessbaum beenden.';
+        $runner = Mockery::mock(WorkflowTaskRunner::class);
+        $runner->shouldReceive('cancelRun')
+            ->once()
+            ->with('node-run-123', true, $message)
+            ->andReturn(['ok' => true, 'processFamilyTerminated' => true]);
+        $this->app->instance(WorkflowTaskRunner::class, $runner);
+
+        $result = app(WorkflowExecutionService::class)->terminate($run, $message);
+
+        $this->assertTrue($result['ok']);
+        $this->assertTrue($result['alreadyFinal']);
+        $this->assertSame(1, $result['terminatedExternalRuns']);
+        $this->assertSame('completed', $run->fresh()->status);
+        $this->assertSame(1, data_get($run->fresh()->result_json, 'process_termination.external_runs'));
+    }
+
+    public function test_force_cancelling_a_node_runner_terminates_its_exact_windows_process_tree(): void
+    {
+        if (PHP_OS_FAMILY !== 'Windows') {
+            $this->markTestSkipped('Windows taskkill contract test.');
+        }
+
+        $runId = 'force-stop-'.str()->uuid();
+        $directory = storage_path('app/workflow-task-runs/'.$runId);
+        File::ensureDirectoryExists($directory);
+        File::put($directory.'/status.json', json_encode([
+            'runId' => $runId,
+            'pid' => 4242,
+            'state' => 'running',
+            'isRunning' => true,
+        ], JSON_THROW_ON_ERROR));
+        Process::fake();
+
+        try {
+            $result = app(WorkflowTaskRunner::class)->cancelRun($runId, true, 'Erzwungen beendet.');
+
+            $this->assertTrue($result['ok']);
+            Process::assertRan(fn ($process): bool => $process->command === [
+                'taskkill',
+                '/PID',
+                '4242',
+                '/T',
+                '/F',
+            ]);
+        } finally {
+            File::deleteDirectory($directory);
+        }
     }
 
     private function workflow(): array

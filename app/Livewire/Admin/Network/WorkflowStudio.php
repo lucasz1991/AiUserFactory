@@ -255,6 +255,24 @@ class WorkflowStudio extends Component
         });
     }
 
+    public function terminateRun(): void
+    {
+        $this->perform('run.terminated', function (): array {
+            $run = $this->activeRunOrFail();
+            $response = app(WorkflowExecutionService::class)->terminate(
+                $run,
+                'Workflow-Test und alle zugeordneten Node-Prozesse wurden im Workflow Studio beendet.',
+            );
+            $this->session()->forceFill(['status' => 'stopped', 'finished_at' => now()])->save();
+
+            return $this->result(
+                (string) ($run->fresh()?->status ?? 'cancelled'),
+                (string) $response['message'],
+                $run->fresh(),
+            );
+        });
+    }
+
     public function restartRun(): void
     {
         $run = $this->activeRun();
@@ -577,6 +595,22 @@ class WorkflowStudio extends Component
             app(WorkflowCopilotSessionService::class)->stop($copilot, 'Im Workflow Studio gestoppt.');
 
             return $this->result('stopped', 'Copilot-Optimierung wurde gestoppt.');
+        });
+    }
+
+    public function terminateCopilot(): void
+    {
+        $this->perform('copilot.terminated', function (): array {
+            $copilot = $this->copilotSessionOrFail();
+            $response = app(WorkflowExecutionService::class)->terminateCopilotRuns(
+                $copilot,
+                'Copilot-Optimierung und alle zugeordneten Node-Prozesse wurden im Workflow Studio beendet.',
+            );
+
+            app(WorkflowCopilotSessionService::class)->stop($copilot, 'Mit zugeordneten Node-Prozessen im Workflow Studio beendet.');
+            $this->session()->forceFill(['status' => 'stopped', 'finished_at' => now()])->save();
+
+            return $this->result('stopped', (string) $response['message']);
         });
     }
 
