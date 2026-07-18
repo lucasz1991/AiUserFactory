@@ -259,6 +259,8 @@ class WorkflowStudioTest extends TestCase
             ->assertSee('Kritisch nachfragen')
             ->assertSeeHtml('x-show="isPanelOpen()"')
             ->assertSeeHtml('Object.prototype.hasOwnProperty.call(this.panelTitles, this.activePanel)')
+            ->assertSeeHtml('data-workflow-studio-tools-modal')
+            ->assertSeeHtml('style="display: none;"')
             ->assertSeeHtml('data-studio-selected-task="true"')
             ->assertDontSee('Checkpoints verwalten')
             ->assertDontSeeHtml('wire:model="showCheckpointsModal"');

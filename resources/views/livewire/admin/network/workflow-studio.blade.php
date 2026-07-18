@@ -192,10 +192,12 @@
         x-cloak
         x-show="isPanelOpen()"
         x-effect="if (activePanel !== null && !isPanelOpen()) closePanel()"
+        style="display: none;"
         x-transition.opacity
         x-on:click.self="closePanel()"
         class="absolute inset-0 z-[65] flex items-stretch justify-center bg-slate-950/55 p-2 backdrop-blur-sm sm:p-5"
         role="dialog"
+        data-workflow-studio-tools-modal
         aria-modal="true"
         x-bind:aria-label="panelTitles[activePanel] || 'Workflow Studio Werkzeug'"
     >
