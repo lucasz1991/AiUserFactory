@@ -1,29 +1,7 @@
 <div
     x-data="{
-        activePanel: null,
-        panelTitles: {
-            builder: 'Workflow bearbeiten',
-            copilot: 'Copilot & Ziele',
-            tools: 'Selector & Browser',
-            runtime: 'Daten & Logs',
-            revisions: 'Revisionen',
-        },
         init() {
-            this.closePanel();
             this.$nextTick(() => window.dispatchEvent(new CustomEvent('workflow-studio-pin-copilot')));
-        },
-        isPanelOpen() {
-            return typeof this.activePanel === 'string'
-                && Object.prototype.hasOwnProperty.call(this.panelTitles, this.activePanel);
-        },
-        openPanel(panel) {
-            const normalized = String(panel || '').trim();
-            this.activePanel = Object.prototype.hasOwnProperty.call(this.panelTitles, normalized)
-                ? normalized
-                : null;
-        },
-        closePanel() {
-            this.activePanel = null;
         },
     }"
     x-on:workflow-preview-task-selected.window="
@@ -33,13 +11,12 @@
     "
     x-on:workflow-preview-task-edit-requested.window="
         if (Number($event.detail.workflowId || 0) === {{ (int) $workflow->id }}) {
-            openPanel('builder');
             $wire.editTask(Number($event.detail.stepId || 0), String($event.detail.taskKey || ''));
         }
     "
-    x-on:workflow-studio-open-builder.window="openPanel('builder')"
-    x-on:workflow-studio-open-panel.window="openPanel($event.detail.panel)"
-    x-on:keydown.escape.window="closePanel()"
+    x-on:workflow-studio-open-builder.window="$wire.openStudioPanel('builder')"
+    x-on:workflow-studio-open-panel.window="$wire.openStudioPanel(String($event.detail.panel || ''))"
+    x-on:keydown.escape.window="$wire.closeStudioPanel()"
     data-workflow-studio-shell
     class="fixed inset-0 z-[70] flex h-screen flex-col overflow-hidden bg-slate-100 text-slate-900"
     wire:poll.2s="refreshStudio"
@@ -97,7 +74,7 @@
                 <p class="mt-1 text-[10px] text-slate-400">Sitzung #{{ $session->id }} · Revision {{ $workflow->copilot_revision }} · {{ $permissionLabel }}</p>
             </div>
 
-            <button type="button" x-on:click="openPanel('copilot')" class="inline-flex h-9 items-center gap-2 rounded-lg border border-white/15 bg-white/5 px-3 text-xs font-bold text-slate-200 transition hover:border-cyan-400/50 hover:bg-cyan-400/10 hover:text-cyan-200">
+            <button type="button" wire:click="openStudioPanel('copilot')" class="inline-flex h-9 items-center gap-2 rounded-lg border border-white/15 bg-white/5 px-3 text-xs font-bold text-slate-200 transition hover:border-cyan-400/50 hover:bg-cyan-400/10 hover:text-cyan-200">
                 <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21H9.6v-.1A1.7 1.7 0 0 0 8 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 3.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H2V9.6h.1A1.7 1.7 0 0 0 3.6 8a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 8 3.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V2h4v.1A1.7 1.7 0 0 0 15 3.6a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 8c.16.37.37.7.6 1 .3.35.7.55 1.1.6h.1v4h-.1a1.7 1.7 0 0 0-1.7 1.4Z"></path></svg>
                 Copilot & Ziele
             </button>
@@ -164,17 +141,17 @@
     <nav class="relative z-20 shrink-0 overflow-x-auto border-b border-slate-200 bg-white px-4 py-2 lg:px-6" aria-label="Workflow-Studio Werkzeuge">
         <div class="flex min-w-max items-center gap-2">
             <span class="mr-1 text-[9px] font-black uppercase tracking-[0.16em] text-slate-400">Werkzeuge</span>
-            <button type="button" x-on:click="openPanel('builder')" class="inline-flex h-8 items-center gap-2 rounded-lg bg-slate-900 px-3 text-[11px] font-bold text-white transition hover:bg-slate-800">
+            <button type="button" wire:click="openStudioPanel('builder')" class="inline-flex h-8 items-center gap-2 rounded-lg bg-slate-900 px-3 text-[11px] font-bold text-white transition hover:bg-slate-800">
                 Workflow bearbeiten <span class="rounded bg-white/10 px-1.5 py-0.5 text-[9px]">{{ $taskCount }}</span>
             </button>
-            <button type="button" x-on:click="openPanel('copilot')" class="inline-flex h-8 items-center gap-2 rounded-lg border border-cyan-200 bg-cyan-50 px-3 text-[11px] font-bold text-cyan-800 transition hover:border-cyan-300 hover:bg-cyan-100">
+            <button type="button" wire:click="openStudioPanel('copilot')" class="inline-flex h-8 items-center gap-2 rounded-lg border border-cyan-200 bg-cyan-50 px-3 text-[11px] font-bold text-cyan-800 transition hover:border-cyan-300 hover:bg-cyan-100">
                 Copilot <span class="h-1.5 w-1.5 rounded-full {{ $copilotSession && in_array($copilotSession->status, \App\Models\WorkflowCopilotSession::ACTIVE_STATUSES, true) ? 'bg-emerald-500' : 'bg-slate-300' }}"></span>
             </button>
-            <button type="button" x-on:click="openPanel('tools')" class="h-8 rounded-lg border border-slate-200 bg-white px-3 text-[11px] font-bold text-slate-700 transition hover:border-cyan-300 hover:text-cyan-700">Selector & Browser</button>
-            <button type="button" x-on:click="openPanel('runtime')" class="inline-flex h-8 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-[11px] font-bold text-slate-700 transition hover:border-cyan-300 hover:text-cyan-700">
+            <button type="button" wire:click="openStudioPanel('tools')" class="h-8 rounded-lg border border-slate-200 bg-white px-3 text-[11px] font-bold text-slate-700 transition hover:border-cyan-300 hover:text-cyan-700">Selector & Browser</button>
+            <button type="button" wire:click="openStudioPanel('runtime')" class="inline-flex h-8 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-[11px] font-bold text-slate-700 transition hover:border-cyan-300 hover:text-cyan-700">
                 Daten & Logs @if($run)<span class="font-mono text-[9px] text-slate-400">#{{ $run->id }}</span>@endif
             </button>
-            <button type="button" x-on:click="openPanel('revisions')" class="inline-flex h-8 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-[11px] font-bold text-slate-700 transition hover:border-cyan-300 hover:text-cyan-700">
+            <button type="button" wire:click="openStudioPanel('revisions')" class="inline-flex h-8 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-[11px] font-bold text-slate-700 transition hover:border-cyan-300 hover:text-cyan-700">
                 Revisionen <span class="rounded bg-slate-100 px-1.5 py-0.5 text-[9px] text-slate-500">{{ $workflow->studioRevisions->count() }}</span>
             </button>
         </div>
@@ -188,45 +165,59 @@
         </div>
     </main>
 
-    <div
-        x-cloak
-        x-show="isPanelOpen()"
-        x-effect="if (activePanel !== null && !isPanelOpen()) closePanel()"
-        style="display: none;"
-        x-transition.opacity
-        x-on:click.self="closePanel()"
-        class="absolute inset-0 z-[65] flex items-stretch justify-center bg-slate-950/55 p-2 backdrop-blur-sm sm:p-5"
-        role="dialog"
-        data-workflow-studio-tools-modal
-        aria-modal="true"
-        x-bind:aria-label="panelTitles[activePanel] || 'Workflow Studio Werkzeug'"
-    >
+    @php
+        $studioPanelTitles = [
+            'builder' => 'Workflow bearbeiten',
+            'copilot' => 'Copilot & Ziele',
+            'tools' => 'Selector & Browser',
+            'runtime' => 'Daten & Logs',
+            'revisions' => 'Revisionen',
+        ];
+    @endphp
+
+    @if(isset($studioPanelTitles[$activeStudioPanel]))
+        <div
+            wire:key="workflow-studio-tools-modal-{{ $activeStudioPanel }}"
+            wire:click.self="closeStudioPanel"
+            class="absolute inset-0 z-[65] flex items-stretch justify-center bg-slate-950/55 p-2 backdrop-blur-sm sm:p-5"
+            role="dialog"
+            data-workflow-studio-tools-modal
+            aria-modal="true"
+            aria-label="{{ $studioPanelTitles[$activeStudioPanel] }}"
+        >
         <section class="flex min-h-0 w-full max-w-[1720px] flex-col overflow-hidden rounded-2xl border border-white/20 bg-slate-100 shadow-2xl">
             <header class="flex shrink-0 items-center justify-between gap-4 border-b border-slate-200 bg-white px-4 py-3 sm:px-5">
                 <div>
                     <p class="text-[9px] font-black uppercase tracking-[0.18em] text-cyan-700">Workflow Studio Werkzeug</p>
-                    <h2 class="mt-1 text-base font-bold text-slate-950" x-text="panelTitles[activePanel] || 'Werkzeug'"></h2>
+                    <h2 class="mt-1 text-base font-bold text-slate-950">{{ $studioPanelTitles[$activeStudioPanel] }}</h2>
                 </div>
-                <button type="button" x-on:click="closePanel()" class="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 transition hover:bg-slate-100">
+                <button type="button" wire:click="closeStudioPanel" class="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 transition hover:bg-slate-100">
                     Schliessen <span aria-hidden="true">&times;</span>
                 </button>
             </header>
 
             <div class="min-h-0 flex-1 overflow-hidden p-3 sm:p-4">
-                <section x-show="activePanel === 'builder'" class="h-full">
+                @if($activeStudioPanel === 'builder')
+                    <section class="h-full">
                     <livewire:admin.network.workflow-studio-task-editor :workflow="$workflow" :studio-session-id="$session->id" :key="'workflow-studio-builder-'.$workflow->id.'-'.$session->id" />
-                </section>
-                <section x-show="activePanel === 'copilot'" class="h-full overflow-y-auto">
+                    </section>
+                @elseif($activeStudioPanel === 'copilot')
+                    <section class="h-full overflow-y-auto">
                     <div class="mx-auto max-w-[1500px] rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">@include('livewire.admin.network.workflow-studio.copilot')</div>
-                </section>
-                <section x-show="activePanel === 'tools'" class="h-full">@include('livewire.admin.network.workflow-studio.tools')</section>
-                <section x-show="activePanel === 'runtime'" class="h-full">@include('livewire.admin.network.workflow-studio.runtime')</section>
-                <section x-show="activePanel === 'revisions'" class="h-full overflow-y-auto rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                    </section>
+                @elseif($activeStudioPanel === 'tools')
+                    <section class="h-full">@include('livewire.admin.network.workflow-studio.tools')</section>
+                @elseif($activeStudioPanel === 'runtime')
+                    <section class="h-full">@include('livewire.admin.network.workflow-studio.runtime')</section>
+                @elseif($activeStudioPanel === 'revisions')
+                    <section class="h-full overflow-y-auto rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                     <livewire:admin.network.workflow-revision-history :workflow-id="$workflow->id" :studio-session-id="$session->id" :key="'workflow-studio-revisions-'.$workflow->id.'-'.$session->id" />
-                </section>
+                    </section>
+                @endif
             </div>
         </section>
-    </div>
+        </div>
+    @endif
 
     @include('livewire.admin.network.workflow-studio.selector-modal')
 </div>

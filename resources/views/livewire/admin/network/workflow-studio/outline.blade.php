@@ -15,7 +15,7 @@
             <h2 class="mt-1 text-sm font-bold text-slate-950">Workflow-Navigator</h2>
             <p class="mt-1 text-[11px] leading-4 text-slate-500">Klick wählt aus, Doppelklick bearbeitet.</p>
         </div>
-        <button type="button" x-on:click="$dispatch('workflow-studio-open-builder')" class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-lg font-medium text-slate-700 transition hover:border-cyan-300 hover:bg-cyan-50 hover:text-cyan-700" title="Workflow bearbeiten">+</button>
+        <button type="button" wire:click="openStudioPanel('builder')" class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-lg font-medium text-slate-700 transition hover:border-cyan-300 hover:bg-cyan-50 hover:text-cyan-700" title="Workflow bearbeiten">+</button>
     </div>
 
     <div class="min-h-0 flex-1 space-y-3 overflow-y-auto bg-slate-50/70 p-3">
@@ -78,7 +78,7 @@
                 </div>
             </section>
         @empty
-            <button type="button" x-on:click="$dispatch('workflow-studio-open-builder')" class="block w-full rounded-xl border-2 border-dashed border-slate-300 bg-white px-4 py-10 text-center text-xs font-bold text-slate-500 hover:border-cyan-400 hover:text-cyan-700">Erste Liste anlegen</button>
+            <button type="button" wire:click="openStudioPanel('builder')" class="block w-full rounded-xl border-2 border-dashed border-slate-300 bg-white px-4 py-10 text-center text-xs font-bold text-slate-500 hover:border-cyan-400 hover:text-cyan-700">Erste Liste anlegen</button>
         @endforelse
     </div>
 </aside>

@@ -29,6 +29,14 @@ use Throwable;
 
 class WorkflowStudio extends Component
 {
+    private const STUDIO_PANELS = [
+        'builder',
+        'copilot',
+        'tools',
+        'runtime',
+        'revisions',
+    ];
+
     public int $workflowId;
 
     public int $studioSessionId;
@@ -74,6 +82,8 @@ class WorkflowStudio extends Component
     public bool $showCopilotSettingsModal = false;
 
     public bool $showSelectorProbeModal = false;
+
+    public string $activeStudioPanel = '';
 
     public string $observedCursorSignature = '';
 
@@ -393,15 +403,27 @@ class WorkflowStudio extends Component
         }
 
         $this->selectedStepId = (string) $stepId;
+        $this->openStudioPanel('builder');
         $this->dispatch('workflow-studio-builder-target', stepId: $stepId);
-        $this->dispatch('workflow-studio-open-builder');
     }
 
     public function editTask(int $stepId, string $taskKey): void
     {
         $this->selectTask($stepId, $taskKey);
-        $this->dispatch('workflow-studio-open-builder');
+        $this->openStudioPanel('builder');
         $this->dispatch('open-workflow-studio-task-editor', stepId: $stepId, taskKey: $taskKey);
+    }
+
+    public function openStudioPanel(string $panel): void
+    {
+        $this->activeStudioPanel = in_array($panel, self::STUDIO_PANELS, true)
+            ? $panel
+            : '';
+    }
+
+    public function closeStudioPanel(): void
+    {
+        $this->activeStudioPanel = '';
     }
 
     public function editSelectedTask(): void
