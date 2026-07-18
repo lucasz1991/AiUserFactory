@@ -41,9 +41,35 @@ class WorkflowCollectionTaskCatalogTest extends TestCase
 
         $this->assertSame('current_result', $loop['store_current_element_as']);
         $this->assertSame('result_index', $loop['store_index_as']);
+        $this->assertSame('current_result', $loop['collect_from_variable']);
         $this->assertSame('current_result', $reader['scope_variable']);
         $this->assertSame('top_results', $append['array_name']);
         $this->assertSame('current_result', $append['value_from_variable']);
+    }
+
+    public function test_every_catalog_task_has_complete_structured_documentation(): void
+    {
+        $catalog = (new WorkflowTaskCatalog)->all();
+
+        $this->assertNotEmpty($catalog);
+
+        foreach ($catalog as $taskKey => $definition) {
+            $documentation = $definition['documentation'] ?? [];
+
+            $this->assertNotEmpty($documentation['purpose'] ?? null, $taskKey.' purpose');
+            $this->assertNotEmpty($documentation['use_when'] ?? null, $taskKey.' use_when');
+            $this->assertNotEmpty($documentation['workflow_role'] ?? null, $taskKey.' workflow_role');
+            $this->assertNotEmpty($documentation['execution'] ?? null, $taskKey.' execution');
+            $this->assertIsArray($documentation['inputs'] ?? null, $taskKey.' inputs');
+            $this->assertNotEmpty($documentation['outputs'] ?? null, $taskKey.' outputs');
+            $this->assertNotEmpty($documentation['routing'] ?? null, $taskKey.' routing');
+            $this->assertNotEmpty($documentation['important_notes'] ?? null, $taskKey.' notes');
+        }
+
+        $loopFields = collect(data_get($catalog['loop.for_each_element'], 'form.extra_fields'))->keyBy('name');
+        $this->assertNotNull($loopFields->get('collect_to_array'));
+        $this->assertNotNull($loopFields->get('completion_target'));
+        $this->assertSame('Zielkarte bei leerer Liste', data_get($loopFields->get('empty_target'), 'label'));
     }
 
     public function test_fill_field_exposes_explicit_fixed_or_workflow_variable_sources(): void

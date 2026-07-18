@@ -70,6 +70,16 @@ class WorkflowCopilotPromptContextServiceTest extends TestCase
             data_get($context, 'workflow_task_catalog'),
         );
         $this->assertArrayHasKey('loop.end', data_get($context, 'workflow_task_catalog'));
+        $loopCatalog = data_get($context, 'workflow_task_catalog')['loop.for_each_element'];
+        $loopDocumentation = $loopCatalog['documentation'];
+        $this->assertNotEmpty($loopCatalog['parameters']);
+        $this->assertNotEmpty($loopDocumentation['purpose']);
+        $this->assertStringContainsString(
+            'collect_to_array',
+            $loopDocumentation['outputs'][1],
+        );
+        $this->assertStringContainsString('Workflow-Step', data_get($context, 'workflow_structure.lists'));
+        $this->assertCount(5, data_get($context, 'workflow_structure.loop_recipe'));
         $this->assertSame(
             'Beendet den gesamten Workflow sofort als fehlgeschlagen. fail niemals fuer einen behebbaren oder optionalen Fehler verwenden.',
             data_get($context, 'execution_contract.route_types.fail'),
@@ -99,5 +109,62 @@ class WorkflowCopilotPromptContextServiceTest extends TestCase
         );
         $this->assertStringNotContainsString('never-leak-this-fixed-value', $serialized);
         $this->assertStringNotContainsString('private query', $serialized);
+    }
+
+    public function test_context_diagnoses_conflicting_loop_collection_and_missing_targets(): void
+    {
+        $workflow = Workflow::query()->create([
+            'name' => 'Loop Diagnostics',
+            'slug' => 'loop-diagnostics',
+            'category' => 'test',
+            'is_active' => true,
+            'is_locked' => false,
+            'trigger_type' => 'manual',
+            'settings_json' => [],
+        ]);
+        $workflow->steps()->create([
+            'name' => 'Ergebnisse',
+            'type' => WorkflowStep::TYPE_BROWSER_TASK,
+            'action_key' => 'ergebnisse',
+            'position' => 10,
+            'is_enabled' => true,
+            'config_json' => [
+                'tasks' => [
+                    [
+                        'key' => 'result-loop',
+                        'task_key' => 'loop.for_each_element',
+                        'loop_pair_id' => 'pair-1',
+                        'loop_end_key' => 'result-loop-end',
+                        'collect_to_array' => 'results',
+                        'collect_from_variable' => 'current_result',
+                        'completion_target' => 'missing-target',
+                    ],
+                    [
+                        'key' => 'read-result',
+                        'task_key' => 'browser.read_element_fields',
+                        'output_variable' => 'current_result',
+                    ],
+                    [
+                        'key' => 'append-result',
+                        'task_key' => 'data.append_to_array',
+                        'array_name' => 'results',
+                        'value_from_variable' => 'current_result',
+                    ],
+                    [
+                        'key' => 'result-loop-end',
+                        'task_key' => 'loop.end',
+                        'loop_pair_id' => 'pair-1',
+                        'loop_start_key' => 'result-loop',
+                    ],
+                ],
+            ],
+        ]);
+
+        $context = app(WorkflowCopilotPromptContextService::class)->forWorkflow($workflow->fresh());
+        $codes = collect($context['workflow_diagnostics'])->pluck('code');
+
+        $this->assertContains('loop_collection_duplicate_append', $codes);
+        $this->assertContains('loop_route_target_missing', $codes);
+        $this->assertNotContains('loop_collection_producer_missing', $codes);
     }
 }

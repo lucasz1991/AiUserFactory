@@ -2310,8 +2310,8 @@ async function finalizeBrowserLifecycle(state = 'completed') {
 
   if (browser && connectedToExistingBrowser && typeof browser.disconnect === 'function') {
     browser.disconnect();
-  } else if (browser && !shouldKeepWorkflowBrowserProcessAlive() && typeof browser.disconnect === 'function') {
-    browser.disconnect();
+  } else if (browser && !shouldKeepWorkflowBrowserProcessAlive() && typeof browser.close === 'function') {
+    await browser.close().catch(() => {});
   } else if (browser && browserWindowsByName.size === 0 && typeof browser.close === 'function') {
     await browser.close().catch(() => {});
   }

@@ -4,6 +4,7 @@
     $catalogKey = $isEdit ? $editingTaskCatalogKey : $newTaskCatalogKey;
     $isLoopPairEdit = $isEdit && in_array($editingTaskLoopPairSegment ?? '', ['start', 'end'], true);
     $selectedDefinition = collect($taskDefinitions)->firstWhere('key', $catalogKey) ?? [];
+    $documentation = is_array($selectedDefinition['documentation'] ?? null) ? $selectedDefinition['documentation'] : [];
     $usesBrowserWindow = in_array($selectedDefinition['kind'] ?? '', ['browser', 'input', 'wait'], true) && $catalogKey !== 'wait.seconds';
     $form = array_replace([
         'browser_window' => $usesBrowserWindow,
@@ -254,6 +255,59 @@
             @error($prefix.'Title') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
         </div>
     </div>
+
+    @if($documentation !== [])
+        <details class="group rounded-xl border border-cyan-200 bg-cyan-50/70 p-4">
+            <summary class="flex cursor-pointer list-none items-center justify-between gap-3 text-sm font-bold text-cyan-950">
+                <span>Ausführliche Task-Erklärung</span>
+                <span class="text-xs text-cyan-700 group-open:hidden">anzeigen</span>
+                <span class="hidden text-xs text-cyan-700 group-open:inline">schließen</span>
+            </summary>
+            <div class="mt-4 grid gap-4 text-xs leading-5 text-slate-700 lg:grid-cols-2">
+                <section>
+                    <h4 class="font-bold text-slate-950">Wann und wofür?</h4>
+                    <p class="mt-1">{{ $documentation['use_when'] ?? $documentation['purpose'] ?? '' }}</p>
+                    @if(filled($documentation['workflow_role'] ?? null))
+                        <p class="mt-2 rounded-lg bg-white/80 p-2.5"><strong>Rolle im Workflow:</strong> {{ $documentation['workflow_role'] }}</p>
+                    @endif
+                </section>
+                <section>
+                    <h4 class="font-bold text-slate-950">Ausführung</h4>
+                    <p class="mt-1">{{ $documentation['execution'] ?? '' }}</p>
+                </section>
+                @if(! empty($documentation['outputs']))
+                    <section>
+                        <h4 class="font-bold text-slate-950">Ausgaben</h4>
+                        <ul class="mt-1 list-disc space-y-1 pl-4">
+                            @foreach($documentation['outputs'] as $output)
+                                <li>{{ $output }}</li>
+                            @endforeach
+                        </ul>
+                    </section>
+                @endif
+                @if(! empty($documentation['routing']))
+                    <section>
+                        <h4 class="font-bold text-slate-950">Weiterleitungen</h4>
+                        <ul class="mt-1 list-disc space-y-1 pl-4">
+                            @foreach($documentation['routing'] as $routeExplanation)
+                                <li>{{ $routeExplanation }}</li>
+                            @endforeach
+                        </ul>
+                    </section>
+                @endif
+                @if(! empty($documentation['important_notes']))
+                    <section class="lg:col-span-2">
+                        <h4 class="font-bold text-slate-950">Wichtige Hinweise</h4>
+                        <ul class="mt-1 grid list-disc gap-x-6 gap-y-1 pl-4 lg:grid-cols-2">
+                            @foreach($documentation['important_notes'] as $note)
+                                <li>{{ $note }}</li>
+                            @endforeach
+                        </ul>
+                    </section>
+                @endif
+            </div>
+        </details>
+    @endif
 
     <div>
         <label class="block text-sm font-medium text-gray-700">Beschreibung</label>

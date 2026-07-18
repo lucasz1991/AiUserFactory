@@ -98,6 +98,16 @@
                 </button>
             </div>
 
+            <details class="shrink-0 border-b border-cyan-200 bg-cyan-50/70 px-4 py-3 text-xs text-slate-700">
+                <summary class="cursor-pointer font-bold text-cyan-950">So funktionieren Workflow, Listen, Tasks und Weiterleitungen</summary>
+                <div class="mt-3 grid gap-3 leading-5 md:grid-cols-2 xl:grid-cols-4">
+                    <p><strong>Workflow:</strong> Der gesamte Prozess mit Ziel, Eingaben und Erfolgskriterien. Aktivierte Listen laufen grundsätzlich von links nach rechts.</p>
+                    <p><strong>Liste:</strong> Eine fachliche Phase mit eigenen Erfolgs-, Fehler-, Partial- und Timeout-Wegen. Ihre Route greift erst, wenn keine Task-Route Vorrang hat.</p>
+                    <p><strong>Task:</strong> Eine konkrete Aktion. Ohne eigene Route folgt die nächste Karte; <code>next</code> und <code>on_error</code> können zu Karten, Listen, Ende oder Fehler führen.</p>
+                    <p><strong>Loop:</strong> Start, Reader, optionales Array-Sammeln und Loop-Ende bilden einen Block. Normaler Abschluss, leere Liste und Fehler besitzen getrennte Ziele.</p>
+                </div>
+            </details>
+
             @if(! $canEdit)
                 <div class="flex shrink-0 items-center justify-between gap-3 border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-900">
                     <span><strong>Bearbeitung gesperrt:</strong> Der Lauf ist {{ $runStatus ?: 'aktiv' }}. Pausiere ihn, damit Browserzustand und Task-Reihenfolge konsistent bleiben.</span>

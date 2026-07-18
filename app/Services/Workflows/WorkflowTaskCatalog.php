@@ -9,7 +9,7 @@ class WorkflowTaskCatalog
 {
     public function all(): array
     {
-        return [
+        $tasks = [
             'browser.open' => [
                 'label' => 'Browserfenster oeffnen',
                 'kind' => 'browser',
@@ -604,7 +604,7 @@ class WorkflowTaskCatalog
                 'runner' => 'node',
                 'node_script' => 'node/workflows/tasks/loop/for_each_element.cjs',
                 'timeout_seconds' => 30,
-                'description' => 'Iteriert Treffer eines konfigurierbaren DOM-Selectors. Der aktuelle Element-Handle bleibt privat im Node-Kontext; Status und Index werden als Workflow-Variablen bereitgestellt.',
+                'description' => 'Iteriert Treffer eines DOM-Selectors, loest Elemente pro Durchlauf frisch auf und kann Reader-Ausgaben direkt in einem Workflow-Array sammeln.',
                 'form' => [
                     'selector' => true,
                     'selector_label' => 'Treffer-Selector',
@@ -619,8 +619,13 @@ class WorkflowTaskCatalog
                         ['name' => 'only_visible', 'label' => 'Nur sichtbare Elemente', 'default' => 'true', 'placeholder' => 'true oder false', 'tab' => 'Schleife'],
                         ['name' => 'store_current_element_as', 'label' => 'Aktuelles Element als', 'default' => 'current_result', 'placeholder' => 'current_result', 'tab' => 'Variablen'],
                         ['name' => 'store_index_as', 'label' => 'Index als', 'default' => 'result_index', 'placeholder' => 'result_index', 'tab' => 'Variablen'],
+                        ['name' => 'collect_to_array', 'label' => 'Direkt in Array sammeln', 'placeholder' => 'top_results', 'help' => 'Optional. Speichert nach jedem erfolgreichen Durchlauf den Wert der Sammelvariable direkt in diesem Workflow-Array.', 'tab' => 'Sammlung'],
+                        ['name' => 'collect_from_variable', 'label' => 'Sammelvariable', 'default' => 'current_result', 'placeholder' => 'current_result', 'help' => 'Variable, die ein Reader im Loop-Body erzeugt. Wird nur verwendet, wenn ein Ziel-Array eingetragen ist.', 'tab' => 'Sammlung'],
+                        ['name' => 'collect_dedupe_by', 'label' => 'Deduplizieren nach', 'placeholder' => 'url oder product.id', 'help' => 'Optionaler Objektpfad. Bereits vorhandene Werte mit demselben Feldwert werden nicht erneut gespeichert.', 'tab' => 'Sammlung'],
+                        ['name' => 'collect_max_items', 'label' => 'Maximale Array-Eintraege', 'type' => 'number', 'min' => 0, 'max' => 100000, 'default' => '0', 'help' => '0 bedeutet unbegrenzt. Das Loop-Limit bleibt davon getrennt.', 'tab' => 'Sammlung'],
                         ['name' => 'success_target', 'label' => 'Zielkarte je Treffer', 'placeholder' => 'Karten-Key von read_element_fields', 'help' => 'Optional. Ohne Eingabe wird die normale Erfolgsroute verwendet.', 'tab' => 'Routen'],
-                        ['name' => 'empty_target', 'label' => 'Zielkarte wenn fertig/leer', 'placeholder' => 'Karten-Key von array_length oder workflow_return', 'tab' => 'Routen'],
+                        ['name' => 'completion_target', 'label' => 'Zielkarte nach Abschluss', 'placeholder' => 'Karten-Key nach dem Loop', 'help' => 'Optional. Ohne Ziel wird automatisch ueber das gekoppelte Loop-Ende hinter die Schleife gesprungen.', 'tab' => 'Routen'],
+                        ['name' => 'empty_target', 'label' => 'Zielkarte bei leerer Liste', 'placeholder' => 'Karten-Key fuer den Leerfall', 'help' => 'Optionaler Sonderweg, wenn bereits die erste Suche keine Elemente liefert.', 'tab' => 'Routen'],
                         ['name' => 'error_target', 'label' => 'Zielkarte bei Fehler', 'placeholder' => 'Karten-Key der Fehlerbehandlung', 'tab' => 'Routen'],
                     ],
                 ],
@@ -679,7 +684,7 @@ class WorkflowTaskCatalog
                 'runner' => 'node',
                 'node_script' => 'node/workflows/tasks/data/append_to_array.cjs',
                 'timeout_seconds' => 15,
-                'description' => 'Haengt eine Workflow-Variable an ein benanntes Array an, optional mit Deduplizierung und maximaler Laenge.',
+                'description' => 'Haengt eine Workflow-Variable dauerhaft an ein benanntes Workflow-Array an, optional mit Deduplizierung und maximaler Laenge.',
                 'form' => [
                     'selector' => false,
                     'value' => false,
@@ -1490,6 +1495,181 @@ class WorkflowTaskCatalog
                 ],
             ],
         ];
+
+        return collect($tasks)
+            ->map(fn (array $definition, string $taskKey): array => $this->withDocumentation($taskKey, $definition))
+            ->all();
+    }
+
+    protected function withDocumentation(string $taskKey, array $definition): array
+    {
+        $description = trim((string) ($definition['description'] ?? ''));
+        $runner = (string) ($definition['runner'] ?? 'node');
+        $script = trim((string) ($definition['node_script'] ?? $definition['php_handler'] ?? ''));
+
+        $definition['documentation'] = [
+            'purpose' => $description,
+            'use_when' => 'Nutze diese Task, wenn der Workflow genau diesen fachlichen Teilschritt benoetigt: '.$description,
+            'workflow_role' => $this->workflowRoleDocumentation($taskKey),
+            'execution' => $runner === 'node'
+                ? 'Die Task wird im Node-Workflow-Runtime innerhalb der aktiven Liste ausgefuehrt'.($script !== '' ? ' ('.$script.')' : '').'. Ihre Ausgaben werden vor der naechsten Task in den gemeinsamen Workflow-Kontext uebernommen.'
+                : 'Die Task wird serverseitig ausgefuehrt. Das Ergebnis wird normalisiert und fuer nachfolgende Listen und Tasks im Workflow-Kontext bereitgestellt.',
+            'inputs' => $this->documentationFields($definition),
+            'outputs' => $this->outputDocumentation($taskKey),
+            'routing' => $this->routingDocumentation($taskKey),
+            'example_configuration' => $this->exampleConfiguration($definition),
+            'important_notes' => $this->documentationNotes($taskKey),
+        ];
+
+        return $definition;
+    }
+
+    protected function workflowRoleDocumentation(string $taskKey): string
+    {
+        return match (true) {
+            str_starts_with($taskKey, 'browser.open') => 'Initialisiert ein benanntes Browserfenster. Nachfolgende Browser-, Input- und Wait-Tasks muessen dasselbe browser_window verwenden.',
+            str_starts_with($taskKey, 'browser.') => 'Arbeitet im aktuell gewaehlten Browserfenster und liefert Beobachtungs- oder Aktionsdaten an die folgenden Tasks derselben Liste.',
+            str_starts_with($taskKey, 'input.') => 'Veraendert Formulardaten im Browser. Die Task sollte nach einer passenden Browser-/Find-Task und vor einer Submit- oder Pruef-Task stehen.',
+            str_starts_with($taskKey, 'wait.') => 'Synchronisiert den Workflow mit Zeit oder sichtbarem Seitenzustand, ohne eigenstaendige Fachdaten zu erzeugen.',
+            str_starts_with($taskKey, 'decision.') => 'Erzeugt eine fachliche Verzweigung. Erfolg und nicht erfuellte Bedingung muessen auf unterschiedliche, nachvollziehbare Ziele zeigen.',
+            str_starts_with($taskKey, 'loop.') => 'Steuert einen wiederholten Task-Block. Loop-Start, Body und gekoppeltes Loop-Ende bilden eine untrennbare Einheit.',
+            str_starts_with($taskKey, 'mail.') || str_starts_with($taskKey, 'webmail.') => 'Verarbeitet Mailbox-/Webmail-Daten und stellt Treffer oder Status als Workflow-Daten fuer spaetere Tasks bereit.',
+            str_starts_with($taskKey, 'data.persist_') || $taskKey === 'data.delete_browser_session' => 'Schreibt oder entfernt dauerhafte Anwendungsdaten. Vorher muessen alle benoetigten Werte validiert und auf die richtige Person bzw. Session bezogen sein.',
+            str_starts_with($taskKey, 'data.') => 'Liest, transformiert oder speichert Workflow-Daten. Benannte Ausgaben bleiben fuer nachfolgende Tasks und Listen verfuegbar.',
+            default => 'Ist ein einzelner ausfuehrbarer Baustein innerhalb einer Workflow-Liste.',
+        };
+    }
+
+    protected function outputDocumentation(string $taskKey): array
+    {
+        return match ($taskKey) {
+            'loop.for_each_element' => [
+                'Aktiviert pro Durchlauf ein DOM-Element als privaten Scope und schreibt Index/Metadaten in Workflow-Variablen.',
+                'Kann den vom Reader erzeugten Wert automatisch in collect_to_array sammeln.',
+                'Liefert matched_count, selected_count, visited_count, processed_count, skipped_count und collected_count.',
+            ],
+            'loop.end' => ['Springt bei einer aktiven Schleife zur gekoppelten Startkarte zurueck; nach Abschluss laeuft der Workflow hinter dem Loop weiter.'],
+            'browser.read_element_fields', 'browser.read_searchengine_result' => ['Schreibt das gelesene Objekt unter output_variable in workflow_variables und liefert dasselbe Objekt als result.'],
+            'data.append_to_array' => ['Schreibt das vollstaendige Array unter array_name in workflow_variables und meldet new_length, appended, deduped und limit_reached.'],
+            'decision.array_length' => ['Liefert Array-Laenge, Vergleichsergebnis und die passende dynamische Route. Das Array selbst bleibt unveraendert.'],
+            'decision.element_exists', 'decision.variable' => ['Liefert ein boolesches Bedingungsergebnis. Eine nicht erfuellte Bedingung ist ein fachlicher failed-Zweig, kein Runtime-Crash.'],
+            'browser.find_inputs' => ['Liefert sichtbare Eingabefelder inklusive Labels, Namen und Selector-Kandidaten fuer nachfolgende Formular-Tasks.'],
+            'browser.find_element' => ['Liefert den Fundstatus und Selector-/Elementinformationen fuer nachfolgende Aktionen oder Entscheidungen.'],
+            'mail.inbox_list_scan' => ['Speichert die gefundenen Mails unter output_array_name als Workflow-Array und liefert Zaehler sowie Diagnoseinformationen.'],
+            'mail.list_search_loop', 'mail.list_action_loop' => ['Liefert Treffer-, Aktions- und Wiederholungsstatus und aktualisiert die konfigurierten Workflow-Variablen.'],
+            'mail.extract_value' => ['Schreibt den extrahierten Wert unter output_value_name in workflow_variables.'],
+            'mail.generate_address', 'mail.generate_password' => ['Erzeugt den Wert und stellt ihn als Ergebnis sowie als Workflow-Variable fuer die folgenden Tasks bereit.'],
+            'data.workflow_return' => ['Setzt workflow_return und workflow_return_ok. Dieser Wert ist die ausdrueckliche Schnittstelle zu Eltern-Workflows und Erfolgskriterien.'],
+            'data.read_account_data', 'data.resolve_person', 'data.read_login_data' => ['Liefert normalisierte Personen-, Account- oder Login-Daten fuer nachfolgende Tasks.'],
+            'data.persist_mail_account', 'data.persist_webmail_session', 'data.persist_browser_session', 'data.delete_browser_session' => ['Liefert Speicher-/Loeschstatus und die betroffenen, nicht geheimen Identifikatoren.'],
+            'wait.selector', 'wait.seconds', 'wait.status' => ['Liefert Warte- und Statusinformationen; vorhandene Workflow-Variablen bleiben unveraendert erhalten.'],
+            'browser.open', 'browser.open_url', 'browser.open_webmail_session', 'browser.open_browser_session' => ['Stellt ein benanntes Browserfenster bzw. eine Seite fuer nachfolgende Tasks bereit und meldet den Oeffnungs-/Sessionstatus.'],
+            'browser.close' => ['Meldet das geschlossene Browserfenster; andere benannte Fenster bleiben erhalten.'],
+            default => ['Liefert einen normalisierten Status mit ok, status und statusMessage. Task-spezifische Ergebniswerte werden in den gemeinsamen Runtime-Kontext uebernommen.'],
+        };
+    }
+
+    protected function routingDocumentation(string $taskKey): array
+    {
+        $base = [
+            'Ohne ausdrueckliche Erfolgsroute folgt die naechste Task derselben Liste; am Listenende folgt die Erfolgsroute der Liste.',
+            'on_error bzw. status_routes.failed/timeout hat Vorrang vor der Fehlerroute der Liste.',
+        ];
+
+        return match ($taskKey) {
+            'loop.for_each_element' => [
+                'success_target startet den Loop-Body fuer jeden Treffer.',
+                'completion_target wird nach mindestens einem verarbeiteten Treffer verwendet.',
+                'empty_target gilt nur, wenn die Trefferliste von Anfang an leer ist.',
+                'Ohne Abschlussziel springt die Task automatisch zum gekoppelten loop.end und danach hinter die Schleife.',
+                'error_target behandelt Selector-, DOM- und Array-Speicherfehler.',
+            ],
+            'loop.end' => ['Solange der Loop aktiv ist, erfolgt automatisch ein Ruecksprung zur gekoppelten Startkarte. Das Loop-Ende darf nicht separat umgeroutet oder aus dem Paar geloest werden.'],
+            'decision.array_length' => ['success_target gilt bei erfuelltem Vergleich, error_target bei nicht erfuelltem Vergleich. Beide Ziele sollten fachlich verschieden sein.'],
+            'decision.element_exists', 'decision.variable' => [
+                'next ist der Wahr-/Erfolgsweg.',
+                'on_error ist der Falsch-/Nicht-erfuellt-Weg und darf fuer optionale Bedingungen normal weiterfuehren.',
+            ],
+            default => $base,
+        };
+    }
+
+    protected function documentationNotes(string $taskKey): array
+    {
+        return match ($taskKey) {
+            'loop.for_each_element' => [
+                'Ein Reader muss zwischen Loop-Start und Loop-Ende stehen, bevor dessen Ausgabe gesammelt werden kann.',
+                'collect_from_variable und output_variable des Readers muessen denselben Namen verwenden.',
+                'Loop-Limit begrenzt Durchlaeufe; collect_max_items begrenzt nur die gespeicherte Array-Laenge.',
+                'Das DOM-Element wird vor jeder Iteration anhand einer stabilen Identitaet frisch aufgeloest.',
+            ],
+            'loop.end' => ['Diese interne Task wird vom Studio automatisch mit loop_pair_id und loop_start_key erzeugt und gemeinsam mit dem Loop-Start verwaltet.'],
+            'data.append_to_array' => [
+                'value_from_variable muss auf die Ausgabe einer vorherigen Task zeigen; bei leerem Wert schlaegt die Task mit einem eindeutigen reason_code fehl.',
+                'dedupe_by bezieht sich auf einen Pfad innerhalb des anzuhangenden Objekts, beispielsweise url oder product.id.',
+                'Das Array bleibt als workflow_variables[array_name] ueber Listen- und Step-Grenzen hinweg erhalten.',
+            ],
+            'data.workflow_return' => ['Das Sammeln in ein Array beendet den Workflow nicht. Fuer eingebettete Workflows muss das fertige Array anschliessend mit data.workflow_return zurueckgegeben werden.'],
+            'input.fill_field' => ['Bei value_source=workflow_variable wird der Variablenname aufgeloest; er darf nicht als sichtbarer Literaltext in das Formular geschrieben werden.'],
+            'browser.click', 'input.submit' => ['Nach Navigation oder deutlicher DOM-Aenderung sollte eine Wait- oder Find-Task den neuen Seitenzustand bestaetigen.'],
+            default => ['Verwende stabile Kartenschluessel und benannte Workflow-Variablen, damit Copilot, Routing und Laufdiagnose dieselben Referenzen benutzen.'],
+        };
+    }
+
+    protected function documentationFields(array $definition): array
+    {
+        $form = is_array($definition['form'] ?? null) ? $definition['form'] : [];
+        $fields = [];
+
+        foreach ([
+            'selector' => ['label' => 'Selector', 'required' => 'selector_required'],
+            'value' => ['label' => 'Wert', 'required' => 'value_required'],
+            'url' => ['label' => 'URL', 'required' => 'url_required'],
+            'browser_window' => ['label' => 'Browserfenster', 'required' => 'browser_window_required'],
+            'mailbox_source' => ['label' => 'Mailbox-Quelle', 'required' => 'mailbox_source_required'],
+        ] as $name => $metadata) {
+            if (! (bool) ($form[$name] ?? false)) {
+                continue;
+            }
+
+            $fields[] = array_filter([
+                'name' => $name,
+                'label' => (string) ($form[$name.'_label'] ?? $metadata['label']),
+                'required' => (bool) ($form[$metadata['required']] ?? false),
+                'explanation' => (string) ($form[$name.'_help'] ?? $form[$name.'_placeholder'] ?? ''),
+            ], static fn (mixed $value): bool => $value !== '');
+        }
+
+        foreach (is_array($form['extra_fields'] ?? null) ? $form['extra_fields'] : [] as $field) {
+            if (! is_array($field) || blank($field['name'] ?? null)) {
+                continue;
+            }
+
+            $fields[] = array_filter([
+                'name' => (string) $field['name'],
+                'label' => (string) ($field['label'] ?? $field['name']),
+                'required' => (bool) ($field['required'] ?? false),
+                'default' => $field['default'] ?? null,
+                'explanation' => (string) ($field['help'] ?? $field['placeholder'] ?? ''),
+            ], static fn (mixed $value): bool => $value !== null && $value !== '');
+        }
+
+        return $fields;
+    }
+
+    protected function exampleConfiguration(array $definition): array
+    {
+        return collect($this->documentationFields($definition))
+            ->mapWithKeys(function (array $field): array {
+                $value = $field['default'] ?? null;
+
+                if ($value === null && (bool) ($field['required'] ?? false)) {
+                    $value = '<'.($field['name'] ?? 'wert').'>';
+                }
+
+                return $value === null ? [] : [(string) $field['name'] => $value];
+            })
+            ->all();
     }
 
     public function options(): array
@@ -1502,6 +1682,7 @@ class WorkflowTaskCatalog
                 'kind' => $task['kind'],
                 'runner' => $task['runner'],
                 'description' => $task['description'] ?? '',
+                'documentation' => $task['documentation'] ?? [],
                 'form' => $task['form'] ?? [],
             ])
             ->values()

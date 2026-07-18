@@ -1,59 +1,48 @@
 'use strict';
 
 const {
-  cleanName,
-  getPath,
-  number,
-  resolveVariable,
-  setWorkflowVariable,
+  appendWorkflowArray,
   text,
 } = require('../lib/collection.cjs');
 
 async function run(context = {}) {
   const input = context.input || {};
-  const arrayName = cleanName(input.array_name ?? input.arrayName, 'items');
+  const arrayName = input.array_name ?? input.arrayName ?? 'items';
   const source = text(input.value_from_variable ?? input.valueFromVariable);
-  const dedupeBy = text(input.dedupe_by ?? input.dedupeBy);
-  const maxItems = Math.floor(number(input.max_items ?? input.maxItems, 0, 0));
-  const current = resolveVariable(context, arrayName, []);
-  const items = Array.isArray(current) ? [...current] : [];
-  const value = source !== ''
-    ? resolveVariable(context, source)
-    : (context.lastResult?.result ?? context.lastResult?.value);
+  const result = appendWorkflowArray(context, {
+    arrayName,
+    valueFromVariable: source,
+    dedupeBy: input.dedupe_by ?? input.dedupeBy,
+    maxItems: input.max_items ?? input.maxItems,
+  });
 
-  if (value === undefined || value === null || value === '') {
-    return { ok: false, status: 'failed', statusMessage: `Kein Wert zum Anhaengen an "${arrayName}" gefunden.` };
+  if (!result.ok) {
+    return {
+      ok: false,
+      status: 'failed',
+      statusMessage: result.message,
+      array_name: result.arrayName,
+      source_variable: result.source || source || null,
+      reason_code: result.reason,
+      workflow_variables: context.workflow_variables,
+    };
   }
-
-  let appended = false;
-  let deduped = false;
-  if (maxItems > 0 && items.length >= maxItems) {
-    deduped = true;
-  } else if (dedupeBy !== '') {
-    const candidate = getPath(value, dedupeBy);
-    deduped = candidate !== undefined && items.some((item) => getPath(item, dedupeBy) === candidate);
-    if (!deduped) {
-      items.push(value);
-      appended = true;
-    }
-  } else {
-    items.push(value);
-    appended = true;
-  }
-
-  setWorkflowVariable(context, arrayName, items);
 
   return {
     ok: true,
-    status: appended ? 'success' : 'skipped',
-    statusMessage: appended
-      ? `Wert an "${arrayName}" angehaengt (${items.length}).`
-      : `Wert fuer "${arrayName}" wurde uebersprungen.`,
-    array_name: arrayName,
-    new_length: items.length,
-    appended,
-    deduped,
-    preview: items.slice(0, 3),
+    status: result.appended ? 'success' : 'skipped',
+    statusMessage: result.appended
+      ? `Wert an "${result.arrayName}" angehaengt (${result.newLength}).`
+      : (result.limitReached
+        ? `Maximale Anzahl fuer "${result.arrayName}" ist erreicht (${result.newLength}).`
+        : `Doppelter Wert fuer "${result.arrayName}" wurde uebersprungen.`),
+    array_name: result.arrayName,
+    source_variable: result.source || source || null,
+    new_length: result.newLength,
+    appended: result.appended,
+    deduped: result.deduped,
+    limit_reached: result.limitReached,
+    preview: result.items.slice(0, 3),
     workflow_variables: context.workflow_variables,
   };
 }

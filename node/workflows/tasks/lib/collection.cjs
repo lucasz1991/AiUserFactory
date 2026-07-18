@@ -103,6 +103,73 @@ function setWorkflowVariable(context = {}, name, value) {
   context.workflowVariables = variables;
 }
 
+function appendWorkflowArray(context = {}, options = {}) {
+  const arrayName = cleanName(options.arrayName ?? options.array_name, 'items');
+  const source = text(options.valueFromVariable ?? options.value_from_variable);
+  const dedupeBy = text(options.dedupeBy ?? options.dedupe_by);
+  const maxItems = Math.floor(number(options.maxItems ?? options.max_items, 0, 0, 100000));
+  const current = resolveVariable(context, arrayName, []);
+
+  if (!Array.isArray(current)) {
+    return {
+      ok: false,
+      arrayName,
+      reason: 'array_not_array',
+      message: `Workflow-Variable "${arrayName}" ist kein Array.`,
+    };
+  }
+
+  const value = Object.prototype.hasOwnProperty.call(options, 'value')
+    ? options.value
+    : (source !== ''
+      ? resolveVariable(context, source)
+      : (context.lastResult?.result ?? context.lastResult?.value));
+
+  if (value === undefined || value === null || value === '') {
+    return {
+      ok: false,
+      arrayName,
+      source,
+      reason: 'value_missing',
+      message: source === ''
+        ? `Kein Wert zum Anhaengen an "${arrayName}" gefunden.`
+        : `Workflow-Variable "${source}" enthaelt keinen Wert fuer "${arrayName}".`,
+    };
+  }
+
+  const items = [...current];
+  let appended = false;
+  let deduped = false;
+  let limitReached = false;
+
+  if (maxItems > 0 && items.length >= maxItems) {
+    limitReached = true;
+  } else if (dedupeBy !== '') {
+    const candidate = getPath(value, dedupeBy);
+    deduped = candidate !== undefined && items.some((item) => getPath(item, dedupeBy) === candidate);
+    if (!deduped) {
+      items.push(value);
+      appended = true;
+    }
+  } else {
+    items.push(value);
+    appended = true;
+  }
+
+  setWorkflowVariable(context, arrayName, items);
+
+  return {
+    ok: true,
+    arrayName,
+    source,
+    items,
+    appended,
+    deduped,
+    limitReached,
+    newLength: items.length,
+  };
+}
+
 function privateRegistry(context = {}, key) {
   if (!isObject(context[key])) {
     Object.defineProperty(context, key, {
@@ -250,6 +317,7 @@ async function readFields(scope, fields = [], pageUrl = '') {
 }
 
 module.exports = {
+  appendWorkflowArray,
   bool,
   cleanName,
   getPath,

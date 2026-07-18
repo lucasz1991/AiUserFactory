@@ -2079,6 +2079,7 @@ class WorkflowCopilotRepairService
             ? $this->promptContexts->forWorkflow($workflow, $session, $step, $checkpoint)
             : [
                 'execution_contract' => $this->promptContexts->executionContract(),
+                'workflow_structure' => $this->promptContexts->workflowStructureDocumentation(),
                 'workflow_task_catalog' => $this->promptContexts->taskCatalogSnapshot(),
             ];
         $workflowStructure = data_get($workflowContext, 'workflow.steps', []);
@@ -2104,7 +2105,7 @@ class WorkflowCopilotRepairService
             'structural_operations' => [
                 'insert_task' => [
                     'fields' => ['type', 'step_action_key', 'task_catalog_key', 'title', 'description', 'parameters', 'insert_position', 'element_ref'],
-                    'constraint' => 'Kataloggebundene Tasks nicht duplizieren. Fuer Tasks mit sichtbarem Ziel ist eine von Vision vorgeschlagene trusted element_ref Pflicht; Selector und Browserfenster werden serverseitig aus DOM-Evidenz abgeleitet. loop.for_each_element erzeugt sein Loop-Ende automatisch. Fuer input.fill_field setzt parameters.value_reference eine Workflow-Variable; optional definiert parameters.fallback_value den festen Ersatzwert.',
+                    'constraint' => 'Kataloggebundene Tasks nicht duplizieren. Fuer Tasks mit sichtbarem Ziel ist eine von Vision vorgeschlagene trusted element_ref Pflicht; Selector und Browserfenster werden serverseitig aus DOM-Evidenz abgeleitet. loop.for_each_element erzeugt sein Loop-Ende automatisch und kann Reader-Ausgaben mit collect_to_array sammeln. Fuer input.fill_field setzt parameters.value_reference eine Workflow-Variable; optional definiert parameters.fallback_value den festen Ersatzwert.',
                 ],
                 'move_task' => [
                     'fields' => ['type', 'step_action_key', 'task_key', 'insert_position'],
@@ -2127,7 +2128,7 @@ class WorkflowCopilotRepairService
         ]);
 
         return 'Waehle die kleinste sichere Reparatur, die den Workflow autonom weiter zum Ziel bringt. '
-            .'Lies zuerst execution_contract, workflow_diagnostics, den vollstaendigen workflow_task_catalog und danach den aktuellen Workflow-Graph. '
+            .'Lies zuerst execution_contract, workflow_structure, workflow_diagnostics, den vollstaendigen workflow_task_catalog und danach den aktuellen Workflow-Graph. '
             .'Als configured_but_not_executed markierte Tasks sind vorhanden und wurden nur noch nicht ausgefuehrt; fuege sie nicht doppelt ein, sondern repariere zuerst Fortsetzung, Reihenfolge oder Routen. '
             .'Wenn der aktuelle Bildschirm Folge fehlender oder falsch gerouteter Workflow-Logik ist, verwende structural_update statt pause. '
             .'Eine optionale IF-Pruefung braucht getrennte Found-/Not-Found-Routen; ein Handler darf bei bereits verschwundenem Hindernis nicht zur IF-Pruefung zurueckspringen. '

@@ -38,6 +38,7 @@ class WorkflowCopilotPromptContextService
 
         $context = [
             'execution_contract' => $this->executionContract(),
+            'workflow_structure' => $this->workflowStructureDocumentation(),
             'workflow' => $this->workflowSnapshot($workflow),
             'workflow_task_catalog' => $this->taskCatalogSnapshot(),
             'workflow_diagnostics' => $this->workflowDiagnostics($workflow),
@@ -70,6 +71,7 @@ class WorkflowCopilotPromptContextService
     ): array {
         return (array) $this->sanitizeContext([
             'execution_contract' => $this->executionContract(),
+            'workflow_structure' => $this->workflowStructureDocumentation(),
             'workflow' => [
                 'id' => (int) $workflow->id,
                 'name' => (string) $workflow->name,
@@ -120,8 +122,8 @@ class WorkflowCopilotPromptContextService
             'task_semantics' => [
                 'decision.element_exists' => 'Element gefunden ergibt success; nicht gefunden ergibt den Branch failed, obwohl die technische Pruefung selbst ausgefuehrt wurde. Deshalb next und on_error fachlich getrennt konfigurieren.',
                 'input.fill_field' => 'value_source=fixed nutzt value/input. value_source=workflow_variable nutzt workflow_variable; value_fallback ist nur der optionale Ersatzwert. Ein Variablenname darf nie als Literal in das Feld geschrieben werden.',
-                'loop.for_each_element' => 'Loop-Start und loop.end sind ein atomares Paar. Reader und Consumer stehen dazwischen. empty_target behandelt eine leere Trefferliste; error_target einen technischen Fehler.',
-                'data.append_to_array' => 'Haengt den Wert aus value_from_variable an array_name an. Der Producer der Variable muss innerhalb desselben Loop-Durchlaufs vor dem Consumer liegen.',
+                'loop.for_each_element' => 'Loop-Start und loop.end sind ein atomares Paar. Reader und Consumer stehen dazwischen. collect_to_array sammelt die Reader-Ausgabe automatisch; completion_target behandelt den normalen Abschluss, empty_target nur null Treffer und error_target technische Fehler.',
+                'data.append_to_array' => 'Haengt den Wert aus value_from_variable dauerhaft an workflow_variables[array_name] an. Der Producer der Variable muss innerhalb desselben Loop-Durchlaufs vor dem Consumer liegen; nicht gleichzeitig mit collect_to_array fuer dasselbe Array verwenden.',
                 'data.workflow_return' => 'Setzt den expliziten Rueckgabewert des Workflows. Erfolgskriterien fuer einen Rueckgabewert pruefen diesen Wert, nicht irgendeine zufaellige interne Variable.',
                 'browser.open_browser_session' => 'Laedt Cookies/Storage und oeffnet standardmaessig die letzte gespeicherte URL; eine konfigurierte URL ueberschreibt dieses Ziel.',
             ],
@@ -134,6 +136,8 @@ class WorkflowCopilotPromptContextService
             'variables' => [
                 'Workflow-Eingaben werden unter workflow_inputs und als Workflow-Variablen bereitgestellt.',
                 'Neue Task-Ausgaben muessen einen benannten output_variable-, array_name- oder Rueckgabepfad besitzen, wenn spaetere Tasks oder Erfolgskriterien sie benoetigen.',
+                'Arrays werden unter workflow_variables[array_name] gespeichert und bleiben ueber Task- und Listengrenzen hinweg erhalten.',
+                'Ein Loop sammelt Daten entweder ueber collect_to_array direkt oder ueber eine nachgelagerte data.append_to_array-Task. Beide Varianten gleichzeitig sind fuer dasselbe Array zu vermeiden.',
                 'Passwoerter, Tokens, Cookies und feste Eingabewerte werden im Modellkontext redigiert.',
             ],
             'verification' => [
@@ -141,6 +145,42 @@ class WorkflowCopilotPromptContextService
                 'Jeder optionale Pfad muss deshalb bereits statisch ohne Copilot-Sonderbehandlung bis zum Ziel laufen.',
                 'Technischer Erfolg, deterministische Erfolgskriterien und der visuelle Zielzustand muessen gemeinsam bestehen.',
                 'Ein technisch beendeter Lauf ohne verlangten Rueckgabewert oder ohne erforderliche Sammlung ist nicht erfolgreich.',
+            ],
+        ];
+    }
+
+    public function workflowStructureDocumentation(): array
+    {
+        return [
+            'workflow' => 'Ein Workflow ist der gesamte Prozess. Er besitzt Ziel, Eingaben, Erfolgskriterien und eine geordnete Folge aktivierter Listen.',
+            'lists' => 'Eine Liste entspricht einem Workflow-Step und gruppiert fachlich zusammengehoerige Tasks. Listen laufen nach position; am Listenende entscheidet ihre Erfolgs-, Fehler-, Timeout- oder Partial-Weiterleitung ueber das naechste Ziel.',
+            'tasks' => 'Eine Task ist eine konkrete Karte innerhalb einer Liste. Tasks laufen linear, solange keine Task-eigene Route ein anderes Ziel waehlt. Task-Routen haben Vorrang vor Listen-Routen.',
+            'task_routes' => [
+                'next' => 'Erfolgsweg einer Task. Ohne next folgt die naechste Karte derselben Liste.',
+                'on_error' => 'Fehler- oder Falschweg. Bei IF-Tasks ist dies der fachliche Nein-Zweig und muss nicht terminal sein.',
+                'on_partial' => 'Weg fuer ein verwertbares, aber unvollstaendiges Ergebnis.',
+                'status_routes' => 'Optionale statusgenaue Ziele, beispielsweise failed oder timeout.',
+            ],
+            'list_routes' => [
+                'success' => 'Wird erst verwendet, wenn keine Task-Erfolgsroute mehr greift und das Listenende erreicht ist.',
+                'failed' => 'Wird verwendet, wenn eine Task fehlschlaegt und keine Task-Fehlerroute gesetzt ist.',
+                'partial' => 'Uebernimmt Teilergebnisse ohne Task-eigenes Ziel.',
+                'timeout' => 'Behandelt Zeitueberschreitungen ohne Task-eigenes Timeout-Ziel.',
+            ],
+            'route_targets' => [
+                'card' => 'Springt zu einer konkreten Task-Karte; bei einer anderen Liste muss auch deren action_key angegeben sein.',
+                'step' => 'Springt zum Beginn einer Liste. step=next bedeutet die naechste aktivierte Liste.',
+                'end' => 'Beendet den Workflow erfolgreich.',
+                'fail' => 'Beendet den Workflow terminal fehlgeschlagen und ist nur fuer bewusst nicht reparierbare Fachfehler gedacht.',
+            ],
+            'data_flow' => 'Task-Ausgaben werden als benannte workflow_variables gespeichert. Nachfolgende Tasks und Listen lesen diese Namen; ein eingebetteter Workflow gibt sein Endergebnis ausdruecklich mit data.workflow_return zurueck.',
+            'arrays' => 'Reader erzeugen pro Treffer ein Objekt. loop.for_each_element kann dieses Objekt ueber collect_to_array automatisch sammeln; alternativ haengt data.append_to_array den Wert aus value_from_variable an. dedupe_by verhindert Duplikate anhand eines Objektpfads.',
+            'loop_recipe' => [
+                'Loop-Start mit einem Selector fuer alle gleichartigen Treffer konfigurieren.',
+                'Reader direkt zwischen Loop-Start und Loop-Ende setzen und dessen output_variable festlegen.',
+                'Entweder collect_to_array am Loop setzen oder danach data.append_to_array verwenden.',
+                'completion_target fuer den normalen Abschluss, empty_target nur fuer null Treffer und error_target fuer technische Fehler verwenden.',
+                'Das gekoppelte loop.end nicht einzeln verschieben, umkonfigurieren oder entfernen.',
             ],
         ];
     }
@@ -155,6 +195,7 @@ class WorkflowCopilotPromptContextService
                     'kind' => (string) ($definition['kind'] ?? 'data'),
                     'runner' => (string) ($definition['runner'] ?? 'node'),
                     'timeout_seconds' => max(0, (int) ($definition['timeout_seconds'] ?? 0)),
+                    'documentation' => $this->taskDocumentationSnapshot($definition),
                     'parameters' => $this->catalogFields($definition),
                     'routing_fields' => self::ROUTE_FIELDS,
                     'hidden_from_library' => (bool) ($definition['hidden_from_library'] ?? false),
@@ -347,6 +388,20 @@ class WorkflowCopilotPromptContextService
             ->all();
     }
 
+    protected function taskDocumentationSnapshot(array $definition): array
+    {
+        $documentation = is_array($definition['documentation'] ?? null) ? $definition['documentation'] : [];
+
+        return array_filter(Arr::only($documentation, [
+            'purpose',
+            'use_when',
+            'workflow_role',
+            'outputs',
+            'routing',
+            'important_notes',
+        ]), static fn (mixed $value): bool => $value !== null && $value !== '' && $value !== []);
+    }
+
     protected function workflowDiagnostics(Workflow $workflow): array
     {
         $diagnostics = [];
@@ -432,12 +487,12 @@ class WorkflowCopilotPromptContextService
 
                 if ($catalogKey === 'loop.for_each_element') {
                     $pairId = trim((string) ($task['loop_pair_id'] ?? ''));
-                    $endExists = $pairId !== '' && $tasks->contains(
+                    $endIndex = $pairId === '' ? false : $tasks->search(
                         fn (array $candidate): bool => trim((string) ($candidate['loop_pair_id'] ?? '')) === $pairId
                             && (string) ($candidate['task_key'] ?? '') === 'loop.end',
                     );
 
-                    if (! $endExists) {
+                    if ($endIndex === false) {
                         $diagnostics[] = [
                             'severity' => 'error',
                             'code' => 'loop_end_missing',
@@ -445,6 +500,51 @@ class WorkflowCopilotPromptContextService
                             'task_key' => $taskKey,
                             'message' => 'Zum Loop-Start wurde kein gekoppeltes Loop-Ende gefunden.',
                         ];
+                    } else {
+                        $body = $tasks->slice((int) $index + 1, max(0, (int) $endIndex - (int) $index - 1));
+                        $collectToArray = trim((string) ($task['collect_to_array'] ?? ''));
+                        $collectFromVariable = trim((string) ($task['collect_from_variable'] ?? 'current_result')) ?: 'current_result';
+
+                        if ($collectToArray !== '') {
+                            $hasProducer = $body->contains(fn (array $candidate): bool => trim((string) ($candidate['output_variable'] ?? '')) === $collectFromVariable);
+                            $hasDuplicateAppend = $body->contains(fn (array $candidate): bool => (string) ($candidate['task_key'] ?? '') === 'data.append_to_array'
+                                && trim((string) ($candidate['array_name'] ?? '')) === $collectToArray);
+
+                            if (! $hasProducer) {
+                                $diagnostics[] = [
+                                    'severity' => 'warning',
+                                    'code' => 'loop_collection_producer_missing',
+                                    'step_action_key' => (string) $step->action_key,
+                                    'task_key' => $taskKey,
+                                    'message' => 'Der Loop sammelt aus "'.$collectFromVariable.'", aber im Loop-Body erzeugt keine Task diese output_variable.',
+                                ];
+                            }
+
+                            if ($hasDuplicateAppend) {
+                                $diagnostics[] = [
+                                    'severity' => 'error',
+                                    'code' => 'loop_collection_duplicate_append',
+                                    'step_action_key' => (string) $step->action_key,
+                                    'task_key' => $taskKey,
+                                    'message' => 'Der Loop und data.append_to_array sammeln beide in "'.$collectToArray.'". Genau eine Sammelvariante verwenden.',
+                                ];
+                            }
+                        }
+                    }
+
+                    foreach (['success_target', 'completion_target', 'empty_target', 'error_target'] as $routeField) {
+                        $target = trim((string) ($task[$routeField] ?? ''));
+
+                        if ($target !== '' && ! $tasks->contains(fn (array $candidate): bool => (string) ($candidate['key'] ?? '') === $target)) {
+                            $diagnostics[] = [
+                                'severity' => 'error',
+                                'code' => 'loop_route_target_missing',
+                                'step_action_key' => (string) $step->action_key,
+                                'task_key' => $taskKey,
+                                'field' => $routeField,
+                                'message' => 'Das Loop-Ziel "'.$target.'" aus '.$routeField.' existiert nicht in dieser Liste.',
+                            ];
+                        }
                     }
                 }
 

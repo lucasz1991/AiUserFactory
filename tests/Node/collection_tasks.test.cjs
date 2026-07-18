@@ -28,6 +28,7 @@ class FakeHandle {
   }
 
   async evaluate(_callback, payload) {
+    if (Number.isInteger(payload)) return this.data.identity || `element-${payload}`;
     if (!payload || !payload.type) return this.visible;
     switch (payload.type) {
       case 'href': return this.data.href || '';
@@ -181,6 +182,155 @@ test('loop end routes back to start while the loop is active and continues after
   const finalEnd = await loopEndTask.run(context);
   assert.equal(finalEnd.loop_complete, true);
   assert.equal(finalEnd.route_target_key, undefined);
+});
+
+test('element loop collects every reader result into a persistent workflow array', async () => {
+  const handles = [
+    searchResult('First result', '/first', 'First description'),
+    searchResult('Second result', '/second', 'Second description'),
+  ];
+  handles[0].data.identity = 'result:first';
+  handles[1].data.identity = 'result:second';
+  const context = {
+    page: {
+      $$: async (selector) => (selector === '.result' ? handles : []),
+      url: () => 'https://search.example/',
+    },
+    workflow_variables: {},
+  };
+  const loopInput = {
+    key: 'collect-loop',
+    selector: '.result',
+    store_current_element_as: 'current_result',
+    store_index_as: 'result_index',
+    collect_to_array: 'top_results',
+    collect_from_variable: 'current_result',
+    collect_dedupe_by: 'url',
+    success_target: 'read-result',
+    completion_target: 'return-results',
+  };
+
+  for (let index = 0; index < handles.length; index += 1) {
+    context.input = loopInput;
+    const active = await loopTask.run(context);
+    assert.equal(active.current_index, index);
+
+    context.input = {
+      scope_variable: 'current_result',
+      output_variable: 'current_result',
+      fields: [
+        { name: 'title', selector: 'h3', type: 'text', required: true },
+        { name: 'url', selector: 'a', type: 'href', required: true },
+      ],
+    };
+    const read = await readFieldsTask.run(context);
+    assert.equal(read.ok, true);
+  }
+
+  context.input = loopInput;
+  const completed = await loopTask.run(context);
+
+  assert.equal(completed.route_target_key, 'return-results');
+  assert.equal(completed.route_outcome, 'complete');
+  assert.equal(completed.collected_count, 2);
+  assert.deepEqual(context.workflow_variables.top_results, [
+    { title: 'First result', url: 'https://search.example/first' },
+    { title: 'Second result', url: 'https://search.example/second' },
+  ]);
+});
+
+test('element loop separates empty and completed routes and defaults to its paired end', async () => {
+  const emptyContext = {
+    page: { $$: async () => [] },
+    workflow_variables: {},
+    input: {
+      key: 'empty-loop',
+      selector: '.result',
+      empty_target: 'handle-empty',
+      completion_target: 'handle-complete',
+      loop_end_key: 'empty-loop-end',
+    },
+  };
+  const empty = await loopTask.run(emptyContext);
+  assert.equal(empty.status, 'loop_empty');
+  assert.equal(empty.route_target_key, 'handle-empty');
+  assert.equal(empty.route_outcome, 'empty');
+
+  const handle = searchResult('Only result', '/only', 'Only description');
+  handle.data.identity = 'result:only';
+  const completedContext = {
+    page: { $$: async () => [handle] },
+    workflow_variables: {},
+    input: {
+      key: 'default-exit-loop',
+      selector: '.result',
+      loop_end_key: 'default-exit-loop-end',
+    },
+  };
+  await loopTask.run(completedContext);
+  const completed = await loopTask.run(completedContext);
+  assert.equal(completed.route_target_key, 'default-exit-loop-end');
+  assert.equal(completed.route_outcome, 'complete');
+});
+
+test('element loop refreshes the DOM handle before the next iteration', async () => {
+  const firstSnapshot = [
+    new FakeHandle({ identity: 'item:1', text: 'Old first' }),
+    new FakeHandle({ identity: 'item:2', text: 'Old second' }),
+  ];
+  const refreshedSnapshot = [
+    new FakeHandle({ identity: 'item:1', text: 'New first' }),
+    new FakeHandle({ identity: 'item:2', text: 'New second' }),
+  ];
+  let queryCount = 0;
+  const context = {
+    page: {
+      $$: async () => {
+        queryCount += 1;
+        return queryCount === 1 ? firstSnapshot : refreshedSnapshot;
+      },
+      url: () => 'https://example.test/',
+    },
+    workflow_variables: {},
+    input: {
+      key: 'refresh-loop',
+      selector: '.item',
+      store_current_element_as: 'current_item',
+    },
+  };
+
+  await loopTask.run(context);
+  context.input = {
+    key: 'refresh-loop',
+    selector: '.item',
+    store_current_element_as: 'current_item',
+  };
+  const second = await loopTask.run(context);
+  assert.equal(second.current_index, 1);
+
+  context.input = {
+    scope_variable: 'current_item',
+    output_variable: 'current_item_data',
+    fields: [{ name: 'text', scope_self: true, type: 'text' }],
+  };
+  const read = await readFieldsTask.run(context);
+  assert.deepEqual(read.result, { text: 'New second' });
+});
+
+test('append to array reports invalid arrays and missing source values explicitly', async () => {
+  const invalidArray = await appendTask.run({
+    workflow_variables: { results: 'not-an-array', current_result: { id: 1 } },
+    input: { array_name: 'results', value_from_variable: 'current_result' },
+  });
+  assert.equal(invalidArray.ok, false);
+  assert.equal(invalidArray.reason_code, 'array_not_array');
+
+  const missingValue = await appendTask.run({
+    workflow_variables: {},
+    input: { array_name: 'results', value_from_variable: 'missing_result' },
+  });
+  assert.equal(missingValue.ok, false);
+  assert.equal(missingValue.reason_code, 'value_missing');
 });
 
 test('search result wrapper supports fallback selectors and optional fields', async () => {
