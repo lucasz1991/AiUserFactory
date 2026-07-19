@@ -193,6 +193,39 @@ class WorkflowDefinitionValidatorTest extends TestCase
         $this->assertNotContains('route_step_missing', collect($result['diagnostics'])->pluck('code'));
     }
 
+    public function test_press_key_accepts_only_catalogued_keyboard_values(): void
+    {
+        $workflow = $this->workflow();
+        $step = $workflow->steps()->create([
+            'name' => 'Keyboard',
+            'type' => WorkflowStep::TYPE_BROWSER_TASK,
+            'action_key' => 'keyboard',
+            'position' => 10,
+            'is_enabled' => true,
+            'config_json' => ['tasks' => [[
+                'key' => 'confirm',
+                'task_key' => 'browser.press_key',
+                'value' => 'Escape',
+            ]]],
+        ]);
+
+        $invalid = app(WorkflowDefinitionValidator::class)->validate($workflow->fresh('steps'));
+        $diagnostic = collect($invalid['diagnostics'])->firstWhere('code', 'invalid_configuration_option');
+
+        $this->assertFalse($invalid['valid']);
+        $this->assertSame('confirm', $diagnostic['task_key']);
+        $this->assertSame('value', $diagnostic['field']);
+        $this->assertStringContainsString('Enter, Tab', $diagnostic['repair_hint']);
+
+        $config = $step->config_json;
+        $config['tasks'][0]['value'] = 'Tab';
+        $step->forceFill(['config_json' => $config])->save();
+
+        $valid = app(WorkflowDefinitionValidator::class)->validate($workflow->fresh('steps'));
+
+        $this->assertTrue($valid['valid'], json_encode($valid['diagnostics'], JSON_PRETTY_PRINT));
+    }
+
     private function workflow(): Workflow
     {
         return Workflow::query()->create([

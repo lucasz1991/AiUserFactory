@@ -14,6 +14,21 @@ class WorkflowCopilotPromptContextServiceTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_press_key_catalog_context_exposes_only_enter_and_tab(): void
+    {
+        $snapshot = app(WorkflowCopilotPromptContextService::class)->taskCatalogSnapshot(['browser.press_key']);
+        $definition = $snapshot['browser.press_key'];
+        $valueParameter = collect($definition['parameters'])->firstWhere('name', 'value');
+
+        $this->assertSame('select', data_get($definition, 'configuration.value_type'));
+        $this->assertSame(['Enter', 'Tab'], data_get($definition, 'configuration.value_options'));
+        $this->assertSame('select', $valueParameter['type']);
+        $this->assertSame([
+            'Enter' => 'Enter - bestaetigen oder absenden',
+            'Tab' => 'Tab - zum naechsten Feld wechseln',
+        ], $valueParameter['options']);
+    }
+
     public function test_context_contains_complete_catalog_routes_and_redacted_task_values(): void
     {
         $workflow = Workflow::query()->create([

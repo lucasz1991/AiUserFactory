@@ -6,7 +6,11 @@
                 <div><label class="block text-xs font-bold uppercase tracking-wide text-slate-500">Probeaktion</label><select wire:model.live="probeAction" class="mt-1 w-full rounded-lg border-slate-300 bg-white text-sm"><option value="selector.search">Selector suchen</option><option value="selector.highlight">Element hervorheben</option><option value="selector.read">Text / Attribute lesen</option><option value="probe.click">Klicken</option><option value="probe.fill">Eingabe setzen</option><option value="probe.keypress">Taste senden</option><option value="probe.submit">Formular absenden</option><option value="probe.wait">Warten</option><option value="probe.navigate">Navigieren</option><option value="probe.screenshot">Screenshot neu erfassen</option><option value="probe.dom_refresh">DOM neu erfassen</option></select></div>
                 <div><label class="block text-xs font-bold uppercase tracking-wide text-slate-500">Browserfenster</label><input type="text" wire:model="probeBrowserWindow" class="mt-1 w-full rounded-lg border-slate-300 bg-slate-50 text-sm" readonly></div>
                 <div><label class="block text-xs font-bold uppercase tracking-wide text-slate-500">Selector, Text oder Rolle</label><textarea wire:model="probeSelector" rows="4" class="mt-1 w-full rounded-lg border-slate-300 bg-white font-mono text-xs" placeholder="button[type=submit], text=Weiter"></textarea></div>
-                <div><label class="block text-xs font-bold uppercase tracking-wide text-slate-500">Wert, URL oder Wartezeit</label><input type="text" wire:model="probeValue" class="mt-1 w-full rounded-lg border-slate-300 bg-white text-sm"></div>
+                @if($probeAction === 'probe.keypress')
+                    <div><label class="block text-xs font-bold uppercase tracking-wide text-slate-500">Taste</label><select wire:model="probeValue" class="mt-1 w-full rounded-lg border-slate-300 bg-white text-sm"><option value="Enter">Enter</option><option value="Tab">Tab</option></select><p class="mt-1 text-[10px] leading-4 text-slate-500">Enter bestätigt die aktuelle Eingabe. Tab setzt den Fokus auf das nächste Bedienelement.</p></div>
+                @else
+                    <div><label class="block text-xs font-bold uppercase tracking-wide text-slate-500">Wert, URL oder Wartezeit</label><input type="text" wire:model="probeValue" class="mt-1 w-full rounded-lg border-slate-300 bg-white text-sm"></div>
+                @endif
             </div>
             <div>
                 @if(is_array($probeResult))

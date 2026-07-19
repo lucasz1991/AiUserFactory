@@ -18,12 +18,15 @@ use App\Services\Workflows\WorkflowCopilotSessionService;
 use App\Services\Workflows\WorkflowDefinitionValidator;
 use App\Services\Workflows\WorkflowExecutionService;
 use App\Services\Workflows\WorkflowStudioAuthorizationService;
+use App\Services\Workflows\WorkflowStudioCheckpointService;
 use App\Services\Workflows\WorkflowStudioControlService;
 use App\Services\Workflows\WorkflowStudioRevisionService;
 use App\Services\Workflows\WorkflowStudioSessionService;
 use App\Services\Workflows\WorkflowTaskCatalog;
 use App\Services\Workflows\WorkflowTaskOrderingService;
 use DomainException;
+use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Livewire\Attributes\On;
 use Livewire\Component;
@@ -33,6 +36,18 @@ class WorkflowStudio extends Component
 {
     private const STUDIO_PANELS = [
         'builder',
+    ];
+
+    private const TOOL_MODALS = [
+        'browser',
+        'data',
+        'checkpoints',
+        'logs',
+        'debug',
+        'steps',
+        'tasks',
+        'variables',
+        'artifacts',
     ];
 
     public int $workflowId;
@@ -77,6 +92,8 @@ class WorkflowStudio extends Component
 
     public string $probeBrowserWindow = 'main';
 
+    public string $checkpointName = '';
+
     public array $lastActionResult = [];
 
     public array $pendingConfirmation = [];
@@ -84,6 +101,8 @@ class WorkflowStudio extends Component
     public bool $showCopilotSettingsModal = false;
 
     public bool $showSelectorProbeModal = false;
+
+    public string $activeToolModal = '';
 
     public string $activeStudioPanel = '';
 
@@ -338,6 +357,116 @@ class WorkflowStudio extends Component
         });
     }
 
+    public function createCheckpoint(): void
+    {
+        $this->perform('checkpoint.created', function (): array {
+            $session = $this->session();
+            app(WorkflowStudioControlService::class)->assertUserControl($session);
+            $run = $this->activeRunOrFail()->fresh();
+            $this->assertCheckpointRunIsSafe($run, requirePaused: true);
+
+            $checkpoint = app(WorkflowStudioCheckpointService::class)->create(
+                $session,
+                $run,
+                $this->checkpointName,
+            );
+            $this->checkpointName = '';
+
+            return $this->result(
+                'paused',
+                'Checkpoint „'.$checkpoint->name.'“ wurde dauerhaft gespeichert.',
+                $run,
+                checkpointId: (int) $checkpoint->getKey(),
+            );
+        });
+    }
+
+    public function restoreCheckpoint(int $checkpointId, ?string $confirmationId = null, ?int $targetRunId = null): void
+    {
+        $this->perform('checkpoint.restore_requested', function () use ($checkpointId, $confirmationId, $targetRunId): array {
+            $session = $this->session();
+            app(WorkflowStudioControlService::class)->assertUserControl($session);
+            $checkpoint = $session->checkpoints()->with(['revision', 'run'])->findOrFail($checkpointId);
+            $run = $targetRunId
+                ? $session->runs()->findOrFail($targetRunId)
+                : $this->activeRunOrFail();
+
+            if ((int) $session->active_workflow_run_id !== (int) $run->getKey()) {
+                throw new DomainException('Der zu bestätigende Ziel-Lauf ist nicht mehr der aktive Studio-Lauf.');
+            }
+            $this->assertCheckpointRunIsSafe($run);
+
+            $parameters = $this->checkpointActionParameters($checkpoint, $run);
+            $decision = app(WorkflowStudioAuthorizationService::class)->decide(
+                $session,
+                'checkpoint.restore',
+                $parameters,
+                $confirmationId,
+            );
+            if ($decision['requires_confirmation']) {
+                $this->rememberPendingConfirmation([
+                    'type' => 'checkpoint_restore',
+                    'action' => 'checkpoint.restore',
+                    'checkpoint_id' => (int) $checkpoint->getKey(),
+                    'workflow_run_id' => (int) $run->getKey(),
+                    'confirmation_id' => $decision['confirmation_id'],
+                    'message' => 'Aktuellen Lauf auf Checkpoint „'.$checkpoint->name.'“ zurücksetzen?',
+                ]);
+
+                return $this->result('confirmation_required', (string) $decision['message'], $run, true, $decision['confirmation_id'], (int) $checkpoint->getKey());
+            }
+
+            $restored = app(WorkflowStudioCheckpointService::class)->restore($session, $checkpoint, $run);
+            if ($confirmationId) {
+                app(WorkflowStudioAuthorizationService::class)->consume($session->fresh(), $confirmationId);
+            }
+            $this->activeRunId = (int) $restored->getKey();
+            $this->synchronizeSelectionWithRunCursor($restored, true);
+
+            return $this->result('paused', 'Der aktuelle Lauf wurde auf „'.$checkpoint->name.'“ zurückgesetzt und bleibt pausiert.', $restored, checkpointId: (int) $checkpoint->getKey());
+        });
+    }
+
+    public function branchFromCheckpoint(int $checkpointId, ?string $confirmationId = null): void
+    {
+        $this->perform('checkpoint.branch_requested', function () use ($checkpointId, $confirmationId): array {
+            $session = $this->session();
+            app(WorkflowStudioControlService::class)->assertUserControl($session);
+            $checkpoint = $session->checkpoints()->with(['revision', 'run'])->findOrFail($checkpointId);
+            if ($run = $this->activeRun()) {
+                $this->assertCheckpointRunIsSafe($run);
+            }
+
+            $parameters = $this->checkpointActionParameters($checkpoint);
+            $decision = app(WorkflowStudioAuthorizationService::class)->decide(
+                $session,
+                'checkpoint.branch',
+                $parameters,
+                $confirmationId,
+            );
+            if ($decision['requires_confirmation']) {
+                $this->rememberPendingConfirmation([
+                    'type' => 'checkpoint_branch',
+                    'action' => 'checkpoint.branch',
+                    'checkpoint_id' => (int) $checkpoint->getKey(),
+                    'confirmation_id' => $decision['confirmation_id'],
+                    'message' => 'Neuen pausierten Lauf ab Checkpoint „'.$checkpoint->name.'“ erstellen?',
+                ]);
+
+                return $this->result('confirmation_required', (string) $decision['message'], $this->activeRun(), true, $decision['confirmation_id'], (int) $checkpoint->getKey());
+            }
+
+            $branched = app(WorkflowStudioCheckpointService::class)->branch($session, $checkpoint);
+            if ($confirmationId) {
+                app(WorkflowStudioAuthorizationService::class)->consume($session->fresh(), $confirmationId);
+            }
+            $this->activeRunId = (int) $branched->getKey();
+            $this->synchronizeSelectionWithRunCursor($branched, true);
+
+            return $this->result((string) $branched->status, 'Neuer Lauf wurde ab „'.$checkpoint->name.'“ verzweigt.', $branched, checkpointId: (int) $checkpoint->getKey());
+        });
+    }
+
     public function runProbe(?string $confirmationId = null): void
     {
         $this->perform('probe.started', function () use ($confirmationId): array {
@@ -502,6 +631,34 @@ class WorkflowStudio extends Component
         $this->activeStudioPanel = '';
     }
 
+    public function openToolModal(string $tool): void
+    {
+        $this->activeToolModal = in_array($tool, self::TOOL_MODALS, true) ? $tool : '';
+    }
+
+    public function closeToolModal(): void
+    {
+        $this->activeToolModal = '';
+    }
+
+    public function selectTaskFromTool(int $stepId, string $taskKey): void
+    {
+        $this->selectTask($stepId, $taskKey);
+        $this->closeToolModal();
+    }
+
+    public function editTaskFromTool(int $stepId, string $taskKey): void
+    {
+        $this->closeToolModal();
+        $this->editTask($stepId, $taskKey);
+    }
+
+    public function openBuilderForStepFromTool(int $stepId): void
+    {
+        $this->closeToolModal();
+        $this->openBuilderForStep($stepId);
+    }
+
     public function editSelectedTask(): void
     {
         if ($this->selectedStepId === '' || $this->selectedTaskKey === '') {
@@ -518,6 +675,7 @@ class WorkflowStudio extends Component
     {
         $this->selectTask($stepId, $taskKey);
         $this->lastActionResult = $this->result('draft', 'Task wurde gespeichert und eine neue Revision erstellt.');
+        $this->dispatchStudioNotice($this->lastActionResult);
     }
 
     #[On('workflow-studio-definition-updated')]
@@ -530,6 +688,7 @@ class WorkflowStudio extends Component
         }
 
         $this->lastActionResult = $this->result('draft', $message);
+        $this->dispatchStudioNotice($this->lastActionResult);
     }
 
     public function saveSelectedTask(): void
@@ -700,6 +859,13 @@ class WorkflowStudio extends Component
         $this->showSelectorProbeModal = true;
     }
 
+    public function updatedProbeAction(string $action): void
+    {
+        if ($action === 'probe.keypress' && ! in_array($this->probeValue, ['Enter', 'Tab'], true)) {
+            $this->probeValue = 'Enter';
+        }
+    }
+
     public function refreshStudio(): void
     {
         $session = $this->session()->fresh();
@@ -712,12 +878,26 @@ class WorkflowStudio extends Component
         $this->synchronizeSelectionWithRunCursor($run);
         $this->ensureSelectedTaskExists();
         if ($session && $run && $session->status !== $run->status && $session->status !== 'confirmation_required') {
+            $previousStatus = (string) $session->status;
             $session->forceFill([
                 'status' => $run->status,
                 'paused_at' => $run->status === 'paused' ? ($session->paused_at ?: now()) : null,
                 'finished_at' => in_array($run->status, ['completed', 'failed', 'cancelled', 'timed_out', 'lost'], true) ? ($run->finished_at ?: now()) : null,
                 'last_activity_at' => now(),
             ])->save();
+
+            if (in_array((string) $run->status, ['paused', 'completed', 'failed', 'cancelled', 'timed_out', 'lost'], true)) {
+                $message = match ((string) $run->status) {
+                    'paused' => 'Der Workflow wurde am nächsten sicheren Punkt pausiert.',
+                    'completed' => 'Der Workflow-Test wurde vollständig abgeschlossen.',
+                    'failed' => 'Der Workflow-Test wurde wegen eines Fehlers angehalten.',
+                    'cancelled' => 'Der Workflow-Test wurde gestoppt.',
+                    'timed_out' => 'Der Workflow-Test wurde wegen einer Zeitüberschreitung angehalten.',
+                    'lost' => 'Die Verbindung zum Workflow-Lauf wurde verloren.',
+                    default => 'Der Workflow-Status wurde aktualisiert.',
+                };
+                $this->dispatchStudioNotice($this->result((string) $run->status, $message, $run), $previousStatus);
+            }
         }
     }
 
@@ -739,6 +919,7 @@ class WorkflowStudio extends Component
     public function closeStudio(): void
     {
         if ($this->embedded) {
+            $this->dispatch('workflow-studio-unpin-copilot');
             $this->dispatch('workflow-test-workbench-close');
         }
     }
@@ -807,11 +988,29 @@ class WorkflowStudio extends Component
         try {
             $this->lastActionResult = $action();
             app(WorkflowStudioSessionService::class)->appendEvent($this->session(), $event, $this->lastActionResult['message'] ?? $event, $this->lastActionResult);
+            $this->dispatchStudioNotice($this->lastActionResult);
         } catch (Throwable $exception) {
             report($exception);
             $this->addError('studio', $exception->getMessage());
             $this->lastActionResult = $this->result('failed', $exception->getMessage());
+            $this->dispatchStudioNotice($this->lastActionResult);
         }
+    }
+
+    private function dispatchStudioNotice(array $result, ?string $previousStatus = null): void
+    {
+        $status = (string) ($result['status'] ?? 'ready');
+        $type = in_array($status, ['failed', 'timed_out', 'lost', 'unreachable'], true)
+            ? 'error'
+            : (in_array($status, ['completed', 'success', 'succeeded'], true) ? 'success' : 'info');
+
+        $this->dispatch(
+            'workflow-studio-notice',
+            type: $type,
+            message: (string) ($result['message'] ?? 'Workflow Studio wurde aktualisiert.'),
+            status: $status,
+            previousStatus: $previousStatus,
+        );
     }
 
     private function result(
@@ -892,6 +1091,7 @@ class WorkflowStudio extends Component
     {
         $context = $run && is_array($run->context_json) ? $run->context_json : [];
         $runtimeWindows = data_get($context, 'browser_windows', []);
+        $snapshots = $this->browserWindowSnapshots($run);
 
         if (! is_array($runtimeWindows) || $runtimeWindows === []) {
             $runtimeWindows = data_get($context, 'manual_pause_checkpoint.browser_windows', []);
@@ -912,6 +1112,8 @@ class WorkflowStudio extends Component
                     'active' => $name === $activeWindow,
                     'runtime' => true,
                     'task_count' => 0,
+                    'screenshot_url' => null,
+                    'dom_url' => null,
                 ]];
             });
 
@@ -932,10 +1134,28 @@ class WorkflowStudio extends Component
                     'active' => $name === $activeWindow,
                     'runtime' => false,
                     'task_count' => 0,
+                    'screenshot_url' => null,
+                    'dom_url' => null,
                 ]);
                 $card['task_count']++;
                 $cards->put($name, $card);
             }
+        }
+
+        foreach ($snapshots as $name => $snapshot) {
+            $card = $cards->get($name, [
+                'name' => $name,
+                'title' => '',
+                'url' => '',
+                'target_id' => '',
+                'connected' => false,
+                'active' => $name === $activeWindow,
+                'runtime' => true,
+                'task_count' => 0,
+                'screenshot_url' => null,
+                'dom_url' => null,
+            ]);
+            $cards->put($name, array_replace($card, array_filter($snapshot, fn (mixed $value): bool => filled($value))));
         }
 
         if ($cards->isEmpty()) {
@@ -948,10 +1168,93 @@ class WorkflowStudio extends Component
                 'active' => true,
                 'runtime' => false,
                 'task_count' => 0,
+                'screenshot_url' => null,
+                'dom_url' => null,
             ]);
         }
 
         return $cards->values()->all();
+    }
+
+    private function browserWindowSnapshots(?WorkflowRun $run): array
+    {
+        if (! $run) {
+            return [];
+        }
+
+        $snapshots = [];
+        foreach ($run->stepRuns->sortByDesc('id') as $stepRun) {
+            $result = is_array($stepRun->result_json) ? $stepRun->result_json : [];
+            foreach ((array) data_get($result, 'browserWindows', []) as $key => $window) {
+                if (! is_array($window)) {
+                    continue;
+                }
+
+                $name = trim((string) ($window['key'] ?? $window['name'] ?? $key)) ?: 'main';
+                $snapshots[$name] ??= [
+                    'title' => trim((string) ($window['title'] ?? $window['label'] ?? '')),
+                    'url' => trim((string) ($window['url'] ?? $window['currentUrl'] ?? '')),
+                    'target_id' => trim((string) ($window['targetId'] ?? $window['target_id'] ?? '')),
+                    'connected' => filled($window['targetId'] ?? $window['target_id'] ?? null),
+                    'runtime' => true,
+                    'screenshot_url' => $this->runtimePreviewUrl($window['screenshotUrl'] ?? null, $window['livePreviewRelativePath'] ?? null),
+                    'dom_url' => $this->runtimePreviewUrl($window['debugDomUrl'] ?? null, $window['debugDomRelativePath'] ?? null),
+                ];
+            }
+
+            if (! isset($snapshots['main']) && filled(data_get($result, 'screenshotUrl'))) {
+                $snapshots['main'] = [
+                    'title' => 'Browser',
+                    'url' => trim((string) data_get($result, 'windowStatus.url', '')),
+                    'target_id' => trim((string) data_get($result, 'windowStatus.targetId', '')),
+                    'connected' => filled(data_get($result, 'windowStatus.targetId')),
+                    'runtime' => true,
+                    'screenshot_url' => trim((string) data_get($result, 'screenshotUrl')),
+                    'dom_url' => trim((string) data_get($result, 'debugDomUrl')),
+                ];
+            }
+        }
+
+        foreach ($run->artifacts->sortByDesc('id') as $artifact) {
+            $name = trim((string) $artifact->browser_window) ?: 'main';
+            $snapshots[$name] ??= [
+                'title' => trim((string) $artifact->title),
+                'url' => trim((string) $artifact->current_url),
+                'target_id' => '',
+                'connected' => false,
+                'runtime' => true,
+                'screenshot_url' => null,
+                'dom_url' => null,
+            ];
+            if ($artifact->status === 'success' && $artifact->artifact_type === 'screenshot' && blank($snapshots[$name]['screenshot_url'] ?? null)) {
+                $snapshots[$name]['screenshot_url'] = route('workflow-run-artifacts.show', ['run' => $run, 'artifact' => $artifact]);
+            }
+            if ($artifact->status === 'success' && $artifact->artifact_type === 'dom' && blank($snapshots[$name]['dom_url'] ?? null)) {
+                $snapshots[$name]['dom_url'] = route('workflow-run-artifacts.show', ['run' => $run, 'artifact' => $artifact]);
+            }
+        }
+
+        return $snapshots;
+    }
+
+    private function runtimePreviewUrl(mixed $url, mixed $relativePath): ?string
+    {
+        $url = trim((string) $url);
+        if ($url !== '') {
+            return $url;
+        }
+
+        $relativePath = trim((string) $relativePath);
+        if ($relativePath === '') {
+            return null;
+        }
+
+        $absolutePath = storage_path('app/public/'.$relativePath);
+        if (! File::exists($absolutePath)) {
+            return null;
+        }
+
+        return Storage::disk('public')->url($relativePath).'?v='.File::lastModified($absolutePath);
     }
 
     private function startInteractiveRun(

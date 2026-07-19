@@ -61,6 +61,38 @@ class WorkflowCopilotUiMarkupTest extends TestCase
         $this->assertStringContainsString('wire:click="terminateCopilotSession"', $chat);
     }
 
+    public function test_workflow_studio_uses_a_diagram_first_tool_layout_with_docked_chat_and_toasts(): void
+    {
+        $root = dirname(__DIR__, 2);
+        $studio = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-studio.blade.php');
+        $toolbar = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-studio/tool-bar.blade.php');
+        $browserWindows = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-studio/browser-windows.blade.php');
+        $browser = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-studio/browser.blade.php');
+        $runPreview = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-run-preview.blade.php');
+        $manager = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-manager.blade.php');
+        $chat = file_get_contents($root.'/resources/views/livewire/tools/chatbot.blade.php');
+        $javascript = file_get_contents($root.'/resources/js/app.js');
+
+        foreach (['Browser', 'Selektoren', 'Daten', 'Checkpoints', 'Logs', 'Debug', 'Schritte', 'Tasks', 'Variablen', 'Artefakte', 'Copilot-Einstellungen'] as $label) {
+            $this->assertStringContainsString($label, $toolbar);
+        }
+        $this->assertStringContainsString(':diagram-only="true"', $browser);
+        $this->assertStringContainsString('background-size: 20px 20px, 20px 20px, 100px 100px, 100px 100px', $runPreview);
+        $this->assertStringContainsString('h-20 w-36', $browserWindows);
+        $this->assertStringContainsString('data-workflow-test-workbench', $manager);
+        $this->assertStringContainsString('fixed inset-0 top-0', $manager);
+        $this->assertStringContainsString('workflow-studio-pin-copilot', $studio);
+        $this->assertStringContainsString('workflow-studio-unpin-copilot', $studio);
+        $this->assertStringContainsString('[data-workflow-test-workbench]', $chat);
+        $this->assertStringContainsString('right: 30rem !important', $chat);
+        $this->assertStringContainsString('this.studioChatWasOpen = storedChatOpen', $chat);
+        $this->assertStringContainsString('toast: true', $studio);
+        $this->assertStringContainsString("position: 'top'", $studio);
+        $this->assertStringContainsString('timerProgressBar: true', $studio);
+        $this->assertStringContainsString("import Swal from 'sweetalert2'", $javascript);
+        $this->assertStringContainsString("import 'sweetalert2/dist/sweetalert2.min.css'", $javascript);
+    }
+
     public function test_copilot_settings_expose_vision_fallback_order_and_default_budgets(): void
     {
         $root = dirname(__DIR__, 2);

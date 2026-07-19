@@ -82,6 +82,22 @@ class WorkflowDefinitionValidator
                     }
                 }
 
+                foreach ($this->selectFieldOptions($definition) as $fieldName => $allowedValues) {
+                    $configuredValue = $this->taskConfigurationValue($task, $fieldName);
+
+                    if ($configuredValue !== '' && ! in_array($configuredValue, $allowedValues, true)) {
+                        $diagnostics[] = $this->diagnostic(
+                            'error',
+                            'invalid_configuration_option',
+                            $step,
+                            $cardKey,
+                            $fieldName,
+                            'Die Task-Konfiguration `'.$fieldName.'` enthaelt den nicht erlaubten Wert `'.$configuredValue.'`.',
+                            'Einen der Katalogwerte verwenden: '.implode(', ', $allowedValues).'.',
+                        );
+                    }
+                }
+
                 foreach ($this->routes($task) as $field => $route) {
                     $this->validateRoute($diagnostics, $step, $cardKey, $field, $route, $stepKeys, $taskKeysByStep, $stepPositions);
                 }
@@ -195,6 +211,48 @@ class WorkflowDefinitionValidator
         }
 
         return $result;
+    }
+
+    /** @return array<string,array<int,string>> */
+    private function selectFieldOptions(array $definition): array
+    {
+        $form = is_array($definition['form'] ?? null) ? $definition['form'] : [];
+        $selects = [];
+
+        foreach (['selector', 'value', 'url', 'browser_window', 'mailbox_source'] as $fieldName) {
+            if (($form[$fieldName.'_type'] ?? null) !== 'select' || ! is_array($form[$fieldName.'_options'] ?? null)) {
+                continue;
+            }
+
+            $selects[$fieldName] = array_map('strval', array_keys($form[$fieldName.'_options']));
+        }
+
+        foreach (is_array($form['extra_fields'] ?? null) ? $form['extra_fields'] : [] as $field) {
+            if (! is_array($field) || ($field['type'] ?? null) !== 'select' || ! is_array($field['options'] ?? null)) {
+                continue;
+            }
+
+            $fieldName = trim((string) ($field['name'] ?? ''));
+
+            if ($fieldName !== '') {
+                $selects[$fieldName] = array_map('strval', array_keys($field['options']));
+            }
+        }
+
+        return $selects;
+    }
+
+    private function taskConfigurationValue(array $task, string $fieldName): string
+    {
+        if ($fieldName === 'value') {
+            return trim((string) ($task['value'] ?? $task['input'] ?? ''));
+        }
+
+        $value = array_key_exists($fieldName, $task)
+            ? $task[$fieldName]
+            : data_get($task, $fieldName);
+
+        return is_scalar($value) ? trim((string) $value) : '';
     }
 
     private function validateLoopCollection(array &$diagnostics, WorkflowStep $step, array $loop, Collection $body): void

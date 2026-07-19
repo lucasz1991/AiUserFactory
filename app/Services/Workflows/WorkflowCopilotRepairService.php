@@ -367,6 +367,155 @@ class WorkflowCopilotRepairService
         );
     }
 
+    /**
+     * Plan only offline-verifiable structure repairs before a fresh browser
+     * run. Selectors and visual actions are deliberately excluded because no
+     * current DOM observation exists at this point.
+     *
+     * @return array{operations: list<array<string, mixed>>, reason: string, rejected_operations: list<array<string, mixed>>}
+     */
+    public function planHistoricalPreflight(
+        WorkflowCopilotSession $session,
+        array $historyReport,
+    ): array {
+        $workflow = $session->workflow()->with(['steps' => fn ($query) => $query->ordered()])->first();
+        $currentStep = $workflow?->steps->first();
+
+        if (! $workflow || ! $currentStep) {
+            return ['operations' => [], 'reason' => 'Kein bestehender Workflow-Graph fuer eine Vorab-Strukturpruefung vorhanden.', 'rejected_operations' => []];
+        }
+
+        $unresolved = collect(is_array($historyReport['error_patterns'] ?? null) ? $historyReport['error_patterns'] : [])
+            ->where('resolved', false)
+            ->values();
+        $diagnostics = collect(is_array($historyReport['static_diagnostics'] ?? null) ? $historyReport['static_diagnostics'] : [])
+            ->filter(fn (mixed $diagnostic): bool => is_array($diagnostic))
+            ->values();
+        $alreadyCovered = max(0, (int) ($historyReport['historically_proven_repair_count'] ?? 0));
+        $requiresOfflinePlan = $unresolved->count() > $alreadyCovered
+            || $diagnostics->contains(fn (array $diagnostic): bool => ($diagnostic['severity'] ?? null) === 'error');
+
+        if (! $requiresOfflinePlan) {
+            return ['operations' => [], 'reason' => 'Alle historisch belegbaren Fehler sind bereits durch sichere Task-Wiederverwendung abgedeckt.', 'rejected_operations' => []];
+        }
+
+        try {
+            $decision = $this->ai->json(
+                'Pruefe bekannte Lauf-, Revisions- und Diagnosefehler, bevor ein neuer Browser-Test startet. '.
+                    'Es gibt absichtlich noch KEINEN aktuellen DOM- oder Screenshot-Befund. Deshalb sind Selector-Aenderungen, Klicks, Eingaben, neue visuell zielgebundene Tasks und externe Aktionen verboten. '.
+                    'Erlaubt sind ausschliesslich Operationen, die identisch in history_preflight.offline_safe_operations vorgegeben sind. '.
+                    'Eine explizite type=fail-Route darf insbesondere niemals ohne dort belegtes alternatives bestehendes Ziel in type=end oder eine andere Route umgebogen werden. '.
+                    'Normale condition_false-/IF-Falschzweige sind fachliche Abzweigungen und keine Fehler, solange ihre aufgeloeste Route nicht type=fail oder invalid ist. '.
+                    'Veraendere nur Tasks oder Listen, die in unresolved error_patterns oder static_diagnostics konkret genannt sind. '.
+                    'Antworte als JSON im Schema {"action":"structural_update|none","operations":[],"reason":"..."}. Daten: '.
+                    json_encode([
+                        'workflow_context' => $this->promptContexts->forWorkflow($workflow, $session),
+                        'history_preflight' => $historyReport,
+                    ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE),
+                'Du bist der sichere Vorab-Planer des Workflow-Copiloten. Nutze Lauf- und Revisionshistorie, wiederhole keine gescheiterten Aenderungen und plane ohne aktuelle Browser-Evidenz nur statisch beweisbare Routing- oder Reihenfolgekorrekturen. Antworte nur als JSON.',
+                ['temperature' => 0.05, 'max_completion_tokens' => 1600, '_timeout' => 30],
+            );
+            $decision = $this->observations->sanitizeForModel($decision);
+            $decision = is_array($decision) ? $decision : [];
+        } catch (\Throwable) {
+            return ['operations' => [], 'reason' => 'Der optionale Vorab-Strukturplaner war nicht verfuegbar; historisch bewiesene Task-Reparaturen bleiben davon unberuehrt.', 'rejected_operations' => []];
+        }
+
+        if (($decision['action'] ?? 'none') !== 'structural_update') {
+            return [
+                'operations' => [],
+                'reason' => $this->safeReason($decision['reason'] ?? 'Keine weitere statisch beweisbare Vorab-Reparatur gefunden.'),
+                'rejected_operations' => [],
+            ];
+        }
+
+        $requested = collect(is_array($decision['operations'] ?? null) ? $decision['operations'] : [])
+            ->filter(fn (mixed $operation): bool => is_array($operation)
+                && in_array(($operation['type'] ?? null), ['move_task', 'update_step_routes', 'update_task_routes'], true))
+            ->values()
+            ->all();
+        $rejections = [];
+        $operations = $this->normalizeStructuralOperations($currentStep, $requested, [], [], $rejections);
+        $provenOperations = collect(is_array($historyReport['offline_safe_operations'] ?? null)
+            ? $historyReport['offline_safe_operations']
+            : [])
+            ->filter(fn (mixed $operation): bool => is_array($operation))
+            ->map(fn (array $operation): string => hash('sha256', (string) json_encode(
+                $this->sortOperation($operation),
+                JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE,
+            )))
+            ->values();
+        $operations = collect($operations)
+            ->filter(function (array $operation, int $index) use ($provenOperations, &$rejections): bool {
+                $fingerprint = hash('sha256', (string) json_encode(
+                    $this->sortOperation($operation),
+                    JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE,
+                ));
+
+                if ($provenOperations->contains($fingerprint)) {
+                    return true;
+                }
+
+                $this->recordStructuralRejection(
+                    $rejections,
+                    $index,
+                    (string) ($operation['type'] ?? ''),
+                    'historical_operation_not_proven',
+                    'Die Offline-Strukturaenderung ist nicht durch eine fruehere erfolgreiche Revision exakt belegt.',
+                );
+
+                return false;
+            })
+            ->values()
+            ->all();
+        $allowedTaskKeys = $unresolved->pluck('task_key')
+            ->merge($diagnostics->pluck('task_key'))
+            ->map(fn (mixed $key): string => trim((string) $key))
+            ->filter()
+            ->unique();
+        $allowedStepKeys = $diagnostics->pluck('step_action_key')
+            ->merge($workflow->steps
+                ->filter(fn (WorkflowStep $step): bool => collect($step->task_cards)
+                    ->contains(fn (array $task): bool => $allowedTaskKeys->contains((string) ($task['key'] ?? ''))))
+                ->pluck('action_key'))
+            ->map(fn (mixed $key): string => trim((string) $key))
+            ->filter()
+            ->unique();
+        $operations = collect($operations)
+            ->filter(function (array $operation) use ($allowedTaskKeys, $allowedStepKeys): bool {
+                $taskKey = trim((string) ($operation['task_key'] ?? ''));
+                $stepKey = trim((string) ($operation['step_action_key'] ?? ''));
+
+                return ($taskKey !== '' && $allowedTaskKeys->contains($taskKey))
+                    || ($stepKey !== '' && $allowedStepKeys->contains($stepKey));
+            })
+            ->values()
+            ->all();
+
+        return [
+            'operations' => $operations,
+            'reason' => $this->safeReason($decision['reason'] ?? 'Historische Routing- oder Reihenfolgefehler werden vor dem Browser-Test korrigiert.'),
+            'rejected_operations' => $rejections,
+        ];
+    }
+
+    protected function sortOperation(mixed $value): mixed
+    {
+        if (! is_array($value)) {
+            return $value;
+        }
+
+        if (! array_is_list($value)) {
+            ksort($value);
+        }
+
+        foreach ($value as $key => $child) {
+            $value[$key] = $this->sortOperation($child);
+        }
+
+        return $value;
+    }
+
     public function applyStructuralOperations(
         Workflow $workflow,
         array $operations,
@@ -596,6 +745,41 @@ class WorkflowCopilotRepairService
 
             return $this->applyChangesToLockedStep($lockedStep, $taskKey, $changes);
         });
+    }
+
+    /**
+     * Reduce a historically successful task card to the catalog-backed fields
+     * that may safely be restored on the current card. The caller still has to
+     * prove that the historical card really belongs to a successful execution;
+     * this method only enforces the existing mutation and route policies.
+     *
+     * @return array<string, mixed>
+     */
+    public function historicalTaskChanges(
+        WorkflowStep $step,
+        string $taskKey,
+        array $historicalTask,
+    ): array {
+        $currentTask = collect($step->task_cards)->first(
+            fn (array $candidate): bool => (string) ($candidate['key'] ?? '') === $taskKey,
+        );
+
+        if (! is_array($currentTask)) {
+            return [];
+        }
+
+        $currentCatalogKey = trim((string) ($currentTask['task_key'] ?? ''));
+        $historicalCatalogKey = trim((string) ($historicalTask['task_key'] ?? ''));
+
+        if ($currentCatalogKey === ''
+            || $currentCatalogKey !== $historicalCatalogKey
+            || $this->catalog->task($currentCatalogKey) === null) {
+            return [];
+        }
+
+        return collect($this->normalizeChanges($step, $currentTask, $historicalTask, true))
+            ->filter(fn (mixed $value, string $field): bool => ($currentTask[$field] ?? null) !== $value)
+            ->all();
     }
 
     protected function applyChangesToLockedStep(WorkflowStep $step, string $taskKey, array $changes): array

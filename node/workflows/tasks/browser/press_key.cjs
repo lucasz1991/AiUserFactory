@@ -2,16 +2,58 @@
 
 const { captureTaskPreview } = require('../lib/preview.cjs');
 
+const SUPPORTED_KEYS = Object.freeze({
+  enter: 'Enter',
+  return: 'Enter',
+  eingabe: 'Enter',
+  tab: 'Tab',
+  tabulator: 'Tab',
+});
+
+function keyboardKey(input = {}) {
+  // `input.key` is deliberately not considered here. In the workflow runtime it
+  // identifies the task card (for example `search-submit`) and is not a key that
+  // Playwright can press.
+  const configuredKey = String(
+    input.keyboard_key
+    ?? input.keyboardKey
+    ?? input.value
+    ?? input.inputValue
+    ?? input.input_value
+    ?? input.input
+    ?? '',
+  ).trim();
+
+  return {
+    configuredKey,
+    key: SUPPORTED_KEYS[configuredKey.toLowerCase()] || '',
+  };
+}
+
 async function run(context = {}) {
   const page = context.page;
   const input = context.input || {};
-  const key = String(input.key ?? input.value ?? input.input ?? '').trim();
+  const { configuredKey, key } = keyboardKey(input);
 
   if (!page?.keyboard || typeof page.keyboard.press !== 'function') {
-    return { ok: false, status: 'failed', statusMessage: 'Kein Browser-Keyboard fuer die Taste vorhanden.' };
+    return {
+      ok: false,
+      status: 'failed',
+      statusMessage: 'Kein Browser-Keyboard fuer die Taste vorhanden.',
+      reason_code: 'browser_keyboard_missing',
+    };
   }
-  if (!key || key.length > 80 || !/^[A-Za-z0-9+_-]+$/.test(key)) {
-    return { ok: false, status: 'failed', statusMessage: 'Die Taste ist leer oder nicht im erlaubten Format.' };
+  if (!key) {
+    return {
+      ok: false,
+      status: 'failed',
+      statusMessage: configuredKey === ''
+        ? 'Bitte eine Taste auswaehlen. Erlaubt sind Enter und Tab.'
+        : `Die Taste ${configuredKey} wird nicht unterstuetzt. Erlaubt sind Enter und Tab.`,
+      reason_code: 'keyboard_key_unsupported',
+      configuredKey,
+      allowedKeys: ['Enter', 'Tab'],
+    };
   }
 
   try {
@@ -22,6 +64,7 @@ async function run(context = {}) {
       status: 'success',
       statusMessage: `Taste ${key} wurde gesendet.`,
       key,
+      configuredKey,
       url: typeof page.url === 'function' ? page.url() : null,
     });
   } catch (error) {
@@ -30,9 +73,11 @@ async function run(context = {}) {
       status: 'failed',
       statusMessage: `Taste ${key} konnte nicht gesendet werden.`,
       key,
+      configuredKey,
+      reason_code: 'keyboard_press_failed',
       error: error.message,
     });
   }
 }
 
-module.exports = { key: 'browser.press_key', run };
+module.exports = { key: 'browser.press_key', run, keyboardKey };

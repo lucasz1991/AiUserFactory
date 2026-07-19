@@ -14,6 +14,8 @@ class WorkflowCopilotLaunchRequest
         public array $budget = [],
         public string $permissionMode = 'ask_critical',
         public string $source = 'workflow-studio',
+        public ?int $studioSessionId = null,
+        public bool $unrestrictedWarningAcknowledged = false,
     ) {}
 
     public static function fromArray(array $attributes): self
@@ -39,6 +41,10 @@ class WorkflowCopilotLaunchRequest
             is_array($attributes['budget'] ?? null) ? $attributes['budget'] : [],
             trim((string) ($attributes['permission_mode'] ?? 'ask_critical')) ?: 'ask_critical',
             trim((string) ($attributes['source'] ?? 'workflow-studio')) ?: 'workflow-studio',
+            isset($attributes['studio_session_id']) && (int) $attributes['studio_session_id'] > 0
+                ? (int) $attributes['studio_session_id']
+                : null,
+            (bool) ($attributes['unrestricted_warning_acknowledged'] ?? false),
         );
     }
 

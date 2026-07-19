@@ -1,5 +1,38 @@
 <div
-    x-data
+    x-data="{
+        fallbackNotice: null,
+        fallbackNoticeTimer: null,
+        init() {
+            this.$dispatch('workflow-studio-pin-copilot');
+        },
+        destroy() {
+            window.clearTimeout(this.fallbackNoticeTimer);
+            this.$dispatch('workflow-studio-unpin-copilot');
+        },
+        showStudioNotice(event) {
+            const detail = Array.isArray(event.detail) ? (event.detail[0] || {}) : (event.detail || {});
+            const type = ['success', 'error', 'warning', 'info'].includes(detail.type) ? detail.type : 'info';
+            const message = String(detail.message || 'Workflow Studio wurde aktualisiert.');
+
+            if (window.Swal && typeof window.Swal.fire === 'function') {
+                window.Swal.fire({
+                    toast: true,
+                    position: 'top',
+                    icon: type,
+                    title: message,
+                    showConfirmButton: false,
+                    timer: type === 'error' ? 5200 : 3000,
+                    timerProgressBar: true,
+                });
+                return;
+            }
+
+            this.fallbackNotice = { type, message };
+            window.clearTimeout(this.fallbackNoticeTimer);
+            this.fallbackNoticeTimer = window.setTimeout(() => this.fallbackNotice = null, type === 'error' ? 5200 : 3000);
+        },
+    }"
+    x-on:workflow-studio-notice.window="showStudioNotice($event)"
     x-on:workflow-preview-task-selected.window="
         if (Number($event.detail.workflowId || 0) === {{ (int) $workflow->id }}) {
             $wire.selectTask(Number($event.detail.stepId || 0), String($event.detail.taskKey || ''));
@@ -12,7 +45,8 @@
     "
     x-on:workflow-studio-open-builder.window="$wire.openStudioPanel('builder')"
     data-workflow-studio-shell
-    class="{{ $embedded ? 'h-[100dvh]' : 'fixed inset-0 z-[70] h-[100dvh]' }} flex min-h-0 flex-col overflow-hidden bg-slate-100 text-slate-900"
+    data-workflow-studio-mode="{{ $embedded ? 'embedded' : 'standalone' }}"
+    class="{{ $embedded ? 'relative h-[100dvh]' : 'fixed inset-0 top-0 z-[70] h-[100dvh]' }} flex min-h-0 flex-col overflow-hidden bg-slate-100 text-slate-900"
     wire:poll.2s="refreshStudio"
 >
     @php
@@ -53,7 +87,7 @@
     <header class="relative z-30 shrink-0 border-b border-slate-200 bg-white shadow-sm">
         <div class="flex flex-wrap items-center gap-3 px-4 py-3 lg:px-6">
             @if($embedded)
-                <button type="button" wire:click="closeStudio" class="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-cyan-500">
+                <button type="button" x-on:click="$dispatch('workflow-studio-unpin-copilot')" wire:click="closeStudio" class="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-cyan-500">
                     <span aria-hidden="true">←</span> Manager
                 </button>
             @else
@@ -132,42 +166,38 @@
                 <div class="flex gap-2"><button type="button" wire:click="discardPendingAction" class="rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-bold text-amber-800">Verwerfen</button><button type="button" wire:click="confirmPendingAction" class="rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-bold text-white">Einmalig ausführen</button></div>
             </div>
         @endif
-        @if($lastActionResult)
-            <div class="border-t px-4 py-2 text-xs lg:px-6 {{ ($lastActionResult['status'] ?? '') === 'failed' ? 'border-rose-200 bg-rose-50 font-semibold text-rose-700' : 'border-cyan-100 bg-cyan-50 text-cyan-800' }}">{{ $lastActionResult['message'] ?? '' }}</div>
-        @endif
-        @error('studio')<div class="border-t border-rose-200 bg-rose-50 px-4 py-2 text-xs font-semibold text-rose-700 lg:px-6">{{ $message }}</div>@enderror
+        @error('studio')<span class="sr-only" role="alert">{{ $message }}</span>@enderror
     </header>
 
     @include('livewire.admin.network.workflow-studio.browser-windows')
-
-    <nav class="relative z-20 shrink-0 overflow-x-auto border-b border-slate-200 bg-white px-4 py-2 lg:px-6" aria-label="Testbereiche">
-        <div class="flex min-w-max items-center gap-1 rounded-xl bg-slate-100 p-1">
-            @foreach(($autonomousMode ? ['test' => 'Workflow-Vorschau', 'runtime' => 'Daten & Checkpoints'] : ['test' => 'Workflow-Vorschau', 'tools' => 'Browser & Selector', 'runtime' => 'Daten & Checkpoints']) as $tab => $label)
-                <button type="button" wire:click="$set('activeWorkspaceTab', '{{ $tab }}')" class="h-8 rounded-lg px-3 text-[11px] font-bold transition {{ $activeWorkspaceTab === $tab ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-500 hover:text-slate-800' }}">{{ $label }}</button>
-            @endforeach
-        </div>
-    </nav>
+    @include('livewire.admin.network.workflow-studio.tool-bar')
 
     <main class="relative min-h-0 flex-1 overflow-hidden bg-slate-100 p-3">
-        <div class="grid h-full min-h-0 gap-3 xl:grid-cols-[minmax(0,1fr)_360px]">
-            <section class="min-h-0 min-w-0" aria-label="Aktiver Testbereich">
-                @if($activeWorkspaceTab === 'tools' && ! $autonomousMode)
-                    @include('livewire.admin.network.workflow-studio.tools')
-                @elseif($activeWorkspaceTab === 'runtime')
-                    @include('livewire.admin.network.workflow-studio.runtime')
-                @else
-                    @include('livewire.admin.network.workflow-studio.browser')
-                @endif
-            </section>
-            <aside class="min-h-0 overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-sm" aria-label="Copilot">
-                @include('livewire.admin.network.workflow-studio.copilot-rail')
-            </aside>
-        </div>
+        <section class="h-full min-h-0 min-w-0" aria-label="Workflow-Vorschau und Live-Ausführung">
+            @include('livewire.admin.network.workflow-studio.browser')
+        </section>
 
         <div wire:loading.delay.flex wire:target="startRun,pauseRun,resumeRun,runSingleTask,stopRun,restartRun,runProbe,commitProbeAsTask,saveSessionDefinition,startCopilot,setPermissionMode,chooseControlMode" class="pointer-events-none absolute inset-0 z-50 hidden items-center justify-center bg-white/55 backdrop-blur-[1px]">
             <span class="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-700 shadow-xl"><span class="h-3 w-3 animate-spin rounded-full border-2 border-slate-300 border-t-cyan-600"></span>Test wird aktualisiert …</span>
         </div>
     </main>
+
+    <div x-cloak x-show="fallbackNotice" x-transition class="pointer-events-none absolute left-1/2 top-3 z-[80] w-[calc(100%_-_2rem)] max-w-[34rem] -translate-x-1/2 rounded-xl border bg-white px-4 py-3 text-sm font-semibold shadow-2xl" x-bind:class="fallbackNotice?.type === 'error' ? 'border-rose-200 text-rose-800' : (fallbackNotice?.type === 'success' ? 'border-emerald-200 text-emerald-800' : 'border-cyan-200 text-cyan-800')" role="status"><span x-text="fallbackNotice?.message"></span></div>
+
+    @if($activeToolModal !== '')
+        @include('livewire.admin.network.workflow-studio.tool-modal')
+    @endif
+
+    @if($showCopilotSettingsModal)
+        <div wire:key="workflow-studio-copilot-settings" wire:click.self="$set('showCopilotSettingsModal', false)" class="absolute inset-0 z-[64] flex items-center justify-center bg-slate-950/35 p-3 backdrop-blur-sm sm:p-6" role="dialog" aria-modal="true" aria-label="Copilot-Einstellungen">
+            <section class="flex max-h-full w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-white/70 bg-white shadow-2xl">
+                <header class="flex shrink-0 items-center justify-between gap-4 border-b border-slate-200 px-4 py-3 sm:px-5"><div><p class="text-[9px] font-black uppercase tracking-[0.18em] text-cyan-700">Workflow-Copilot</p><h2 class="mt-1 text-base font-bold text-slate-950">Einstellungen und Start</h2><p class="mt-1 text-xs text-slate-500">Ziel, Testkontext und Berechtigungen dieser Studio-Sitzung.</p></div><button type="button" wire:click="$set('showCopilotSettingsModal', false)" class="h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 hover:bg-slate-100">Schließen ×</button></header>
+                <div class="min-h-0 flex-1 overflow-y-auto">
+                    @include('livewire.admin.network.workflow-studio.copilot-rail')
+                </div>
+            </section>
+        </div>
+    @endif
 
     @if($activeStudioPanel === 'builder' && ! $autonomousMode)
         <div wire:key="workflow-studio-builder-modal" wire:click.self="closeStudioPanel" class="absolute inset-0 z-[65] flex items-stretch justify-center bg-slate-950/45 p-2 backdrop-blur-sm sm:p-5" role="dialog" aria-modal="true" aria-label="Workflow bearbeiten">

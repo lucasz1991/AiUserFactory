@@ -933,12 +933,19 @@ class WorkflowTaskCatalog
                 'runner' => 'node',
                 'node_script' => 'node/workflows/tasks/browser/press_key.cjs',
                 'timeout_seconds' => 30,
-                'description' => 'Sendet eine Playwright-kompatible Taste an das aktive Browserfenster.',
+                'description' => 'Sendet Enter oder Tab an das aktive Browserfenster. Browser-History und Reload sind eigenstaendige Navigations-Tasks.',
                 'form' => [
                     'selector' => false,
                     'value' => true,
+                    'value_required' => true,
+                    'value_type' => 'select',
                     'value_label' => 'Taste',
-                    'value_placeholder' => 'Enter, Escape, Tab oder Control+A',
+                    'value_placeholder' => 'Taste auswaehlen',
+                    'value_help' => 'Enter bestaetigt die aktuelle Eingabe; Tab setzt den Fokus auf das naechste bedienbare Element. Fuer Zurueck, Vorwaerts und Reload die jeweiligen Browser-Navigations-Tasks verwenden.',
+                    'value_options' => [
+                        'Enter' => 'Enter - bestaetigen oder absenden',
+                        'Tab' => 'Tab - zum naechsten Feld wechseln',
+                    ],
                     'url' => false,
                     'success_payload' => true,
                     'failure_payload' => true,
@@ -1773,9 +1780,11 @@ class WorkflowTaskCatalog
             $fields[] = array_filter([
                 'name' => $name,
                 'label' => (string) ($form[$name.'_label'] ?? $metadata['label']),
+                'type' => (string) ($form[$name.'_type'] ?? 'text'),
                 'required' => (bool) ($form[$metadata['required']] ?? false),
                 'explanation' => (string) ($form[$name.'_help'] ?? $form[$name.'_placeholder'] ?? ''),
-            ], static fn (mixed $value): bool => $value !== '');
+                'options' => is_array($form[$name.'_options'] ?? null) ? $form[$name.'_options'] : null,
+            ], static fn (mixed $value): bool => $value !== null && $value !== '');
         }
 
         foreach (is_array($form['extra_fields'] ?? null) ? $form['extra_fields'] : [] as $field) {

@@ -27,7 +27,7 @@ class WorkflowStudioCheckpointService
         $stepRun = $run->stepRuns()->latest('id')->first();
         $artifact = $run->artifacts()
             ->where('artifact_type', 'screenshot')
-            ->where('status', 'ready')
+            ->where('status', 'success')
             ->latest('id')
             ->first();
         $revision = WorkflowStudioRevision::query()
@@ -46,6 +46,7 @@ class WorkflowStudioCheckpointService
             'task_key' => $context['next_task_key'] ?? data_get($stepRun?->result_json, 'taskKey'),
             'step_run_id' => $stepRun?->getKey(),
             'run_status' => $run->status,
+            'workflow_revision' => (int) ($run->workflow_revision ?? $session->current_revision ?? $session->workflow->copilot_revision),
         ];
         $safeContext = $this->safeContext($context);
         $domSnapshot = data_get($artifact?->metadata_json, 'dom_snapshot');
@@ -178,6 +179,30 @@ class WorkflowStudioCheckpointService
         $checkpoint->forceFill(['is_reproducible' => false])->save();
     }
 
+    public function compatibility(
+        WorkflowStudioSession $session,
+        WorkflowStudioCheckpoint|int $checkpoint,
+    ): array {
+        try {
+            $checkpoint = $this->resolve($session, $checkpoint);
+            $this->assertCompatible($session, $checkpoint);
+
+            return [
+                'compatible' => true,
+                'reason' => null,
+                'revision' => $this->checkpointRevision($session, $checkpoint),
+            ];
+        } catch (DomainException $exception) {
+            return [
+                'compatible' => false,
+                'reason' => $exception->getMessage(),
+                'revision' => $checkpoint instanceof WorkflowStudioCheckpoint
+                    ? $this->checkpointRevision($session, $checkpoint)
+                    : null,
+            ];
+        }
+    }
+
     private function resolve(WorkflowStudioSession $session, WorkflowStudioCheckpoint|int $checkpoint): WorkflowStudioCheckpoint
     {
         $checkpoint = $checkpoint instanceof WorkflowStudioCheckpoint
@@ -197,10 +222,22 @@ class WorkflowStudioCheckpointService
             throw new DomainException('Dieser Checkpoint ist nicht reproduzierbar, weil die Browser-Sitzung nicht mehr erreichbar ist.');
         }
 
-        $checkpointRevision = (int) ($checkpoint->revision?->revision_number ?? $session->current_revision);
+        $checkpointRevision = $this->checkpointRevision($session, $checkpoint);
         if ($checkpointRevision !== (int) $session->workflow->copilot_revision) {
             throw new DomainException('Dieser Checkpoint ist nach strukturellen Workflow-Aenderungen inkompatibel.');
         }
+    }
+
+    private function checkpointRevision(WorkflowStudioSession $session, WorkflowStudioCheckpoint $checkpoint): int
+    {
+        $cursor = is_array($checkpoint->cursor_json) ? $checkpoint->cursor_json : [];
+
+        return (int) (
+            $cursor['workflow_revision']
+            ?? $checkpoint->revision?->revision_number
+            ?? $checkpoint->run?->workflow_revision
+            ?? $session->current_revision
+        );
     }
 
     private function decryptContext(WorkflowStudioCheckpoint $checkpoint): array

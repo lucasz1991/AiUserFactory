@@ -3,6 +3,7 @@
     x-data="{
         showChat: false,
         studioPinned: false,
+        studioChatWasOpen: false,
         draft: @entangle('message'),
         isLoading: @entangle('isLoading'),
         chatHistory: @entangle('chatHistory'),
@@ -71,8 +72,10 @@
             return await component.call(method, ...parameters);
         },
         init() {
+            const storedChatOpen = sessionStorage.getItem('workflow-copilot-open') === '1';
             this.studioPinned = Boolean(document.querySelector('[data-workflow-studio-shell]'));
-            this.showChat = this.studioPinned || sessionStorage.getItem('workflow-copilot-open') === '1';
+            this.studioChatWasOpen = storedChatOpen;
+            this.showChat = this.studioPinned || storedChatOpen;
             this.showImportPanel = false;
             this.clearVoiceCaptureState();
             this.autoRead = this.readBool('workflow-copilot-auto-read', this.autoRead);
@@ -179,6 +182,19 @@
             this.showImportPanel = false;
             this.stopSpeaking();
             this.stopListening();
+        },
+        pinStudioCopilot() {
+            if (!this.studioPinned) {
+                this.studioChatWasOpen = this.showChat;
+            }
+            this.studioPinned = true;
+            this.setOpen(true);
+        },
+        unpinStudioCopilot() {
+            const restoreOpen = this.studioChatWasOpen;
+            this.studioPinned = false;
+            this.showChat = restoreOpen;
+            this.syncDockLayout();
         },
         desktopDocked() {
             return window.matchMedia('(min-width: 1280px)').matches;
@@ -1202,7 +1218,8 @@
     x-on:assistant-ui-action.window="handleUiAction($event)"
     x-on:assistant-workflow-page-refresh.window="refreshWorkflowPage()"
     x-on:workflow-copilot-session-activated.window="const detail = normalizeEventDetail($event); const sessionId = Number(detail.sessionId || detail.session_id || 0); if (sessionId > 0) { setOpen(true); callLivewire('attachCopilotSession', sessionId); }"
-    x-on:workflow-studio-pin-copilot.window="studioPinned = true; setOpen(true)"
+    x-on:workflow-studio-pin-copilot.window="pinStudioCopilot()"
+    x-on:workflow-studio-unpin-copilot.window="unpinStudioCopilot()"
     x-on:assistant-reapply-workflow-improvements.window="queueImprovementHighlights()"
     x-on:keydown.escape.window="if (showChat) closeChat()"
     class="workflow-copilot"
@@ -1239,7 +1256,8 @@
             box-shadow: 0 0 0 7px rgba(14, 165, 233, .15), 0 18px 38px -22px rgba(3, 105, 161, .5);
         }
         @media (min-width: 1280px) {
-            body.workflow-copilot-docked [data-workflow-studio-shell] {
+            body.workflow-copilot-docked [data-workflow-test-workbench],
+            body.workflow-copilot-docked [data-workflow-studio-shell][data-workflow-studio-mode="standalone"] {
                 right: 30rem !important;
                 transition: right 200ms ease;
             }

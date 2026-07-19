@@ -6,6 +6,7 @@ use App\Models\Workflow;
 use App\Models\WorkflowCopilotSession;
 use App\Models\WorkflowRevision;
 use App\Models\WorkflowStep;
+use App\Models\WorkflowStudioRevision;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Str;
 
@@ -71,6 +72,10 @@ class WorkflowCopilotPromptContextService
         if ($session instanceof WorkflowCopilotSession) {
             $context['copilot_session'] = $this->sessionSnapshot($session);
             $context['runtime_state'] = $this->runtimeSnapshot($session, $checkpoint);
+            $preflight = data_get($session->state_json, 'history_preflight');
+            if (is_array($preflight)) {
+                $context['revision_learning']['latest_preflight'] = $preflight;
+            }
         }
 
         if ($currentStep instanceof WorkflowStep) {
@@ -97,7 +102,14 @@ class WorkflowCopilotPromptContextService
         string $goal,
         array $successCriteria,
         array $workflowInputs,
+        array $historyPreflight = [],
     ): array {
+        $revisionLearning = $this->revisionLearning($workflow);
+
+        if ($historyPreflight !== []) {
+            $revisionLearning['latest_preflight'] = $historyPreflight;
+        }
+
         return (array) $this->sanitizeContext([
             'context_version' => 2,
             'execution_contract' => $this->executionContract(),
@@ -115,7 +127,7 @@ class WorkflowCopilotPromptContextService
             'variable_provenance' => $this->variableProvenance($workflow, $workflowInputs),
             'workflow_task_catalog' => $this->taskCatalogSnapshot(),
             'workflow_task_catalog_index' => $this->taskCatalogIndex(),
-            'revision_learning' => $this->revisionLearning($workflow),
+            'revision_learning' => $revisionLearning,
         ]);
     }
 
@@ -182,6 +194,14 @@ class WorkflowCopilotPromptContextService
                 'Ein technisch beendeter Lauf ohne verlangten Rueckgabewert oder ohne erforderliche Sammlung ist nicht erfolgreich.',
             ],
         ];
+    }
+
+    /** @return list<array<string, mixed>> */
+    public function diagnostics(Workflow $workflow): array
+    {
+        $workflow->loadMissing(['steps' => fn ($query) => $query->ordered()]);
+
+        return $this->workflowDiagnostics($workflow);
     }
 
     public function workflowStructureDocumentation(): array
@@ -306,23 +326,50 @@ class WorkflowCopilotPromptContextService
 
     protected function revisionLearning(Workflow $workflow): array
     {
+        $copilotRevisions = WorkflowRevision::query()
+            ->where('workflow_id', $workflow->id)
+            ->latest('revision_number')
+            ->limit(80)
+            ->get()
+            ->map(fn (WorkflowRevision $revision): array => $this->revisionLearningEntry($revision, 'copilot'));
+        $studioRevisions = WorkflowStudioRevision::query()
+            ->where('workflow_id', $workflow->id)
+            ->latest('revision_number')
+            ->limit(80)
+            ->get()
+            ->map(fn (WorkflowStudioRevision $revision): array => $this->revisionLearningEntry($revision, 'studio'));
+
         return [
-            'revision_history' => WorkflowRevision::query()
-                ->where('workflow_id', $workflow->id)
-                ->latest('revision_number')
-                ->limit(80)
-                ->get()
-                ->map(fn (WorkflowRevision $revision): array => [
-                    'revision' => (int) $revision->revision_number,
-                    'parent_revision' => $revision->parent_revision_number,
-                    'actor' => (string) $revision->actor,
-                    'reason' => Str::limit((string) $revision->reason, 1000, ''),
-                    'verified' => (bool) $revision->is_verified,
-                    'diff' => $revision->diff_json,
-                    'created_at' => $revision->created_at?->toIso8601String(),
-                ])->all(),
+            'revision_history' => $copilotRevisions
+                ->concat($studioRevisions)
+                ->sortByDesc(fn (array $revision): string => sprintf(
+                    '%020d-%s-%020d',
+                    (int) $revision['revision'],
+                    (string) ($revision['created_at'] ?? ''),
+                    (int) $revision['id'],
+                ))
+                ->take(80)
+                ->values()
+                ->all(),
             'execution_evidence' => $this->revisionEvidence->relevantHistory((int) $workflow->id, 100),
             'instruction' => 'Nutze erfolgreiche Evidenz erneut, vermeide bekannte Fehlersignaturen und schwaeche Ziel oder Erfolgskriterien niemals ab.',
+        ];
+    }
+
+    protected function revisionLearningEntry(
+        WorkflowRevision|WorkflowStudioRevision $revision,
+        string $source,
+    ): array {
+        return [
+            'id' => (int) $revision->id,
+            'source' => $source,
+            'revision' => (int) $revision->revision_number,
+            'parent_revision' => $revision->parent_revision_number,
+            'actor' => (string) $revision->actor,
+            'reason' => Str::limit((string) $revision->reason, 1000, ''),
+            'verified' => (bool) $revision->is_verified,
+            'diff' => $revision->diff_json,
+            'created_at' => $revision->created_at?->toIso8601String(),
         ];
     }
 
@@ -394,6 +441,8 @@ class WorkflowCopilotPromptContextService
             'selector_required' => (bool) ($form['selector_required'] ?? false),
             'uses_value' => (bool) ($form['value'] ?? false),
             'value_required' => (bool) ($form['value_required'] ?? false),
+            'value_type' => trim((string) ($form['value_type'] ?? '')) ?: null,
+            'value_options' => is_array($form['value_options'] ?? null) ? array_keys($form['value_options']) : null,
             'uses_url' => (bool) ($form['url'] ?? false),
             'url_required' => (bool) ($form['url_required'] ?? false),
             'uses_browser_window' => (bool) ($form['browser_window'] ?? false),
@@ -611,6 +660,7 @@ class WorkflowCopilotPromptContextService
             $fields[] = array_filter([
                 'name' => $name,
                 'label' => (string) ($form[$name.'_label'] ?? $metadata['label']),
+                'type' => (string) ($form[$name.'_type'] ?? 'text'),
                 'required' => (bool) ($form[$metadata['required_key']] ?? false),
                 'placeholder' => (string) ($form[$name.'_placeholder'] ?? ''),
                 'options' => is_array($form[$name.'_options'] ?? null) ? $form[$name.'_options'] : null,

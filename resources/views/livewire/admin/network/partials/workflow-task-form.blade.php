@@ -18,8 +18,10 @@
         'value_required' => true,
         'value_source_control' => false,
         'value_label' => 'Wert',
+        'value_type' => 'text',
         'value_placeholder' => 'person.email oder fester Wert',
         'value_help' => '',
+        'value_options' => [],
         'url' => false,
         'url_label' => 'URL',
         'url_placeholder' => 'https://example.test',
@@ -383,7 +385,16 @@
                                     @endif
                                 >
                                     <label class="block text-sm font-medium text-gray-700">{{ $form['url'] ? $form['url_label'] : $form['value_label'] }}</label>
-                                    <input type="text" wire:model.defer="{{ $prefix }}InputValue" placeholder="{{ $form['url'] ? $form['url_placeholder'] : $form['value_placeholder'] }}" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                                    @if(! $form['url'] && ($form['value_type'] ?? 'text') === 'select')
+                                        <select wire:model.defer="{{ $prefix }}InputValue" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                                            <option value="">{{ $form['value_placeholder'] ?: 'Bitte waehlen' }}</option>
+                                            @foreach((array) ($form['value_options'] ?? []) as $optionValue => $optionLabel)
+                                                <option value="{{ $optionValue }}">{{ $optionLabel }}</option>
+                                            @endforeach
+                                        </select>
+                                    @else
+                                        <input type="text" wire:model.defer="{{ $prefix }}InputValue" placeholder="{{ $form['url'] ? $form['url_placeholder'] : $form['value_placeholder'] }}" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                                    @endif
                                     @if(! $form['url'] && ($form['value_help'] ?? '') !== '')
                                         <p class="mt-1 text-xs text-slate-500">{{ $form['value_help'] }}</p>
                                     @endif

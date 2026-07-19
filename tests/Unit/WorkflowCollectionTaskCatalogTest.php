@@ -34,6 +34,7 @@ class WorkflowCollectionTaskCatalogTest extends TestCase
     public function test_browser_navigation_tasks_are_registered_with_node_runner(): void
     {
         $catalog = new WorkflowTaskCatalog;
+        $visibleTaskKeys = collect($catalog->options())->pluck('key');
         $expected = [
             'browser.navigate_back' => 'node/workflows/tasks/browser/navigate_back.cjs',
             'browser.navigate_forward' => 'node/workflows/tasks/browser/navigate_forward.cjs',
@@ -46,7 +47,24 @@ class WorkflowCollectionTaskCatalogTest extends TestCase
             $this->assertNotNull($definition, $taskKey);
             $this->assertSame('node', $definition['runner'], $taskKey);
             $this->assertSame($script, $definition['node_script'], $taskKey);
+            $this->assertFalse((bool) data_get($definition, 'form.value'), $taskKey.' must not be modeled as a key press');
+            $this->assertContains($taskKey, $visibleTaskKeys, $taskKey.' must stay visible in the task form catalog');
         }
+    }
+
+    public function test_press_key_uses_a_bounded_enter_and_tab_select(): void
+    {
+        $definition = (new WorkflowTaskCatalog)->task('browser.press_key');
+
+        $this->assertNotNull($definition);
+        $this->assertTrue((bool) data_get($definition, 'form.value'));
+        $this->assertTrue((bool) data_get($definition, 'form.value_required'));
+        $this->assertSame('select', data_get($definition, 'form.value_type'));
+        $this->assertSame([
+            'Enter' => 'Enter - bestaetigen oder absenden',
+            'Tab' => 'Tab - zum naechsten Feld wechseln',
+        ], data_get($definition, 'form.value_options'));
+        $this->assertStringContainsString('Navigations-Tasks', data_get($definition, 'form.value_help'));
     }
 
     public function test_catalog_cards_include_task_specific_defaults(): void

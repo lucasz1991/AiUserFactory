@@ -7,6 +7,7 @@
     'selectedTaskKey' => null,
     'selectableTasks' => false,
     'expanded' => false,
+    'diagramOnly' => false,
 ])
 
 <div {{ $attributes }}>
@@ -18,6 +19,7 @@
         :selected-task-key="$selectedTaskKey"
         :selectable-tasks="$selectableTasks"
         :expanded="$expanded"
+        :diagram-only="$diagramOnly"
         :process-pid="$process?->pid"
         :process-type="$process?->process_type"
         :process-status="$process?->status"

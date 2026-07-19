@@ -35,6 +35,7 @@ class WorkflowCopilotSupervisorService
         protected WorkflowCopilotVisionService $vision,
         protected WorkflowCopilotPlanningService $planning,
         protected WorkflowCopilotRepairService $repairs,
+        protected WorkflowCopilotPreflightService $preflight,
         protected WorkflowCopilotPromptContextService $promptContexts,
         protected WorkflowRevisionService $revisions,
         protected WorkflowCopilotAiUsageTracker $aiUsage,
@@ -100,6 +101,28 @@ class WorkflowCopilotSupervisorService
         }
 
         if (! $run) {
+            $workflow = $session->workflow()->with('steps')->firstOrFail();
+            if ($this->planning->needsInitialPlan($workflow)
+                && ! is_array(data_get($session->state_json, 'history_preflight'))) {
+                $preflight = $this->captureCopilotAiUsage(
+                    $session,
+                    fn (): array => $this->preflight->prepare($session, false),
+                    'history_preflight',
+                );
+
+                if (! $preflight['ready']) {
+                    return;
+                }
+
+                $session = $preflight['session']->fresh(['workflow.steps']) ?? $preflight['session'];
+
+                if ($this->budgetExceeded($session)) {
+                    $this->exhaustBudget($session);
+
+                    return;
+                }
+            }
+
             $session = $this->createInitialWorkflowDefinition($session);
             $this->startRepairRun($session, $this->optimizationPlans->resumeContext($session));
 
@@ -1745,6 +1768,24 @@ class WorkflowCopilotSupervisorService
 
     protected function startRepairRun(WorkflowCopilotSession $session, array $resumeContext = []): void
     {
+        $preflight = $this->captureCopilotAiUsage(
+            $session,
+            fn (): array => $this->preflight->prepare($session, $resumeContext === []),
+            'history_preflight',
+        );
+
+        if (! $preflight['ready']) {
+            return;
+        }
+
+        $session = $preflight['session']->fresh() ?? $preflight['session'];
+
+        if ($this->budgetExceeded($session)) {
+            $this->exhaustBudget($session);
+
+            return;
+        }
+
         if ($session->status !== WorkflowCopilotSession::STATUS_RUNNING) {
             $session = $this->sessions->transition(
                 $session,
@@ -1765,6 +1806,9 @@ class WorkflowCopilotSupervisorService
             'workflow_variables' => $runtimeVariables,
             'workflow_copilot_session_id' => (int) $session->id,
             'workflow_revision' => (int) $session->current_revision,
+            'copilot_history_preflight' => is_array(data_get($session->state_json, 'history_preflight'))
+                ? data_get($session->state_json, 'history_preflight')
+                : [],
             'copilot_supervised' => true,
             'copilot_verification_run' => false,
             'execution_target' => 'system',
@@ -1844,6 +1888,9 @@ class WorkflowCopilotSupervisorService
                             (string) $session->goal,
                             is_array($session->success_criteria_json) ? $session->success_criteria_json : [],
                             is_array($session->workflow_inputs_json) ? $session->workflow_inputs_json : [],
+                            is_array(data_get($session->state_json, 'history_preflight'))
+                                ? data_get($session->state_json, 'history_preflight')
+                                : [],
                         );
                     },
                 );
@@ -1914,6 +1961,23 @@ class WorkflowCopilotSupervisorService
 
     protected function startVerification(WorkflowCopilotSession $session, WorkflowRun $repairRun): void
     {
+        $preflight = $this->captureCopilotAiUsage(
+            $session,
+            fn (): array => $this->preflight->prepare($session, false),
+            'history_preflight',
+        );
+
+        if (! $preflight['ready']) {
+            return;
+        }
+
+        $session = $preflight['session']->fresh() ?? $preflight['session'];
+
+        if ($this->budgetExceeded($session)) {
+            $this->exhaustBudget($session);
+
+            return;
+        }
         $workflowHash = $this->workflowSnapshotHash($session->workflow);
         $session = $this->sessions->transition(
             $session,
@@ -1928,6 +1992,9 @@ class WorkflowCopilotSupervisorService
             'workflow_variables' => $inputs,
             'workflow_copilot_session_id' => (int) $session->id,
             'workflow_revision' => (int) $session->current_revision,
+            'copilot_history_preflight' => is_array(data_get($session->state_json, 'history_preflight'))
+                ? data_get($session->state_json, 'history_preflight')
+                : [],
             'copilot_supervised' => true,
             'copilot_verification_run' => true,
             'copilot_mutations_allowed' => false,

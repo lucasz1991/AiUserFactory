@@ -795,7 +795,7 @@
         </x-ui.dialog-modal>
 
         @if($showTestWorkbenchModal && $selectedWorkflow)
-            <div class="fixed inset-0 z-[70] overflow-hidden bg-slate-100" role="dialog" aria-modal="true" aria-label="Workflow testen">
+            <div class="fixed inset-0 top-0 z-[70] overflow-hidden bg-slate-100" data-workflow-test-workbench role="dialog" aria-modal="true" aria-label="Workflow testen">
                 <livewire:admin.network.workflow-studio
                     :workflow="$selectedWorkflow"
                     :embedded="true"

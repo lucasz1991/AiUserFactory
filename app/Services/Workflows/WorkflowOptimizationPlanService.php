@@ -23,7 +23,11 @@ class WorkflowOptimizationPlanService
         return DB::transaction(function () use ($session, $blueprint): WorkflowOptimizationPlan {
             $studio = WorkflowStudioSession::query()
                 ->where('workflow_id', $session->workflow_id)
-                ->whereNull('workflow_copilot_session_id')
+                ->where(function ($query) use ($session): void {
+                    $query->where('workflow_copilot_session_id', $session->id)
+                        ->orWhereNull('workflow_copilot_session_id');
+                })
+                ->orderByRaw('CASE WHEN workflow_copilot_session_id = ? THEN 0 ELSE 1 END', [$session->id])
                 ->latest('id')
                 ->first();
             $items = collect($blueprint['steps'] ?? [])->flatMap(function (array $step, int $stepIndex): array {
@@ -52,7 +56,7 @@ class WorkflowOptimizationPlanService
                 $plan->items()->create([...$item, 'sequence' => $sequence + 1, 'status' => 'planned']);
             }
 
-            if ($studio) {
+            if ($studio && ! $studio->workflow_copilot_session_id) {
                 $studio->forceFill(['workflow_copilot_session_id' => $session->id])->save();
             }
 

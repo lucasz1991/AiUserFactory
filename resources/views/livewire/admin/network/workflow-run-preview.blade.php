@@ -1,5 +1,5 @@
 <div
-    class="space-y-4"
+    class="{{ $diagramOnly ? 'h-full min-h-0' : 'space-y-4' }}"
     data-assistant-highlight="run_preview:{{ $workflowRun?->id ?? 'empty' }}"
     data-assistant-highlight-key="{{ $workflowRun?->id ?? 'empty' }}"
     @if($polling) wire:poll.3s="refresh" @endif
@@ -114,16 +114,16 @@
                     });
                 },
             }"
-            class="space-y-4"
+            class="{{ $diagramOnly ? 'h-full min-h-0' : 'space-y-4' }}"
         >
-            @if($processSummary)
+            @if($processSummary && ! $diagramOnly)
                 <div class="rounded-md border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
                     <span class="font-semibold text-slate-900">Prozess:</span>
                     PID {{ $processSummary['pid'] ?? '-' }} · {{ $processSummary['process_type'] ?? '-' }} · {{ $processSummary['status'] ?? '-' }}
                 </div>
             @endif
 
-            <section class="w-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+            <section class="w-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm {{ $diagramOnly ? 'flex h-full min-h-0 flex-col' : '' }}">
                 <div class="flex min-w-0 items-center justify-between gap-4 border-b border-slate-100 px-4 py-3">
                     <div class="min-w-0">
                         <p class="text-[10px] font-semibold uppercase tracking-wide text-sky-600">Workflow-Vorschau</p>
@@ -136,26 +136,28 @@
                     </div>
                     <div class="flex shrink-0 items-center gap-2">
                         <x-workflows.status-badge :status="$workflowRun->status" />
-                        <button
-                            type="button"
-                            x-on:click="overviewOpen = !overviewOpen"
-                            x-bind:title="overviewOpen ? 'Minimieren' : 'Maximieren'"
-                            class="inline-flex h-9 w-9 items-center justify-center rounded-md border border-sky-200 bg-sky-50 text-sky-800 transition hover:bg-sky-100"
-                        >
-                            <svg x-show="!overviewOpen" xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                                <path d="M15 3h6v6"></path>
-                                <path d="m21 3-7 7"></path>
-                                <path d="M9 21H3v-6"></path>
-                                <path d="m3 21 7-7"></path>
-                            </svg>
-                            <svg x-cloak x-show="overviewOpen" xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                                <path d="M8 3v5H3"></path>
-                                <path d="m3 8 5-5"></path>
-                                <path d="M16 21v-5h5"></path>
-                                <path d="m21 16-5 5"></path>
-                            </svg>
-                            <span class="sr-only" x-text="overviewOpen ? 'Minimieren' : 'Maximieren'"></span>
-                        </button>
+                        @if(! $diagramOnly)
+                            <button
+                                type="button"
+                                x-on:click="overviewOpen = !overviewOpen"
+                                x-bind:title="overviewOpen ? 'Minimieren' : 'Maximieren'"
+                                class="inline-flex h-9 w-9 items-center justify-center rounded-md border border-sky-200 bg-sky-50 text-sky-800 transition hover:bg-sky-100"
+                            >
+                                <svg x-show="!overviewOpen" xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                    <path d="M15 3h6v6"></path>
+                                    <path d="m21 3-7 7"></path>
+                                    <path d="M9 21H3v-6"></path>
+                                    <path d="m3 21 7-7"></path>
+                                </svg>
+                                <svg x-cloak x-show="overviewOpen" xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                    <path d="M8 3v5H3"></path>
+                                    <path d="m3 8 5-5"></path>
+                                    <path d="M16 21v-5h5"></path>
+                                    <path d="m21 16-5 5"></path>
+                                </svg>
+                                <span class="sr-only" x-text="overviewOpen ? 'Minimieren' : 'Maximieren'"></span>
+                            </button>
+                        @endif
                     </div>
                 </div>
 
@@ -222,8 +224,8 @@
                     </div>
                 </div>
 
-                <div x-cloak x-show="overviewOpen" x-collapse.duration.180ms class="bg-white">
-                    <div class="px-4 py-3" x-ref="maximizedWorkflowMap">
+                <div x-cloak x-show="overviewOpen" x-collapse.duration.180ms class="{{ $diagramOnly ? 'min-h-0 flex-1 overflow-auto bg-slate-50' : 'bg-white' }}" @if($diagramOnly) style="background-image: linear-gradient(rgba(203,213,225,.20) 1px, transparent 1px), linear-gradient(90deg, rgba(203,213,225,.20) 1px, transparent 1px), linear-gradient(rgba(148,163,184,.18) 1px, transparent 1px), linear-gradient(90deg, rgba(148,163,184,.18) 1px, transparent 1px); background-size: 20px 20px, 20px 20px, 100px 100px, 100px 100px;" @endif>
+                    <div class="px-4 py-3 {{ $diagramOnly ? 'min-h-full' : '' }}" x-ref="maximizedWorkflowMap">
                         <x-workflows.minimap
                             :workflow-run="$workflowRun"
                             :active-step-id="$activeStepId"
@@ -237,6 +239,7 @@
                 </div>
             </section>
 
+            @if(! $diagramOnly)
             @if($embeddedCards->isNotEmpty())
                 <section class="space-y-2">
                     @foreach($embeddedCards as $card)
@@ -806,6 +809,7 @@
                     @endif
                 </div>
             </section>
+            @endif
         </div>
     @endif
 </div>

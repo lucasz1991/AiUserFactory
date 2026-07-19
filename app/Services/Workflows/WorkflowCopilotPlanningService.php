@@ -51,8 +51,9 @@ class WorkflowCopilotPlanningService
         string $goal,
         array $successCriteria = [],
         array $workflowInputs = [],
+        array $historyPreflight = [],
     ): array {
-        $normalized = $this->plan($workflow, $goal, $successCriteria, $workflowInputs);
+        $normalized = $this->plan($workflow, $goal, $successCriteria, $workflowInputs, $historyPreflight);
 
         return $this->applyPlan($workflow, $goal, $normalized, $successCriteria, $workflowInputs);
     }
@@ -67,13 +68,14 @@ class WorkflowCopilotPlanningService
         string $goal,
         array $successCriteria = [],
         array $workflowInputs = [],
+        array $historyPreflight = [],
     ): array {
         if (! $this->needsInitialPlan($workflow)) {
             throw new RuntimeException('Eine Erstplanung ist nur fuer einen Workflow ohne konfigurierte Tasks erlaubt.');
         }
 
         $plan = $this->ai->json(
-            $this->planningPrompt($workflow, $goal, $successCriteria, $workflowInputs),
+            $this->planningPrompt($workflow, $goal, $successCriteria, $workflowInputs, $historyPreflight),
             implode(' ', [
                 'Du planst einen ausfuehrbaren AiUserFactory-Workflow ausschliesslich aus dem gelieferten WorkflowTaskCatalog.',
                 'Antworte nur als JSON. Erfinde keine Task-Keys, Quellcode-Skripte oder nicht vorhandenen Funktionen.',
@@ -167,12 +169,14 @@ class WorkflowCopilotPlanningService
         string $goal,
         array $successCriteria,
         array $workflowInputs,
+        array $historyPreflight = [],
     ): string {
         $context = $this->promptContexts->forInitialPlanning(
             $workflow,
             $goal,
             $successCriteria,
             $workflowInputs,
+            $historyPreflight,
         );
 
         return implode("\n", [

@@ -37,6 +37,8 @@ class WorkflowRunPreview extends Component
 
     public bool $expanded = false;
 
+    public bool $diagramOnly = false;
+
     public ?string $processPid = null;
 
     public ?string $processType = null;
@@ -53,6 +55,7 @@ class WorkflowRunPreview extends Component
         ?string $selectedTaskKey = null,
         bool $selectableTasks = false,
         bool $expanded = false,
+        bool $diagramOnly = false,
         int|string|null $processPid = null,
         ?string $processType = null,
         ?string $processStatus = null,
@@ -64,6 +67,7 @@ class WorkflowRunPreview extends Component
         $this->selectedTaskKey = $selectedTaskKey !== null ? trim($selectedTaskKey) : null;
         $this->selectableTasks = $selectableTasks;
         $this->expanded = $expanded;
+        $this->diagramOnly = $diagramOnly;
         $this->processPid = is_scalar($processPid) ? (string) $processPid : null;
         $this->processType = $processType !== null ? trim($processType) : null;
         $this->processStatus = $processStatus !== null ? trim($processStatus) : null;

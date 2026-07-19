@@ -241,39 +241,50 @@ class WorkflowStudioTest extends TestCase
         $this->assertCount(2, $step->fresh()->task_cards);
     }
 
-    public function test_unified_studio_renders_the_known_preview_tabs_and_permanent_copilot(): void
+    public function test_unified_studio_renders_a_diagram_first_workbench_with_fixed_tools_and_copilot_settings(): void
     {
         [$workflow] = $this->workflow();
         $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
         $this->actingAs($admin);
 
         Livewire::test(WorkflowStudio::class, ['workflow' => $workflow])
-            ->assertSee('Workflow-Vorschau & Live-Ausführung', false)
+            ->assertSee('Workflow-Vorschau und Live-Ausführung', false)
             ->assertSee('Bis Ende starten')
             ->assertSee('Eine Task')
             ->assertSeeHtml('wire:click="stopRun"')
             ->assertDontSeeHtml('wire:click="terminateRun"')
-            ->assertSee('Workflow-Vorschau')
-            ->assertSee('Browser & Selector')
-            ->assertSee('Daten & Checkpoints')
             ->assertSee('Browserfenster')
             ->assertSee('Selector prüfen')
-            ->assertSee('Immer bereit')
+            ->assertSee('Selektoren')
+            ->assertSee('Daten')
+            ->assertSee('Checkpoints')
+            ->assertSee('Logs')
+            ->assertSee('Debug')
+            ->assertSee('Schritte')
+            ->assertSee('Tasks')
+            ->assertSee('Variablen')
+            ->assertSee('Artefakte')
+            ->assertSee('Copilot-Einstellungen')
             ->assertSee('Eigenes Testen')
             ->assertSee('Autonomer Copilot')
-            ->assertSee('Kritisch nachfragen')
             ->assertDontSee('Workflow-Outline')
             ->assertDontSee('Checkpoints verwalten')
-            ->assertDontSeeHtml('wire:model="showCheckpointsModal"');
+            ->assertDontSeeHtml('wire:model="showCheckpointsModal"')
+            ->set('showCopilotSettingsModal', true)
+            ->assertSee('Immer bereit')
+            ->assertSee('Kritisch nachfragen');
 
         Livewire::test(WorkflowStudio::class, ['workflow' => $workflow])
             ->call('openSelectorProbe', 'main')
             ->assertSet('probeBrowserWindow', 'main')
             ->assertSet('showSelectorProbeModal', true)
-            ->assertSee('Selector-Prüfung');
+            ->assertSee('Selector-Prüfung')
+            ->set('probeAction', 'probe.keypress')
+            ->assertSet('probeValue', 'Enter')
+            ->assertSeeHtml('<option value="Tab">Tab</option>');
     }
 
-    public function test_browser_tools_are_a_workspace_tab_and_only_builder_uses_a_modal(): void
+    public function test_diagnostic_tools_and_builder_use_scoped_modals(): void
     {
         [$workflow] = $this->workflow();
         $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
@@ -281,9 +292,14 @@ class WorkflowStudioTest extends TestCase
 
         Livewire::test(WorkflowStudio::class, ['workflow' => $workflow])
             ->assertSet('activeStudioPanel', '')
-            ->assertSet('activeWorkspaceTab', 'test')
-            ->set('activeWorkspaceTab', 'tools')
-            ->assertSee('Browserwerkzeuge')
+            ->assertSet('activeToolModal', '')
+            ->call('openToolModal', 'browser')
+            ->assertSet('activeToolModal', 'browser')
+            ->assertSee('Live-Vorschauen, URLs und DOM-Zugriffe')
+            ->call('closeToolModal')
+            ->assertSet('activeToolModal', '')
+            ->call('openToolModal', 'invalid-tool')
+            ->assertSet('activeToolModal', '')
             ->call('openStudioPanel', 'tools')
             ->assertSet('activeStudioPanel', '')
             ->call('openStudioPanel', 'builder')
@@ -407,7 +423,9 @@ class WorkflowStudioTest extends TestCase
             'event_type' => 'run.restarted',
             'message' => 'Workflow-Test wurde neu gestartet.',
         ]);
-        $component->assertSee('Workflow-Test wurde neu gestartet.');
+        $component->assertDispatched('workflow-studio-notice', function (string $name, array $parameters): bool {
+            return ($parameters['message'] ?? null) === 'Workflow-Test wurde neu gestartet.';
+        });
         Queue::assertPushed(RunWorkflowJob::class, 1);
     }
 

@@ -6,11 +6,13 @@ use App\Enums\WorkflowCopilotPermissionMode;
 use App\Models\Setting;
 use App\Models\User;
 use App\Models\Workflow;
+use App\Models\WorkflowCopilotSession;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowStudioEvent;
 use App\Models\WorkflowStudioSession;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use DomainException;
 
 class WorkflowStudioSessionService
 {
@@ -111,6 +113,48 @@ class WorkflowStudioSessionService
             'workflow_run_id' => (int) $run->getKey(),
             'run_uuid' => $run->run_uuid,
         ]);
+    }
+
+    public function attachCopilotSession(
+        WorkflowStudioSession $studio,
+        WorkflowCopilotSession $copilot,
+    ): WorkflowStudioSession {
+        if ((int) $studio->workflow_id !== (int) $copilot->workflow_id) {
+            throw new DomainException('Studio- und Copilot-Sitzung gehoeren nicht zum selben Workflow.');
+        }
+
+        $studio = DB::transaction(function () use ($studio, $copilot): WorkflowStudioSession {
+            $locked = WorkflowStudioSession::query()->lockForUpdate()->findOrFail($studio->getKey());
+
+            if ($locked->workflow_copilot_session_id
+                && (int) $locked->workflow_copilot_session_id !== (int) $copilot->getKey()) {
+                throw new DomainException('Die Studio-Sitzung ist bereits mit einer anderen Copilot-Sitzung verbunden.');
+            }
+
+            $locked->forceFill([
+                'workflow_copilot_session_id' => $copilot->getKey(),
+                'mode' => 'autonomous',
+                'control_owner' => 'copilot',
+                'status' => 'running',
+                'goal' => $copilot->goal,
+                'success_criteria_json' => $copilot->success_criteria_json,
+                'workflow_inputs_json' => $copilot->workflow_inputs_json,
+                'budget_json' => $copilot->budget_json,
+                'started_at' => $locked->started_at ?: now(),
+                'last_activity_at' => now(),
+            ])->save();
+
+            return $locked->fresh() ?? $locked;
+        });
+
+        $this->appendEvent(
+            $studio,
+            'copilot.attached',
+            'Autonome Copilot-Sitzung wurde vor dem ersten Supervisor-Durchlauf mit dem Studio verbunden.',
+            ['workflow_copilot_session_id' => (int) $copilot->getKey()],
+        );
+
+        return $studio->fresh() ?? $studio;
     }
 
     public function appendEvent(
