@@ -18,7 +18,7 @@
     $hasFailedRoute = is_array(data_get($task, 'on_error'));
 @endphp
 
-<div {{ $attributes->merge(['class' => 'relative w-full min-w-0 max-w-full rounded-lg border border-slate-200 bg-white px-3 py-3 shadow-sm transition hover:-translate-y-px hover:border-slate-300 hover:shadow-md']) }}>
+<div {{ $attributes->merge(['class' => 'relative w-full min-w-0 max-w-full rounded-lg border border-slate-300 bg-white px-3 py-3 shadow-sm transition hover:-translate-y-px hover:border-slate-400 hover:shadow-md']) }}>
     @if($showPorts)
         <span class="absolute -left-[5px] top-1/2 z-30 h-2.5 w-2.5 -translate-y-1/2 rounded-full border-2 border-white bg-slate-400 shadow-sm" title="Eingang" aria-hidden="true"></span>
         <span class="absolute -right-[5px] top-[40%] z-30 h-2.5 w-2.5 -translate-y-1/2 rounded-full border-2 border-white bg-emerald-500 shadow-sm" title="Erfolg" aria-hidden="true"></span>
