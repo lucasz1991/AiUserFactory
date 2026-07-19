@@ -180,6 +180,15 @@ class WorkflowStudio extends Component
         });
     }
 
+    public function unlockControlMode(): void
+    {
+        $this->perform('control.mode_unlocked', function (): array {
+            app(WorkflowStudioControlService::class)->release($this->session());
+
+            return $this->result('ready', 'Testmodus wurde entsperrt. Der Modus kann neu gewaehlt werden.');
+        });
+    }
+
     public function saveSessionDefinition(): void
     {
         $this->perform('session.saved', function (): array {

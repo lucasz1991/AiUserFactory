@@ -126,7 +126,16 @@ class WorkflowExecutionService
                 ]);
             }
 
-            if (! $lockedWorkflow->is_active && ! $copilotSession) {
+            // Copilot-/Studio-Optimierungs- und Testlaeufe duerfen auch einen noch
+            // inaktiven (Entwurfs-)Workflow ausfuehren – genau das ist der Zweck der
+            // Optimierung vor der Aktivierung. Nur echte Fremdlaeufe (Manager/Scheduler)
+            // eines deaktivierten Workflows werden weiterhin blockiert.
+            $isOptimizationOrTestRun = $copilotSession !== null
+                || $studioSession !== null
+                || $studioSessionId > 0
+                || in_array($requestedBy, ['workflow-copilot', 'workflow-studio'], true);
+
+            if (! $lockedWorkflow->is_active && ! $isOptimizationOrTestRun) {
                 throw new \RuntimeException('Dieser Workflow ist deaktiviert.');
             }
 

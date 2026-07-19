@@ -447,7 +447,7 @@ class WorkflowStudioTaskEditor extends WorkflowManager
     {
         $session = WorkflowStudioSession::query()->findOrFail($this->studioSessionId);
 
-        if ($session->mode === 'autonomous' && $session->mode_locked_at) {
+        if ($session->mode === 'autonomous' && $session->mode_locked_at && ! $session->finished_at) {
             return false;
         }
 

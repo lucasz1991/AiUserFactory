@@ -68,9 +68,39 @@ class WorkflowStudioControlService
     {
         $session->refresh();
 
-        if ($session->mode === 'autonomous' && $session->mode_locked_at) {
+        // Die Sperre gilt nur solange die Sitzung wirklich laeuft. Eine beendete
+        // Sitzung (finished_at gesetzt) darf manuelle Aktionen nie mehr blockieren,
+        // sonst bleibt eine tote autonome Sitzung fuer immer gesperrt.
+        if ($session->mode === 'autonomous' && $session->mode_locked_at && ! $session->finished_at) {
             throw new DomainException('Der autonome Testmodus ist fest aktiv. Laufsteuerung und Workflow-Aenderungen gehoeren bis zum Sitzungsende dem Copiloten.');
         }
+    }
+
+    /**
+     * Hebt die Modus-Sperre einer Sitzung manuell auf, damit der Testmodus neu
+     * gewaehlt werden kann. Erzeugt ein neues (append-only) Audit-Event.
+     */
+    public function release(WorkflowStudioSession $session, ?string $reason = null): WorkflowStudioSession
+    {
+        $session->refresh();
+
+        if (! $session->mode_locked_at) {
+            return $session;
+        }
+
+        $session->forceFill([
+            'mode_locked_at' => null,
+            'last_activity_at' => now(),
+        ])->save();
+
+        app(WorkflowStudioSessionService::class)->appendEvent(
+            $session,
+            'control.unlocked',
+            $reason ?: 'Testmodus wurde manuell entsperrt und kann neu gewaehlt werden.',
+            ['mode' => $session->mode],
+        );
+
+        return $session->fresh() ?? $session;
     }
 
     public function isAutonomous(WorkflowStudioSession $session): bool

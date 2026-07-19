@@ -82,7 +82,12 @@
                 </button>
             </div>
             @if($modeLocked)
-                <span class="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 text-[10px] font-bold text-slate-600" title="Der Modus bleibt bis zum Ende dieser Sitzung fest">Modus gesperrt</span>
+                <button type="button" wire:click="unlockControlMode"
+                        wire:confirm="Testmodus fuer diese Sitzung entsperren? Der Modus kann danach neu gewaehlt werden."
+                        class="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 text-[10px] font-bold text-slate-600 transition hover:border-cyan-300 hover:bg-cyan-50 hover:text-cyan-800"
+                        title="Modus ist festgeschrieben – hier entsperren, um ihn neu zu waehlen">
+                    Modus gesperrt · entsperren
+                </button>
             @endif
         </div>
 

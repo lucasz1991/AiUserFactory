@@ -19,6 +19,11 @@ class WorkflowDefinitionValidator
         $workflow->loadMissing(['steps' => fn ($query) => $query->ordered()]);
         $steps = $workflow->steps->filter(fn (WorkflowStep $step): bool => (bool) $step->is_enabled)->values();
         $stepKeys = $steps->pluck('action_key')->filter()->map(fn ($key): string => (string) $key)->all();
+        // Reihenfolge-Position je Step, um unbegrenzte Rueckwaertsspruenge
+        // (Retry-Zyklen ohne Ausstieg) erkennen zu koennen.
+        $stepPositions = $steps->values()
+            ->mapWithKeys(fn (WorkflowStep $step, int $index): array => [(string) $step->action_key => $index])
+            ->all();
         $taskKeysByStep = $steps->mapWithKeys(fn (WorkflowStep $step): array => [
             (string) $step->action_key => collect($step->task_cards)
                 ->pluck('key')
@@ -78,7 +83,7 @@ class WorkflowDefinitionValidator
                 }
 
                 foreach ($this->routes($task) as $field => $route) {
-                    $this->validateRoute($diagnostics, $step, $cardKey, $field, $route, $stepKeys, $taskKeysByStep);
+                    $this->validateRoute($diagnostics, $step, $cardKey, $field, $route, $stepKeys, $taskKeysByStep, $stepPositions);
                 }
 
                 if ($catalogKey === 'data.workflow_return') {
@@ -162,7 +167,7 @@ class WorkflowDefinitionValidator
             }
 
             foreach (is_array(data_get($step->config_json, 'routes')) ? data_get($step->config_json, 'routes') : [] as $field => $route) {
-                $this->validateRoute($diagnostics, $step, null, 'routes.'.$field, $route, $stepKeys, $taskKeysByStep);
+                $this->validateRoute($diagnostics, $step, null, 'routes.'.$field, $route, $stepKeys, $taskKeysByStep, $stepPositions);
             }
         }
 
@@ -305,7 +310,7 @@ class WorkflowDefinitionValidator
         return json_last_error() === JSON_ERROR_NONE && is_array($decoded);
     }
 
-    private function validateRoute(array &$diagnostics, WorkflowStep $step, ?string $cardKey, string $field, mixed $route, array $stepKeys, array $taskKeysByStep): void
+    private function validateRoute(array &$diagnostics, WorkflowStep $step, ?string $cardKey, string $field, mixed $route, array $stepKeys, array $taskKeysByStep, array $stepPositions = []): void
     {
         if (! is_array($route)) {
             return;
@@ -334,13 +339,51 @@ class WorkflowDefinitionValidator
                 $diagnostics[] = $this->diagnostic('error', 'route_task_missing', $step, $cardKey, $field, 'Die Ziel-Task `'.$targetTask.'` existiert in der Zielliste nicht.', 'Einen vorhandenen Karten-Key der Zielliste verwenden.');
             }
         }
+        $attemptLimit = max(0, (int) ($route['max_attempts'] ?? $route['retry_limit'] ?? 0));
+
         if ($cardKey !== null
             && $targetTask === $cardKey
             && $effectiveStep === (string) $step->action_key
-            && max(0, (int) ($route['max_attempts'] ?? $route['retry_limit'] ?? 0)) === 0
+            && $attemptLimit === 0
         ) {
             $diagnostics[] = $this->diagnostic('error', 'unsafe_self_route', $step, $cardKey, $field, 'Die Task routet ohne nachweisbare Zustandsaenderung auf sich selbst.', 'Ein anderes Ziel verwenden oder einen begrenzten Retry-Mechanismus konfigurieren.');
         }
+
+        // Selbstbezug auf Listenebene: Die Route zeigt ohne konkrete Ziel-Task auf
+        // die eigene Liste und startet sie dadurch endlos von vorn.
+        if ($targetTask === ''
+            && $targetStep !== ''
+            && $targetStep !== 'next'
+            && $targetStep === (string) $step->action_key
+            && $attemptLimit === 0
+        ) {
+            $diagnostics[] = $this->diagnostic('error', 'unsafe_self_route', $step, $cardKey, $field, 'Die Route zeigt ohne Ziel-Task auf die eigene Liste zurueck und wiederholt sie dadurch endlos.', 'Auf die naechste Liste, eine konkrete Ziel-Task oder type=end/fail routen bzw. ein Retry-Limit setzen.');
+        }
+
+        // Unbegrenzter Rueckwaertssprung einer Fehlerroute: bildet mit der
+        // fehlschlagenden Task einen geschlossenen Wiederholungszyklus ohne
+        // Ausstieg. Bewusst nur fuer Fehlerrouten – fachliche IF-/Abzweigungs-
+        // routen duerfen laut Ausfuehrungsvertrag rueckwaerts zeigen.
+        if ($this->isFailureRouteField($field)
+            && $targetStep !== ''
+            && $targetStep !== 'next'
+            && $targetStep !== (string) $step->action_key
+            && $attemptLimit === 0
+            && array_key_exists($targetStep, $stepPositions)
+            && array_key_exists((string) $step->action_key, $stepPositions)
+            && $stepPositions[$targetStep] < $stepPositions[(string) $step->action_key]
+        ) {
+            $diagnostics[] = $this->diagnostic('error', 'unbounded_backward_retry_route', $step, $cardKey, $field, 'Die Fehlerroute springt ohne Versuchsbegrenzung auf die frueher liegende Liste `'.$targetStep.'` zurueck und kann dadurch einen endlosen Wiederholungszyklus bilden.', 'Ein Retry-Limit (max_attempts) setzen oder auf eine Folgeliste bzw. type=end/fail routen.');
+        }
+    }
+
+    private function isFailureRouteField(string $field): bool
+    {
+        $normalized = strtolower($field);
+
+        return str_contains($normalized, 'on_error')
+            || str_contains($normalized, 'failed')
+            || str_contains($normalized, 'error');
     }
 
     private function routes(array $task): array

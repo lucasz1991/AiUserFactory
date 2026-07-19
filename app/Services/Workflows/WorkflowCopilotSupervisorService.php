@@ -694,6 +694,82 @@ class WorkflowCopilotSupervisorService
         }
 
         if ((bool) ($checkpoint['successful'] ?? false)) {
+            // Maskierte Task-Fehler sichtbar machen: Ein Step meldet auch dann "ok",
+            // wenn eine Task fehlschlug und lediglich eine Fehlerroute gefolgt ist.
+            // Ohne diesen Hinweis sieht die Optimierung nur "erfolgreich" und kann
+            // die eigentliche Ursache weder erkennen noch reparieren. Die
+            // Routen-Semantik bleibt unveraendert – dies ist reine Diagnose.
+            $maskedFailures = $this->maskedTaskFailures($checkpoint);
+
+            if ($maskedFailures !== []) {
+                $this->sessions->appendEvent(
+                    $session,
+                    'checkpoint.task_failure_masked',
+                    'Der Step meldet Erfolg, obwohl '.count($maskedFailures).' Task(s) fehlgeschlagen sind: '.implode('; ', array_map(
+                        static fn (array $item): string => trim(($item['key'] ?: $item['task_key']).' – '.$item['status_message']),
+                        $maskedFailures,
+                    )),
+                    [
+                        'workflow_run_id' => (int) $run->id,
+                        'task_attempt_id' => (int) $attempt->id,
+                        'checkpoint_id' => (int) $storedCheckpoint->id,
+                        'failed_tasks' => $maskedFailures,
+                        'technical_success' => true,
+                    ],
+                    'executing',
+                    'warning',
+                );
+            }
+
+            // No-Progress-Sperre: Auch wenn Tasks technisch "erfolgreich" melden, darf
+            // eine unveraenderte Seite nicht endlos fortgesetzt werden. Erreicht der
+            // Stillstands-Zaehler das Limit, wird der Checkpoint als fachlicher Fehler
+            // in die Strukturreparatur umgeleitet (analog Consent-/Business-Gap), statt
+            // den Kreislauf 77x zu wiederholen.
+            $progressSession = $session->fresh() ?? $session;
+            $maxSameStateRepeats = max(1, (int) data_get($progressSession->budget_json, 'max_same_state_repeats', 2));
+            $sameStateRepeats = (int) data_get($progressSession->usage_json, 'same_state_repeats', 0);
+
+            if ($sameStateRepeats >= $maxSameStateRepeats) {
+                $this->sessions->appendEvent(
+                    $session,
+                    'checkpoint.no_progress',
+                    'Kein Fortschritt: Dieselbe Seite wurde '.$sameStateRepeats.'x ohne Aenderung erneut erreicht, obwohl die Tasks technisch erfolgreich meldeten. Es wird eine Strukturreparatur ausgeloest.',
+                    [
+                        'workflow_run_id' => (int) $run->id,
+                        'task_attempt_id' => (int) $attempt->id,
+                        'checkpoint_id' => (int) $storedCheckpoint->id,
+                        'task_key' => $checkpoint['task_key'] ?? null,
+                        'same_state_repeats' => $sameStateRepeats,
+                        'max_same_state_repeats' => $maxSameStateRepeats,
+                        'technical_success' => true,
+                        'requires_workflow_repair' => true,
+                    ],
+                    'repairing',
+                    'warning',
+                    true,
+                );
+                $stalledCheckpoint = $checkpoint;
+                $stalledCheckpoint['successful'] = false;
+                $stalledCheckpoint['outcome'] = 'no_progress';
+                $stalledResult = is_array($stalledCheckpoint['result'] ?? null) ? $stalledCheckpoint['result'] : [];
+                $stalledResult['technicalSuccess'] = true;
+                $stalledResult['noProgress'] = true;
+                $stalledResult['sameStateRepeats'] = $sameStateRepeats;
+                $stalledResult['statusMessage'] = 'Kein Fortschritt: gleiche Seite wiederholt sich ohne Aenderung.';
+                $stalledCheckpoint['result'] = $stalledResult;
+                $this->repairFailedCheckpoint(
+                    $session->fresh() ?? $session,
+                    $run->fresh() ?? $run,
+                    $stepRun->workflowStep,
+                    $stalledCheckpoint,
+                    $observation,
+                    $vision,
+                );
+
+                return;
+            }
+
             if ($this->timeBudgetExceeded($session->fresh() ?? $session)) {
                 $this->exhaustBudget($session->fresh() ?? $session);
 
@@ -743,6 +819,38 @@ class WorkflowCopilotSupervisorService
         }
 
         $this->repairFailedCheckpoint($session->fresh() ?? $session, $run->fresh() ?? $run, $stepRun->workflowStep, $checkpoint, $observation, $vision);
+    }
+
+    /**
+     * Tasks, die im Checkpoint-Ergebnis als fehlgeschlagen gemeldet sind, obwohl
+     * der Step insgesamt Erfolg meldet (z. B. weil eine Fehlerroute gefolgt ist).
+     *
+     * @return array<int, array<string, string>>
+     */
+    protected function maskedTaskFailures(array $checkpoint): array
+    {
+        $result = is_array($checkpoint['result'] ?? null) ? $checkpoint['result'] : [];
+        $failures = [];
+
+        foreach (is_array($result['tasks'] ?? null) ? $result['tasks'] : [] as $task) {
+            if (! is_array($task)) {
+                continue;
+            }
+
+            $status = strtolower(trim((string) ($task['status'] ?? '')));
+
+            if ($status !== 'failed' && ($task['ok'] ?? null) !== false) {
+                continue;
+            }
+
+            $failures[] = [
+                'key' => (string) ($task['key'] ?? ''),
+                'task_key' => (string) ($task['task_key'] ?? ''),
+                'status_message' => (string) ($task['statusMessage'] ?? $task['status_message'] ?? ''),
+            ];
+        }
+
+        return $failures;
     }
 
     protected function successfulCheckpointBusinessGap(
@@ -2220,7 +2328,7 @@ class WorkflowCopilotSupervisorService
         }
 
         if (! is_array($assertion)) {
-            return $this->assertionResult($index, 'unsupported', 'equals', null, false, 'Assertion besitzt kein unterstuetztes Format.');
+            return $this->assertionResult($index, 'unsupported', 'equals', null, false, 'Erfolgskriterium besitzt kein pruefbares Format und kann daher nie bestehen. Bitte pruefbar formulieren, z. B. "URL enthaelt /erfolg" oder "Text X ist sichtbar".');
         }
 
         $type = Str::lower(trim((string) ($assertion['type'] ?? 'unsupported')));
@@ -2290,7 +2398,7 @@ class WorkflowCopilotSupervisorService
                     $operator ?: 'equals',
                     $path,
                     false,
-                    'Assertion-Typ wird nicht deterministisch unterstuetzt.',
+                    'Erfolgskriterium ist nicht automatisch pruefbar und kann daher nie bestehen. Bitte pruefbar formulieren, z. B. "URL enthaelt /erfolg", "Titel enthaelt X", "Text X ist sichtbar", "Seitenzustand ist Y" oder "Rueckgabewert = array".',
                 );
         }
 
@@ -2327,7 +2435,19 @@ class WorkflowCopilotSupervisorService
             '/^(?:finale?\s+)?url\s+(?:enth(?:ae|ä)lt|contains)\s+(.+)$/iu' => ['url', 'contains'],
             '/^(?:finale?\s+)?url\s+(?:endet\s+mit|ends\s+with)\s+(.+)$/iu' => ['url', 'ends_with'],
             '/^(?:finale?\s+)?url\s+(?:ist|gleich|equals)\s+(.+)$/iu' => ['url', 'equals'],
+            // Die folgenden Typen wertet evaluateSuccessAssertion bereits aus, es
+            // fehlten bisher nur die Freitext-Muster – dadurch landeten normal
+            // formulierte Kriterien auf `unsupported` und die Verifikation konnte
+            // strukturell nie bestehen.
+            '/^(?:seiten)?titel\s+(?:enth(?:ae|ä)lt|contains)\s+(.+)$/iu' => ['title', 'contains'],
+            '/^title\s+(?:contains|enth(?:ae|ä)lt)\s+(.+)$/iu' => ['title', 'contains'],
+            '/^(?:seiten)?titel\s+(?:ist|gleich|equals)\s+(.+)$/iu' => ['title', 'equals'],
+            '/^(?:seitenzustand|seiten[-\s]?status|page[-\s]?state)\s+(?:ist|gleich|=|equals)\s+(.+)$/iu' => ['page_state', 'equals'],
+            '/^technischer?\s+status\s+(?:ist|gleich|=|equals)\s+(.+)$/iu' => ['technical_status', 'equals'],
+            '/^technical[-\s]?status\s+(?:is|=|equals)\s+(.+)$/iu' => ['technical_status', 'equals'],
+            '/^(?:fachlicher?\s+status|business[-\s]?status)\s+(?:ist|is|gleich|=|equals)\s+(.+)$/iu' => ['business_status', 'equals'],
             '/^text\s+(.+?)\s+(?:ist\s+sichtbar|is\s+visible)$/iu' => ['visible_text', 'contains'],
+            '/^(?:seite|page)\s+(?:zeigt|enth(?:ae|ä)lt|shows|contains)\s+(.+)$/iu' => ['visible_text', 'contains'],
             '/^(.+?)\s+(?:ist\s+sichtbar|is\s+visible)$/iu' => ['visible_text', 'contains'],
         ];
 
@@ -2697,31 +2817,51 @@ class WorkflowCopilotSupervisorService
             $taskFingerprint = $this->stateTaskFingerprint($runtimeCheckpoint, $state);
             $previousTaskFingerprint = trim((string) ($state['last_state_task_fingerprint'] ?? ''));
 
+            // Stillstands-/Zyklus-Erkennung: Solange sich die Seite (state_signature)
+            // nicht aendert, sammeln wir die Task-Fingerprints. Kommt eine Task-Signatur
+            // unter derselben Seite ein zweites Mal (Revisit), ist das ein echter
+            // Kreislauf ohne Fortschritt – auch wenn mehrere Tasks rotieren. Frueher
+            // wurde nur bei identischem Vorgaenger-Fingerprint gezaehlt, sodass ein
+            // 3-Task-Zyklus den Zaehler jedes Mal auf 0 zuruecksetzte (Endlosschleife).
+            $signatureFingerprints = is_array($state['state_signature_task_fingerprints'] ?? null)
+                ? array_values($state['state_signature_task_fingerprints'])
+                : [];
+
             if ($isNewObservation) {
-                $usage['same_state_repeats'] = $signature !== ''
-                    && $signature === $previousSignature
-                    && $taskFingerprint === $previousTaskFingerprint
-                    ? max(0, (int) ($usage['same_state_repeats'] ?? 0)) + 1
-                    : 0;
+                if ($signature !== '' && $signature === $previousSignature) {
+                    if (in_array($taskFingerprint, $signatureFingerprints, true)) {
+                        $usage['same_state_repeats'] = max(0, (int) ($usage['same_state_repeats'] ?? 0)) + 1;
+                    } else {
+                        $signatureFingerprints[] = $taskFingerprint;
+                    }
+                } else {
+                    // Seite hat sich geaendert -> Fortschritt -> Zaehler und Set zuruecksetzen.
+                    $usage['same_state_repeats'] = 0;
+                    $signatureFingerprints = [$taskFingerprint];
+                }
             }
 
+            $newState = array_replace_recursive($state, [
+                'observed_checkpoint_id' => $runtimeCheckpointId,
+                'latest_checkpoint_id' => (int) $stored->id,
+                'latest_checkpoint_sequence' => (int) $stored->sequence,
+                'last_state_signature' => $signature,
+                'last_state_task_fingerprint' => $taskFingerprint,
+                'current_step_name' => $runtimeCheckpoint['workflow_step_name'] ?? null,
+                'current_task_key' => $runtimeCheckpoint['task_key'] ?? null,
+                'latest_screenshot_url' => $observation['screenshot_url'] ?? null,
+                'page_state' => data_get($vision, 'ui_state', data_get($observation, 'page.state')),
+                'observation' => Arr::except($observation, ['screenshot_data_url', 'raw_dom', 'html']),
+                'vision' => Arr::except($vision, ['raw_response']),
+                'last_action' => ($runtimeCheckpoint['kind'] ?? null) === 'probe' ? 'Probeaktion ausgefuehrt' : 'Task ausgefuehrt',
+                'current_result' => (bool) ($runtimeCheckpoint['successful'] ?? false) ? 'Erfolgreich' : 'Fehlgeschlagen',
+                'next_action' => $runtimeCheckpoint['next_action'] ?? null,
+            ]);
+            // Liste explizit setzen (nicht rekursiv mergen), damit das Zuruecksetzen greift.
+            $newState['state_signature_task_fingerprints'] = array_values($signatureFingerprints);
+
             $lockedSession->forceFill([
-                'state_json' => array_replace_recursive($state, [
-                    'observed_checkpoint_id' => $runtimeCheckpointId,
-                    'latest_checkpoint_id' => (int) $stored->id,
-                    'latest_checkpoint_sequence' => (int) $stored->sequence,
-                    'last_state_signature' => $signature,
-                    'last_state_task_fingerprint' => $taskFingerprint,
-                    'current_step_name' => $runtimeCheckpoint['workflow_step_name'] ?? null,
-                    'current_task_key' => $runtimeCheckpoint['task_key'] ?? null,
-                    'latest_screenshot_url' => $observation['screenshot_url'] ?? null,
-                    'page_state' => data_get($vision, 'ui_state', data_get($observation, 'page.state')),
-                    'observation' => Arr::except($observation, ['screenshot_data_url', 'raw_dom', 'html']),
-                    'vision' => Arr::except($vision, ['raw_response']),
-                    'last_action' => ($runtimeCheckpoint['kind'] ?? null) === 'probe' ? 'Probeaktion ausgefuehrt' : 'Task ausgefuehrt',
-                    'current_result' => (bool) ($runtimeCheckpoint['successful'] ?? false) ? 'Erfolgreich' : 'Fehlgeschlagen',
-                    'next_action' => $runtimeCheckpoint['next_action'] ?? null,
-                ]),
+                'state_json' => $newState,
                 'usage_json' => $usage,
                 'last_activity_at' => now(),
             ])->save();

@@ -36,6 +36,11 @@ class WorkflowTaskCatalog
                     'selector' => false,
                     'value' => false,
                     'url' => true,
+                    // Ohne URL bricht der Node-Task zwingend ab ("Keine URL fuer
+                    // Navigation uebergeben."). Die URL ist daher ein Pflichtfeld,
+                    // damit der Validator eine URL-lose Navigations-Task ablehnt,
+                    // statt sie erst zur Laufzeit auf about:blank scheitern zu lassen.
+                    'url_required' => true,
                     'url_label' => 'URL',
                     'url_placeholder' => 'https://example.test oder person.webmailUrl',
                     'success_payload' => false,

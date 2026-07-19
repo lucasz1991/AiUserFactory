@@ -79,10 +79,19 @@ class WorkflowStudioSessionService
         string $mode = 'manual',
         ?string $permissionMode = null,
     ): WorkflowStudioSession {
+        // Eine neue Testsitzung darf keine beendete/tote Sitzung wiederverwenden,
+        // sonst wird deren (nie zurueckgesetztes) mode_locked_at geerbt und der
+        // Modus wirkt dauerhaft gesperrt. Nur echte, noch offene Sitzungen
+        // fortsetzen; alles Terminale/Fehlgeschlagene fuehrt zu einer frischen,
+        // entsperrten Sitzung.
         $session = WorkflowStudioSession::query()
             ->where('workflow_id', $workflow->getKey())
             ->when($user, fn ($query) => $query->where('user_id', $user->getKey()))
-            ->whereNotIn('status', ['stopped', 'completed'])
+            ->whereNull('finished_at')
+            ->whereNotIn('status', [
+                'stopped', 'completed', 'failed', 'cancelled',
+                'timed_out', 'lost', 'budget_exhausted',
+            ])
             ->latest('id')
             ->first();
 
