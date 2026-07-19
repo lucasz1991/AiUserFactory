@@ -1,4 +1,4 @@
-<x-dialog-modal wire:model="showSelectorProbeModal" maxWidth="3xl">
+<x-ui.dialog-modal wire:model="showSelectorProbeModal" maxWidth="3xl">
     <x-slot name="title"><div><span class="text-base font-semibold text-slate-950">Selector-Prüfung · {{ $probeBrowserWindow }}</span><p class="mt-1 text-xs font-normal text-slate-500">Elemente im ausgewählten Browserfenster suchen, markieren oder testweise bedienen.</p></div></x-slot>
     <x-slot name="content">
         <div class="grid gap-4 md:grid-cols-2">
@@ -19,4 +19,4 @@
         @if(! $isPaused)<p class="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">Pausiere zuerst den Lauf, damit die Probe denselben stabilen Browserzustand untersucht.</p>@endif
     </x-slot>
     <x-slot name="footer"><button type="button" x-on:click="$dispatch('close')" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700">Schließen</button><button type="button" wire:click="runProbe" @disabled(! $isPaused) class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40">Probe ausführen</button><button type="button" wire:click="commitProbeAsTask" @disabled(! is_array($probeResult)) class="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40">Als Task einsetzen</button></x-slot>
-</x-dialog-modal>
+</x-ui.dialog-modal>

@@ -1,5 +1,5 @@
 <div>
-    <x-dialog-modal wire:model="showModal" maxWidth="6xl">
+    <x-ui.dialog-modal wire:model="showModal" maxWidth="6xl">
         <x-slot name="title">
             Person bearbeiten
         </x-slot>
@@ -197,5 +197,5 @@
                 </button>
             </div>
         </x-slot>
-    </x-dialog-modal>
+    </x-ui.dialog-modal>
 </div>

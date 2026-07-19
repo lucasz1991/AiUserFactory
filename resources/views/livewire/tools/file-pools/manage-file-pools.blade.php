@@ -65,7 +65,7 @@
         @endforelse
     </div>
 
-    <x-dialog-modal wire:model="openFileForm">
+    <x-ui.dialog-modal wire:model="openFileForm">
         <x-slot name="title">Datei-Upload</x-slot>
         <x-slot name="content">
             @if($filePool)
@@ -96,9 +96,9 @@
                 @endif
             </div>
         </x-slot>
-    </x-dialog-modal>
+    </x-ui.dialog-modal>
 
-    <x-dialog-modal wire:model="openEditFileForm">
+    <x-ui.dialog-modal wire:model="openEditFileForm">
         <x-slot name="title">Datei bearbeiten</x-slot>
         <x-slot name="content">
             <div class="space-y-4">
@@ -124,5 +124,5 @@
                 </button>
             </div>
         </x-slot>
-    </x-dialog-modal>
+    </x-ui.dialog-modal>
 </div>

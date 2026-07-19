@@ -4,6 +4,7 @@ namespace App\Services\Workflows;
 
 use App\Models\Workflow;
 use App\Models\WorkflowCopilotSession;
+use App\Models\WorkflowRevision;
 use App\Models\WorkflowStep;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Str;
@@ -26,6 +27,7 @@ class WorkflowCopilotPromptContextService
 
     public function __construct(
         protected WorkflowTaskCatalog $catalog,
+        protected WorkflowRevisionEvidenceService $revisionEvidence,
     ) {}
 
     public function forWorkflow(
@@ -51,6 +53,7 @@ class WorkflowCopilotPromptContextService
                 'lookup_instruction' => 'Weitere Task-Details bei Bedarf ueber list_task_catalog abrufen; keine nicht dokumentierten Felder erfinden.',
             ],
             'workflow_diagnostics' => $this->workflowDiagnostics($workflow),
+            'revision_learning' => $this->revisionLearning($workflow),
         ];
 
         $sessionInputs = $session instanceof WorkflowCopilotSession && is_array($session->workflow_inputs_json)
@@ -112,6 +115,7 @@ class WorkflowCopilotPromptContextService
             'variable_provenance' => $this->variableProvenance($workflow, $workflowInputs),
             'workflow_task_catalog' => $this->taskCatalogSnapshot(),
             'workflow_task_catalog_index' => $this->taskCatalogIndex(),
+            'revision_learning' => $this->revisionLearning($workflow),
         ]);
     }
 
@@ -125,7 +129,7 @@ class WorkflowCopilotPromptContextService
             ],
             'outcomes' => [
                 'success' => 'Task fachlich erfolgreich.',
-                'failed' => 'Task fehlgeschlagen oder eine IF-Bedingung wie decision.element_exists ist nicht erfuellt.',
+                'failed' => 'Technischer Taskfehler oder logischer Falsch-Zweig. Bei IF-Tasks ist der Falsch-Zweig kein Workflowfehler; erst die aufgeloeste Route entscheidet ueber continue, complete oder fail.',
                 'timeout' => 'Task hat ihr Zeitlimit erreicht.',
                 'partial' => 'Task lieferte nur ein Teilergebnis.',
                 'blocked' => 'Task war technisch erfolgreich, aber der sichtbare Seitenzustand blockiert das Workflow-Ziel.',
@@ -150,7 +154,7 @@ class WorkflowCopilotPromptContextService
                 'Ein reparierbarer Fehler soll eine card- oder step-Route benutzen. type=fail ist ausschliesslich fuer bewusst terminale Fachfehler.',
             ],
             'task_semantics' => [
-                'decision.element_exists' => 'Element gefunden ergibt success; nicht gefunden ergibt den Branch failed, obwohl die technische Pruefung selbst ausgefuehrt wurde. Deshalb next und on_error fachlich getrennt konfigurieren.',
+                'decision.element_exists' => 'Element gefunden ergibt condition_true, nicht gefunden condition_false. Beide Ergebnisse sind technisch erfolgreich. next und on_error bilden fachliche Verzweigungen; nur type=fail ist ein Workflowfehler.',
                 'input.fill_field' => 'value_source=fixed nutzt value/input. value_source=workflow_variable nutzt workflow_variable; value_fallback ist nur der optionale Ersatzwert. Ein Variablenname darf nie als Literal in das Feld geschrieben werden.',
                 'loop.for_each_element' => 'Automatische Laeufe behandeln Loop-Start bis loop.end als wiederholbares Segment. Im Studio ist jede Karte einzeln testbar; Scope, Cursor und Array-Zustand werden zwischen den Klicks persistiert. Reader und Consumer stehen zwischen Start und Ende.',
                 'data.append_to_array' => 'Haengt den Wert aus value_from_variable dauerhaft an workflow_variables[array_name] an. Der Producer der Variable muss innerhalb desselben Loop-Durchlaufs vor dem Consumer liegen; nicht gleichzeitig mit collect_to_array fuer dasselbe Array verwenden.',
@@ -297,6 +301,28 @@ class WorkflowCopilotPromptContextService
                 ])
                 ->values()
                 ->all(),
+        ];
+    }
+
+    protected function revisionLearning(Workflow $workflow): array
+    {
+        return [
+            'revision_history' => WorkflowRevision::query()
+                ->where('workflow_id', $workflow->id)
+                ->latest('revision_number')
+                ->limit(80)
+                ->get()
+                ->map(fn (WorkflowRevision $revision): array => [
+                    'revision' => (int) $revision->revision_number,
+                    'parent_revision' => $revision->parent_revision_number,
+                    'actor' => (string) $revision->actor,
+                    'reason' => Str::limit((string) $revision->reason, 1000, ''),
+                    'verified' => (bool) $revision->is_verified,
+                    'diff' => $revision->diff_json,
+                    'created_at' => $revision->created_at?->toIso8601String(),
+                ])->all(),
+            'execution_evidence' => $this->revisionEvidence->relevantHistory((int) $workflow->id, 100),
+            'instruction' => 'Nutze erfolgreiche Evidenz erneut, vermeide bekannte Fehlersignaturen und schwaeche Ziel oder Erfolgskriterien niemals ab.',
         ];
     }
 

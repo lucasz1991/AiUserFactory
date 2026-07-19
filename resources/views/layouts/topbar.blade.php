@@ -24,7 +24,7 @@
 
             @auth
                 <div class="ms-3 relative">
-                    <x-dropdown align="" width="48">
+                    <x-ui.dropdown align="" width="48">
                         <x-slot name="trigger">
                             <button class="flex items-center space-x-2 text-sm border-2 border-transparent rounded-full focus:outline-none focus:border-gray-300 transition">
                                 <img class="h-8 w-8 rounded-full object-cover" src="{{ Auth::user()->profile_photo_url }}" alt="{{ Auth::user()->name }}" />
@@ -38,20 +38,20 @@
                                 Konto verwalten
                             </div>
 
-                            <x-dropdown-link href="{{ route('profile.show') }}">
+                            <x-ui.dropdown-link href="{{ route('profile.show') }}">
                                 Profil
-                            </x-dropdown-link>
+                            </x-ui.dropdown-link>
 
                             <div class="border-t border-gray-200"></div>
 
                             <form method="POST" action="{{ route('logout') }}" x-data>
                                 @csrf
-                                <x-dropdown-link href="{{ route('logout') }}" @click.prevent="$root.submit();">
+                                <x-ui.dropdown-link href="{{ route('logout') }}" @click.prevent="$root.submit();">
                                     Abmelden
-                                </x-dropdown-link>
+                                </x-ui.dropdown-link>
                             </form>
                         </x-slot>
-                    </x-dropdown>
+                    </x-ui.dropdown>
                 </div>
             @else
                 <div class="flex items-center gap-2">

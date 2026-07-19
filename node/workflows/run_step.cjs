@@ -2394,7 +2394,11 @@ function routeStepKey(route = {}) {
 }
 
 function routeType(route = {}) {
-  return String(route?.type || route?.action_key || route?.step || '').trim().toLowerCase();
+  const step = routeStepKey(route).toLowerCase();
+
+  if (['end', 'fail'].includes(step)) return step;
+
+  return String(route?.type || step).trim().toLowerCase();
 }
 
 function routeHasExplicitTarget(route = {}) {
@@ -2404,6 +2408,16 @@ function routeHasExplicitTarget(route = {}) {
   return routeTargetCardKey(route) !== ''
     || (step !== '' && !['next', 'end', 'fail'].includes(step))
     || type === 'card';
+}
+
+function routeDisposition(route = {}) {
+  const type = routeType(route);
+
+  if (type === 'fail') return 'fail';
+  if (type === 'end') return 'complete';
+  if (type === 'card') return routeTargetCardKey(route) !== '' ? 'continue' : 'invalid';
+
+  return routeStepKey(route) !== '' ? 'continue' : 'invalid';
 }
 
 function routeMaxAttempts(route = {}) {
@@ -2814,6 +2828,8 @@ async function run() {
       ...cleanForJson(task),
       ...result,
       status,
+      logicalOutcome: result.logicalOutcome || result.logical_outcome || (branchFailed ? 'condition_false' : (ok ? 'success' : 'technical_error')),
+      logical_outcome: result.logical_outcome || result.logicalOutcome || (branchFailed ? 'condition_false' : (ok ? 'success' : 'technical_error')),
       finishedAt: now(),
     });
 
@@ -2936,6 +2952,17 @@ async function run() {
           continue;
         }
 
+        if (currentEmbeddedFrameKey === '' && failureRouteType === 'end') {
+          requestedFailureRouteTask = {
+            ...task,
+            key: task.route_source_task_key || task.parent_task_key || task.key,
+          };
+          requestedRouteMessage = branchFailed
+            ? 'IF-Falschzweig beendet den Workflow regulaer.'
+            : 'Konfigurierte Route beendet den Workflow regulaer.';
+          break;
+        }
+
         const canFollowFailureRouteInNode = targetTaskIndex > taskIndex || targetIsInSameEmbeddedFrame;
 
         if (canFollowFailureRouteInNode) {
@@ -2973,7 +3000,9 @@ async function run() {
             throw new Error('Zu viele Task-Routenwechsel. Moegliche Schleife in der Fehlerroute.');
           }
 
-          pushEvent(branchFailed ? 'task-branch-route-followed' : 'task-error-route-followed', `Fehlerroute wird fortgesetzt: ${targetCardKey}.`, {
+          pushEvent(branchFailed ? 'task-branch-route-followed' : 'task-error-route-followed', branchFailed
+            ? `IF-Abzweigung wird fortgesetzt: ${targetCardKey}.`
+            : `Fehlerroute wird fortgesetzt: ${targetCardKey}.`, {
             taskKey: task.key,
             targetTaskKey: targetCardKey,
             status,
@@ -3010,7 +3039,7 @@ async function run() {
           requestedRouteMessage = targetCardKey !== ''
             ? `Fehlerroute wird ausserhalb des aktuellen Task-Ausschnitts fortgesetzt: ${targetCardKey}.`
             : `Fehlerroute wird in der Workflow-Liste ${routeStepKey(failureRoute)} fortgesetzt.`;
-          pushEvent('task-error-route-requested', requestedRouteMessage, {
+          pushEvent(branchFailed ? 'task-branch-route-requested' : 'task-error-route-requested', requestedRouteMessage, {
             taskKey: task.key,
             targetTaskKey: targetCardKey || null,
             targetStepKey: routeStepKey(failureRoute) || null,
@@ -3202,6 +3231,24 @@ async function run() {
     },
     events,
     finishedAt: now(),
+    ...(() => {
+      const routedTask = requestedFailureRouteTask || requestedSuccessRouteTask;
+      const routedResult = routedTask
+        ? taskResults.find((candidate) => String(candidate.key || '') === String(routedTask.key || ''))
+        : null;
+      const branchOutcome = String(routedResult?.branchOutcome || routedResult?.branch_outcome || '').trim().toLowerCase();
+      const logicalOutcome = requestedFailureRouteTask
+        ? (branchOutcome === 'failed' ? 'condition_false' : 'technical_error')
+        : (routedResult?.logicalOutcome || routedResult?.logical_outcome || 'success');
+      const route = requestedFailureRouteTask?.on_error || requestedSuccessRouteTask?.next || null;
+
+      return {
+        logicalOutcome,
+        logical_outcome: logicalOutcome,
+        routeDisposition: route ? routeDisposition(route) : 'continue',
+        route_disposition: route ? routeDisposition(route) : 'continue',
+      };
+    })(),
     ...(requestedDynamicRoute ? {
       routeRequested: true,
       route_requested: true,

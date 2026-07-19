@@ -14,6 +14,7 @@ class WorkflowCopilotLaunchService
         protected WorkflowDefinitionValidator $validator,
         protected WorkflowCopilotSessionService $sessions,
         protected WorkflowCopilotAiUsageTracker $usageTracker,
+        protected WorkflowOptimizationPlanService $optimizationPlans,
     ) {}
 
     /** @return array{session:\App\Models\WorkflowCopilotSession,initial_plan:?array,validation:array} */
@@ -34,7 +35,7 @@ class WorkflowCopilotLaunchService
         if ($this->planning->needsInitialPlan($workflow)) {
             $this->usageTracker->beginCapture();
             try {
-                $initialPlan = $this->planning->planAndApply(
+                $initialPlan = $this->planning->plan(
                     $workflow,
                     $request->goal,
                     $request->successCriteria,
@@ -43,10 +44,16 @@ class WorkflowCopilotLaunchService
             } finally {
                 $initialAiUsage = $this->usageTracker->finishCapture();
             }
-            $workflow = $workflow->fresh(['steps']) ?? $workflow;
         }
 
-        $validation = $this->validator->assertValid($workflow, $request->successCriteria, $request->workflowInputs);
+        $validation = $initialPlan
+            ? [
+                'valid' => true,
+                'stage' => 'blueprint',
+                'message' => 'Der Gesamtplan ist gespeichert; Tasks werden einzeln materialisiert und getestet.',
+                'task_count' => (int) ($initialPlan['task_count'] ?? 0),
+            ]
+            : $this->validator->assertValid($workflow, $request->successCriteria, $request->workflowInputs);
         $attributes = $request->sessionAttributes($initialPlan);
         $attributes['state']['definition_validation'] = $validation;
         $attributes['state']['launch_source'] = $request->source;
@@ -56,11 +63,12 @@ class WorkflowCopilotLaunchService
             $session = $this->sessions->recordAiUsage($session, $initialAiUsage, 'initial_planning');
         }
         if ($initialPlan) {
+            $plan = $this->optimizationPlans->create($session, $initialPlan);
             $this->sessions->appendEvent(
                 $session,
-                'plan.applied',
-                'Der leere Workflow wurde aus Zielbeschreibung und Katalogdaten geplant, validiert und aufgebaut.',
-                ['plan' => $initialPlan, 'validation' => $validation],
+                'plan.blueprint_created',
+                'Der Gesamtplan wurde gespeichert. Die erste Task wird erst durch den Supervisor eingesetzt und einzeln getestet.',
+                ['plan_id' => $plan->id, 'plan' => $initialPlan, 'validation' => $validation],
                 'planning',
                 'success',
                 true,

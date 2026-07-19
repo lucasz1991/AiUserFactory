@@ -1,4 +1,4 @@
-<x-action-section>
+<x-layout.action-section>
     <x-slot name="title">
         {{ __('Browsersitzungen') }}
     </x-slot>
@@ -52,17 +52,17 @@
         @endif
 
         <div class="flex items-center mt-5">
-            <x-button wire:click="confirmLogout" wire:loading.attr="disabled">
+            <x-ui.button wire:click="confirmLogout" wire:loading.attr="disabled">
                 {{ __('Von anderen Browsersitzungen abmelden') }}
-            </x-button>
+            </x-ui.button>
 
-            <x-action-message class="ms-3" on="loggedOut">
+            <x-feedback.action-message class="ms-3" on="loggedOut">
                 {{ __('Erledigt.') }}
-            </x-action-message>
+            </x-feedback.action-message>
         </div>
 
         <!-- Bestätigungsmodal: Von anderen Geräten abmelden -->
-        <x-dialog-modal wire:model.live="confirmingLogout">
+        <x-ui.dialog-modal wire:model.live="confirmingLogout">
             <x-slot name="title">
                 {{ __('Von anderen Browsersitzungen abmelden') }}
             </x-slot>
@@ -71,28 +71,28 @@
                 {{ __('Bitte gib dein Passwort ein, um zu bestätigen, dass du dich von deinen anderen Browsersitzungen auf allen Geräten abmelden möchtest.') }}
 
                 <div class="mt-4" x-data="{}" x-on:confirming-logout-other-browser-sessions.window="setTimeout(() => $refs.password.focus(), 250)">
-                    <x-input type="password" class="mt-1 block w-3/4"
+                    <x-forms.input type="password" class="mt-1 block w-3/4"
                                 autocomplete="current-password"
                                 placeholder="{{ __('Passwort') }}"
                                 x-ref="password"
                                 wire:model="password"
                                 wire:keydown.enter="logoutOtherBrowserSessions" />
 
-                    <x-input-error for="password" class="mt-2" />
+                    <x-forms.input-error for="password" class="mt-2" />
                 </div>
             </x-slot>
 
             <x-slot name="footer">
-                <x-secondary-button wire:click="$toggle('confirmingLogout')" wire:loading.attr="disabled">
+                <x-ui.secondary-button wire:click="$toggle('confirmingLogout')" wire:loading.attr="disabled">
                     {{ __('Abbrechen') }}
-                </x-secondary-button>
+                </x-ui.secondary-button>
 
-                <x-button class="ms-3"
+                <x-ui.button class="ms-3"
                             wire:click="logoutOtherBrowserSessions"
                             wire:loading.attr="disabled">
                     {{ __('Von anderen Browsersitzungen abmelden') }}
-                </x-button>
+                </x-ui.button>
             </x-slot>
-        </x-dialog-modal>
+        </x-ui.dialog-modal>
     </x-slot>
-</x-action-section>
+</x-layout.action-section>

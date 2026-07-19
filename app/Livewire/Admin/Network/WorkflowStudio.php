@@ -10,6 +10,7 @@ use App\Models\Person;
 use App\Models\Workflow;
 use App\Models\WorkflowCopilotSession;
 use App\Models\WorkflowRun;
+use App\Models\WorkflowOptimizationPlan;
 use App\Models\WorkflowStudioSession;
 use App\Services\Workflows\WorkflowCopilotLaunchRequest;
 use App\Services\Workflows\WorkflowCopilotLaunchService;
@@ -17,6 +18,7 @@ use App\Services\Workflows\WorkflowCopilotSessionService;
 use App\Services\Workflows\WorkflowDefinitionValidator;
 use App\Services\Workflows\WorkflowExecutionService;
 use App\Services\Workflows\WorkflowStudioAuthorizationService;
+use App\Services\Workflows\WorkflowStudioControlService;
 use App\Services\Workflows\WorkflowStudioRevisionService;
 use App\Services\Workflows\WorkflowStudioSessionService;
 use App\Services\Workflows\WorkflowTaskCatalog;
@@ -31,10 +33,6 @@ class WorkflowStudio extends Component
 {
     private const STUDIO_PANELS = [
         'builder',
-        'copilot',
-        'tools',
-        'runtime',
-        'revisions',
     ];
 
     public int $workflowId;
@@ -43,7 +41,11 @@ class WorkflowStudio extends Component
 
     public ?int $activeRunId = null;
 
-    public string $mode = 'manual';
+    public string $mode = 'interactive';
+
+    public bool $embedded = false;
+
+    public string $activeWorkspaceTab = 'test';
 
     public string $permissionMode = 'ask_critical';
 
@@ -87,15 +89,20 @@ class WorkflowStudio extends Component
 
     public string $observedCursorSignature = '';
 
-    public function mount(Workflow $workflow): void
+    public function mount(
+        Workflow $workflow,
+        bool $embedded = false,
+        string $initialMode = 'interactive',
+        ?int $runId = null,
+    ): void
     {
         $this->workflowId = (int) $workflow->getKey();
-        $this->mode = in_array((string) request()->query('mode'), ['manual', 'assisted', 'autonomous'], true)
-            ? (string) request()->query('mode')
-            : 'manual';
+        $this->embedded = $embedded;
+        $requestedMode = $embedded ? $initialMode : (string) request()->query('mode', $initialMode);
+        $this->mode = $requestedMode === 'autonomous' ? 'autonomous' : 'interactive';
         $requestedRun = WorkflowRun::query()
             ->where('workflow_id', $workflow->getKey())
-            ->find((int) request()->query('run', 0));
+            ->find((int) ($runId ?: request()->query('run', 0)));
         $requestedSessionId = (int) request()->query('session', $requestedRun?->workflow_studio_session_id ?? 0);
         $session = $requestedSessionId > 0
             ? WorkflowStudioSession::query()
@@ -107,6 +114,19 @@ class WorkflowStudio extends Component
             auth()->user(),
             $this->mode,
         );
+        if (! $session->mode_locked_at) {
+            $session = app(WorkflowStudioControlService::class)->choose($session, $this->mode, auth()->user());
+        }
+        $activeCopilotId = (int) ($workflow->active_workflow_copilot_session_id ?? 0);
+        if ($this->mode === 'autonomous' && $activeCopilotId > 0 && ! $session->workflow_copilot_session_id) {
+            $session->forceFill(['workflow_copilot_session_id' => $activeCopilotId])->save();
+            WorkflowOptimizationPlan::query()
+                ->where('workflow_copilot_session_id', $activeCopilotId)
+                ->update(['workflow_studio_session_id' => $session->id]);
+        }
+        if ($this->mode === 'autonomous' && $activeCopilotId > 0 && ! $session->mode_locked_at) {
+            $session = app(WorkflowStudioControlService::class)->lock($session, 'autonomous', auth()->user());
+        }
         app(WorkflowStudioRevisionService::class)->ensureBaseline($session);
 
         if ($requestedRun) {
@@ -120,6 +140,7 @@ class WorkflowStudio extends Component
         }
 
         $this->studioSessionId = (int) $session->getKey();
+        $this->mode = $session->mode === 'autonomous' ? 'autonomous' : 'interactive';
         $this->activeRunId = $requestedRun
             ? (int) $requestedRun->id
             : ($session->active_workflow_run_id ? (int) $session->active_workflow_run_id : null);
@@ -147,6 +168,7 @@ class WorkflowStudio extends Component
     {
         $this->perform('permission.changed', function (): array {
             $session = $this->session();
+            app(WorkflowStudioControlService::class)->assertUserControl($session);
             app(WorkflowStudioAuthorizationService::class)->setPermissionMode(
                 $session,
                 $this->permissionMode,
@@ -165,10 +187,10 @@ class WorkflowStudio extends Component
             $criteria = collect(preg_split('/\r\n|\r|\n/', $this->successCriteria) ?: [])
                 ->map(fn (string $item): string => trim($item))->filter()->values()->all();
             $session = $this->session();
+            app(WorkflowStudioControlService::class)->assertUserControl($session);
             $state = is_array($session->state_json) ? $session->state_json : [];
             $state['execution_target'] = $this->executionTarget;
             $session->forceFill([
-                'mode' => $this->mode,
                 'goal' => trim($this->goal),
                 'success_criteria_json' => $criteria,
                 'workflow_inputs_json' => $inputs,
@@ -184,7 +206,9 @@ class WorkflowStudio extends Component
     public function startRun(): void
     {
         $this->perform('run.started', function (): array {
+            app(WorkflowStudioControlService::class)->assertUserControl($this->session());
             $run = $this->startInteractiveRun();
+            app(WorkflowStudioControlService::class)->lock($this->session(), 'interactive', auth()->user());
 
             return $this->result((string) $run->status, 'Workflow-Test wurde gestartet.', $run);
         });
@@ -193,6 +217,7 @@ class WorkflowStudio extends Component
     public function pauseRun(): void
     {
         $this->perform('run.pause_requested', function (): array {
+            app(WorkflowStudioControlService::class)->assertUserControl($this->session());
             $run = $this->activeRunOrFail();
             $response = app(WorkflowExecutionService::class)->requestManualPause($run);
 
@@ -203,6 +228,7 @@ class WorkflowStudio extends Component
     public function resumeRun(): void
     {
         $this->perform('run.resumed', function (): array {
+            app(WorkflowStudioControlService::class)->assertUserControl($this->session());
             $run = $this->activeRunOrFail();
             $this->rebasePausedRunRevision($run);
             $response = app(WorkflowExecutionService::class)->resumeManualPause($run);
@@ -214,6 +240,7 @@ class WorkflowStudio extends Component
     public function runSingleTask(): void
     {
         $this->perform('run.single_task', function (): array {
+            app(WorkflowStudioControlService::class)->assertUserControl($this->session());
             if ($this->selectedStepId === '' || $this->selectedTaskKey === '') {
                 throw new DomainException('Wählen Sie zuerst eine Task aus.');
             }
@@ -225,6 +252,7 @@ class WorkflowStudio extends Component
                     (int) $this->selectedStepId,
                     $this->selectedTaskKey,
                 );
+                app(WorkflowStudioControlService::class)->lock($this->session(), 'interactive', auth()->user());
 
                 return $this->result('running', 'Die ausgewählte Task wird einmal ausgeführt; danach pausiert der Lauf.', $run);
             }
@@ -247,6 +275,7 @@ class WorkflowStudio extends Component
     public function stopRun(): void
     {
         $this->perform('run.stopped', function (): array {
+            app(WorkflowStudioControlService::class)->assertUserControl($this->session());
             $run = $this->activeRunOrFail();
             $response = app(WorkflowExecutionService::class)->cancel($run);
             $this->session()->forceFill(['status' => 'stopped', 'finished_at' => now()])->save();
@@ -258,6 +287,7 @@ class WorkflowStudio extends Component
     public function terminateRun(): void
     {
         $this->perform('run.terminated', function (): array {
+            app(WorkflowStudioControlService::class)->assertUserControl($this->session());
             $run = $this->activeRunOrFail();
             $response = app(WorkflowExecutionService::class)->terminate(
                 $run,
@@ -275,6 +305,7 @@ class WorkflowStudio extends Component
 
     public function restartRun(): void
     {
+        app(WorkflowStudioControlService::class)->assertUserControl($this->session());
         $run = $this->activeRun();
         if ($run && ! in_array($run->status, ['completed', 'failed', 'cancelled', 'timed_out', 'lost'], true)) {
             app(WorkflowExecutionService::class)->cancel($run, 'Workflow-Lauf wurde fuer den Neustart beendet.');
@@ -287,6 +318,7 @@ class WorkflowStudio extends Component
     public function runProbe(?string $confirmationId = null): void
     {
         $this->perform('probe.started', function () use ($confirmationId): array {
+            app(WorkflowStudioControlService::class)->assertUserControl($this->session());
             $run = $this->activeRunOrFail();
             if ($run->status !== 'paused') {
                 throw new DomainException('Probeaktionen sind ausschliesslich im pausierten Zustand zulaessig.');
@@ -366,6 +398,7 @@ class WorkflowStudio extends Component
     public function commitProbeAsTask(): void
     {
         $this->perform('probe.committed', function (): array {
+            app(WorkflowStudioControlService::class)->assertUserControl($this->session());
             $run = $this->activeRunOrFail();
             $probeResult = data_get($run->context_json, 'studio_probe_result');
             $task = is_array(data_get($probeResult, 'task')) ? data_get($probeResult, 'task') : null;
@@ -415,6 +448,7 @@ class WorkflowStudio extends Component
 
     public function openBuilderForStep(int $stepId): void
     {
+        app(WorkflowStudioControlService::class)->assertUserControl($this->session());
         $step = $this->workflow()->steps()->find($stepId);
         if (! $step) {
             return;
@@ -427,6 +461,7 @@ class WorkflowStudio extends Component
 
     public function editTask(int $stepId, string $taskKey): void
     {
+        app(WorkflowStudioControlService::class)->assertUserControl($this->session());
         $this->selectTask($stepId, $taskKey);
         $this->openStudioPanel('builder');
         $this->dispatch('open-workflow-studio-task-editor', stepId: $stepId, taskKey: $taskKey);
@@ -477,6 +512,7 @@ class WorkflowStudio extends Component
     public function saveSelectedTask(): void
     {
         $this->perform('task.saved', function (): array {
+            app(WorkflowStudioControlService::class)->assertUserControl($this->session());
             $replacement = json_decode($this->editingTaskJson, true);
             if (! is_array($replacement) || trim((string) ($replacement['task_key'] ?? '')) === '') {
                 throw new DomainException('Die Task-Definition muss gueltiges JSON mit task_key sein.');
@@ -506,6 +542,19 @@ class WorkflowStudio extends Component
     {
         $this->perform('copilot.started', function (): array {
             $session = $this->session();
+            app(WorkflowStudioControlService::class)->choose($session, 'autonomous', auth()->user());
+            $criteria = collect(preg_split('/\r\n|\r|\n/', $this->successCriteria) ?: [])->map(fn (string $item): string => trim($item))->filter()->values()->all();
+            $inputs = $this->decodeObject($this->workflowInputs, 'Workflow-Eingaben');
+            $state = is_array($session->state_json) ? $session->state_json : [];
+            $state['execution_target'] = 'system';
+            $session->forceFill([
+                'goal' => trim($this->goal),
+                'success_criteria_json' => $criteria,
+                'workflow_inputs_json' => $inputs,
+                'person_id' => $this->personId !== '' ? (int) $this->personId : null,
+                'state_json' => $state,
+                'last_activity_at' => now(),
+            ])->save();
             $active = $this->activeRun();
             if ($active && ! in_array($active->status, ['completed', 'failed', 'cancelled', 'timed_out', 'lost'], true)) {
                 throw new DomainException('Beenden Sie den manuellen Lauf, bevor die autonome Optimierung gestartet wird.');
@@ -515,8 +564,8 @@ class WorkflowStudio extends Component
                 WorkflowCopilotLaunchRequest::fromArray([
                     'person_id' => $this->personId !== '' ? (int) $this->personId : null,
                     'goal' => trim($this->goal),
-                    'success_criteria' => collect(preg_split('/\r\n|\r|\n/', $this->successCriteria) ?: [])->filter()->values()->all(),
-                    'workflow_inputs' => $this->decodeObject($this->workflowInputs, 'Workflow-Eingaben'),
+                    'success_criteria' => $criteria,
+                    'workflow_inputs' => $inputs,
                     'permission_mode' => $session->permission_mode,
                     'source' => 'workflow-studio',
                     'budget' => [
@@ -526,6 +575,7 @@ class WorkflowStudio extends Component
                 ]),
             );
             $copilot = $launch['session'];
+            $session = app(WorkflowStudioControlService::class)->lock($session, 'autonomous', auth()->user());
             $session->forceFill([
                 'workflow_copilot_session_id' => $copilot->getKey(),
                 'mode' => 'autonomous',
@@ -542,6 +592,7 @@ class WorkflowStudio extends Component
     public function pauseCopilot(): void
     {
         $this->perform('copilot.paused', function (): array {
+            app(WorkflowStudioControlService::class)->assertUserControl($this->session());
             $copilot = $this->copilotSessionOrFail();
             app(WorkflowCopilotSessionService::class)->pause($copilot, 'Im Workflow Studio pausiert.');
 
@@ -552,6 +603,7 @@ class WorkflowStudio extends Component
     public function resumeCopilot(): void
     {
         $this->perform('copilot.resumed', function (): array {
+            app(WorkflowStudioControlService::class)->assertUserControl($this->session());
             $copilot = app(WorkflowCopilotSessionService::class)->resume($this->copilotSessionOrFail());
             WorkflowCopilotSupervisorJob::dispatch((int) $copilot->getKey());
 
@@ -562,6 +614,7 @@ class WorkflowStudio extends Component
     public function restartCopilot(): void
     {
         $this->perform('copilot.restarted', function (): array {
+            app(WorkflowStudioControlService::class)->assertUserControl($this->session());
             $copilot = app(WorkflowCopilotSessionService::class)->restart(
                 $this->copilotSessionOrFail(),
                 'Vollstaendiger Neustart wurde im Workflow Studio angefordert.',
@@ -582,6 +635,7 @@ class WorkflowStudio extends Component
     public function stopCopilot(): void
     {
         $this->perform('copilot.stopped', function (): array {
+            app(WorkflowStudioControlService::class)->assertUserControl($this->session());
             $copilot = $this->copilotSessionOrFail();
             $copilot->loadMissing('activeRun');
 
@@ -601,6 +655,7 @@ class WorkflowStudio extends Component
     public function terminateCopilot(): void
     {
         $this->perform('copilot.terminated', function (): array {
+            app(WorkflowStudioControlService::class)->assertUserControl($this->session());
             $copilot = $this->copilotSessionOrFail();
             $response = app(WorkflowExecutionService::class)->terminateCopilotRuns(
                 $copilot,
@@ -616,6 +671,7 @@ class WorkflowStudio extends Component
 
     public function openSelectorProbe(string $browserWindow): void
     {
+        app(WorkflowStudioControlService::class)->assertUserControl($this->session());
         $this->probeBrowserWindow = trim($browserWindow) ?: 'main';
         $this->probeAction = 'selector.search';
         $this->showSelectorProbeModal = true;
@@ -642,6 +698,28 @@ class WorkflowStudio extends Component
         }
     }
 
+    public function chooseControlMode(string $mode): void
+    {
+        $this->perform('control.mode_selected', function () use ($mode): array {
+            $session = app(WorkflowStudioControlService::class)->choose($this->session(), $mode, auth()->user());
+            $this->mode = $session->mode === 'autonomous' ? 'autonomous' : 'interactive';
+            if ($this->mode === 'autonomous' && $this->activeWorkspaceTab === 'tools') {
+                $this->activeWorkspaceTab = 'test';
+            }
+
+            return $this->result('ready', $this->mode === 'autonomous'
+                ? 'Autonomer Modus ist vorbereitet und wird beim Start fest gesperrt.'
+                : 'Interaktiver Testmodus ist vorbereitet und wird beim ersten Test fest gesperrt.');
+        });
+    }
+
+    public function closeStudio(): void
+    {
+        if ($this->embedded) {
+            $this->dispatch('workflow-test-workbench-close');
+        }
+    }
+
     public function render()
     {
         $workflow = $this->workflow()->load(['steps', 'studioRevisions']);
@@ -654,7 +732,7 @@ class WorkflowStudio extends Component
         );
         $selectedTaskIndex = $selectedTaskIndex === false ? null : (int) $selectedTaskIndex;
 
-        return view('livewire.admin.network.workflow-studio', [
+        $view = view('livewire.admin.network.workflow-studio', [
             'workflow' => $workflow,
             'session' => $session,
             'copilotSession' => $copilotSession,
@@ -672,7 +750,11 @@ class WorkflowStudio extends Component
             'selectedTaskNumber' => $selectedTaskIndex === null ? null : $selectedTaskIndex + 1,
             'hasPreviousTask' => $selectedTaskIndex !== null && $selectedTaskIndex > 0,
             'hasNextTask' => $selectedTaskIndex !== null && $selectedTaskIndex < $taskNavigation->count() - 1,
-        ])->layout('layouts.master');
+            'modeLocked' => (bool) $session->mode_locked_at,
+            'autonomousMode' => $session->mode === 'autonomous',
+        ]);
+
+        return $this->embedded ? $view : $view->layout('layouts.master');
     }
 
     private function probeTask(): array

@@ -266,7 +266,7 @@
         <div class="hidden" wire:poll.{{ $backgroundPollSeconds }}s="refreshVerificationMailboxSessionRun"></div>
     @endif
 
-    <x-dialog-modal wire:model="showVerificationMailboxSessionModal" maxWidth="6xl">
+    <x-ui.dialog-modal wire:model="showVerificationMailboxSessionModal" maxWidth="6xl">
         <x-slot name="title">
             Webmail-Session beobachten
         </x-slot>
@@ -402,9 +402,9 @@
                 Schliessen
             </button>
         </x-slot>
-    </x-dialog-modal>
+    </x-ui.dialog-modal>
 
-    <x-dialog-modal wire:model="showRegistrationRunModal" maxWidth="6xl">
+    <x-ui.dialog-modal wire:model="showRegistrationRunModal" maxWidth="6xl">
         <x-slot name="title">
             Mail-Registrierung beobachten
         </x-slot>
@@ -548,5 +548,5 @@
                 Schliessen
             </button>
         </x-slot>
-    </x-dialog-modal>
+    </x-ui.dialog-modal>
 </div>

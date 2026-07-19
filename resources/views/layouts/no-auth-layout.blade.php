@@ -6,7 +6,7 @@
                 {{-- Logo --}}
                 <div class="mb-10">
                     <a href="/" class="inline-flex items-center">
-                        <x-application-logo class="h-11 w-auto max-w-[200px]" />
+                        <x-branding.application-logo class="h-11 w-auto max-w-[200px]" />
                     </a>
                 </div>
 
@@ -27,7 +27,7 @@
 
         {{-- Markenseite (ab lg sichtbar) --}}
         <div class="relative col-span-1 hidden lg:col-span-7 lg:block xl:col-span-8">
-            <x-auth-section-image-anim />
+            <x-branding.auth-section-image-anim />
         </div>
     </div>
 </div>

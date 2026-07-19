@@ -114,6 +114,14 @@ class WorkflowManager extends Component
 
     public bool $showRunModal = false;
 
+    public bool $showTestWorkbenchModal = false;
+
+    public string $testWorkbenchMode = 'interactive';
+
+    public ?int $testWorkbenchRunId = null;
+
+    public int $testWorkbenchKey = 0;
+
     public bool $showRunPreviewModal = false;
 
     public bool $showCopilotModal = false;
@@ -927,6 +935,28 @@ class WorkflowManager extends Component
         $this->showRevisionHistoryModal = true;
     }
 
+    public function openTestWorkbench(string $mode = 'interactive', ?int $runId = null): void
+    {
+        if (! $this->selectedWorkflow()) {
+            return;
+        }
+
+        $this->testWorkbenchMode = $mode === 'autonomous' ? 'autonomous' : 'interactive';
+        $this->testWorkbenchRunId = $runId && $runId > 0 ? $runId : null;
+        $this->testWorkbenchKey++;
+        $this->showRunModal = false;
+        $this->showCopilotModal = false;
+        $this->showRunPreviewModal = false;
+        $this->showTestWorkbenchModal = true;
+    }
+
+    #[On('workflow-test-workbench-close')]
+    public function closeTestWorkbench(): void
+    {
+        $this->showTestWorkbenchModal = false;
+        $this->testWorkbenchRunId = null;
+    }
+
     #[On('workflow-studio-revision-restored')]
     public function handleRevisionRestored(): void
     {
@@ -1274,11 +1304,7 @@ class WorkflowManager extends Component
             $this->showRunModal = false;
             $this->previewWorkflowRunId = $run->id;
             session()->flash('success', 'Workflow-Lauf wurde eingeplant: '.$run->run_uuid);
-            $this->redirectRoute('network.workflows.studio', [
-                'workflow' => $workflow->id,
-                'mode' => 'manual',
-                'run' => $run->id,
-            ], navigate: true);
+            $this->openTestWorkbench('interactive', (int) $run->id);
         } catch (\Throwable $exception) {
             session()->flash('success', 'Workflow konnte nicht gestartet werden: '.$exception->getMessage());
         }
@@ -1291,24 +1317,8 @@ class WorkflowManager extends Component
             return;
         }
 
-        if ($session = $this->activeCopilotSession()) {
-            $parameters = [
-                'workflow' => $workflow->id,
-                'mode' => 'autonomous',
-                'session' => $session->id,
-            ];
-            if ($session->active_workflow_run_id) {
-                $parameters['run'] = $session->active_workflow_run_id;
-            }
-            $this->redirectRoute('network.workflows.studio', $parameters, navigate: true);
-
-            return;
-        }
-
-        $this->redirectRoute('network.workflows.studio', [
-            'workflow' => $workflow->id,
-            'mode' => 'assisted',
-        ], navigate: true);
+        $session = $this->activeCopilotSession();
+        $this->openTestWorkbench('autonomous', $session?->active_workflow_run_id);
     }
 
     public function startCopilotOptimization(): void
@@ -1382,11 +1392,7 @@ class WorkflowManager extends Component
             $this->refreshCopilotSession();
             $this->dispatch('workflow-copilot-session-activated', sessionId: (int) $session->getKey());
             session()->flash('success', 'Autonome Workflow-Optimierung wurde in der System-Ausfuehrung gestartet.');
-            $this->redirectRoute('network.workflows.studio', [
-                'workflow' => $workflow->id,
-                'mode' => 'autonomous',
-                'session' => $session->id,
-            ], navigate: true);
+            $this->openTestWorkbench('autonomous', $session->active_workflow_run_id);
         } catch (\Throwable $exception) {
             $this->addError('copilotGoal', $exception->getMessage());
         }
@@ -1514,7 +1520,7 @@ class WorkflowManager extends Component
             $this->dismissedCopilotTerminalSessionId = null;
             $this->previewWorkflowRunId = null;
             $this->showCopilotPreviewModal = false;
-            $this->showRunPreviewModal = true;
+            $this->openTestWorkbench('autonomous', $restarted->active_workflow_run_id);
             $this->copilotRewindCheckpoint = '';
             $this->refreshCopilotSession();
             $this->dispatch('workflow-copilot-session-activated', sessionId: (int) $restarted->getKey());
@@ -1578,16 +1584,7 @@ class WorkflowManager extends Component
             }
         }
 
-        $workflow = $this->selectedWorkflow();
-        if (! $workflow) {
-            return;
-        }
-        $this->redirectRoute('network.workflows.studio', array_filter([
-            'workflow' => $workflow->id,
-            'mode' => $sessionId > 0 ? 'autonomous' : 'manual',
-            'run' => $this->previewWorkflowRunId,
-            'session' => $sessionId > 0 ? $sessionId : null,
-        ], fn (mixed $value): bool => $value !== null && $value !== 0), navigate: true);
+        $this->openTestWorkbench($sessionId > 0 ? 'autonomous' : 'interactive', $this->previewWorkflowRunId);
     }
 
     public function refreshRunPreview(): void
@@ -1744,11 +1741,7 @@ class WorkflowManager extends Component
         }
 
         $this->previewWorkflowRunId = $run->id;
-        $this->redirectRoute('network.workflows.studio', [
-            'workflow' => $workflow->id,
-            'mode' => $run->workflow_copilot_session_id ? 'autonomous' : 'manual',
-            'run' => $run->id,
-        ], navigate: true);
+        $this->openTestWorkbench($run->workflow_copilot_session_id ? 'autonomous' : 'interactive', (int) $run->id);
     }
 
     public function downloadLatestRunDebugPackage(WorkflowRunDebugPackageService $debugPackages): mixed

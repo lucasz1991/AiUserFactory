@@ -39,6 +39,7 @@ class WorkflowCopilotSupervisorService
         protected WorkflowRevisionService $revisions,
         protected WorkflowCopilotAiUsageTracker $aiUsage,
         protected WorkflowStudioAuthorizationService $studioAuthorization,
+        protected WorkflowOptimizationPlanService $optimizationPlans,
     ) {}
 
     public function supervise(int $sessionId): void
@@ -100,7 +101,7 @@ class WorkflowCopilotSupervisorService
 
         if (! $run) {
             $session = $this->createInitialWorkflowDefinition($session);
-            $this->startRepairRun($session);
+            $this->startRepairRun($session, $this->optimizationPlans->resumeContext($session));
 
             return;
         }
@@ -148,6 +149,20 @@ class WorkflowCopilotSupervisorService
         }
 
         if ($run->status === 'completed') {
+            $advance = $this->optimizationPlans->advanceAfterCompletedRun($session, $run);
+
+            if ($advance['continued']) {
+                $this->startRepairRun($session->fresh() ?? $session, $advance['resume_context']);
+
+                return;
+            }
+
+            if ($advance['finalized']) {
+                $this->startVerification($session->fresh() ?? $session, $run);
+
+                return;
+            }
+
             $this->startVerification($session, $run);
 
             return;
@@ -1674,6 +1689,25 @@ class WorkflowCopilotSupervisorService
     protected function createInitialWorkflowDefinition(WorkflowCopilotSession $session): WorkflowCopilotSession
     {
         $workflow = $session->workflow()->with('steps')->firstOrFail();
+
+        if ($plan = $this->optimizationPlans->active($session)) {
+            $testing = $plan->items->firstWhere('status', 'testing');
+            $item = $testing ?: $this->optimizationPlans->materializeNext($session);
+
+            if ($item) {
+                $this->sessions->appendEvent(
+                    $session->fresh() ?? $session,
+                    'planning.task_materialized',
+                    'Task `'.$item->task_key.'` wurde aus dem Gesamtplan als naechster einzeln testbarer Baustein eingesetzt.',
+                    ['plan_id' => $plan->id, 'plan_item_id' => $item->id, 'sequence' => $item->sequence],
+                    'planning',
+                    'success',
+                    true,
+                );
+            }
+
+            return $session->fresh(['workflow.steps']) ?? $session;
+        }
 
         if (! $this->planning->needsInitialPlan($workflow)) {
             return $session;

@@ -1,4 +1,4 @@
-<x-form-section submit="updateProfileInformation">
+<x-layout.form-section submit="updateProfileInformation">
     <x-slot name="title">
          {{ __('Profilinformationen') }}
     </x-slot>
@@ -64,7 +64,7 @@
                                     reader.readAsDataURL($refs.photo.files[0]);
                             " />
 
-                <x-label for="photo" value="{{ __('Foto') }}" />
+                <x-forms.label for="photo" value="{{ __('Foto') }}" />
 
                 <!-- Aktuelles Profilfoto -->
                 <div class="mt-2" x-show="! photoPreview">
@@ -78,32 +78,32 @@
                     </span>
                 </div>
 
-                <x-secondary-button class="mt-2 me-2" type="button" x-on:click.prevent="$refs.photo.click()">
+                <x-ui.secondary-button class="mt-2 me-2" type="button" x-on:click.prevent="$refs.photo.click()">
                     {{ __('Neues Foto auswählen') }}
-                </x-secondary-button>
+                </x-ui.secondary-button>
 
                 @if ($this->user->profile_photo_path)
-                    <x-secondary-button type="button" class="mt-2" wire:click="deleteProfilePhoto">
+                    <x-ui.secondary-button type="button" class="mt-2" wire:click="deleteProfilePhoto">
                         {{ __('Foto entfernen') }}
-                    </x-secondary-button>
+                    </x-ui.secondary-button>
                 @endif
 
-                <x-input-error for="photo" class="mt-2" />
+                <x-forms.input-error for="photo" class="mt-2" />
             </div>
         @endif
 
         <!-- Name -->
         <div class="col-span-6 sm:col-span-4">
-            <x-label for="name" value="{{ __('Benutzername') }}" />
-            <x-input id="name" type="text" class="mt-1 block w-full" wire:model="state.name" required autocomplete="name" />
-            <x-input-error for="name" class="mt-2" />
+            <x-forms.label for="name" value="{{ __('Benutzername') }}" />
+            <x-forms.input id="name" type="text" class="mt-1 block w-full" wire:model="state.name" required autocomplete="name" />
+            <x-forms.input-error for="name" class="mt-2" />
         </div>
 
         <!-- E-Mail -->
         <div class="col-span-6 sm:col-span-4">
-            <x-label for="email" value="{{ __('E-Mail') }}" />
-            <x-input id="email" type="email" class="mt-1 block w-full" wire:model="state.email" required autocomplete="username" />
-            <x-input-error for="email" class="mt-2" />
+            <x-forms.label for="email" value="{{ __('E-Mail') }}" />
+            <x-forms.input id="email" type="email" class="mt-1 block w-full" wire:model="state.email" required autocomplete="username" />
+            <x-forms.input-error for="email" class="mt-2" />
 
             @if (Laravel\Fortify\Features::enabled(Laravel\Fortify\Features::emailVerification()) && ! $this->user->hasVerifiedEmail())
                 <p class="text-sm mt-2">
@@ -124,12 +124,12 @@
     </x-slot>
 
     <x-slot name="actions">
-        <x-action-message class="me-3" on="saved">
+        <x-feedback.action-message class="me-3" on="saved">
             {{ __('Gespeichert.') }}
-        </x-action-message>
+        </x-feedback.action-message>
 
-        <x-button wire:loading.attr="disabled" wire:target="photo">
+        <x-ui.button wire:loading.attr="disabled" wire:target="photo">
             {{ __('Speichern') }}
-        </x-button>
+        </x-ui.button>
     </x-slot>
-</x-form-section>
+</x-layout.form-section>

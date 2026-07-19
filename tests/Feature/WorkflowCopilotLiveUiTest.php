@@ -70,10 +70,8 @@ class WorkflowCopilotLiveUiTest extends TestCase
 
         Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
             ->call('openCopilotOptimization')
-            ->assertRedirect(route('network.workflows.studio', [
-                'workflow' => $workflow->id,
-                'mode' => 'assisted',
-            ]));
+            ->assertSet('showTestWorkbenchModal', true)
+            ->assertSet('testWorkbenchMode', 'autonomous');
 
         $component = Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
             ->set('copilotGoal', 'Der Workflow erreicht vollstaendig die Erfolgsseite.')
@@ -97,20 +95,22 @@ class WorkflowCopilotLiveUiTest extends TestCase
         $this->assertSame(250, $session->usage_json['total_tokens']);
         $this->assertSame(['Finale URL enthaelt /success', 'Text Fertig ist sichtbar'], $session->success_criteria_json['assertions']);
         $this->assertSame($session->id, $workflow->fresh()->active_workflow_copilot_session_id);
-        $this->assertSame('wait.seconds', data_get($workflow->fresh()->steps()->first()?->task_cards, '0.task_key'));
+        $this->assertSame(0, $workflow->fresh()->steps()->count());
+        $this->assertDatabaseHas('workflow_optimization_plans', [
+            'workflow_copilot_session_id' => $session->id,
+            'status' => 'planned',
+        ]);
         $this->assertDatabaseHas('workflow_copilot_events', [
             'workflow_copilot_session_id' => $session->id,
-            'event_type' => 'plan.applied',
+            'event_type' => 'plan.blueprint_created',
         ]);
         Queue::assertPushed(
             WorkflowCopilotSupervisorJob::class,
             fn (WorkflowCopilotSupervisorJob $job): bool => $job->workflowCopilotSessionId === $session->id,
         );
-        $component->assertRedirect(route('network.workflows.studio', [
-            'workflow' => $workflow->id,
-            'mode' => 'autonomous',
-            'session' => $session->id,
-        ]));
+        $component
+            ->assertSet('showTestWorkbenchModal', true)
+            ->assertSet('testWorkbenchMode', 'autonomous');
 
         $component->call('pauseCopilotOptimization')->call('resumeCopilotOptimization');
         Queue::assertPushed(WorkflowCopilotSupervisorJob::class, 2);
@@ -441,20 +441,15 @@ class WorkflowCopilotLiveUiTest extends TestCase
             ->assertSet('activeCopilotSessionId', $session->id)
             ->assertSet('copilotStatus.verification_report.pass', true)
             ->call('openCopilotOptimization')
-            ->assertRedirect(route('network.workflows.studio', [
-                'workflow' => $workflow->id,
-                'mode' => 'autonomous',
-                'session' => $session->id,
-            ]));
+            ->assertSet('showTestWorkbenchModal', true)
+            ->assertSet('testWorkbenchMode', 'autonomous');
 
         $manager = Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
             ->call('closeCopilotPreview')
             ->assertSet('activeCopilotSessionId', null)
             ->call('openCopilotOptimization')
-            ->assertRedirect(route('network.workflows.studio', [
-                'workflow' => $workflow->id,
-                'mode' => 'assisted',
-            ]));
+            ->assertSet('showTestWorkbenchModal', true)
+            ->assertSet('testWorkbenchMode', 'autonomous');
     }
 
     public function test_clear_chat_hides_old_copilot_events_locally_without_deleting_the_audit_log(): void
@@ -652,7 +647,8 @@ class WorkflowCopilotLiveUiTest extends TestCase
 
         $manager = Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
             ->call('restartCopilotOptimization')
-            ->assertSet('showRunPreviewModal', true)
+            ->assertSet('showTestWorkbenchModal', true)
+            ->assertSet('testWorkbenchMode', 'autonomous')
             ->assertSet('previewWorkflowRunId', null)
             ->assertDispatched('workflow-copilot-session-activated');
 

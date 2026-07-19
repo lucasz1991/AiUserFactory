@@ -151,20 +151,19 @@
                                 <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" /></svg>
                             </button>
                             <div x-cloak x-show="open" x-transition x-on:click.outside="open = false" class="absolute right-0 z-50 mt-2 w-56 rounded-lg border border-slate-200 bg-white p-1.5 shadow-xl">
-                                <button type="button" wire:click="$set('showRunModal', true)" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-slate-900 hover:bg-slate-100">
-                                    Normalen Testdurchlauf starten
-                                    <span class="mt-0.5 block text-xs font-medium text-slate-500">Kompletter Lauf mit Eingaben und Ausfuehrungsziel</span>
+                                <button type="button" wire:click="openTestWorkbench('interactive')" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-slate-900 hover:bg-slate-100">
+                                    Interaktiv testen
+                                    <span class="mt-0.5 block text-xs font-medium text-slate-500">Schrittweise testen, pausieren und Tasks bearbeiten</span>
                                 </button>
-                                <a href="{{ route('network.workflows.studio', ['workflow' => $selectedWorkflow, 'mode' => 'manual']) }}" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-100">Test im Workflow Studio starten</a>
-                                <a href="{{ route('network.workflows.studio', ['workflow' => $selectedWorkflow, 'mode' => 'assisted']) }}" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-cyan-800 hover:bg-cyan-50">
-                                    Mit Copilot im Studio optimieren
-                                    <span class="mt-0.5 block text-xs font-medium text-cyan-600">Test, Browser und Tasks gemeinsam</span>
-                                </a>
+                                <button type="button" wire:click="openTestWorkbench('autonomous')" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-cyan-800 hover:bg-cyan-50">
+                                    Autonom optimieren
+                                    <span class="mt-0.5 block text-xs font-medium text-cyan-600">Copilot plant, testet und repariert exklusiv</span>
+                                </button>
                                 <button type="button" wire:click="$set('showCopilotRunsModal', true)" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-cyan-800 hover:bg-cyan-50">
                                     Optimierungslaeufe anzeigen
                                     <span class="mt-0.5 block text-xs font-medium text-cyan-600">Kosten, Tests, Logs und Daten</span>
                                 </button>
-                                <a @if($quickPreviewRun) href="{{ route('network.workflows.studio', ['workflow' => $selectedWorkflow, 'mode' => $activeCopilotSession ? 'autonomous' : 'manual', 'run' => $quickPreviewRun->id]) }}" @endif x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-indigo-700 hover:bg-indigo-50 {{ $quickPreviewRun ? '' : 'pointer-events-none opacity-40' }}">
+                                <button type="button" @if($quickPreviewRun) wire:click="openTestWorkbench('{{ $activeCopilotSession ? 'autonomous' : 'interactive' }}', {{ $quickPreviewRun->id }})" @endif x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-indigo-700 hover:bg-indigo-50 {{ $quickPreviewRun ? '' : 'pointer-events-none opacity-40' }}">
                                     {{ $quickPreviewRun && in_array($quickPreviewRun->status, ['queued', 'running', 'waiting'], true) ? 'Laufenden Test öffnen' : 'Letzten Test öffnen' }}
                                     @if($quickPreviewDurationLabel)
                                         <span class="mt-0.5 block text-xs font-medium text-indigo-500">Dauer: {{ $quickPreviewDurationLabel }}</span>
@@ -172,7 +171,7 @@
                                     @if($quickPreviewReturnLabel)
                                         <span class="mt-0.5 block break-words text-xs font-medium text-indigo-500">{{ $quickPreviewReturnLabel }}</span>
                                     @endif
-                                </a>
+                                </button>
                                 <button type="button" wire:click="downloadLatestRunDebugPackage" x-on:click="open = false" @disabled(! $quickPreviewRun) class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-40">
                                     Debug-Paket herunterladen
                                     <span class="mt-0.5 block text-xs font-medium text-emerald-500">CSV, letzter Run, DOM</span>
@@ -775,7 +774,7 @@
             </div>
         @endif
 
-        <x-dialog-modal wire:model="showWorkflowModal" maxWidth="2xl">
+        <x-ui.dialog-modal wire:model="showWorkflowModal" maxWidth="2xl">
             <x-slot name="title">Workflow bearbeiten</x-slot>
             <x-slot name="content">
                 <x-workflows.workflow-form
@@ -793,9 +792,21 @@
                 <button type="button" x-on:click="$dispatch('close')" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">Abbrechen</button>
                 <button type="button" wire:click="saveWorkflow" class="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">Speichern</button>
             </x-slot>
-        </x-dialog-modal>
+        </x-ui.dialog-modal>
 
-        <x-dialog-modal wire:model="showRunModal" maxWidth="xl" :interactive-aside="true">
+        @if($showTestWorkbenchModal && $selectedWorkflow)
+            <div class="fixed inset-0 z-[70] overflow-hidden bg-slate-100" role="dialog" aria-modal="true" aria-label="Workflow testen">
+                <livewire:admin.network.workflow-studio
+                    :workflow="$selectedWorkflow"
+                    :embedded="true"
+                    :initial-mode="$testWorkbenchMode"
+                    :run-id="$testWorkbenchRunId"
+                    :key="'workflow-test-workbench-'.$selectedWorkflow->id.'-'.$testWorkbenchKey"
+                />
+            </div>
+        @endif
+
+        <x-ui.dialog-modal wire:model="showRunModal" maxWidth="xl" :interactive-aside="true">
             <x-slot name="title">Workflow testen</x-slot>
             <x-slot name="content">
                 <div class="space-y-4">
@@ -857,9 +868,9 @@
                 <button type="button" x-on:click="$dispatch('close')" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">Abbrechen</button>
                 <button type="button" wire:click="runWorkflow" wire:loading.attr="disabled" class="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 disabled:opacity-60">Normalen Testdurchlauf starten</button>
             </x-slot>
-        </x-dialog-modal>
+        </x-ui.dialog-modal>
 
-        <x-dialog-modal wire:model="showCopilotModal" maxWidth="3xl" :interactive-aside="true">
+        <x-ui.dialog-modal wire:model="showCopilotModal" maxWidth="3xl" :interactive-aside="true">
             <x-slot name="title">Workflow mit Copilot optimieren</x-slot>
             <x-slot name="content">
                 <div class="space-y-5">
@@ -958,9 +969,9 @@
                 <button type="button" x-on:click="$dispatch('close')" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">Abbrechen</button>
                 <button type="button" wire:click="startCopilotOptimization" wire:loading.attr="disabled" wire:target="startCopilotOptimization" @disabled(! $copilotAutoExecute) class="rounded-md bg-cyan-700 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-40">System-Optimierung starten</button>
             </x-slot>
-        </x-dialog-modal>
+        </x-ui.dialog-modal>
 
-        <x-dialog-modal wire:model="showRunPreviewModal" maxWidth="7xl" :interactive-aside="true">
+        <x-ui.dialog-modal wire:model="showRunPreviewModal" maxWidth="7xl" :interactive-aside="true">
             <x-slot name="title">
                 <div class="flex flex-wrap items-center gap-2">
                     <span>{{ $activeCopilotSession ? 'Testlauf & Copilot-Optimierung' : 'Workflow-Testlauf' }}</span>
@@ -1326,9 +1337,9 @@
                     Schliessen
                 </button>
             </x-slot>
-        </x-dialog-modal>
+        </x-ui.dialog-modal>
 
-        <x-dialog-modal wire:model="showCopilotRunsModal" maxWidth="7xl" :interactive-aside="true">
+        <x-ui.dialog-modal wire:model="showCopilotRunsModal" maxWidth="7xl" :interactive-aside="true">
             <x-slot name="title">Copilot-Optimierungslaeufe dieses Workflows</x-slot>
             <x-slot name="content">
                 @if($showCopilotRunsModal && $selectedWorkflow)
@@ -1338,9 +1349,9 @@
             <x-slot name="footer">
                 <button type="button" x-on:click="$dispatch('close')" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">Schliessen</button>
             </x-slot>
-        </x-dialog-modal>
+        </x-ui.dialog-modal>
 
-        <x-dialog-modal wire:model="showAddStepModal" maxWidth="2xl">
+        <x-ui.dialog-modal wire:model="showAddStepModal" maxWidth="2xl">
             <x-slot name="title">Liste / Aufgabe hinzufuegen</x-slot>
             <x-slot name="content">
                 <div class="space-y-4">
@@ -1409,9 +1420,9 @@
                     <button type="button" wire:click="addStep" class="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">Hinzufuegen</button>
                 @endif
             </x-slot>
-        </x-dialog-modal>
+        </x-ui.dialog-modal>
 
-        <x-dialog-modal wire:model="showEditStepModal" maxWidth="2xl">
+        <x-ui.dialog-modal wire:model="showEditStepModal" maxWidth="2xl">
             <x-slot name="title">Liste / Aufgabe bearbeiten</x-slot>
             <x-slot name="content">
                 <div class="space-y-4">
@@ -1479,9 +1490,9 @@
                 <button type="button" x-on:click="$dispatch('close')" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">Abbrechen</button>
                 <button type="button" wire:click="saveEditStep" class="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">Speichern</button>
             </x-slot>
-        </x-dialog-modal>
+        </x-ui.dialog-modal>
 
-        <x-dialog-modal wire:model="showAddTaskModal" maxWidth="3xl">
+        <x-ui.dialog-modal wire:model="showAddTaskModal" maxWidth="3xl">
             <x-slot name="title">Step-Karte hinzufuegen</x-slot>
             <x-slot name="content">
                 @include('livewire.admin.network.partials.workflow-task-form', [
@@ -1501,9 +1512,9 @@
                     class="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800"
                 >Hinzufuegen</button>
             </x-slot>
-        </x-dialog-modal>
+        </x-ui.dialog-modal>
 
-        <x-dialog-modal wire:model="showEditTaskModal" maxWidth="5xl">
+        <x-ui.dialog-modal wire:model="showEditTaskModal" maxWidth="5xl">
             <x-slot name="title">Step-Karte bearbeiten</x-slot>
             <x-slot name="content">
                 @include('livewire.admin.network.partials.workflow-task-form', [
@@ -1523,9 +1534,9 @@
                     class="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700"
                 >Speichern</button>
             </x-slot>
-        </x-dialog-modal>
+        </x-ui.dialog-modal>
 
-        <x-dialog-modal wire:model="showRevisionHistoryModal" maxWidth="6xl">
+        <x-ui.dialog-modal wire:model="showRevisionHistoryModal" maxWidth="6xl">
             <x-slot name="title">
                 <div>
                     <span class="text-base font-semibold text-slate-950">Workflow-Revisionen</span>
@@ -1546,9 +1557,9 @@
             <x-slot name="footer">
                 <button type="button" x-on:click="$dispatch('close')" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">Schließen</button>
             </x-slot>
-        </x-dialog-modal>
+        </x-ui.dialog-modal>
 
-        <x-dialog-modal wire:model="showActionLibraryModal" maxWidth="5xl">
+        <x-ui.dialog-modal wire:model="showActionLibraryModal" maxWidth="5xl">
             <x-slot name="title">Aktionsbibliothek</x-slot>
             <x-slot name="content">
                 <div class="grid gacontainer md:grid-cols-2">
@@ -1590,6 +1601,6 @@
             <x-slot name="footer">
                 <button type="button" x-on:click="$dispatch('close')" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">Schliessen</button>
             </x-slot>
-        </x-dialog-modal>
+        </x-ui.dialog-modal>
     @endif
 </div>

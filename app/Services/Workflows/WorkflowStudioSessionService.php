@@ -21,7 +21,8 @@ class WorkflowStudioSessionService
         ?string $permissionMode = null,
         array $attributes = [],
     ): WorkflowStudioSession {
-        $mode = in_array($mode, ['manual', 'assisted', 'autonomous'], true) ? $mode : 'manual';
+        $mode = in_array($mode, ['manual', 'interactive', 'assisted', 'autonomous'], true) ? $mode : 'manual';
+        $mode = $mode === 'autonomous' ? 'autonomous' : 'manual';
         $permission = WorkflowCopilotPermissionMode::normalize(
             $permissionMode
             ?? data_get($workflow->settings_json, 'studio.permission_mode')
@@ -44,6 +45,7 @@ class WorkflowStudioSessionService
             'user_id' => $user?->getKey(),
             'person_id' => $attributes['person_id'] ?? null,
             'mode' => $mode,
+            'control_owner' => $mode === 'autonomous' ? 'copilot' : 'user',
             'permission_mode' => $permission->value,
             'status' => $attributes['status'] ?? 'draft',
             'goal' => $attributes['goal'] ?? null,

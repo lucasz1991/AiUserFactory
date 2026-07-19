@@ -2,6 +2,8 @@
 
 namespace App\Services\Workflows;
 
+use App\Enums\WorkflowLogicalOutcome;
+use App\Enums\WorkflowRouteDisposition;
 use App\Jobs\MonitorWorkflowStepRunJob;
 use App\Jobs\RunWorkflowJob;
 use App\Jobs\WorkflowCopilotSupervisorJob;
@@ -1402,9 +1404,10 @@ class WorkflowExecutionService
         $failureRoute = $hasFailureOutcome
             ? $this->routeForResult($step, $outcome, $result)
             : null;
+        $failureDisposition = WorkflowRouteDisposition::fromRoute($failureRoute);
         $routedFailure = ! $isProbe
             && $hasFailureOutcome
-            && $this->isContinuableFailureRoute($failureRoute);
+            && in_array($failureDisposition, [WorkflowRouteDisposition::CONTINUE, WorkflowRouteDisposition::COMPLETE], true);
         $taskSuccessful = $successful && ! $hasFailureOutcome;
         $workflowMayContinue = $taskSuccessful || $routedFailure;
         $context = $this->mergeWorkflowBrowserState($context, $result);
@@ -1608,7 +1611,9 @@ class WorkflowExecutionService
         $failureRoute = $hasFailureOutcome
             ? $this->routeForResult($step, $outcome, $result)
             : null;
-        $routedFailure = $hasFailureOutcome && $this->isContinuableFailureRoute($failureRoute);
+        $failureDisposition = WorkflowRouteDisposition::fromRoute($failureRoute);
+        $routedFailure = $hasFailureOutcome
+            && in_array($failureDisposition, [WorkflowRouteDisposition::CONTINUE, WorkflowRouteDisposition::COMPLETE], true);
         $taskSuccessful = $successful && ! $hasFailureOutcome;
         $workflowMayContinue = $taskSuccessful || $routedFailure;
 
@@ -2800,33 +2805,47 @@ class WorkflowExecutionService
             return;
         }
 
-        $this->recordRoute($run, $stepRun, $outcome, $route, $context);
+        $disposition = WorkflowRouteDisposition::fromRoute($route);
+        $logicalOutcome = WorkflowLogicalOutcome::fromResult($result, $outcome);
+        $result['logical_outcome'] = $logicalOutcome->value;
+        $result['logicalOutcome'] = $logicalOutcome->value;
+        $result['route_disposition'] = $disposition->value;
+        $result['routeDisposition'] = $disposition->value;
+        $result['resolved_route'] = $route;
+        $stepRun->forceFill([
+            'result_json' => $this->publicRunSnapshot($this->normalizeStepResult($stepRun, $result)),
+        ])->save();
+
+        app(WorkflowRevisionEvidenceService::class)->record(
+            $run,
+            $stepRun,
+            $result,
+            $logicalOutcome->value,
+            $disposition->value,
+        );
+
+        $this->recordRoute($run, $stepRun, $outcome, $route, $context, $result);
         $run->refresh();
 
-        if (in_array($outcome, ['failed', 'timeout'], true) && ! $this->isContinuableFailureRoute($route)) {
+        if ($disposition === WorkflowRouteDisposition::FAIL) {
             $this->failRun($run, (string) (
                 $route['message']
                 ?? data_get($result, 'statusMessage')
                 ?? data_get($result, 'message')
-                ?? 'Workflow wurde durch einen Taskfehler ohne Fortsetzungsroute beendet.'
+                ?? 'Workflow wurde ueber die ausdrueckliche Fehlerroute beendet.'
             ));
 
             return;
         }
 
-        if ($routeType === 'end') {
+        if ($disposition === WorkflowRouteDisposition::INVALID) {
+            $this->failRun($run, 'Workflow-Konfigurationsfehler: Fuer das Ergebnis '.$logicalOutcome->value.' wurde keine gueltige Route gefunden.');
+
+            return;
+        }
+
+        if ($disposition === WorkflowRouteDisposition::COMPLETE) {
             $this->completeRun($run);
-
-            return;
-        }
-
-        if ($routeType === 'fail') {
-            $this->failRun($run, (string) (
-                $route['message']
-                ?? data_get($result, 'statusMessage')
-                ?? data_get($result, 'message')
-                ?? 'Workflow wurde ueber Fehlerroute beendet.'
-            ));
 
             return;
         }
@@ -2852,8 +2871,15 @@ class WorkflowExecutionService
         if ($targetCardKey !== '') {
             $context['next_task_route_outcome'] = $outcome;
             $context['next_task_route_source_key'] = trim((string) ($route['_source_card_key'] ?? ''));
+            $context['next_task_logical_outcome'] = $logicalOutcome->value;
+            $context['next_task_route_disposition'] = $disposition->value;
         } else {
-            unset($context['next_task_route_outcome'], $context['next_task_route_source_key']);
+            unset(
+                $context['next_task_route_outcome'],
+                $context['next_task_route_source_key'],
+                $context['next_task_logical_outcome'],
+                $context['next_task_route_disposition'],
+            );
         }
 
         if ((bool) ($context['manual_pause_requested'] ?? false)) {
@@ -2974,29 +3000,13 @@ class WorkflowExecutionService
     }
 
     /**
-     * A failed task may continue the workflow only when its error route points
-     * to another executable card or step. Missing routes and the explicit
-     * terminal targets `end` and `fail` are real workflow failures.
+     * A failed/false branch continues only when it points to executable work.
+     * `end` is a regular completion, `fail` is the only explicit business
+     * failure and a missing target is a configuration error.
      */
     protected function isContinuableFailureRoute(?array $route): bool
     {
-        if (! is_array($route) || $route === []) {
-            return false;
-        }
-
-        $type = strtolower(trim((string) ($route['type'] ?? '')));
-        $step = strtolower(trim((string) ($route['action_key'] ?? $route['step'] ?? '')));
-        $card = trim((string) ($route['card_key'] ?? $route['card'] ?? ''));
-
-        if (in_array($type, ['end', 'fail'], true) || in_array($step, ['end', 'fail'], true)) {
-            return false;
-        }
-
-        if ($type === 'card') {
-            return $card !== '';
-        }
-
-        return $step !== '';
+        return WorkflowRouteDisposition::fromRoute($route) === WorkflowRouteDisposition::CONTINUE;
     }
 
     protected function hasRouteForOutcome(WorkflowStep $step, string $outcome): bool
@@ -3438,7 +3448,14 @@ class WorkflowExecutionService
         ]);
     }
 
-    protected function recordRoute(WorkflowRun $run, WorkflowStepRun $stepRun, string $outcome, array $route, ?array $context = null): void
+    protected function recordRoute(
+        WorkflowRun $run,
+        WorkflowStepRun $stepRun,
+        string $outcome,
+        array $route,
+        ?array $context = null,
+        array $result = [],
+    ): void
     {
         $context = is_array($context) ? $context : (is_array($run->context_json) ? $run->context_json : []);
         $history = is_array($context['route_history'] ?? null) ? $context['route_history'] : [];
@@ -3447,6 +3464,8 @@ class WorkflowExecutionService
             'workflow_step_id' => $stepRun->workflow_step_id,
             'workflow_step_run_id' => $stepRun->id,
             'outcome' => $outcome,
+            'logical_outcome' => WorkflowLogicalOutcome::fromResult($result, $outcome)->value,
+            'route_disposition' => WorkflowRouteDisposition::fromRoute($route)->value,
             'route' => $route,
         ];
 
@@ -3477,7 +3496,13 @@ class WorkflowExecutionService
         unset($context['next_step_action_key']);
 
         if (! $preserveTaskCursor) {
-            unset($context['next_task_key'], $context['next_task_route_outcome'], $context['next_task_route_source_key']);
+            unset(
+                $context['next_task_key'],
+                $context['next_task_route_outcome'],
+                $context['next_task_route_source_key'],
+                $context['next_task_logical_outcome'],
+                $context['next_task_route_disposition'],
+            );
         }
 
         $run->forceFill(['context_json' => $context])->save();

@@ -230,6 +230,8 @@ async function run(context = {}) {
     actual: actual ?? null,
     conditionMatched: matched,
     condition_matched: matched,
+    logicalOutcome: matched ? 'condition_true' : 'condition_false',
+    logical_outcome: matched ? 'condition_true' : 'condition_false',
   };
 
   if (!matched) {

@@ -278,10 +278,9 @@ test('failed task requests a configured external step route without failing the 
   )));
 });
 
-test('failed task remains a workflow failure for end, fail and missing error routes', () => {
+test('failed task remains a workflow failure for fail and missing error routes', () => {
   for (const route of [
     null,
-    { type: 'end', step: 'end' },
     { type: 'fail', step: 'fail' },
   ]) {
     const failedTask = returnTask('terminal-failure', false);
@@ -295,6 +294,18 @@ test('failed task remains a workflow failure for end, fail and missing error rou
     assert.equal(result.routeRequested, undefined);
     assert.equal(result.failedTaskKey, 'terminal-failure');
   }
+});
+
+test('configured end route completes a false branch without marking it as an error', () => {
+  const result = executeTasks([
+    branchTask('condition-not-met', { type: 'end', step: 'end' }),
+  ]);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.routeRequested, true);
+  assert.equal(result.routeOutcome, 'failed');
+  assert.equal(result.logicalOutcome, 'condition_false');
+  assert.equal(result.routeDisposition, 'complete');
 });
 
 test('unmatched condition follows on_error without marking the task as failed', () => {
@@ -314,6 +325,7 @@ test('unmatched condition follows on_error without marking the task as failed', 
   ]);
   assert.ok(result.events.some((event) => event.stage === 'task-condition-not-met'));
   assert.ok(result.events.some((event) => event.stage === 'task-branch-route-followed'));
+  assert.equal(result.tasks[0].logicalOutcome, 'condition_false');
   assert.equal(result.events.some((event) => (
     event.stage === 'task-failed' && event.taskKey === 'condition-not-met'
   )), false);

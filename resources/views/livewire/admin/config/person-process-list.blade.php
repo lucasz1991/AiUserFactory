@@ -177,7 +177,7 @@
         </div>
     @endif
 
-    <x-dialog-modal wire:model="showPreviewModal" maxWidth="6xl">
+    <x-ui.dialog-modal wire:model="showPreviewModal" maxWidth="6xl">
         <x-slot name="title">
             Prozess-Vorschau
         </x-slot>
@@ -293,9 +293,9 @@
                 Schliessen
             </button>
         </x-slot>
-    </x-dialog-modal>
+    </x-ui.dialog-modal>
 
-    <x-dialog-modal wire:model="showWorkflowPreviewModal" maxWidth="7xl">
+    <x-ui.dialog-modal wire:model="showWorkflowPreviewModal" maxWidth="7xl">
         <x-slot name="title">
             Workflow-Vorschau
         </x-slot>
@@ -326,5 +326,5 @@
                 Schliessen
             </button>
         </x-slot>
-    </x-dialog-modal>
+    </x-ui.dialog-modal>
 </section>

@@ -241,28 +241,28 @@ class WorkflowStudioTest extends TestCase
         $this->assertCount(2, $step->fresh()->task_cards);
     }
 
-    public function test_fullscreen_studio_renders_the_test_builder_and_task_navigation_without_checkpoint_controls(): void
+    public function test_unified_studio_renders_the_known_preview_tabs_and_permanent_copilot(): void
     {
         [$workflow] = $this->workflow();
         $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
         $this->actingAs($admin);
 
         Livewire::test(WorkflowStudio::class, ['workflow' => $workflow])
-            ->assertSee('Live-Browser & Ausführung', false)
-            ->assertSee('Testdurchlauf starten')
-            ->assertSee('1 Task ausführen')
-            ->assertSeeHtml('wire:click="terminateRun"')
-            ->assertSee('Task zurück')
-            ->assertSee('Task weiter')
-            ->assertSee('Workflow bearbeiten')
-            ->assertSee('Task-Katalog')
+            ->assertSee('Workflow-Vorschau & Live-Ausführung', false)
+            ->assertSee('Bis Ende starten')
+            ->assertSee('Eine Task')
+            ->assertSeeHtml('wire:click="stopRun"')
+            ->assertDontSeeHtml('wire:click="terminateRun"')
+            ->assertSee('Workflow-Vorschau')
+            ->assertSee('Browser & Selector')
+            ->assertSee('Daten & Checkpoints')
             ->assertSee('Browserfenster')
             ->assertSee('Selector prüfen')
-            ->assertSee('Daten & Logs', false)
-            ->assertSee('Copilot & Ziele', false)
+            ->assertSee('Immer bereit')
+            ->assertSee('Eigenes Testen')
+            ->assertSee('Autonomer Copilot')
             ->assertSee('Kritisch nachfragen')
-            ->assertDontSeeHtml('data-workflow-studio-tools-modal')
-            ->assertSeeHtml('data-studio-selected-task="true"')
+            ->assertDontSee('Workflow-Outline')
             ->assertDontSee('Checkpoints verwalten')
             ->assertDontSeeHtml('wire:model="showCheckpointsModal"');
 
@@ -273,7 +273,7 @@ class WorkflowStudioTest extends TestCase
             ->assertSee('Selector-Prüfung');
     }
 
-    public function test_tools_modal_is_only_rendered_for_a_valid_server_side_panel_and_can_close(): void
+    public function test_browser_tools_are_a_workspace_tab_and_only_builder_uses_a_modal(): void
     {
         [$workflow] = $this->workflow();
         $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
@@ -281,17 +281,18 @@ class WorkflowStudioTest extends TestCase
 
         Livewire::test(WorkflowStudio::class, ['workflow' => $workflow])
             ->assertSet('activeStudioPanel', '')
-            ->assertDontSeeHtml('data-workflow-studio-tools-modal')
+            ->assertSet('activeWorkspaceTab', 'test')
+            ->set('activeWorkspaceTab', 'tools')
+            ->assertSee('Browserwerkzeuge')
             ->call('openStudioPanel', 'tools')
-            ->assertSet('activeStudioPanel', 'tools')
-            ->assertSeeHtml('data-workflow-studio-tools-modal')
-            ->assertSee('Selector & Browser')
+            ->assertSet('activeStudioPanel', '')
+            ->call('openStudioPanel', 'builder')
+            ->assertSet('activeStudioPanel', 'builder')
+            ->assertSee('Workflow und Task bearbeiten')
             ->call('closeStudioPanel')
             ->assertSet('activeStudioPanel', '')
-            ->assertDontSeeHtml('data-workflow-studio-tools-modal')
             ->call('openStudioPanel', 'invalid-panel')
-            ->assertSet('activeStudioPanel', '')
-            ->assertDontSeeHtml('data-workflow-studio-tools-modal');
+            ->assertSet('activeStudioPanel', '');
     }
 
     public function test_revision_history_is_opened_from_the_workflow_manager_actions(): void
@@ -301,7 +302,8 @@ class WorkflowStudioTest extends TestCase
         $this->actingAs($admin);
 
         Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
-            ->assertSee('Normalen Testdurchlauf starten')
+            ->assertSee('Interaktiv testen')
+            ->assertSee('Autonom optimieren')
             ->assertSee('Revisionen')
             ->call('openRevisionHistory')
             ->assertSet('showRevisionHistoryModal', true)
@@ -692,7 +694,7 @@ class WorkflowStudioTest extends TestCase
         $this->assertSame([0, 1], $workflow->studioRevisions()->pluck('revision_number')->all());
     }
 
-    public function test_empty_workflow_is_planned_validated_and_started_from_the_studio(): void
+    public function test_empty_workflow_saves_a_blueprint_before_materializing_the_first_task(): void
     {
         Queue::fake();
         $workflow = Workflow::query()->create([
@@ -732,7 +734,16 @@ class WorkflowStudioTest extends TestCase
             ->assertHasNoErrors();
 
         $copilot = $workflow->fresh()->copilotSessions()->sole();
-        $this->assertSame('wait.seconds', data_get($workflow->fresh()->steps()->first()?->task_cards, '0.task_key'));
+        $this->assertSame(0, $workflow->fresh()->steps()->count());
+        $this->assertDatabaseHas('workflow_optimization_plans', [
+            'workflow_copilot_session_id' => $copilot->id,
+            'status' => 'planned',
+            'total_items' => 1,
+        ]);
+        $this->assertDatabaseHas('workflow_optimization_plan_items', [
+            'task_key' => 'kurz-warten',
+            'status' => 'planned',
+        ]);
         $this->assertNotEmpty(data_get($copilot->state_json, 'definition_validation'));
         $this->assertSame('workflow-studio', data_get($copilot->state_json, 'launch_source'));
         Queue::assertPushed(

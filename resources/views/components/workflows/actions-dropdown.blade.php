@@ -5,7 +5,7 @@
     'deleteMethod' => null,
 ])
 
-<x-dropdown align="right" width="48" contentClasses="bg-white py-1">
+<x-ui.dropdown align="right" width="48" contentClasses="bg-white py-1">
     <x-slot name="trigger">
         <button type="button" class="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 shadow-sm hover:bg-slate-50 hover:text-slate-900" aria-label="Workflow-Aktionen">
             <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor">
@@ -42,4 +42,4 @@
             @endif
         @endif
     </x-slot>
-</x-dropdown>
+</x-ui.dropdown>

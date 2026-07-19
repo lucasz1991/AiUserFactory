@@ -12,8 +12,8 @@ class WorkflowCopilotUiMarkupTest extends TestCase
         $view = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-manager.blade.php');
         $component = file_get_contents($root.'/app/Livewire/Admin/Network/WorkflowManager.php');
 
-        $this->assertStringContainsString("route('network.workflows.studio'", $view);
-        $this->assertStringContainsString('Mit Copilot im Studio optimieren', $view);
+        $this->assertStringContainsString("openTestWorkbench('interactive')", $view);
+        $this->assertStringContainsString("openTestWorkbench('autonomous')", $view);
         $this->assertStringContainsString('Ausschliesslich System-Ausfuehrung', $view);
         $this->assertStringContainsString('System-Optimierung starten', $view);
         $this->assertStringContainsString('wire:poll.2s="refreshRunPreview"', $view);
@@ -25,7 +25,7 @@ class WorkflowCopilotUiMarkupTest extends TestCase
         $this->assertStringContainsString('Zum Checkpoint zurueckspulen', $view);
         $this->assertStringContainsString('wire:click="openCopilotChat"', $view);
         $this->assertStringContainsString('wire:click="restartCopilotOptimization"', $view);
-        $this->assertStringContainsString('Normalen Testdurchlauf starten', $view);
+        $this->assertStringContainsString('Interaktiv testen', $view);
         $this->assertStringContainsString('wire:click="terminateCopilotOptimization"', $view);
         $this->assertStringContainsString('wire:click="terminatePreviewWorkflowRun"', $view);
         $this->assertStringContainsString('wire:click="downloadCopilotOptimizationLog"', $view);
@@ -46,7 +46,7 @@ class WorkflowCopilotUiMarkupTest extends TestCase
         $this->assertStringNotContainsString("'execution_target' => \$validated['copilot", $component);
     }
 
-    public function test_studio_and_docked_chat_expose_separate_graceful_stop_and_force_termination_controls(): void
+    public function test_interactive_studio_exposes_user_stop_while_autonomous_controls_stay_outside_the_modal(): void
     {
         $root = dirname(__DIR__, 2);
         $studio = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-studio.blade.php');
@@ -54,9 +54,9 @@ class WorkflowCopilotUiMarkupTest extends TestCase
         $chat = file_get_contents($root.'/resources/views/livewire/tools/chatbot.blade.php');
 
         $this->assertStringContainsString('wire:click="stopRun"', $studio);
-        $this->assertStringContainsString('wire:click="terminateRun"', $studio);
-        $this->assertStringContainsString('wire:click="stopCopilot"', $studioCopilot);
-        $this->assertStringContainsString('wire:click="terminateCopilot"', $studioCopilot);
+        $this->assertStringNotContainsString('wire:click="terminateRun"', $studio);
+        $this->assertStringContainsString('Autonome Steuerung', $studio);
+        $this->assertStringContainsString('Autonome Optimierung starten', file_get_contents($root.'/resources/views/livewire/admin/network/workflow-studio/copilot-rail.blade.php'));
         $this->assertStringContainsString('wire:click="stopCopilotSession"', $chat);
         $this->assertStringContainsString('wire:click="terminateCopilotSession"', $chat);
     }

@@ -445,7 +445,13 @@ class WorkflowStudioTaskEditor extends WorkflowManager
 
     private function definitionIsEditable(mixed $activeRun = null): bool
     {
-        $activeRun ??= WorkflowStudioSession::query()->findOrFail($this->studioSessionId)->activeRun;
+        $session = WorkflowStudioSession::query()->findOrFail($this->studioSessionId);
+
+        if ($session->mode === 'autonomous' && $session->mode_locked_at) {
+            return false;
+        }
+
+        $activeRun ??= $session->activeRun;
 
         return ! $activeRun || in_array((string) $activeRun->status, [
             'paused', 'completed', 'failed', 'cancelled', 'timed_out', 'lost',

@@ -2,6 +2,7 @@
 
 namespace App\Services\Workflows;
 
+use App\Enums\WorkflowLogicalOutcome;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowStep;
 use App\Models\WorkflowStepRun;
@@ -48,6 +49,11 @@ class WorkflowResultNormalizer
         $result['diagnostic_reason'] = $normalized['diagnostic_reason'];
         $result['state_signature'] = $normalized['state_signature'];
         $result['ui_state'] = $normalized['ui_state'];
+        $routeOutcome = strtolower(trim((string) ($result['routeOutcome'] ?? $result['route_outcome'] ?? 'success')));
+        $logicalOutcome = WorkflowLogicalOutcome::fromResult($result, $routeOutcome);
+        $result['logical_outcome'] = $logicalOutcome->value;
+        $result['logicalOutcome'] = $logicalOutcome->value;
+        $result['normalized_result']['logical_outcome'] = $logicalOutcome->value;
 
         if (($normalized['mail_scan'] ?? []) !== []) {
             $result['mail_scan_diagnostics'] = $normalized['mail_scan'];
@@ -132,6 +138,11 @@ class WorkflowResultNormalizer
     protected function withNormalizedPayload(array $payload, array $status, ?string $externalRunType, array $task): array
     {
         $payload['normalized_result'] = $this->evaluatePayload($payload, $status, $externalRunType, $task);
+        $routeOutcome = strtolower(trim((string) ($payload['routeOutcome'] ?? $payload['route_outcome'] ?? $payload['branchOutcome'] ?? $payload['branch_outcome'] ?? 'success')));
+        $logicalOutcome = WorkflowLogicalOutcome::fromResult($payload, $routeOutcome);
+        $payload['logical_outcome'] = $logicalOutcome->value;
+        $payload['logicalOutcome'] = $logicalOutcome->value;
+        $payload['normalized_result']['logical_outcome'] = $logicalOutcome->value;
 
         return $payload;
     }

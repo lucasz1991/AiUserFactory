@@ -306,7 +306,7 @@
         </div>
     </div>
 
-    <x-dialog-modal wire:model="showCreateProfileModal">
+    <x-ui.dialog-modal wire:model="showCreateProfileModal">
         <x-slot name="title">
             Neue Person anlegen
         </x-slot>
@@ -355,7 +355,7 @@
                 </button>
             </div>
         </x-slot>
-    </x-dialog-modal>
+    </x-ui.dialog-modal>
 
     @if($baseSyncResult)
         <div class="rounded-lg border p-4 text-sm {{ ($baseSyncResult['ok'] ?? false) ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-red-200 bg-red-50 text-red-900' }}">
@@ -363,7 +363,7 @@
         </div>
     @endif
 
-    <x-dialog-modal wire:model="showProfileModal" maxWidth="2xl">
+    <x-ui.dialog-modal wire:model="showProfileModal" maxWidth="2xl">
         <x-slot name="title">
             Person bearbeiten
         </x-slot>
@@ -552,9 +552,9 @@
                 </button>
             </div>
         </x-slot>
-    </x-dialog-modal>
+    </x-ui.dialog-modal>
 
-    <x-dialog-modal wire:model="showRuntimeSettingsModal" maxWidth="2xl">
+    <x-ui.dialog-modal wire:model="showRuntimeSettingsModal" maxWidth="2xl">
         <x-slot name="title">
             Timeouts und Listen
         </x-slot>
@@ -640,9 +640,9 @@
                 </button>
             </div>
         </x-slot>
-    </x-dialog-modal>
+    </x-ui.dialog-modal>
 
-    <x-dialog-modal wire:model="showAiSuggestionPickerModal" maxWidth="md">
+    <x-ui.dialog-modal wire:model="showAiSuggestionPickerModal" maxWidth="md">
         <x-slot name="title">
             AI-Vorschlag
         </x-slot>
@@ -668,7 +668,7 @@
                 </button>
             </div>
         </x-slot>
-    </x-dialog-modal>
+    </x-ui.dialog-modal>
 
     @livewire('admin.persons.ai-complete-person-profile-modal')
     @livewire('admin.persons.generate-person-images-modal')

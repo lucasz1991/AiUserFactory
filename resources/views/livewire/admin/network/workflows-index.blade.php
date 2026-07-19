@@ -97,7 +97,7 @@
     @endphp
 
     <x-admin.panel class="overflow-visible border-slate-200 shadow-sm">
-        <x-ui.navigation.hozizontal.tabs.horizontal-tabs-panel
+        <x-ui.navigation.horizontal.tabs.horizontal-tabs-panel
             :tabs="$workflowGroupTabs"
             :default="$activeGroup"
             :sync-on-init="true"
@@ -107,7 +107,7 @@
             content-class=""
             x-on:ui-tab-selected="if ($event.detail.group === 'network-workflows-group') $wire.selectWorkflowGroup($event.detail.tab)"
         >
-            <x-ui.navigation.hozizontal.tabs.horizontal-tab
+            <x-ui.navigation.horizontal.tabs.horizontal-tab
                 :for="$activeGroup"
                 :active="$activeGroup"
                 group="network-workflows-group"
@@ -116,7 +116,7 @@
             >
 
         @if($subcategories->isNotEmpty())
-            <x-ui.navigation.hozizontal.tabs.horizontal-tabs-panel
+            <x-ui.navigation.horizontal.tabs.horizontal-tabs-panel
                 :tabs="$workflowSubcategoryTabs"
                 :default="$activeSubcategory"
                 :sync-on-init="true"
@@ -264,11 +264,11 @@
         <div class="border-t border-slate-100 p-4">
             {{ $visibleWorkflows->links() }}
         </div>
-            </x-ui.navigation.hozizontal.tabs.horizontal-tab>
-        </x-ui.navigation.hozizontal.tabs.horizontal-tabs-panel>
+            </x-ui.navigation.horizontal.tabs.horizontal-tab>
+        </x-ui.navigation.horizontal.tabs.horizontal-tabs-panel>
     </x-admin.panel>
 
-    <x-dialog-modal wire:model="showCreateWorkflowModal" maxWidth="2xl">
+    <x-ui.dialog-modal wire:model="showCreateWorkflowModal" maxWidth="2xl">
         <x-slot name="title">Neuer Workflow</x-slot>
         <x-slot name="content">
             <x-workflows.workflow-form
@@ -307,9 +307,9 @@
             <button type="button" x-on:click="$dispatch('close')" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">Abbrechen</button>
             <button type="button" wire:click="createWorkflow" class="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">Erstellen</button>
         </x-slot>
-    </x-dialog-modal>
+    </x-ui.dialog-modal>
 
-    <x-dialog-modal wire:model="showEditWorkflowModal" maxWidth="2xl">
+    <x-ui.dialog-modal wire:model="showEditWorkflowModal" maxWidth="2xl">
         <x-slot name="title">Workflow bearbeiten</x-slot>
         <x-slot name="content">
             <x-workflows.workflow-form
@@ -331,9 +331,9 @@
                 <button type="button" wire:click="saveEditWorkflow" class="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">{{ $editingWorkflowEffectiveLocked ? 'Entsperren' : 'Speichern' }}</button>
             @endif
         </x-slot>
-    </x-dialog-modal>
+    </x-ui.dialog-modal>
 
-    <x-dialog-modal wire:model="showImportWorkflowModal" maxWidth="2xl">
+    <x-ui.dialog-modal wire:model="showImportWorkflowModal" maxWidth="2xl">
         <x-slot name="title">Workflows importieren</x-slot>
         <x-slot name="content">
             <div class="space-y-4">
@@ -354,9 +354,9 @@
                 Importieren
             </button>
         </x-slot>
-    </x-dialog-modal>
+    </x-ui.dialog-modal>
 
-    <x-dialog-modal wire:model="showCopilotRunsModal" maxWidth="7xl" :interactive-aside="true">
+    <x-ui.dialog-modal wire:model="showCopilotRunsModal" maxWidth="7xl" :interactive-aside="true">
         <x-slot name="title">Copilot-Optimierungslaeufe aller Workflows</x-slot>
         <x-slot name="content">
             @if($showCopilotRunsModal)
@@ -366,5 +366,5 @@
         <x-slot name="footer">
             <button type="button" x-on:click="$dispatch('close')" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">Schliessen</button>
         </x-slot>
-    </x-dialog-modal>
+    </x-ui.dialog-modal>
 </div>

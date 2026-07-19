@@ -56,6 +56,11 @@ async function run(context = {}) {
       searchedFrames,
       searchedOpenShadowDom: true,
       branchOutcome: 'failed',
+      branch_outcome: 'failed',
+      conditionMatched: false,
+      condition_matched: false,
+      logicalOutcome: 'condition_false',
+      logical_outcome: 'condition_false',
     };
   }
 
@@ -88,6 +93,10 @@ async function run(context = {}) {
     searchedFrames,
     searchedOpenShadowDom: true,
     element,
+    conditionMatched: true,
+    condition_matched: true,
+    logicalOutcome: 'condition_true',
+    logical_outcome: 'condition_true',
   });
 }
 

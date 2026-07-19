@@ -1,4 +1,4 @@
-{{-- Marken-/Visualseite der Auth-Strecke (Factory AI) --}}
+{{-- Marken-/Visualseite der Auth-Strecke (Factory AI) – nur Marke, keine Systeminfos --}}
 <div class="relative h-full min-h-screen select-none overflow-hidden bg-gradient-to-br from-primary-base via-[#284a82] to-secondary-base">
     {{-- weiche, schwebende Lichtflecken --}}
     <div class="pointer-events-none absolute inset-0">
@@ -11,35 +11,13 @@
     <div class="pointer-events-none absolute inset-0 opacity-[0.10]"
          style="background-image:linear-gradient(rgba(255,255,255,.6) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.6) 1px,transparent 1px);background-size:46px 46px;"></div>
 
-    {{-- Inhalt --}}
-    <div class="relative z-10 flex h-full min-h-screen flex-col justify-between p-12 text-white xl:p-16">
-        <div class="flex items-center gap-2.5 text-xs font-semibold uppercase tracking-[0.22em] text-white/75">
-            <span class="h-2 w-2 rounded-full bg-secondary-base shadow-[0_0_12px_2px_rgba(51,160,67,0.7)]"></span>
-            Factory AI · User Factory
+    {{-- Markenlockup: Icon + Name --}}
+    <div class="relative z-10 flex h-full min-h-screen flex-col items-center justify-center p-12 text-center text-white">
+        <div class="flex h-24 w-24 items-center justify-center rounded-[1.4rem] bg-white shadow-2xl shadow-black/25 ring-1 ring-white/40">
+            <img src="{{ asset('/site-images/brand/factory-ai-mark.svg') }}" alt="Factory AI" class="h-16 w-16">
         </div>
-
-        <div class="max-w-xl">
-            <h1 class="text-3xl font-bold leading-tight xl:text-[2.7rem]">
-                Deine autonome<br>User&nbsp;Factory.
-            </h1>
-            <p class="mt-5 max-w-md text-base text-white/80 xl:text-lg">
-                Personenprofile, Browser-Sessions, Workflows und Automationen &mdash;
-                zentral gesteuert, vollstaendig kontrolliert.
-            </p>
-
-            <div class="mt-9 flex flex-wrap gap-2.5">
-                @foreach (['Personenprofile', 'Browser-Sessions', 'Workflow-Studio', 'Automationen'] as $chip)
-                    <span class="rounded-full border border-white/20 bg-white/10 px-4 py-1.5 text-13 font-medium backdrop-blur-sm">
-                        {{ $chip }}
-                    </span>
-                @endforeach
-            </div>
-        </div>
-
-        <div class="flex items-center gap-2 text-sm text-white/55">
-            <span class="mdi mdi-shield-check-outline text-base"></span>
-            Sichere Verwaltung &middot; Rollenbasierter Zugriff
-        </div>
+        <h1 class="mt-8 text-4xl font-bold tracking-tight">Factory&nbsp;AI</h1>
+        <p class="mt-2.5 text-13 font-semibold uppercase tracking-[0.35em] text-white/70">User Factory</p>
     </div>
 
     <style>

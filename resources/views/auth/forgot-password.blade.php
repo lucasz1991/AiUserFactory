@@ -8,13 +8,7 @@
     @endphp
 
     <div>
-        <span class="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-secondary-base">
-            <span class="h-1.5 w-1.5 rounded-full bg-secondary-base"></span> Passwort zuruecksetzen
-        </span>
-        <h1 class="mt-3 text-2xl font-bold text-slate-800 dark:text-white">Passwort vergessen?</h1>
-        <p class="mt-2 text-sm text-slate-500 dark:text-zinc-400">
-            Gib deine E-Mail-Adresse ein &mdash; wir senden dir einen Link, mit dem du ein neues Passwort vergeben kannst.
-        </p>
+        <h1 class="text-2xl font-bold text-slate-800 dark:text-white">Passwort vergessen</h1>
 
         @if (session('status'))
             <div class="mt-5 rounded-lg border border-secondary-base/30 bg-secondary-base/10 px-4 py-3 text-sm font-medium text-secondary-base">

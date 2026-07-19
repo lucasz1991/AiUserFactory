@@ -52,6 +52,22 @@ class WorkflowCopilotPlanningService
         array $successCriteria = [],
         array $workflowInputs = [],
     ): array {
+        $normalized = $this->plan($workflow, $goal, $successCriteria, $workflowInputs);
+
+        return $this->applyPlan($workflow, $goal, $normalized, $successCriteria, $workflowInputs);
+    }
+
+    /**
+     * Build the immutable blueprint without changing the workflow definition.
+     *
+     * @return array{summary:string, assumptions:array, steps:array, task_count:int}
+     */
+    public function plan(
+        Workflow $workflow,
+        string $goal,
+        array $successCriteria = [],
+        array $workflowInputs = [],
+    ): array {
         if (! $this->needsInitialPlan($workflow)) {
             throw new RuntimeException('Eine Erstplanung ist nur fuer einen Workflow ohne konfigurierte Tasks erlaubt.');
         }
@@ -79,10 +95,29 @@ class WorkflowCopilotPlanningService
             throw new RuntimeException('Die Planungs-KI hat keinen ausfuehrbaren Workflow mit katalogkonformen Tasks geliefert.');
         }
 
-        DB::transaction(function () use ($workflow, $goal, $normalized, $successCriteria, $workflowInputs): void {
+        return $normalized;
+    }
+
+    /**
+     * @param  array{summary:string, assumptions:array, steps:array, task_count:int}  $normalized
+     * @return array{summary:string, assumptions:array, steps:array, task_count:int}
+     */
+    public function applyPlan(
+        Workflow $workflow,
+        string $goal,
+        array $normalized,
+        array $successCriteria = [],
+        array $workflowInputs = [],
+        bool $replaceExisting = false,
+    ): array {
+        if ($normalized['steps'] === [] || $normalized['task_count'] < 1) {
+            throw new RuntimeException('Der Workflow-Plan enthaelt keine ausfuehrbaren Tasks.');
+        }
+
+        DB::transaction(function () use ($workflow, $goal, $normalized, $successCriteria, $workflowInputs, $replaceExisting): void {
             $lockedWorkflow = Workflow::query()->lockForUpdate()->findOrFail($workflow->id);
 
-            if (! $this->needsInitialPlan($lockedWorkflow)) {
+            if (! $replaceExisting && ! $this->needsInitialPlan($lockedWorkflow)) {
                 throw new RuntimeException('Der Workflow wurde waehrend der Erstplanung bereits bearbeitet.');
             }
 

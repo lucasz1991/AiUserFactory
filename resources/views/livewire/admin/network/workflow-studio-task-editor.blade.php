@@ -149,7 +149,7 @@
         </section>
     </div>
 
-    <x-dialog-modal wire:model="showAddStepModal" maxWidth="2xl">
+    <x-ui.dialog-modal wire:model="showAddStepModal" maxWidth="2xl">
         <x-slot name="title">
             <div><span class="text-base font-semibold text-slate-950">Neue Workflow-Liste</span><p class="mt-1 text-xs font-normal text-slate-500">Eine Liste gruppiert zusammengehörige Tasks und besitzt eigene Erfolgs- und Fehlerwege.</p></div>
         </x-slot>
@@ -177,9 +177,9 @@
             <button type="button" x-on:click="$dispatch('close')" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">Abbrechen</button>
             <button type="button" wire:click="addStep" class="ml-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">Liste anlegen</button>
         </x-slot>
-    </x-dialog-modal>
+    </x-ui.dialog-modal>
 
-    <x-dialog-modal wire:model="showEditStepModal" maxWidth="2xl">
+    <x-ui.dialog-modal wire:model="showEditStepModal" maxWidth="2xl">
         <x-slot name="title">
             <div><span class="text-base font-semibold text-slate-950">Liste bearbeiten</span><p class="mt-1 text-xs font-normal text-slate-500">Name, Status, Pause und Routing dieser Liste ändern.</p></div>
         </x-slot>
@@ -235,9 +235,9 @@
             <button type="button" x-on:click="$dispatch('close')" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">Abbrechen</button>
             <button type="button" wire:click="saveEditStep" class="ml-2 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-cyan-500">Speichern & Revision erstellen</button>
         </x-slot>
-    </x-dialog-modal>
+    </x-ui.dialog-modal>
 
-    <x-dialog-modal wire:model="showAddTaskModal" maxWidth="3xl">
+    <x-ui.dialog-modal wire:model="showAddTaskModal" maxWidth="3xl">
         <x-slot name="title">
             <div><span class="text-base font-semibold text-slate-950">Task einsetzen</span><p class="mt-1 text-xs font-normal text-slate-500">Parameter, Browserfenster sowie Erfolgs- und Fehlerwege vor dem Einfügen festlegen.</p></div>
         </x-slot>
@@ -246,9 +246,9 @@
             <button type="button" x-on:click="$dispatch('close')" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">Abbrechen</button>
             <button type="button" x-on:click.prevent="const source = document.querySelector('[data-workflow-task-mailbox-source=&quot;newTask&quot;]')?.value || 'person'; $wire.addTaskCard(source);" class="ml-2 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-cyan-500">Task einsetzen</button>
         </x-slot>
-    </x-dialog-modal>
+    </x-ui.dialog-modal>
 
-    <x-dialog-modal wire:model="showEditTaskModal" maxWidth="5xl">
+    <x-ui.dialog-modal wire:model="showEditTaskModal" maxWidth="5xl">
         <x-slot name="title">
             <div><span class="text-base font-semibold text-slate-950">Task bearbeiten</span><p class="mt-1 text-xs font-normal text-slate-500">Alle Task-Einstellungen aus dem Workflow-Manager stehen auch im pausierten Testlauf zur Verfügung.</p></div>
         </x-slot>
@@ -257,5 +257,5 @@
             <button type="button" x-on:click="$dispatch('close')" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">Abbrechen</button>
             <button type="button" x-on:click.prevent="const source = document.querySelector('[data-workflow-task-mailbox-source=&quot;editingTask&quot;]')?.value || 'person'; $wire.saveEditTaskCard(source);" class="ml-2 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-cyan-500">Speichern & Revision erstellen</button>
         </x-slot>
-    </x-dialog-modal>
+    </x-ui.dialog-modal>
 </div>

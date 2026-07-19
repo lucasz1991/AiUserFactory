@@ -1559,7 +1559,7 @@ class WorkflowTaskCatalog
                 'Ergaenzt _summary mit valid, has_required_inputs, required_count und missing_required_count.',
             ],
             'decision.array_length' => ['Liefert Array-Laenge, Vergleichsergebnis und die passende dynamische Route. Das Array selbst bleibt unveraendert.'],
-            'decision.element_exists', 'decision.variable' => ['Liefert ein boolesches Bedingungsergebnis. Eine nicht erfuellte Bedingung ist ein fachlicher failed-Zweig, kein Runtime-Crash.'],
+            'decision.element_exists', 'decision.variable' => ['Liefert ein boolesches Bedingungsergebnis. Eine nicht erfuellte Bedingung ist condition_false und eine normale Verzweigung; nur eine ausdrueckliche fail-Route beendet den Workflow als Fehler.'],
             'browser.find_inputs' => ['Liefert sichtbare Eingabefelder inklusive Labels, Namen und Selector-Kandidaten fuer nachfolgende Formular-Tasks.'],
             'browser.find_element' => ['Liefert den Fundstatus und Selector-/Elementinformationen fuer nachfolgende Aktionen oder Entscheidungen.'],
             'mail.inbox_list_scan' => ['Speichert die gefundenen Mails unter output_array_name als Workflow-Array und liefert Zaehler sowie Diagnoseinformationen.'],

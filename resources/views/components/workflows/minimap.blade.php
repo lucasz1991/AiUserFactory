@@ -107,6 +107,8 @@
         ->map(function (array $event, int $index) use ($stepById, $stepByAction, $firstTaskNodeByStep, $taskLabelByNode, $routeDirection) {
             $route = data_get($event, 'route', []);
             $outcome = (string) data_get($event, 'outcome', '-');
+            $logicalOutcome = trim((string) data_get($event, 'logical_outcome', ''));
+            $routeDisposition = trim((string) data_get($event, 'route_disposition', ''));
             $routeType = trim((string) data_get($route, 'type', 'step')) ?: 'step';
             $sourceStep = $stepById->get((int) data_get($event, 'workflow_step_id'));
             $sourceAction = trim((string) ($sourceStep?->action_key ?? ''));
@@ -134,10 +136,13 @@
                 'fail' => 'Abbruch',
                 default => 'Route',
             };
-            $lineTone = match ($outcome) {
-                'success' => 'success',
-                'failed', 'timeout' => 'failed',
-                'partial', 'waiting' => 'waiting',
+            $lineTone = match (true) {
+                in_array($routeDisposition, ['fail', 'invalid'], true) => 'failed',
+                in_array($logicalOutcome, ['condition_true', 'success'], true) => 'success',
+                $logicalOutcome === 'condition_false' => 'waiting',
+                in_array($logicalOutcome, ['technical_error', 'timeout'], true) => 'failed',
+                $outcome === 'success' => 'success',
+                in_array($outcome, ['partial', 'waiting'], true) => 'waiting',
                 default => 'default',
             };
 
@@ -145,6 +150,14 @@
                 'id' => 'route-'.$index,
                 'at' => (string) data_get($event, 'at', ''),
                 'outcome' => $outcome,
+                'outcomeLabel' => match ($logicalOutcome) {
+                    'condition_true' => 'Bedingung wahr',
+                    'condition_false' => 'Bedingung falsch',
+                    'technical_error' => 'Technischer Fehler',
+                    default => $outcome,
+                },
+                'logicalOutcome' => $logicalOutcome,
+                'routeDisposition' => $routeDisposition,
                 'type' => $routeType,
                 'direction' => $direction,
                 'directionLabel' => $directionLabel,
@@ -162,6 +175,8 @@
         ->values();
     $pendingRouteTargetCard = trim((string) data_get($workflowRun?->context_json, 'next_task_key', ''));
     $pendingRouteOutcome = trim((string) data_get($workflowRun?->context_json, 'next_task_route_outcome', ''));
+    $pendingLogicalOutcome = trim((string) data_get($workflowRun?->context_json, 'next_task_logical_outcome', ''));
+    $pendingRouteDisposition = trim((string) data_get($workflowRun?->context_json, 'next_task_route_disposition', ''));
     $pendingRouteSourceCard = trim((string) data_get($workflowRun?->context_json, 'next_task_route_source_key', ''));
     $pendingRouteTargetAction = trim((string) data_get($workflowRun?->context_json, 'next_step_action_key', ''));
     $pendingRouteSourceAction = $actionKeyForTask($pendingRouteSourceCard);
@@ -184,6 +199,14 @@
             'id' => 'route-pending',
             'at' => '',
             'outcome' => $pendingRouteOutcome,
+            'outcomeLabel' => match ($pendingLogicalOutcome) {
+                'condition_true' => 'Bedingung wahr',
+                'condition_false' => 'Bedingung falsch',
+                'technical_error' => 'Technischer Fehler',
+                default => $pendingRouteOutcome,
+            },
+            'logicalOutcome' => $pendingLogicalOutcome,
+            'routeDisposition' => $pendingRouteDisposition,
             'type' => 'card',
             'direction' => $direction,
             'directionLabel' => match ($direction) {
@@ -192,10 +215,13 @@
                 'loop' => 'Aktive Schleife',
                 default => 'Aktive Route',
             },
-            'lineTone' => match ($pendingRouteOutcome) {
-                'success' => 'success',
-                'failed', 'timeout' => 'failed',
-                'partial', 'waiting' => 'waiting',
+            'lineTone' => match (true) {
+                in_array($pendingRouteDisposition, ['fail', 'invalid'], true) => 'failed',
+                in_array($pendingLogicalOutcome, ['condition_true', 'success'], true) => 'success',
+                $pendingLogicalOutcome === 'condition_false' => 'waiting',
+                in_array($pendingLogicalOutcome, ['technical_error', 'timeout'], true) => 'failed',
+                $pendingRouteOutcome === 'success' => 'success',
+                in_array($pendingRouteOutcome, ['partial', 'waiting'], true) => 'waiting',
                 default => 'default',
             },
             'sourceNode' => $sourceNode,
@@ -704,7 +730,7 @@
             <div class="flex flex-wrap gap-1 text-[11px]">
                 @foreach($routeEvents->take(-6) as $routeEvent)
                     <span class="rounded-full px-2 py-1 font-semibold ring-1 {{ $routeChipClass($routeEvent) }}">
-                        {{ $routeEvent['directionLabel'] }}: {{ $routeEvent['outcome'] }} -> {{ $routeEvent['routeLabel'] }}
+                        {{ $routeEvent['directionLabel'] }}: {{ $routeEvent['outcomeLabel'] ?? $routeEvent['outcome'] }} -> {{ $routeEvent['routeLabel'] }}
                     </span>
                 @endforeach
             </div>
