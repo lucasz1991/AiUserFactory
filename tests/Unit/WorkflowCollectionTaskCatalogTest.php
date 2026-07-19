@@ -31,6 +31,24 @@ class WorkflowCollectionTaskCatalogTest extends TestCase
         }
     }
 
+    public function test_browser_navigation_tasks_are_registered_with_node_runner(): void
+    {
+        $catalog = new WorkflowTaskCatalog;
+        $expected = [
+            'browser.navigate_back' => 'node/workflows/tasks/browser/navigate_back.cjs',
+            'browser.navigate_forward' => 'node/workflows/tasks/browser/navigate_forward.cjs',
+            'browser.reload' => 'node/workflows/tasks/browser/reload.cjs',
+        ];
+
+        foreach ($expected as $taskKey => $script) {
+            $definition = $catalog->task($taskKey);
+
+            $this->assertNotNull($definition, $taskKey);
+            $this->assertSame('node', $definition['runner'], $taskKey);
+            $this->assertSame($script, $definition['node_script'], $taskKey);
+        }
+    }
+
     public function test_catalog_cards_include_task_specific_defaults(): void
     {
         $catalog = new WorkflowTaskCatalog;

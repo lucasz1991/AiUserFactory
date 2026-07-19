@@ -55,6 +55,9 @@ let browserFallbackReason = null;
 let connectedToExistingBrowser = false;
 let browserDisconnected = false;
 let shutdownInProgress = false;
+let debugManifestDirty = false;
+let debugManifestLastWriteAtMs = 0;
+const DEBUG_MANIFEST_WRITE_INTERVAL_MS = 2000;
 
 function now() {
   return new Date().toISOString();
@@ -1308,18 +1311,36 @@ function appendDebugArtifact(artifact) {
     debugArtifacts.splice(0, debugArtifacts.length - 500);
   }
 
-  const manifestPath = String(config.manifestPath || config.manifest_path || '').trim();
-
-  if (manifestPath) {
-    writeJson(manifestPath, {
-      updatedAt: now(),
-      workflowRunId: config.workflowRunId || runtime.workflowRunId || null,
-      workflowStepRunId: config.workflowStepRunId || runtime.workflowStepRunId || null,
-      artifacts: debugArtifacts,
-    });
-  }
+  debugManifestDirty = true;
+  flushDebugArtifactManifest(false);
 
   return cleanArtifact;
+}
+
+function flushDebugArtifactManifest(force = false) {
+  if (!debugManifestDirty) {
+    return;
+  }
+
+  if (!force && Date.now() - debugManifestLastWriteAtMs < DEBUG_MANIFEST_WRITE_INTERVAL_MS) {
+    return;
+  }
+
+  const config = devDebugConfig();
+  const manifestPath = String(config.manifestPath || config.manifest_path || '').trim();
+
+  if (!manifestPath) {
+    return;
+  }
+
+  writeJson(manifestPath, {
+    updatedAt: now(),
+    workflowRunId: config.workflowRunId || runtime.workflowRunId || null,
+    workflowStepRunId: config.workflowStepRunId || runtime.workflowStepRunId || null,
+    artifacts: debugArtifacts,
+  });
+  debugManifestDirty = false;
+  debugManifestLastWriteAtMs = Date.now();
 }
 
 async function devDomSnapshot(targetPage) {
@@ -2337,6 +2358,7 @@ async function handleShutdownSignal(signal) {
     try {
       await closeWorkflowBrowser(finalState);
     } finally {
+      flushDebugArtifactManifest(true);
       process.exit(0);
     }
   }
@@ -2361,6 +2383,7 @@ async function handleShutdownSignal(signal) {
   try {
     await finalizeBrowserLifecycle('cancelled');
   } finally {
+    flushDebugArtifactManifest(true);
     process.exit(0);
   }
 }
@@ -2843,6 +2866,8 @@ async function run() {
       pushEvent('dev-debug-after-failed', error.message, { taskKey: task.key });
     });
 
+    flushDebugArtifactManifest(true);
+
     const dynamicRouteTarget = String(result.route_target_key || result.routeTargetKey || '').trim();
 
     if (dynamicRouteTarget !== '') {
@@ -3090,6 +3115,7 @@ async function run() {
       failedResult.debugArtifacts = debugArtifacts;
       failedResult.debug_artifacts = debugArtifacts;
 
+      flushDebugArtifactManifest(true);
       writeJson(runtime.resultPath, failedResult);
       writeStatus('failed', 'failed', failedResult.statusMessage, { result: failedResult });
 
@@ -3265,6 +3291,7 @@ async function run() {
     } : {}),
   };
 
+  flushDebugArtifactManifest(true);
   writeJson(runtime.resultPath, result);
   writeStatus('completed', 'completed', result.statusMessage, { result });
 }
@@ -3291,10 +3318,13 @@ run()
       events,
       finishedAt: now(),
     };
+    flushDebugArtifactManifest(true);
     writeJson(runtime.resultPath, result);
     writeStatus('failed', 'failed', error.message, { result });
   })
   .finally(async () => {
+    flushDebugArtifactManifest(true);
+
     if (!shutdownInProgress) {
       await finalizeBrowserLifecycle();
     }

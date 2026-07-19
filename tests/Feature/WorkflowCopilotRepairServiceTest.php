@@ -3,11 +3,13 @@
 namespace Tests\Feature;
 
 use App\Models\Workflow;
+use App\Models\WorkflowCopilotEvent;
 use App\Models\WorkflowCopilotSession;
 use App\Models\WorkflowStep;
 use App\Services\Ai\AiConnectionService;
 use App\Services\Workflows\WorkflowCopilotRepairService;
 use App\Services\Workflows\WorkflowCopilotSessionService;
+use App\Services\Workflows\WorkflowSelectorProbeService;
 use DomainException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Mockery;
@@ -1628,6 +1630,257 @@ class WorkflowCopilotRepairServiceTest extends TestCase
         );
 
         $this->assertSame('https://accounts.example.test/login', $updated['url']);
+    }
+
+    public function test_selector_timeout_with_role_matching_dom_element_plans_deterministic_selector_probe(): void
+    {
+        [$workflow, $step] = $this->workflowWithTasks([[
+            'key' => 'wait-results',
+            'task_key' => 'wait.selector',
+            'title' => 'Auf Suchergebnisse warten',
+            'selector' => 'div#search a:has(div[data-rpos])',
+        ]]);
+        $session = app(WorkflowCopilotSessionService::class)->start($workflow, [
+            'goal' => 'Suchergebnisse einsammeln.',
+        ]);
+        $ai = Mockery::mock(AiConnectionService::class);
+        $ai->shouldNotReceive('json');
+        $this->app->instance(AiConnectionService::class, $ai);
+        $service = app(WorkflowCopilotRepairService::class);
+
+        $plan = $service->plan(
+            $session,
+            $step,
+            [
+                'task_key' => 'wait-results',
+                'successful' => false,
+                'outcome' => 'timeout',
+                'result' => [
+                    'ok' => false,
+                    'statusMessage' => 'Kein Ziel wurde innerhalb des Timeouts gefunden: div#search a:has(div[data-rpos])',
+                    'sideEffects' => [],
+                ],
+            ],
+            [
+                'page' => ['url' => 'https://www.example.com/search?q=test', 'state' => 'search_results', 'window' => 'main'],
+                'dom' => ['ui_state' => 'search_results'],
+                'interaction_map' => [[
+                    'element_ref' => 'el_result_1',
+                    'tag' => 'a',
+                    'text' => 'Erster Treffer',
+                    'visible' => true,
+                    'enabled' => true,
+                    'selector_candidates' => ['#search a:has(h3)', '#volatile-id-123'],
+                    'window' => 'main',
+                ], [
+                    'element_ref' => 'el_result_2',
+                    'tag' => 'a',
+                    'text' => 'Zweiter Treffer',
+                    'visible' => true,
+                    'enabled' => true,
+                    'selector_candidates' => ['#search a:has(h3)'],
+                    'window' => 'main',
+                ], [
+                    'element_ref' => 'el_filter_button',
+                    'tag' => 'button',
+                    'text' => 'Filter',
+                    'visible' => true,
+                    'enabled' => true,
+                    'selector_candidates' => ['button[aria-label="Filter"]'],
+                    'window' => 'main',
+                ]],
+                'evidence_sufficient' => true,
+            ],
+            [],
+        );
+
+        $this->assertSame('probe_update', $plan['action']);
+        $this->assertSame('wait-results', $plan['task_key']);
+        $this->assertSame('wait.selector', $plan['task_catalog_key']);
+        $this->assertSame('#search a:has(h3)', data_get($plan, 'changes.selector'));
+        $this->assertSame('#search a:has(h3)', data_get($plan, 'changes.element_selector'));
+        $this->assertSame('wait-results--copilot-probe', data_get($plan, 'probe_task.key'));
+        $this->assertSame('deterministic_selector_probe', data_get($plan, 'decision_trace.source'));
+        $this->assertSame('selector_timeout', data_get($plan, 'decision_trace.failure_class'));
+        $this->assertSame('selector_probe', data_get($plan, 'evidence.class'));
+        $this->assertSame('dom_observation', data_get($plan, 'evidence.candidate_source'));
+        $this->assertSame('div#search a:has(div[data-rpos])', data_get($plan, 'evidence.previous_selector'));
+        $this->assertSame(['el_result_1', 'el_result_2'], data_get($plan, 'evidence.matches.0.element_refs'));
+        $this->assertSame('deterministic_selector_probe', data_get($plan, 'planning_handoff.planner_profile'));
+
+        $event = WorkflowCopilotEvent::query()
+            ->where('workflow_copilot_session_id', $session->id)
+            ->where('event_type', 'repair.selector_probe_applied')
+            ->first();
+        $this->assertNotNull($event);
+        $this->assertSame('selector_timeout', data_get($event->payload_json, 'failure_class'));
+        $this->assertSame('div#search a:has(div[data-rpos])', data_get($event->payload_json, 'previous_selector'));
+        $this->assertSame('#search a:has(h3)', data_get($event->payload_json, 'new_selector'));
+        $this->assertSame('dom_observation', data_get($event->payload_json, 'candidate_source'));
+
+        // Die geplanten update_task-Aenderungen sind revisionsfaehig: dieselben
+        // changes uebernimmt der Supervisor nach erfolgreicher Probe via
+        // applyChangesToStep in die naechste Workflow-Revision.
+        $updated = $service->applyChangesToStep($step->fresh(), 'wait-results', $plan['changes'], $session->fresh());
+        $this->assertSame('#search a:has(h3)', $updated['selector']);
+        $this->assertSame('#search a:has(h3)', data_get($step->fresh()->config_json, 'tasks.0.selector'));
+    }
+
+    public function test_selector_timeout_without_usable_observation_keeps_existing_planner_behavior(): void
+    {
+        [$workflow, $step] = $this->workflowWithTasks([[
+            'key' => 'wait-results',
+            'task_key' => 'wait.selector',
+            'title' => 'Auf Suchergebnisse warten',
+            'selector' => 'div#search a:has(div[data-rpos])',
+        ]]);
+        $session = app(WorkflowCopilotSessionService::class)->start($workflow);
+        $ai = Mockery::mock(AiConnectionService::class);
+        $ai->shouldReceive('json')->once()->andReturn([
+            'action' => 'pause',
+            'reason' => 'Keine sichere Reparatur moeglich.',
+        ]);
+        $this->app->instance(AiConnectionService::class, $ai);
+
+        $plan = app(WorkflowCopilotRepairService::class)->plan(
+            $session,
+            $step,
+            [
+                'task_key' => 'wait-results',
+                'successful' => false,
+                'outcome' => 'timeout',
+                'result' => [
+                    'ok' => false,
+                    'statusMessage' => 'Kein Ziel wurde innerhalb des Timeouts gefunden: div#search a:has(div[data-rpos])',
+                ],
+            ],
+            [
+                'page' => ['url' => 'https://www.example.com/search?q=test', 'state' => 'search_results'],
+                'interaction_map' => [[
+                    // Rollen-gleiches Element, aber nur ein volatiler ID-Kandidat.
+                    'element_ref' => 'el_result_1',
+                    'tag' => 'a',
+                    'text' => 'Erster Treffer',
+                    'visible' => true,
+                    'enabled' => true,
+                    'selector_candidates' => ['#volatile-id-123'],
+                ], [
+                    // Stabiler Kandidat, aber falsche Elementrolle.
+                    'element_ref' => 'el_filter_button',
+                    'tag' => 'button',
+                    'text' => 'Filter',
+                    'visible' => true,
+                    'enabled' => true,
+                    'selector_candidates' => ['button[aria-label="Filter"]'],
+                ]],
+            ],
+            [],
+        );
+
+        $this->assertSame('pause', $plan['action']);
+        $this->assertSame(0, WorkflowCopilotEvent::query()
+            ->where('workflow_copilot_session_id', $session->id)
+            ->where('event_type', 'repair.selector_probe_applied')
+            ->count());
+        $this->assertSame('div#search a:has(div[data-rpos])', data_get($step->fresh()->config_json, 'tasks.0.selector'));
+    }
+
+    public function test_selector_probe_declines_on_ambiguous_equally_stable_candidates(): void
+    {
+        [$workflow, $step] = $this->workflowWithTasks([[
+            'key' => 'wait-results',
+            'task_key' => 'wait.selector',
+            'title' => 'Auf Suchergebnisse warten',
+            'selector' => 'div#search a:has(div[data-rpos])',
+        ]]);
+        $session = app(WorkflowCopilotSessionService::class)->start($workflow);
+        $ai = Mockery::mock(AiConnectionService::class);
+        $ai->shouldReceive('json')->once()->andReturn([
+            'action' => 'pause',
+            'reason' => 'Keine sichere Reparatur moeglich.',
+        ]);
+        $this->app->instance(AiConnectionService::class, $ai);
+
+        $plan = app(WorkflowCopilotRepairService::class)->plan(
+            $session,
+            $step,
+            [
+                'task_key' => 'wait-results',
+                'successful' => false,
+                'outcome' => 'timeout',
+                'result' => [
+                    'ok' => false,
+                    'statusMessage' => 'Kein Ziel wurde innerhalb des Timeouts gefunden: div#search a:has(div[data-rpos])',
+                ],
+            ],
+            [
+                'page' => ['url' => 'https://www.example.com/search?q=test', 'state' => 'search_results'],
+                'interaction_map' => [[
+                    'element_ref' => 'el_result_1',
+                    'tag' => 'a',
+                    'text' => 'Erster Treffer',
+                    'visible' => true,
+                    'enabled' => true,
+                    'selector_candidates' => ['a[title="Erster Treffer"]'],
+                ], [
+                    'element_ref' => 'el_result_2',
+                    'tag' => 'a',
+                    'text' => 'Zweiter Treffer',
+                    'visible' => true,
+                    'enabled' => true,
+                    'selector_candidates' => ['a[title="Zweiter Treffer"]'],
+                ]],
+            ],
+            [],
+        );
+
+        $this->assertSame('pause', $plan['action']);
+        $this->assertSame(0, WorkflowCopilotEvent::query()
+            ->where('workflow_copilot_session_id', $session->id)
+            ->where('event_type', 'repair.selector_probe_applied')
+            ->count());
+    }
+
+    public function test_failure_classification_is_deterministic_for_known_runtime_messages(): void
+    {
+        $probes = app(WorkflowSelectorProbeService::class);
+
+        foreach ([
+            'selector_timeout' => [
+                ['outcome' => 'timeout', 'result' => ['statusMessage' => 'Kein Ziel wurde innerhalb des Timeouts gefunden: div#search a']],
+                ['outcome' => 'failed', 'result' => ['statusMessage' => 'Timed out waiting for selector #login']],
+            ],
+            'selector_not_found' => [
+                ['outcome' => 'failed', 'result' => ['statusMessage' => 'Kein klickbares Ziel uebergeben oder gefunden.']],
+                ['outcome' => 'failed', 'result' => ['statusMessage' => 'Keines der gefundenen Ziele konnte geklickt werden.']],
+                ['outcome' => 'failed', 'result' => ['statusMessage' => 'Kein Element gefunden. Weiterleitung kann ueber Teilstatus oder Fehler erfolgen.']],
+                ['outcome' => 'failed', 'result' => ['statusMessage' => 'Kein passendes Input-Feld konnte gefuellt werden.']],
+            ],
+            'navigation' => [
+                ['outcome' => 'failed', 'result' => ['error' => 'Timeout beim Navigieren']],
+                ['outcome' => 'failed', 'result' => ['statusMessage' => 'Die Seite konnte nicht geladen werden.']],
+            ],
+            'network' => [
+                ['outcome' => 'failed', 'result' => ['statusMessage' => 'net::ERR_NAME_NOT_RESOLVED bei www.example.com']],
+                ['outcome' => 'failed', 'result' => ['statusMessage' => 'Connection refused durch die Zielseite']],
+            ],
+            'consent' => [
+                ['outcome' => 'failed', 'result' => ['statusMessage' => 'Der Consent-Dialog blockiert die Seite.']],
+            ],
+            'unknown' => [
+                ['outcome' => 'failed', 'result' => ['statusMessage' => 'Unerwarteter interner Fehler.']],
+                ['outcome' => 'timeout', 'result' => []],
+                [],
+            ],
+        ] as $expected => $checkpoints) {
+            foreach ($checkpoints as $checkpoint) {
+                $this->assertSame(
+                    $expected,
+                    $probes->classifyFailure($checkpoint),
+                    'Fehlklassifikation fuer: '.json_encode($checkpoint),
+                );
+            }
+        }
     }
 
     private function workflowWithTasks(array $tasks): array

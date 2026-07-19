@@ -8,6 +8,7 @@ use App\Jobs\MonitorWorkflowStepRunJob;
 use App\Jobs\RunWorkflowJob;
 use App\Jobs\WorkflowCopilotSupervisorJob;
 use App\Models\Device;
+use App\Models\ManagedProcess;
 use App\Models\NetworkJob;
 use App\Models\NetworkNode;
 use App\Models\Person;
@@ -27,6 +28,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
@@ -40,6 +42,18 @@ class WorkflowExecutionService
         'timed_out',
         'lost',
     ];
+
+    /** Sekunden ohne Status-Heartbeat, ab denen ein aktiver Workflow-Task als haengend gilt. */
+    private const WATCHDOG_STALL_SECONDS = 120;
+
+    /** Adaptive Monitor-Taktung: enger Poll fuer junge aktive Step-Runs. */
+    private const MONITOR_FAST_POLL_SECONDS = 3;
+
+    /** Alter in Sekunden, bis zu dem ein aktiver Step-Run als jung gilt. */
+    private const MONITOR_FAST_POLL_WINDOW_SECONDS = 60;
+
+    /** Bisheriger Standard-Poll fuer aeltere aktive Step-Runs. */
+    private const MONITOR_DEFAULT_POLL_SECONDS = 10;
 
     public function __construct(
         protected MailAccountRegistrationRunner $mailRegistration,
@@ -959,6 +973,12 @@ class WorkflowExecutionService
             if (! $isClientControllerStep && $this->stepRunTimedOut($stepRun)) {
                 $this->expireStepRun($stepRun);
 
+                return;
+            }
+
+            if ($stepRun->external_run_type === 'workflow-task'
+                && ! $this->belongsToCopilotSession($stepRun->workflowRun)
+                && $this->handleStalledWorkflowTask($stepRun, $status)) {
                 return;
             }
 
@@ -4462,13 +4482,266 @@ class WorkflowExecutionService
         return $context;
     }
 
-    protected function scheduleMonitor(WorkflowStepRun $stepRun, int $delaySeconds = 10): void
+    protected function scheduleMonitor(WorkflowStepRun $stepRun, ?int $delaySeconds = null): void
     {
         if (! in_array($stepRun->external_run_type, ['mail-registration', 'webmail-session', 'workflow-task', 'client-controller-workflow-task', 'client-controller-workflow-run'], true)) {
             return;
         }
 
+        if ($delaySeconds === null) {
+            // Adaptive Taktung: junge aktive Step-Runs werden engmaschiger
+            // beobachtet, damit kurze Tasks nicht unnoetig auf den naechsten
+            // Standard-Poll warten. Aufrufer mit explizitem Delay bleiben
+            // unveraendert; die Kappung auf 1..60 Sekunden gilt weiterhin.
+            $isYoung = ! ($stepRun->started_at instanceof Carbon)
+                || $stepRun->started_at->gt(now()->subSeconds(self::MONITOR_FAST_POLL_WINDOW_SECONDS));
+            $delaySeconds = $isYoung ? self::MONITOR_FAST_POLL_SECONDS : self::MONITOR_DEFAULT_POLL_SECONDS;
+        }
+
         MonitorWorkflowStepRunJob::dispatch($stepRun->id)->delay(now()->addSeconds(max(1, min(60, $delaySeconds))));
+    }
+
+    /**
+     * Watchdog fuer aktive 'workflow-task'-Step-Runs ohne Copilot-Aufsicht.
+     *
+     * Schreibt der Node-Prozess laenger als WATCHDOG_STALL_SECONDS keinen
+     * Status-Heartbeat, entscheidet die Prozesspruefung: Ein nachweislich
+     * beendeter Prozess schliesst den Step-Run ueber den bestehenden
+     * Fehlerpfad als failed ab (Event 'run.watchdog_stalled'); ein noch
+     * laufender Prozess wird genau einmal als 'run.heartbeat_stale'
+     * protokolliert und nicht abgebrochen. Rueckgabe true bedeutet, dass der
+     * Step-Run terminal behandelt wurde und der Monitor-Tick endet.
+     */
+    protected function handleStalledWorkflowTask(WorkflowStepRun $stepRun, array $status): bool
+    {
+        $heartbeatAt = $this->workflowTaskHeartbeatAt($stepRun, $status);
+
+        if (! $heartbeatAt instanceof Carbon || $heartbeatAt->gt(now()->subSeconds(self::WATCHDOG_STALL_SECONDS))) {
+            return false;
+        }
+
+        $run = $stepRun->workflowRun;
+        $pid = (int) data_get($status, 'pid', 0);
+        $payload = [
+            'workflow_run_id' => (int) $run->id,
+            'workflow_step_run_id' => (int) $stepRun->id,
+            'external_run_id' => trim((string) $stepRun->external_run_id),
+            'last_heartbeat_at' => $heartbeatAt->toIso8601String(),
+            'heartbeat_age_seconds' => max(0, (int) abs($heartbeatAt->diffInSeconds(now()))),
+            'pid' => $pid > 1 ? $pid : null,
+            'task_cursor' => trim((string) data_get($run->context_json, 'next_task_key', '')) ?: null,
+        ];
+
+        if ($this->workflowTaskProcessStillRunning($stepRun, $pid)) {
+            if (! $this->hasWatchdogEvent($run, 'run.heartbeat_stale', $stepRun)) {
+                $this->recordWatchdogEvent(
+                    $stepRun,
+                    'run.heartbeat_stale',
+                    'Der Node-Prozess des Workflow-Tasks laeuft noch, hat aber seit '
+                        .$payload['heartbeat_age_seconds'].' Sekunden keinen Status geschrieben.',
+                    $payload,
+                    'warning',
+                );
+            }
+
+            return false;
+        }
+
+        $message = 'Watchdog: Der Node-Prozess des Workflow-Tasks laeuft nicht mehr'
+            .($pid > 1 ? ' (PID '.$pid.')' : '')
+            .'; letzter Status vor '.$payload['heartbeat_age_seconds']
+            .' Sekunden. Der Schritt wurde als fehlgeschlagen beendet.';
+
+        if (! $this->hasWatchdogEvent($run, 'run.watchdog_stalled', $stepRun)) {
+            $this->recordWatchdogEvent($stepRun, 'run.watchdog_stalled', $message, $payload, 'error');
+        }
+
+        $result = [
+            'ok' => false,
+            'status' => 'failed',
+            'statusLevel' => 'failed',
+            'statusMessage' => $message,
+            'watchdog' => $payload,
+        ];
+
+        $this->failStepRun($stepRun, $message, $result);
+        $this->continueAfterStep($run, $stepRun, $result, 'failed');
+
+        return true;
+    }
+
+    /**
+     * Juengster bekannter Status-Zeitpunkt des externen Node-Laufs: 'at' bzw.
+     * 'heartbeatAt' der Status-JSON und das letzte Status-Event; als Rueckfall
+     * dient die letzte Statusaenderung des Step-Runs.
+     */
+    protected function workflowTaskHeartbeatAt(WorkflowStepRun $stepRun, array $status): ?Carbon
+    {
+        $candidates = [
+            data_get($status, 'heartbeatAt'),
+            data_get($status, 'at'),
+        ];
+        $events = is_array($status['events'] ?? null) ? array_values($status['events']) : [];
+        $lastEvent = $events === [] ? null : end($events);
+
+        if (is_array($lastEvent)) {
+            $candidates[] = $lastEvent['at'] ?? null;
+        }
+
+        $latest = null;
+
+        foreach ($candidates as $candidate) {
+            if (! is_scalar($candidate) || trim((string) $candidate) === '') {
+                continue;
+            }
+
+            try {
+                $parsed = Carbon::parse((string) $candidate);
+            } catch (\Throwable) {
+                continue;
+            }
+
+            if (! $latest || $parsed->gt($latest)) {
+                $latest = $parsed;
+            }
+        }
+
+        if ($latest) {
+            return $latest;
+        }
+
+        foreach ([$stepRun->updated_at, $stepRun->started_at] as $fallback) {
+            if ($fallback instanceof Carbon) {
+                return $fallback->copy();
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Lebendpruefung des Node-Root-Prozesses, angelehnt an die Referenz
+     * WorkflowTaskRunner::workflowTaskRootIsRunning: zuerst die
+     * Prozessinventur (ohne teuren Sync im Monitor-Takt), danach die leichte
+     * PID-Pruefung. Ohne belastbaren Befund gilt der Prozess konservativ als
+     * weiterhin aktiv.
+     */
+    protected function workflowTaskProcessStillRunning(WorkflowStepRun $stepRun, int $pid): bool
+    {
+        $runId = trim((string) $stepRun->external_run_id);
+
+        if ($runId !== '' && Schema::hasTable('managed_processes')) {
+            try {
+                $root = ManagedProcess::query()
+                    ->where('run_id', $runId)
+                    ->where('run_type', 'workflow-task')
+                    ->where('is_root', true)
+                    ->latest('last_seen_at')
+                    ->first();
+
+                if ($root) {
+                    if (! $root->isRunning()) {
+                        return false;
+                    }
+
+                    $seenRecently = $root->last_seen_at instanceof Carbon
+                        && $root->last_seen_at->gt(now()->subSeconds(self::WATCHDOG_STALL_SECONDS));
+
+                    if ($seenRecently) {
+                        return true;
+                    }
+                    // Veralteter 'running'-Eintrag ohne frische Sichtung:
+                    // die direkte PID-Pruefung entscheidet.
+                }
+            } catch (\Throwable) {
+                // Inventur nicht lesbar; die PID-Pruefung entscheidet.
+            }
+        }
+
+        if ($pid <= 1) {
+            return true;
+        }
+
+        try {
+            if (PHP_OS_FAMILY === 'Windows') {
+                return Process::timeout(5)->run([
+                    'cmd.exe',
+                    '/C',
+                    'tasklist /FI "PID eq '.$pid.'" | findstr /R "\\<'.$pid.'\\>"',
+                ])->successful();
+            }
+
+            return Process::timeout(5)->run(['kill', '-0', (string) $pid])->successful();
+        } catch (\Throwable) {
+            return true;
+        }
+    }
+
+    protected function belongsToCopilotSession(WorkflowRun $run): bool
+    {
+        return (int) (
+            $run->workflow_copilot_session_id
+            ?: data_get($run->context_json, 'workflow_copilot_session_id', 0)
+        ) > 0;
+    }
+
+    protected function hasWatchdogEvent(WorkflowRun $run, string $eventKey, WorkflowStepRun $stepRun): bool
+    {
+        $events = data_get($run->context_json, 'watchdog_events');
+
+        if (! is_array($events)) {
+            return false;
+        }
+
+        $externalRunId = trim((string) $stepRun->external_run_id);
+
+        return collect($events)->contains(fn (mixed $event): bool => is_array($event)
+            && (string) ($event['key'] ?? '') === $eventKey
+            && (int) ($event['workflow_step_run_id'] ?? 0) === (int) $stepRun->id
+            && trim((string) ($event['external_run_id'] ?? '')) === $externalRunId);
+    }
+
+    /**
+     * Haengt ein Watchdog-Event append-only an den Lauf-Kontext an und
+     * spiegelt es, falls vorhanden, in das Studio-Eventlog der Sitzung.
+     */
+    protected function recordWatchdogEvent(
+        WorkflowStepRun $stepRun,
+        string $eventKey,
+        string $message,
+        array $payload,
+        string $level,
+    ): void {
+        $run = $stepRun->workflowRun;
+        $context = is_array($run->context_json) ? $run->context_json : [];
+        $events = is_array($context['watchdog_events'] ?? null) ? array_values($context['watchdog_events']) : [];
+        $events[] = [
+            'key' => $eventKey,
+            'at' => now()->toIso8601String(),
+            'message' => $message,
+            ...$payload,
+        ];
+        $context['watchdog_events'] = array_slice($events, -50);
+        $run->forceFill(['context_json' => $context])->save();
+
+        $studioSessionId = (int) (
+            $run->workflow_studio_session_id
+            ?: data_get($context, 'workflow_studio_session_id', 0)
+        );
+
+        if ($studioSessionId <= 0) {
+            return;
+        }
+
+        try {
+            $studio = WorkflowStudioSession::query()->find($studioSessionId);
+
+            if ($studio) {
+                app(WorkflowStudioSessionService::class)->appendEvent($studio, $eventKey, $message, $payload, $level);
+            }
+        } catch (\Throwable) {
+            // Der Watchdog darf den Monitor-Pfad nie an einem Eventlog scheitern lassen.
+        }
     }
 
     protected function normalizeContext(array $context): array

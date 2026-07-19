@@ -74,6 +74,8 @@ class WorkflowCopilotRepairService
         protected WorkflowCopilotObservationService $observations,
         protected WorkflowTaskOrderingService $taskOrdering,
         protected WorkflowCopilotPromptContextService $promptContexts,
+        protected WorkflowSelectorProbeService $selectorProbes,
+        protected WorkflowCopilotSessionService $sessions,
     ) {}
 
     public function plan(
@@ -151,6 +153,19 @@ class WorkflowCopilotRepairService
 
         if ($emptyCollectionSelectorPlan !== []) {
             return $emptyCollectionSelectorPlan;
+        }
+
+        $selectorProbePlan = $this->deterministicSelectorProbePlan(
+            $session,
+            $step,
+            $task,
+            $checkpoint,
+            $observation,
+            $rejectedSelectors,
+        );
+
+        if ($selectorProbePlan !== []) {
+            return $selectorProbePlan;
         }
 
         $requiresVisualTarget = $this->taskRequiresVisualTarget($taskCatalogKey);
@@ -909,6 +924,126 @@ class WorkflowCopilotRepairService
                 'page_state' => $pageState,
                 'previous_selector' => $task['selector'] ?? $task['element_selector'] ?? null,
                 'selected_selector' => $selector,
+            ],
+        ];
+    }
+
+    /**
+     * Deterministische Selektor-Probe (Session 24, Workflow 15): Bei einem
+     * Selector-Timeout existiert das Zielelement nicht in der Beobachtung,
+     * daher gibt es keine Vision-Evidenz und der Modell-Planer durfte den
+     * Selector nie reparieren. Diese Reparaturklasse laeuft VOR dem
+     * Modell-Planer, ist reiner Server-Code und nutzt als Evidenz die Herkunft
+     * aus der eigenen DOM-Beobachtung (Evidenzklasse `selector_probe`). Das
+     * strikte hash_equals-Gate fuer modellvorgeschlagene Selektoren bleibt
+     * unveraendert; zustandsveraendernde Tasks mit Pflicht-Vision-Ziel sind
+     * ausgenommen. Ohne eindeutigen besten Kandidaten: kein Eingriff.
+     *
+     * @param  array<string, mixed>  $task
+     * @param  array<string, mixed>  $checkpoint
+     * @param  array<string, mixed>  $observation
+     * @param  list<string>  $rejectedSelectors
+     * @return array<string, mixed>
+     */
+    protected function deterministicSelectorProbePlan(
+        WorkflowCopilotSession $session,
+        WorkflowStep $step,
+        array $task,
+        array $checkpoint,
+        array $observation,
+        array $rejectedSelectors,
+    ): array {
+        $taskCatalogKey = trim((string) ($task['task_key'] ?? ''));
+        $definition = $taskCatalogKey !== '' ? $this->catalog->task($taskCatalogKey) : null;
+
+        if ($definition === null
+            || ! $this->taskSupportsSelector($definition)
+            || $this->taskRequiresVisualTarget($taskCatalogKey)
+            || (bool) ($checkpoint['successful'] ?? false)
+            || (bool) data_get($checkpoint, 'result.irreversibleSideEffect', false)
+            || (is_array(data_get($checkpoint, 'result.sideEffects'))
+                && data_get($checkpoint, 'result.sideEffects') !== [])
+            || ! in_array(Str::lower(trim((string) ($checkpoint['outcome'] ?? 'failed'))), ['failed', 'timeout'], true)) {
+            return [];
+        }
+
+        $failureClass = $this->selectorProbes->classifyFailure($checkpoint);
+
+        if (! in_array($failureClass, [
+            WorkflowSelectorProbeService::FAILURE_SELECTOR_TIMEOUT,
+            WorkflowSelectorProbeService::FAILURE_SELECTOR_NOT_FOUND,
+        ], true)) {
+            return [];
+        }
+
+        $candidate = $this->selectorProbes->bestCandidate($task, $observation, $rejectedSelectors);
+
+        if ($candidate === []) {
+            return [];
+        }
+
+        $selector = (string) $candidate['selector'];
+        $changes = $this->normalizeChanges($step, $task, [
+            'selector' => $selector,
+            'element_selector' => $selector,
+        ], false, $this->observationDomains($observation));
+
+        if (($changes['selector'] ?? null) !== $selector) {
+            return [];
+        }
+
+        $taskKey = (string) ($task['key'] ?? '');
+        $previousSelector = (string) $candidate['previous_selector'];
+
+        $this->sessions->appendEvent(
+            $session,
+            'repair.selector_probe_applied',
+            'Deterministische Selektor-Probe: Task `'.$taskKey.'` wird von `'.$previousSelector
+                .'` auf den in der eigenen DOM-Beobachtung belegten Selector `'.$selector.'` aktualisiert.',
+            [
+                'task_key' => $taskKey,
+                'task_catalog_key' => $taskCatalogKey,
+                'failure_class' => $failureClass,
+                'previous_selector' => $previousSelector,
+                'new_selector' => $selector,
+                'candidate_source' => 'dom_observation',
+                'matches' => $candidate['matches'],
+            ],
+            'repairing',
+            'info',
+            true,
+        );
+
+        return [
+            'action' => 'probe_update',
+            'task_key' => $taskKey,
+            'task_catalog_key' => $taskCatalogKey,
+            'changes' => $changes,
+            'probe_task' => array_replace($task, $changes, [
+                'key' => $taskKey.'--copilot-probe',
+                'title' => ($task['title'] ?? $taskKey).' (Copilot-Probe)',
+            ]),
+            'reason' => 'Der konfigurierte Selector fand kein Element ('.$failureClass.'). Die eigene DOM-Beobachtung'
+                .' weist genau einen stabilen, rollen-gleichen Kandidaten aus; der Task wird deterministisch auf'
+                .' diesen Selector aktualisiert und vor der Revision als Probe verifiziert.',
+            'selector_candidates' => [$selector],
+            'original_task_key' => $taskKey,
+            'evidence' => [
+                'class' => 'selector_probe',
+                'previous_selector' => $previousSelector,
+                'candidate_source' => 'dom_observation',
+                'matches' => $candidate['matches'],
+            ],
+            'decision_trace' => [
+                'source' => 'deterministic_selector_probe',
+                'failure_class' => $failureClass,
+                'previous_selector' => $previousSelector,
+                'selected_selector' => $selector,
+                'candidate_count' => (int) $candidate['candidate_count'],
+                'expected_tags' => $candidate['expected_tags'],
+            ],
+            'planning_handoff' => [
+                'planner_profile' => 'deterministic_selector_probe',
             ],
         ];
     }
@@ -1728,9 +1863,7 @@ class WorkflowCopilotRepairService
 
     protected function isSafeSelector(string $selector): bool
     {
-        return $selector !== ''
-            && mb_strlen($selector) <= 1000
-            && ! preg_match('/(?:javascript:|<script|\beval\s*\(|\bFunction\s*\()/i', $selector);
+        return $this->selectorProbes->isSafeSelector($selector);
     }
 
     protected function isSafeUrlConfiguration(string $url, array $trustedDomains): bool
@@ -1998,22 +2131,7 @@ class WorkflowCopilotRepairService
 
     protected function selectorStabilityPriority(string $selector): int
     {
-        $lower = Str::lower($selector);
-
-        return match (true) {
-            str_contains($lower, '[title=') => 1000,
-            str_contains($lower, '[aria-label=') => 990,
-            str_contains($lower, '[placeholder=') => 980,
-            preg_match('/\[data-(?:testid|test|cy|qa)=/i', $selector) === 1 => 970,
-            str_contains($lower, '[name=') => 900,
-            str_contains($lower, ':has-text('), str_starts_with($lower, 'text=') => 880,
-            str_contains($lower, ':has(h1'), str_contains($lower, ':has(h2'), str_contains($lower, ':has(h3') => 860,
-            str_contains($lower, '[role='), str_contains($lower, '[type=') => 820,
-            preg_match('/(?:^|[\s>+~,])#[A-Za-z0-9_-]+/', $selector) === 1,
-            str_contains($lower, '[id=') => 100,
-            preg_match('/(?:nth-child|nth-of-type)/i', $selector) === 1 => 50,
-            default => 700,
-        };
+        return $this->selectorProbes->stabilityPriority($selector);
     }
 
     protected function hostMatchesTrustedDomains(string $host, array $trustedDomains): bool
