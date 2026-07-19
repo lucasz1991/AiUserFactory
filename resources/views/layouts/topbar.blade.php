@@ -58,9 +58,6 @@
                     <a href="{{ route('login') }}" class="rounded-md border border-gray-300 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50">
                         Anmelden
                     </a>
-                    <a href="{{ route('register') }}" class="rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-700">
-                        Registrieren
-                    </a>
                 </div>
             @endauth
         </div>

@@ -2,76 +2,72 @@
 @section('title')
     Login
 @endsection
-@section('css')
-    <link rel="stylesheet" href="{{ URL::asset('build/libs/swiper/swiper-bundle.min.css') }}">
-@endsection
 @section('content')
-    <div class="my-auto">
-        <div class="text-center">
-            <h5 class="text-gray-600 dark:text-gray-100">Willkommen bei Factory AI</h5>
-            <p class="text-gray-500 dark:text-gray-100/60 mt-1">
-                Melde dich an, um deine User Factory, Browser-Sessions und Automationen zu verwalten.
-            </p>
-        </div>
+    @php
+        $input = 'block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm transition focus:border-primary-base focus:ring-2 focus:ring-primary-base/30 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder:text-zinc-500';
+    @endphp
+
+    <div>
+        <span class="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-secondary-base">
+            <span class="h-1.5 w-1.5 rounded-full bg-secondary-base"></span> Willkommen zurueck
+        </span>
+        <h1 class="mt-3 text-2xl font-bold text-slate-800 dark:text-white">Bei Factory AI anmelden</h1>
+        <p class="mt-2 text-sm text-slate-500 dark:text-zinc-400">
+            Melde dich an, um deine User Factory, Browser-Sessions und Automationen zu verwalten.
+        </p>
 
         @if (session('status'))
-            <div class="">
+            <div class="mt-5 rounded-lg border border-secondary-base/30 bg-secondary-base/10 px-4 py-3 text-sm font-medium text-secondary-base">
                 {{ session('status') }}
             </div>
         @endif
-        <form method="POST" action="{{ route('login') }}" class="mt-4 pt-2">
+
+        <form method="POST" action="{{ route('login') }}" class="mt-7 space-y-5">
             @csrf
-            <div class="mb-4">
-                <label for="email"
-                    class="text-gray-600 dark:text-gray-100 font-medium mb-2 block">Email <span class="text-red-600">*</span></label>
-                <input type="email" name="email" value=""
-                    class="w-full rounded placeholder:text-sm py-2 px-1 border border-gray-300 dark:bg-zinc-700/50 dark:border-zinc-600 dark:text-gray-100 dark:placeholder:text-zinc-100/60"
-                    id="email" placeholder="Email eingeben" required>
+
+            <div>
+                <label for="email" class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-zinc-200">E-Mail</label>
+                <input id="email" type="email" name="email" value="{{ old('email') }}" required autofocus autocomplete="username"
+                    placeholder="name@firma.de" class="{{ $input }}">
                 @error('email')
-                    <span class="text-sm text-red-600">{{ $message }}</span>
+                    <p class="mt-1.5 text-sm text-red-500">{{ $message }}</p>
                 @enderror
             </div>
-            <div class="mb-3">
-                <div class="flex">
-                    <div class="flex-grow-1">
-                        <label for="password"
-                            class="text-gray-600 dark:text-gray-100 font-medium mb-2 block">Passwort <span class="text-red-600">*</span></label>
-                    </div>
+
+            <div x-data="{ show: false }">
+                <div class="mb-1.5 flex items-center justify-between">
+                    <label for="password" class="block text-sm font-medium text-slate-700 dark:text-zinc-200">Passwort</label>
                     @if (Route::has('password.request'))
-                        <div class="ltr:ml-auto rtl:mr-auto">
-                            <a href="{{ route('password.request') }}"
-                                class="text-gray-500 dark:text-gray-100">Passwort
-                                vergessen?</a>
-                        </div>
+                        <a href="{{ route('password.request') }}" class="text-sm font-medium text-primary-base transition hover:text-secondary-base">
+                            Passwort vergessen?
+                        </a>
                     @endif
                 </div>
-                <div class="flex">
-                    <input type="password" name="password" id="password" value=""
-                        class="w-full rounded ltr:rounded-r-none rtl:rounded-l-none placeholder:text-sm py-2 px-1 border border-gray-300 dark:bg-zinc-700/50 dark:border-zinc-600 dark:text-gray-100 dark:placeholder:text-zinc-100/60"
-                        placeholder="Passwort eingeben " aria-label="Password"
-                        aria-describedby="password-addon" required>
-                    @error('password')
-                        <span class="text-sm text-red-600">{{ $message }}</span>
-                    @enderror
+                <div class="relative">
+                    <input id="password" name="password" required autocomplete="current-password"
+                        :type="show ? 'text' : 'password'" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;"
+                        class="{{ $input }} pr-11">
+                    <button type="button" @click="show = !show" tabindex="-1" aria-label="Passwort anzeigen"
+                        class="absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400 transition hover:text-slate-600 dark:hover:text-zinc-200">
+                        <span class="mdi mdi-eye-outline text-lg" x-show="!show"></span>
+                        <span class="mdi mdi-eye-off-outline text-lg" x-show="show" style="display:none"></span>
+                    </button>
                 </div>
+                @error('password')
+                    <p class="mt-1.5 text-sm text-red-500">{{ $message }}</p>
+                @enderror
             </div>
-            <div class="row mb-6">
-                <div class="col">
-                    <div>
-                        <input type="checkbox" name="remember" id="remember"
-                            class="h-4 w-4 border border-gray-300 rounded bg-white checked:bg-blue-600 checked:border-blue-600 focus:outline-none transition duration-200 mt-1 align-top bg-no-repeat bg-center bg-contain ltr:float-left rtl:float-right ltr:mr-2 rtl:ml-2 cursor-pointer focus:ring-offset-0"
-                            checked id="exampleCheck1">
-                        <label class="align-middle text-gray-600 dark:text-gray-100 font-medium" for="remember">
-                            Angemeldet bleiben
-                        </label>
-                    </div>
-                </div>
-            </div>
-            <div class="mb-3">
-                <x-button
-                    class="btn border-transparent bg-blue-200 w-full py-2.5 text-blue-500 text-lg w-100 waves-effect waves-light shadow-md shadow-gray-200 dark:shadow-zinc-600"
-                    type="submit">Einloggen</x-button>
-            </div>
+
+            <label class="flex cursor-pointer select-none items-center gap-2.5 text-sm text-slate-600 dark:text-zinc-300">
+                <input type="checkbox" name="remember" id="remember" checked
+                    class="h-4 w-4 rounded border-slate-300 text-primary-base focus:ring-primary-base/40">
+                Angemeldet bleiben
+            </label>
+
+            <button type="submit"
+                class="w-full rounded-lg bg-gradient-to-r from-primary-base to-[#3f74c0] px-4 py-2.5 text-center text-base font-semibold text-white shadow-lg shadow-primary-base/25 transition hover:brightness-[1.08] hover:shadow-primary-base/40 focus:outline-none focus:ring-2 focus:ring-primary-base/40 focus:ring-offset-2 active:scale-[0.99]">
+                Einloggen
+            </button>
         </form>
     </div>
 @endsection

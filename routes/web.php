@@ -79,3 +79,11 @@ Route::middleware(['auth:sanctum', config('jetstream.auth_session')])->group(fun
         Route::redirect('/config', '/personen')->name('admin.config');
     });
 });
+
+/*
+| Self-Service-Registrierung ist deaktiviert (siehe config/fortify.php). Fortify
+| registriert ohne Features::registration() keine /register-Route. Diese oeffentliche
+| Umleitung faengt direkte Aufrufe von /register sauber ab und fuehrt zum Login.
+| Bewusst unbenannt, damit route('register') nicht wieder aufgeloest werden kann.
+*/
+Route::redirect('/register', '/login');

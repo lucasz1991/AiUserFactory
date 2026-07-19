@@ -132,6 +132,9 @@ return [
     */
 
     'features' => [
+        // Features::registration() ist bewusst deaktiviert: Self-Service-Registrierung
+        // ist in Factory AI nicht erlaubt. /register wird in routes/web.php auf /login
+        // umgeleitet. Nicht wieder aktivieren, ohne die Zugangsrichtlinie zu klaeren.
         Features::resetPasswords(),
         // Features::emailVerification(),
         Features::updateProfileInformation(),

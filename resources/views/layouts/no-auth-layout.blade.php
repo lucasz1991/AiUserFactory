@@ -1,32 +1,33 @@
-<div class="container-fluid">
-    <div class="h-screen md:overflow-hidden">
-        <div class="grid grid-cols-1 md:grid-cols-12">
-            <div class="col-span-12 md:col-span-5 lg:col-span-4 xl:col-span-3 relative z-50">
-                <div class="w-full bg-white xl:p-12 p-10 dark:bg-zinc-800">
-                    <div class="flex h-[90vh] flex-col">
-                        <div class="mx-auto">
-                            <a href="/" class="flex items-center text-lg flex-shrink-0 font-bold dark:text-white leading-[69px]">
-                                <x-application-logo class="h-14 w-auto max-w-[220px]" />
-                            </a>
-                        </div>
+<div class="min-h-screen w-full bg-slate-50 dark:bg-zinc-900">
+    <div class="grid min-h-screen grid-cols-1 lg:grid-cols-12">
+        {{-- Formularseite --}}
+        <div class="relative z-10 col-span-1 flex flex-col bg-white dark:bg-zinc-900 lg:col-span-5 xl:col-span-4">
+            <div class="flex flex-1 flex-col px-6 py-8 sm:px-10 lg:px-12 xl:px-14">
+                {{-- Logo --}}
+                <div class="mb-10">
+                    <a href="/" class="inline-flex items-center">
+                        <x-application-logo class="h-11 w-auto max-w-[200px]" />
+                    </a>
+                </div>
 
+                {{-- Inhalt, vertikal zentriert --}}
+                <div class="flex flex-1 items-center">
+                    <div class="mx-auto w-full max-w-[420px]">
                         @yield('content')
-
-                        <div class="text-center">
-                            <p class="text-gray-500 dark:text-gray-100 relative select-none">
-                                &copy; <script>document.write(new Date().getFullYear())</script>
-                                Factory AI<br><span class="text-xs font-semibold uppercase tracking-[0.18em]">User Factory</span>
-                            </p>
-                            <p class="text-gray-500 dark:text-gray-100 relative mb-5 select-none">
-                                <small>v.0.1</small>
-                            </p>
-                        </div>
                     </div>
                 </div>
+
+                {{-- Fusszeile --}}
+                <div class="mt-10 flex items-center justify-between text-xs text-slate-400 dark:text-zinc-500">
+                    <p>&copy; <script>document.write(new Date().getFullYear())</script> Factory AI &middot; User Factory</p>
+                    <p class="font-semibold uppercase tracking-wider">v0.1</p>
+                </div>
             </div>
-            <div class="col-span-12 md:col-span-7 lg:col-span-8 xl:col-span-9">
-                <x-auth-section-image-anim />
-            </div>
+        </div>
+
+        {{-- Markenseite (ab lg sichtbar) --}}
+        <div class="relative col-span-1 hidden lg:col-span-7 lg:block xl:col-span-8">
+            <x-auth-section-image-anim />
         </div>
     </div>
 </div>
