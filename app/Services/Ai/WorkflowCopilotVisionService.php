@@ -238,19 +238,25 @@ class WorkflowCopilotVisionService
     protected function prompt(array $observation, string $goal, bool $hasImage, array $workflowContext = []): string
     {
         return implode("\n\n", [
-            'Analysiere den aktuellen Workflow-Bildschirm anhand '.($hasImage ? 'des Screenshots und ' : '').'der nummerierbaren DOM-Interaktionskarte. '
-                .'Das Bild dient nur zur Beobachtung. Du fuehrst keine Aktion aus, erfindest keine Elemente und gibst keine internen Gedankengaenge aus.',
+            'Die gelieferte Beobachtung beschreibt den sichtbaren Inhalt eines Browserfensters innerhalb eines automatisierten Workflow-Laufs. Analysiere diese Browseransicht anhand '
+                .($hasImage ? 'des Screenshots und ' : '').'der nummerierbaren DOM-Interaktionskarte. Das Bild dient nur zur Beobachtung. Du fuehrst keine Aktion aus, '
+                .'erfindest keine Elemente und gibst keine internen Gedankengaenge aus.',
+            'Beschreibe die sichtbare Browseransicht so konkret, dass sie einem Benutzer vorgelesen werden kann: von oben nach unten, mit Seitentitel oder URL soweit sichtbar, '
+                .'Navigation, Hauptinhalt, Formularen, Schaltflaechen, Links, Ergebnissen, Lade- oder Fehlerzustaenden sowie Dialogen, Overlays und Consent-Hinweisen. '
+                .'Nenne Position und erkennbare Funktion wichtiger Elemente. Unterscheide klar zwischen sichtbar, durch DOM belegt und lediglich unbekannt; leite nichts Unsichtbares her.',
             'Workflow-Ziel: '.$this->safeGoal($goal),
             'Nutze den gelieferten Workflow-Kontext als verbindliches Ausfuehrungsmodell. Pruefe insbesondere die aktuelle Task, noch nicht ausgefuehrte Tasks, '
                 .'Task- und Step-Routen, Variablenproduzenten, Loop-Paare und die unveraenderliche Endverifikation. type=fail ist terminal und darf nicht als '
                 .'normale Fehlerfortsetzung interpretiert werden. Ein fehlendes optionales Element braucht eine False-Route zur normalen Fortsetzung.',
             'Erlaubte Task-Keys: '.implode(', ', array_keys($this->taskCatalog->all())),
             'Antworte als JSON-Objekt mit exakt diesen Feldern: '
-                .'page_type (string), ui_state (string), goal_progress (Zahl 0..1 oder kurze Beschreibung), '
+                .'page_type (string), ui_state (string), browser_screen_description (detaillierte deutsche Beschreibung der sichtbaren Browseransicht in 3 bis 8 Saetzen), '
+                .'goal_progress (Zahl 0..1 oder kurze Beschreibung), '
                 .'blockers (string[]), relevant_elements ({element_ref, reason, confidence}[]), confidence (Zahl 0..1), '
-                .'suggested_task_actions ({task_key, element_ref, parameters, reason, confidence}[]), '
+                .'suggested_task_actions ({task_key, workflow_task_key, element_ref, parameters, reason, confidence}[]), '
                 .'needs_screenshot (boolean), verdict (pass|continue|pause). '
                 .'Verwende nur element_ref-Werte aus interaction_map und nur erlaubte Task-Keys. '
+                .'workflow_task_key muss bei einer Reparatur oder Wiederholung exakt dem vorhandenen Karten-Key aus dem Workflow-Kontext entsprechen und darf nicht erfunden werden. '
                 .'Rohwerte fuer Passwort, Token, Cookie oder Eingabefelder duerfen nicht vorgeschlagen werden; nutze allenfalls value_reference.',
             'Vollstaendiger Task-, Routing- und Workflow-Kontext: '.$this->encodeWorkflowContext($workflowContext),
             'Redigierte Beobachtung: '.$this->encode($observation),
@@ -301,6 +307,7 @@ class WorkflowCopilotVisionService
         $aliases = [
             'page_type' => $value['page_type'] ?? $value['pageType'] ?? null,
             'ui_state' => $value['ui_state'] ?? $value['page_state'] ?? $value['uiState'] ?? $value['pageState'] ?? null,
+            'browser_screen_description' => $value['browser_screen_description'] ?? $value['browser_description'] ?? $value['screen_description'] ?? $value['browserScreenDescription'] ?? null,
             'goal_progress' => $value['goal_progress'] ?? $value['goalProgress'] ?? null,
             'blockers' => $value['blockers'] ?? null,
             'relevant_elements' => $value['relevant_elements'] ?? $value['elements'] ?? $value['relevantElements'] ?? null,
@@ -396,6 +403,7 @@ class WorkflowCopilotVisionService
 
                 return [
                     'task_key' => $taskKey,
+                    'workflow_task_key' => Str::limit(trim((string) ($action['workflow_task_key'] ?? $action['card_key'] ?? $action['workflowTaskKey'] ?? '')), 191, '') ?: null,
                     'element_ref' => $elementRef ?: null,
                     'parameters' => $parameters,
                     'reason' => Str::limit(trim((string) $this->observations->sanitizeForModel($action['reason'] ?? '')), 300, '') ?: null,
@@ -437,6 +445,11 @@ class WorkflowCopilotVisionService
         return [
             'page_type' => Str::limit(trim((string) $this->observations->sanitizeForModel($aliases['page_type'])), 120, ''),
             'ui_state' => Str::limit(trim((string) $this->observations->sanitizeForModel($aliases['ui_state'])), 160, ''),
+            'browser_screen_description' => Str::limit(
+                trim((string) $this->observations->sanitizeForModel($aliases['browser_screen_description'] ?? '')),
+                3000,
+                '',
+            ),
             'goal_progress' => $this->goalProgress($aliases['goal_progress']),
             'blockers' => array_values(array_unique(array_slice($blockers, 0, 8))),
             'relevant_elements' => $elements,
@@ -453,6 +466,7 @@ class WorkflowCopilotVisionService
         return [
             'page_type' => 'unknown',
             'ui_state' => Str::limit((string) data_get($observation, 'dom.ui_state', 'unknown_browser_state'), 160, ''),
+            'browser_screen_description' => '',
             'goal_progress' => 'unknown',
             'blockers' => ['Screenshot und DOM liefern keine ausreichend verlaessliche Evidenz. Sitzung sicher pausieren.'],
             'relevant_elements' => [],

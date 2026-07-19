@@ -174,7 +174,7 @@
             </div>
         </x-slot>
         <x-slot name="footer">
-            <button type="button" x-on:click="$dispatch('close')" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">Abbrechen</button>
+            <button type="button" wire:click="closeAddStepModal" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">Abbrechen</button>
             <button type="button" wire:click="addStep" class="ml-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">Liste anlegen</button>
         </x-slot>
     </x-ui.dialog-modal>
@@ -232,7 +232,7 @@
             </div>
         </x-slot>
         <x-slot name="footer">
-            <button type="button" x-on:click="$dispatch('close')" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">Abbrechen</button>
+            <button type="button" wire:click="closeEditStepModal" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">Abbrechen</button>
             <button type="button" wire:click="saveEditStep" class="ml-2 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-cyan-500">Speichern & Revision erstellen</button>
         </x-slot>
     </x-ui.dialog-modal>
@@ -243,7 +243,7 @@
         </x-slot>
         <x-slot name="content">@include('livewire.admin.network.partials.workflow-task-form', ['mode' => 'create', 'steps' => $steps, 'taskDefinitions' => $taskDefinitions])</x-slot>
         <x-slot name="footer">
-            <button type="button" x-on:click="$dispatch('close')" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">Abbrechen</button>
+            <button type="button" wire:click="closeAddTaskModal" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">Abbrechen</button>
             <button type="button" x-on:click.prevent="const source = document.querySelector('[data-workflow-task-mailbox-source=&quot;newTask&quot;]')?.value || 'person'; $wire.addTaskCard(source);" class="ml-2 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-cyan-500">Task einsetzen</button>
         </x-slot>
     </x-ui.dialog-modal>
@@ -254,7 +254,7 @@
         </x-slot>
         <x-slot name="content">@include('livewire.admin.network.partials.workflow-task-form', ['mode' => 'edit', 'steps' => $steps, 'taskDefinitions' => $taskDefinitions])</x-slot>
         <x-slot name="footer">
-            <button type="button" x-on:click="$dispatch('close')" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">Abbrechen</button>
+            <button type="button" wire:click="closeEditTaskModal" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">Abbrechen</button>
             <button type="button" x-on:click.prevent="const source = document.querySelector('[data-workflow-task-mailbox-source=&quot;editingTask&quot;]')?.value || 'person'; $wire.saveEditTaskCard(source);" class="ml-2 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-cyan-500">Speichern & Revision erstellen</button>
         </x-slot>
     </x-ui.dialog-modal>

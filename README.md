@@ -166,6 +166,10 @@ Statuswerte: `geplant`, `in_arbeit`, `verifiziert`, `blockiert`.
 
 | 2026-07-19 | Claude | in_arbeit | Optimierungspaket aus der Live-Test-Analyse, beanspruchte Bereiche: (1) `WorkflowTaskCatalog.php` — drei neue Browser-Navigations-Tasks `browser.navigate_back`, `browser.navigate_forward`, `browser.reload` (Enter existiert als `browser.press_key`); (2) `node/workflows/tasks/browser/` — neue Task-Skripte + Manifest-Batching in `run_step.cjs` (statt Komplett-Manifest-Write je Artefakt); (3) `WorkflowExecutionService.php`/Monitor-Job — Watchdog fuer interaktive Laeufe (Stillstand-Erkennung ueber Heartbeat-Alter + PID, Event-basiert, konservativ) und adaptive Monitor-Taktung; (4) `WorkflowCopilotRepairService.php` — deterministische Fehlerklassifikation + Selector-Probe-Evidenz (serverseitig gegen DOM-Snapshot geprobte Selektor-Kandidaten als zulaessige `update_task`-Evidenz bei Timeout, Modell darf weiterhin keine freien Selektoren erfinden); (5) Studio-/Task-Editor-Blades — Diagnose/Fix der nicht feuernden Buttons (Abbrechen, Bis Ende fortsetzen, Neu versuchen); (6) Runtime-Sync nach `ClientController/src-tauri/resources/workflow-runtime`. | ausstehend | Implementierung via parallele Arbeitsagenten mit disjunkten Dateibereichen, danach Gesamtsuite (SQLite in-memory), Node-Tests, Pint, Sync-SHA-Pruefung; Ergebnis wird hier nachgetragen. |
 
+| 2026-07-19 | Codex | in_arbeit | Uebernahme des von Claude begonnenen Optimierungspakets ab Commits `d89c937` und `7103687`. Beanspruchter Restbereich: Bestandsaudit gegen alle sechs Punkte, Studio-/Task-Editor-Buttonfluss, Runtime-Sync nach ClientController und abschliessende Gesamtverifikation; die bereits implementierten Watchdog-, Selector-Probe-, Taktungs- und Browser-Task-Bereiche werden nur bei belegten Fehlern angepasst. | Git-Arbeitsbaum bei Uebernahme sauber; README-Status und beide Commits gelesen. | Fehlende Teile ermitteln, gezielt korrigieren, PHP-/Node-/Blade-/Pint-/Sync-Pruefungen ausfuehren und beide `in_arbeit`-Eintraege mit einem verifizierten Abschluss aufloesen. |
+
+| 2026-07-19 | Codex | verifiziert | Claudes Optimierungspaket ab `d89c937`/`7103687` uebernommen und abgeschlossen. Bereits vorhandene Teile bestaetigt: neue Tasks `browser.navigate_back`, `browser.navigate_forward`, `browser.reload`, Manifest-Write-Batching, Watchdog-Grundlage und deterministische Selector-Probe. Audit-Fixes: produktive Runner-PID wird auch aus `browserIdentity.runnerProcessId`/`runner_process_id` gelesen; echte Workflow-Task-Monitorpfade takten altersabhaengig mit 3 s bzw. 10 s; Click/Fill/Submit duerfen bei Selector-Timeout nur mit exakt zur aktuellen Workflow-Karte gehoerender, hoch-konfidenter Vision-`element_ref` und eindeutigem stabilem Selector aus der aktuellen DOM-`interaction_map` geprobt werden; unsichere Faelle pausieren. `Neu versuchen` terminiert den alten Prozessbaum, startet sichtbar/protokolliert neu; Editor-Abbrechen nutzt explizite Livewire-Aktionen, und das Kindmodal schliesst per Escape nicht mehr gleichzeitig den gesamten Builder. Das Bildverstehensmodell erhaelt einen festen Browserfenster-Prompt und liefert `browser_screen_description` als detaillierte, vorlesbare Beschreibung; sie erscheint in Manager, Chatbot und Copilot-Ereignis. ClientController-Runtime und Manifest vollstaendig neu synchronisiert. | SQLite in-memory: 114 Tests/1345 Assertions gruen. Node-Quellruntime: 49 Tests gruen; ClientController-Navigation: 10 Tests gruen. Pint: 14 Dateien gruen; PHP-Syntax, Blade-Cache, `git diff --check` und Vite-Produktionsbuild gruen. Runtime: 64/64 Dateien bytegleich, Manifest enthaelt Runner und alle drei Navigationstasks. | Deployen und Workflow 15 frisch interaktiv sowie autonom testen. Erwartung: toter Runner endet mit `run.watchdog_stalled`, Neustart erzeugt `run.restarted`, Selector-Reparatur nutzt nur DOM-/Vision-Evidenz, und `vision.analysis_completed` enthaelt die vorlesbare Browseransicht. Restrisiko: echter produktiver Browser-/OpenRouter-Lauf steht noch aus; DOM/Screenshot-Aufnahmen bleiben fuer die Forensik vor/nach Tasks erhalten, nur die teuren Manifest-Neuschreibungen sind gebatcht. |
+
 Neue Eintraege immer unten anhaengen. Ein Eintrag gilt erst als `verifiziert`,
 wenn die ausgefuehrten Testkommandos und verbleibende Risiken genannt sind.
 
@@ -245,3 +249,42 @@ einem teilweise fehlgeschlagenen DDL-Lauf erneut ausfuehrbar. Auf Plesk:
 Gezielte Verifikation dieses Stands: PHP 74 Tests/610 Assertions, Node 25
 Tests, Rust-Route-Test, PHP-Syntax, Blade-Cache und `git diff --check`.
 Eine angemeldete visuelle Browser-Endabnahme bleibt nach dem Deployment offen.
+
+### Optimierter Test- und Copilot-Lauf
+
+Interaktive `workflow-task`-Laeufe werden ueber ihren Status-Heartbeat und die
+tatsaechliche Runner-PID ueberwacht. Junge Laeufe werden alle drei Sekunden,
+aeltere Laeufe alle zehn Sekunden kontrolliert. Ist der Heartbeat aelter als
+120 Sekunden und der Prozess nachweislich beendet, schliesst der Watchdog den
+Step mit `run.watchdog_stalled` ab. Ein weiterhin laufender Prozess wird nur mit
+`run.heartbeat_stale` diagnostiziert und nicht blind beendet.
+
+Bei Selector-Timeouts darf der Copilot Ersatz-Selector nur aus der aktuellen
+DOM-`interaction_map` ableiten. Fuer `browser.click`, `input.fill_field` und
+`input.submit` sind zusaetzlich ein hoch-konfidentes Vision-Element sowie der
+exakte bestehende Workflow-Task-Key erforderlich. Modellseitig erfundene,
+mehrdeutige oder schwache Selector werden verworfen und fuehren zur sicheren
+Pause. Externe Aktionen unterliegen weiterhin der Studio-Berechtigungspruefung.
+
+Das Bildverstehensmodell wird explizit darueber informiert, dass sein Bild eine
+Browseransicht eines automatisierten Workflow-Laufs zeigt. Es beschreibt die
+Ansicht von oben nach unten mit Navigation, Hauptinhalt, Formularen, Aktionen,
+Ergebnissen, Dialogen, Consent-, Lade- und Fehlerzustaenden. Die redigierte
+Beschreibung steht als `browser_screen_description` im Vision-Ergebnis, im
+Audit-Ereignis und in den Copilot-Oberflaechen bereit und kann ueber die
+bestehende Chat-Audioausgabe vorgelesen werden.
+
+Neue Katalogtasks:
+
+- `browser.navigate_back`: eine Position in der Browser-History zurueck
+- `browser.navigate_forward`: eine Position in der Browser-History vor
+- `browser.reload`: aktuelle Seite neu laden
+- `browser.press_key`: vorhandener Task fuer Enter und andere Tasten
+
+Nach Aenderungen an `node/workflows` muss der portable ClientController-Mirror
+erneut erzeugt werden:
+
+```powershell
+cd C:\xampp\htdocs\followflow\ClientController
+npm run sync:workflow-runtime
+```

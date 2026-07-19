@@ -1632,6 +1632,206 @@ class WorkflowCopilotRepairServiceTest extends TestCase
         $this->assertSame('https://accounts.example.test/login', $updated['url']);
     }
 
+    public function test_selector_timeout_repairs_click_fill_and_submit_only_from_their_confident_dom_element_ref(): void
+    {
+        $cases = [[
+            'task' => [
+                'key' => 'login-click',
+                'task_key' => 'browser.click',
+                'title' => 'Anmelden',
+                'selector' => 'button.legacy-login',
+                'timeout_seconds' => 42,
+            ],
+            'element' => [
+                'element_ref' => 'el_login_click',
+                'tag' => 'button',
+                'visible' => true,
+                'enabled' => true,
+                'selector_candidates' => ['#volatile-login', 'button[aria-label="Anmelden"]'],
+            ],
+            'selector' => 'button[aria-label="Anmelden"]',
+            'preserved' => ['timeout_seconds' => 42],
+        ], [
+            'task' => [
+                'key' => 'email-fill',
+                'task_key' => 'input.fill_field',
+                'title' => 'E-Mail fuellen',
+                'selector' => 'input.legacy-email',
+                'value_source' => 'workflow_variable',
+                'workflow_variable' => 'person.email',
+                'value_fallback' => 'fallback@example.test',
+            ],
+            'element' => [
+                'element_ref' => 'el_email_fill',
+                'tag' => 'input',
+                'visible' => true,
+                'enabled' => true,
+                'selector_candidates' => ['#volatile-email', 'input[placeholder="E-Mail"]'],
+            ],
+            'selector' => 'input[placeholder="E-Mail"]',
+            'preserved' => [
+                'value_source' => 'workflow_variable',
+                'workflow_variable' => 'person.email',
+                'value_fallback' => 'fallback@example.test',
+            ],
+        ], [
+            'task' => [
+                'key' => 'login-submit',
+                'task_key' => 'input.submit',
+                'title' => 'Formular absenden',
+                'selector' => 'button.legacy-submit',
+                'timeout_seconds' => 37,
+            ],
+            'element' => [
+                'element_ref' => 'el_login_submit',
+                'tag' => 'button',
+                'visible' => true,
+                'enabled' => true,
+                'selector_candidates' => ['#volatile-submit', 'button[title="Formular absenden"]'],
+            ],
+            'selector' => 'button[title="Formular absenden"]',
+            'preserved' => ['timeout_seconds' => 37],
+        ]];
+        $ai = Mockery::mock(AiConnectionService::class);
+        $ai->shouldNotReceive('json');
+        $this->app->instance(AiConnectionService::class, $ai);
+
+        foreach ($cases as $case) {
+            [$workflow, $step] = $this->workflowWithTasks([$case['task']]);
+            $session = app(WorkflowCopilotSessionService::class)->start($workflow);
+            $task = $case['task'];
+            $element = $case['element'];
+            $plan = app(WorkflowCopilotRepairService::class)->plan(
+                $session,
+                $step,
+                [
+                    'task_key' => $task['key'],
+                    'successful' => false,
+                    'outcome' => 'timeout',
+                    'result' => [
+                        'statusMessage' => 'Timed out waiting for selector '.$task['selector'],
+                        'sideEffects' => [],
+                    ],
+                ],
+                [
+                    'interaction_map' => [$element],
+                    'evidence_sufficient' => true,
+                ],
+                [
+                    'confidence' => 0.94,
+                    'verdict' => 'continue',
+                    'safe_pause' => false,
+                    'relevant_elements' => [[
+                        'element_ref' => $element['element_ref'],
+                        'confidence' => 0.93,
+                    ]],
+                    'suggested_task_actions' => [[
+                        'task_key' => $task['task_key'],
+                        'card_key' => $task['key'],
+                        'element_ref' => $element['element_ref'],
+                        'parameters' => ['selector' => '#model-selector-is-ignored'],
+                        'confidence' => 0.92,
+                    ]],
+                ],
+            );
+
+            $this->assertSame('probe_update', $plan['action']);
+            $this->assertSame([
+                'selector' => $case['selector'],
+                'element_selector' => $case['selector'],
+            ], $plan['changes']);
+            $this->assertSame($case['selector'], data_get($plan, 'probe_task.selector'));
+            $this->assertNotSame('#model-selector-is-ignored', data_get($plan, 'changes.selector'));
+
+            foreach ($case['preserved'] as $field => $value) {
+                $this->assertSame($value, data_get($plan, 'probe_task.'.$field));
+            }
+        }
+    }
+
+    public function test_mutating_selector_timeout_rejects_low_confidence_or_ambiguous_vision_targets(): void
+    {
+        foreach ([
+            'low_confidence' => [
+                'actions' => [[
+                    'task_key' => 'browser.click',
+                    'card_key' => 'login-click',
+                    'element_ref' => 'el_primary',
+                    'confidence' => 0.4,
+                ]],
+            ],
+            'ambiguous_refs' => [
+                'actions' => [[
+                    'task_key' => 'browser.click',
+                    'card_key' => 'login-click',
+                    'element_ref' => 'el_primary',
+                    'confidence' => 0.92,
+                ], [
+                    'task_key' => 'browser.click',
+                    'card_key' => 'login-click',
+                    'element_ref' => 'el_secondary',
+                    'confidence' => 0.91,
+                ]],
+            ],
+        ] as $case) {
+            [$workflow, $step] = $this->workflowWithTasks([[
+                'key' => 'login-click',
+                'task_key' => 'browser.click',
+                'title' => 'Anmelden',
+                'selector' => 'button.legacy-login',
+            ]]);
+            $session = app(WorkflowCopilotSessionService::class)->start($workflow);
+            $elements = [[
+                'element_ref' => 'el_primary',
+                'tag' => 'button',
+                'visible' => true,
+                'enabled' => true,
+                'selector_candidates' => ['button[aria-label="Anmelden"]'],
+            ], [
+                'element_ref' => 'el_secondary',
+                'tag' => 'button',
+                'visible' => true,
+                'enabled' => true,
+                'selector_candidates' => ['button[aria-label="Weiter"]'],
+            ]];
+            $ai = Mockery::mock(AiConnectionService::class);
+            $ai->shouldNotReceive('json');
+            $this->app->instance(AiConnectionService::class, $ai);
+
+            $plan = app(WorkflowCopilotRepairService::class)->plan(
+                $session,
+                $step,
+                [
+                    'task_key' => 'login-click',
+                    'successful' => false,
+                    'outcome' => 'timeout',
+                    'result' => ['statusMessage' => 'Timed out waiting for selector button.legacy-login'],
+                ],
+                ['interaction_map' => $elements, 'evidence_sufficient' => true],
+                [
+                    'confidence' => 0.94,
+                    'verdict' => 'continue',
+                    'safe_pause' => false,
+                    'relevant_elements' => [[
+                        'element_ref' => 'el_primary',
+                        'confidence' => 0.93,
+                    ], [
+                        'element_ref' => 'el_secondary',
+                        'confidence' => 0.92,
+                    ]],
+                    'suggested_task_actions' => $case['actions'],
+                ],
+            );
+
+            $this->assertSame('pause', $plan['action']);
+            $this->assertArrayNotHasKey('changes', $plan);
+            $this->assertSame(0, WorkflowCopilotEvent::query()
+                ->where('workflow_copilot_session_id', $session->id)
+                ->where('event_type', 'repair.selector_probe_applied')
+                ->count());
+        }
+    }
+
     public function test_selector_timeout_with_role_matching_dom_element_plans_deterministic_selector_probe(): void
     {
         [$workflow, $step] = $this->workflowWithTasks([[

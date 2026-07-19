@@ -11,7 +11,6 @@
         }
     "
     x-on:workflow-studio-open-builder.window="$wire.openStudioPanel('builder')"
-    x-on:keydown.escape.window="$wire.closeStudioPanel()"
     data-workflow-studio-shell
     class="{{ $embedded ? 'h-[100dvh]' : 'fixed inset-0 z-[70] h-[100dvh]' }} flex min-h-0 flex-col overflow-hidden bg-slate-100 text-slate-900"
     wire:poll.2s="refreshStudio"

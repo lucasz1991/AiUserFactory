@@ -1271,6 +1271,7 @@ class Chatbot extends Component
         return [
             'page_type' => Str::limit(trim((string) ($vision['page_type'] ?? '')), 120, ''),
             'ui_state' => Str::limit(trim((string) ($vision['ui_state'] ?? '')), 160, ''),
+            'browser_screen_description' => Str::limit(trim((string) ($vision['browser_screen_description'] ?? '')), 3000, ''),
             'goal_progress' => is_numeric($progress)
                 ? number_format(max(0, min(1, (float) $progress)) * 100, 0, ',', '.').' %'
                 : $this->copilotDisplayValue($progress),
@@ -1302,6 +1303,7 @@ class Chatbot extends Component
             'suggested_task_actions' => collect(is_array($vision['suggested_task_actions'] ?? null) ? $vision['suggested_task_actions'] : [])
                 ->map(fn (mixed $action): array => [
                     'task_key' => Str::limit(trim((string) data_get($action, 'task_key', '')), 191, ''),
+                    'workflow_task_key' => Str::limit(trim((string) data_get($action, 'workflow_task_key', '')), 191, ''),
                     'element_ref' => Str::limit(trim((string) data_get($action, 'element_ref', '')), 191, ''),
                     'reason' => Str::limit(trim((string) data_get($action, 'reason', '')), 300, ''),
                     'confidence' => is_numeric(data_get($action, 'confidence'))

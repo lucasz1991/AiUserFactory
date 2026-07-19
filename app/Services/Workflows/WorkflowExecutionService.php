@@ -988,7 +988,10 @@ class WorkflowExecutionService
                 'logs_json' => $this->logsFromExternalStatus($status),
             ])->save();
 
-            $this->scheduleMonitor($stepRun, (int) ($status['livePreviewPollIntervalSeconds'] ?? $status['livePreviewIntervalSeconds'] ?? 10));
+            $monitorDelay = $stepRun->external_run_type === 'workflow-task'
+                ? null
+                : (int) ($status['livePreviewPollIntervalSeconds'] ?? $status['livePreviewIntervalSeconds'] ?? 10);
+            $this->scheduleMonitor($stepRun, $monitorDelay);
 
             return;
         }
@@ -2336,7 +2339,7 @@ class WorkflowExecutionService
             'logs_json' => $this->logsFromExternalStatus($externalRun),
         ])->save();
 
-        $this->scheduleMonitor($stepRun, (int) ($externalRun['livePreviewPollIntervalSeconds'] ?? $externalRun['livePreviewIntervalSeconds'] ?? 3));
+        $this->scheduleMonitor($stepRun);
 
         return 'waiting';
     }
@@ -3484,8 +3487,7 @@ class WorkflowExecutionService
         array $route,
         ?array $context = null,
         array $result = [],
-    ): void
-    {
+    ): void {
         $context = is_array($context) ? $context : (is_array($run->context_json) ? $run->context_json : []);
         $history = is_array($context['route_history'] ?? null) ? $context['route_history'] : [];
         $history[] = [
@@ -4521,7 +4523,7 @@ class WorkflowExecutionService
         }
 
         $run = $stepRun->workflowRun;
-        $pid = (int) data_get($status, 'pid', 0);
+        $pid = $this->workflowTaskProcessId($status);
         $payload = [
             'workflow_run_id' => (int) $run->id,
             'workflow_step_run_id' => (int) $stepRun->id,
@@ -4617,6 +4619,29 @@ class WorkflowExecutionService
         }
 
         return null;
+    }
+
+    /**
+     * Ermittelt die PID des Node-Runners aus alten und aktuellen Statusformen.
+     * Der produktive Runner liefert sie derzeit in browserIdentity; aeltere
+     * Statusdateien koennen sie weiterhin auf der obersten Ebene enthalten.
+     */
+    protected function workflowTaskProcessId(array $status): int
+    {
+        foreach ([
+            data_get($status, 'pid'),
+            data_get($status, 'browserIdentity.runnerProcessId'),
+            data_get($status, 'browserIdentity.runner_process_id'),
+            data_get($status, 'runner_process_id'),
+        ] as $candidate) {
+            $pid = (int) $candidate;
+
+            if ($pid > 1) {
+                return $pid;
+            }
+        }
+
+        return 0;
     }
 
     /**

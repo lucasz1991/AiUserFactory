@@ -1118,6 +1118,13 @@
                                             <div class="rounded-lg bg-slate-50 p-2"><dt class="font-semibold text-slate-500">Zielfortschritt</dt><dd class="mt-1 font-bold text-slate-900">{{ data_get($visionAnalysis, 'goal_progress') ?: '-' }}</dd></div>
                                         </dl>
 
+                                        @if(filled(data_get($visionAnalysis, 'browser_screen_description')))
+                                            <div class="mt-3 rounded-lg border border-cyan-100 bg-cyan-50/60 p-3">
+                                                <h4 class="text-xs font-bold uppercase tracking-[.08em] text-cyan-800">Beschreibung der Browseransicht</h4>
+                                                <p class="mt-1 whitespace-pre-line text-sm leading-6 text-slate-700">{{ data_get($visionAnalysis, 'browser_screen_description') }}</p>
+                                            </div>
+                                        @endif
+
                                         <div class="mt-4 grid gap-4 lg:grid-cols-2">
                                             <div>
                                                 <h4 class="text-xs font-bold uppercase tracking-[.08em] text-slate-500">Erkannte Elemente</h4>
@@ -1142,6 +1149,9 @@
                                                     @forelse(data_get($visionAnalysis, 'suggested_task_actions', []) as $action)
                                                         <div class="break-words border-l-2 border-emerald-300 pl-2 text-xs text-slate-700">
                                                             <code class="font-bold text-emerald-800">{{ $action['task_key'] }}</code>
+                                                            @if(filled($action['workflow_task_key'] ?? null))
+                                                                fuer <code>{{ $action['workflow_task_key'] }}</code>
+                                                            @endif
                                                             @if(filled($action['element_ref']))
                                                                 an <code>{{ $action['element_ref'] }}</code>
                                                             @endif

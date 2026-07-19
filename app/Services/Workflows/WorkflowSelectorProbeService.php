@@ -103,17 +103,22 @@ class WorkflowSelectorProbeService
      * @param  array<string, mixed>  $task
      * @param  array<string, mixed>  $observation
      * @param  list<string>  $rejectedSelectors
+     * @param  list<string>  $requiredElementRefs
      * @return array<string, mixed>
      */
-    public function bestCandidate(array $task, array $observation, array $rejectedSelectors = []): array
-    {
+    public function bestCandidate(
+        array $task,
+        array $observation,
+        array $rejectedSelectors = [],
+        array $requiredElementRefs = [],
+    ): array {
         $previousSelector = trim((string) ($task['selector'] ?? $task['element_selector'] ?? ''));
 
         if ($previousSelector === '') {
             return [];
         }
 
-        $expectedTags = $this->expectedTagsForSelector($previousSelector);
+        $expectedTags = $this->expectedTagsForTask($task, $previousSelector);
 
         if ($expectedTags === []) {
             return [];
@@ -130,9 +135,27 @@ class WorkflowSelectorProbeService
             return [];
         }
 
+        $requiredElementRefs = collect($requiredElementRefs)
+            ->map(fn (mixed $ref): string => trim((string) $ref))
+            ->filter()
+            ->unique()
+            ->values();
+        $candidateElements = $requiredElementRefs->isEmpty()
+            ? $elements
+            : $elements->filter(function (array $element) use ($requiredElementRefs): bool {
+                $elementRef = trim((string) ($element['element_ref'] ?? $element['ref'] ?? ''));
+
+                return $requiredElementRefs->contains($elementRef);
+            })->values();
+
+        if ($candidateElements->isEmpty()
+            || ($requiredElementRefs->isNotEmpty() && $candidateElements->count() !== 1)) {
+            return [];
+        }
+
         $candidates = [];
 
-        foreach ($elements as $element) {
+        foreach ($candidateElements as $element) {
             $elementRef = trim((string) ($element['element_ref'] ?? $element['ref'] ?? ''));
             $selectors = collect([
                 ...(is_array($element['selector_candidates'] ?? null) ? $element['selector_candidates'] : []),
@@ -167,6 +190,28 @@ class WorkflowSelectorProbeService
 
         if ($candidates === []) {
             return [];
+        }
+
+        if ($requiredElementRefs->isNotEmpty()) {
+            $candidates = array_filter($candidates, function (array $candidate) use ($elements): bool {
+                $selector = (string) $candidate['selector'];
+                $matchingRefs = $elements
+                    ->filter(function (array $element) use ($selector): bool {
+                        return collect([
+                            ...(is_array($element['selector_candidates'] ?? null) ? $element['selector_candidates'] : []),
+                            $element['selector'] ?? null,
+                        ])->contains(fn (mixed $value): bool => trim((string) $value) === $selector);
+                    })
+                    ->map(fn (array $element): string => trim((string) ($element['element_ref'] ?? $element['ref'] ?? '')))
+                    ->filter()
+                    ->unique();
+
+                return $matchingRefs->count() === 1;
+            });
+
+            if ($candidates === []) {
+                return [];
+            }
         }
 
         $ranked = collect($candidates)
@@ -266,5 +311,26 @@ class WorkflowSelectorProbeService
         }
 
         return $tags;
+    }
+
+    /**
+     * @return list<string>
+     */
+    protected function expectedTagsForTask(array $task, string $selector): array
+    {
+        $selectorTags = $this->expectedTagsForSelector($selector);
+
+        return match (trim((string) ($task['task_key'] ?? ''))) {
+            'input.fill_field' => $selectorTags === []
+                ? ['input', 'textarea', 'select']
+                : array_values(array_intersect($selectorTags, ['input', 'textarea', 'select'])),
+            'input.submit' => $selectorTags === []
+                ? ['button', 'input']
+                : array_values(array_intersect($selectorTags, ['button', 'input'])),
+            'browser.click' => $selectorTags === []
+                ? ['a', 'button', 'input', 'select', 'textarea', 'label', 'summary']
+                : $selectorTags,
+            default => $selectorTags,
+        };
     }
 }

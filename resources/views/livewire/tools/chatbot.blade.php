@@ -1571,6 +1571,13 @@
                                             <p class="leading-5 text-slate-600"><strong class="text-slate-800">Zielfortschritt:</strong> {{ data_get($visionAnalysis, 'goal_progress') }}</p>
                                         @endif
 
+                                        @if(filled(data_get($visionAnalysis, 'browser_screen_description')))
+                                            <div class="rounded-lg border border-cyan-100 bg-cyan-50/60 p-3">
+                                                <p class="text-xs font-bold uppercase tracking-[.08em] text-cyan-800">Beschreibung der Browseransicht</p>
+                                                <p class="mt-1 whitespace-pre-line leading-6 text-slate-700">{{ data_get($visionAnalysis, 'browser_screen_description') }}</p>
+                                            </div>
+                                        @endif
+
                                         @if(data_get($visionAnalysis, 'relevant_elements', []) !== [])
                                             <div>
                                                 <p class="font-bold text-slate-700">Erkannte Elemente</p>
@@ -1595,6 +1602,9 @@
                                                     @foreach(data_get($visionAnalysis, 'suggested_task_actions', []) as $action)
                                                         <li class="break-words">
                                                             <code class="font-bold text-emerald-800">{{ $action['task_key'] }}</code>
+                                                            @if(filled($action['workflow_task_key'] ?? null))
+                                                                fuer <code>{{ $action['workflow_task_key'] }}</code>
+                                                            @endif
                                                             @if(filled($action['element_ref']))
                                                                 an <code>{{ $action['element_ref'] }}</code>
                                                             @endif

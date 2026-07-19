@@ -26,6 +26,12 @@ class WorkflowCopilotRepairService
         'mail.generate_password',
     ];
 
+    private const MUTATING_SELECTOR_PROBE_TASKS = [
+        'browser.click',
+        'input.fill_field',
+        'input.submit',
+    ];
+
     private const SHARED_MUTABLE_FIELDS = [
         'timeout_seconds',
         'next',
@@ -161,11 +167,20 @@ class WorkflowCopilotRepairService
             $task,
             $checkpoint,
             $observation,
+            $vision,
             $rejectedSelectors,
         );
 
         if ($selectorProbePlan !== []) {
             return $selectorProbePlan;
+        }
+
+        if (in_array($taskCatalogKey, self::MUTATING_SELECTOR_PROBE_TASKS, true)
+            && $this->selectorProbes->classifyFailure($checkpoint) === WorkflowSelectorProbeService::FAILURE_SELECTOR_TIMEOUT) {
+            return $this->pausePlan(
+                $taskKey,
+                'Die zustandsveraendernde Selektor-Probe wurde verworfen: Es fehlt genau eine zur aktuellen Task passende, hoch-konfidente Vision-Elementreferenz mit einem eindeutigen stabilen DOM-Selector.',
+            );
         }
 
         $requiresVisualTarget = $this->taskRequiresVisualTarget($taskCatalogKey);
@@ -936,12 +951,14 @@ class WorkflowCopilotRepairService
      * Modell-Planer, ist reiner Server-Code und nutzt als Evidenz die Herkunft
      * aus der eigenen DOM-Beobachtung (Evidenzklasse `selector_probe`). Das
      * strikte hash_equals-Gate fuer modellvorgeschlagene Selektoren bleibt
-     * unveraendert; zustandsveraendernde Tasks mit Pflicht-Vision-Ziel sind
-     * ausgenommen. Ohne eindeutigen besten Kandidaten: kein Eingriff.
+     * unveraendert. Zustandsveraendernde Tasks werden nur mit einer exakt zur
+     * aktuellen Karte gehoerenden, hoch-konfidenten Vision-Elementreferenz
+     * zugelassen. Ohne eindeutigen besten Kandidaten: kein Eingriff.
      *
      * @param  array<string, mixed>  $task
      * @param  array<string, mixed>  $checkpoint
      * @param  array<string, mixed>  $observation
+     * @param  array<string, mixed>  $vision
      * @param  list<string>  $rejectedSelectors
      * @return array<string, mixed>
      */
@@ -951,14 +968,16 @@ class WorkflowCopilotRepairService
         array $task,
         array $checkpoint,
         array $observation,
+        array $vision,
         array $rejectedSelectors,
     ): array {
         $taskCatalogKey = trim((string) ($task['task_key'] ?? ''));
         $definition = $taskCatalogKey !== '' ? $this->catalog->task($taskCatalogKey) : null;
+        $isMutatingSelectorProbe = in_array($taskCatalogKey, self::MUTATING_SELECTOR_PROBE_TASKS, true);
 
         if ($definition === null
             || ! $this->taskSupportsSelector($definition)
-            || $this->taskRequiresVisualTarget($taskCatalogKey)
+            || ($this->taskRequiresVisualTarget($taskCatalogKey) && ! $isMutatingSelectorProbe)
             || (bool) ($checkpoint['successful'] ?? false)
             || (bool) data_get($checkpoint, 'result.irreversibleSideEffect', false)
             || (is_array(data_get($checkpoint, 'result.sideEffects'))
@@ -976,7 +995,24 @@ class WorkflowCopilotRepairService
             return [];
         }
 
-        $candidate = $this->selectorProbes->bestCandidate($task, $observation, $rejectedSelectors);
+        if ($isMutatingSelectorProbe && $failureClass !== WorkflowSelectorProbeService::FAILURE_SELECTOR_TIMEOUT) {
+            return [];
+        }
+
+        $requiredElementRefs = $isMutatingSelectorProbe
+            ? $this->trustedSelectorProbeElementRefs($task, $vision, $observation)
+            : [];
+
+        if ($isMutatingSelectorProbe && count($requiredElementRefs) !== 1) {
+            return [];
+        }
+
+        $candidate = $this->selectorProbes->bestCandidate(
+            $task,
+            $observation,
+            $rejectedSelectors,
+            $requiredElementRefs,
+        );
 
         if ($candidate === []) {
             return [];
@@ -1046,6 +1082,43 @@ class WorkflowCopilotRepairService
                 'planner_profile' => 'deterministic_selector_probe',
             ],
         ];
+    }
+
+    /**
+     * @return list<string>
+     */
+    protected function trustedSelectorProbeElementRefs(array $task, array $vision, array $observation): array
+    {
+        if (! (bool) ($observation['evidence_sufficient'] ?? false)) {
+            return [];
+        }
+
+        $trustedRefs = $this->trustedVisionElementRefs($vision, $observation);
+        $taskCatalogKey = trim((string) ($task['task_key'] ?? ''));
+        $taskKey = trim((string) ($task['key'] ?? ''));
+
+        return collect($vision['suggested_task_actions'] ?? [])
+            ->filter(function (mixed $action) use ($taskCatalogKey, $taskKey, $trustedRefs): bool {
+                if (! is_array($action)) {
+                    return false;
+                }
+
+                $candidateCatalogKey = trim((string) ($action['task_catalog_key'] ?? $action['task_key'] ?? ''));
+                $candidateTaskKey = trim((string) ($action['card_key'] ?? $action['workflow_task_key'] ?? ''));
+                $elementRef = trim((string) ($action['element_ref'] ?? $action['elementRef'] ?? ''));
+                $confidence = $action['confidence'] ?? null;
+
+                return $candidateCatalogKey === $taskCatalogKey
+                    && $candidateTaskKey === $taskKey
+                    && $elementRef !== ''
+                    && isset($trustedRefs[$elementRef])
+                    && is_numeric($confidence)
+                    && (float) $confidence >= self::MIN_VISUAL_CONFIDENCE;
+            })
+            ->map(fn (array $action): string => trim((string) ($action['element_ref'] ?? $action['elementRef'] ?? '')))
+            ->unique()
+            ->values()
+            ->all();
     }
 
     /**

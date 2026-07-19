@@ -129,25 +129,41 @@ class WorkflowStepRunWatchdogTest extends TestCase
         $this->assertSame([], data_get($run->context_json, 'watchdog_events', []));
     }
 
-    public function test_schedule_monitor_polls_young_step_runs_faster_and_keeps_explicit_delays(): void
+    public function test_real_workflow_task_monitoring_polls_young_runs_faster_than_old_runs(): void
     {
         Queue::fake();
+        Process::fake(['*' => Process::result('', '', 0)]);
         [$workflow, $step] = $this->workflow();
         [, $youngStepRun] = $this->waitingWorkflowTaskRun($workflow, $step, [], now()->subSeconds(10));
         [, $oldStepRun] = $this->waitingWorkflowTaskRun($workflow, $step, [], now()->subSeconds(120));
+        $this->mockTaskRunnerWithStatus([
+            ...$this->externalStatus(now()->subSeconds(5)),
+            'livePreviewPollIntervalSeconds' => 47,
+        ]);
+
+        $execution = app(WorkflowExecutionService::class);
+        $execution->monitorStepRun($youngStepRun->id);
+        $execution->monitorStepRun($oldStepRun->id);
+
+        $this->assertMonitorDelaySeconds($youngStepRun->id, 3);
+        $this->assertMonitorDelaySeconds($oldStepRun->id, 10);
+    }
+
+    public function test_schedule_monitor_keeps_explicit_delays_for_non_workflow_runtimes(): void
+    {
+        Queue::fake();
+        [$workflow, $step] = $this->workflow();
+        [, $stepRun] = $this->waitingWorkflowTaskRun($workflow, $step);
+        $stepRun->forceFill(['external_run_type' => 'mail-registration'])->save();
         $method = new ReflectionMethod(WorkflowExecutionService::class, 'scheduleMonitor');
         $method->setAccessible(true);
         $execution = app(WorkflowExecutionService::class);
 
-        $method->invoke($execution, $youngStepRun);
-        $method->invoke($execution, $oldStepRun);
-        $method->invoke($execution, $oldStepRun, 25);
-        $method->invoke($execution, $oldStepRun, 600);
+        $method->invoke($execution, $stepRun, 25);
+        $method->invoke($execution, $stepRun, 600);
 
-        $this->assertMonitorDelaySeconds($youngStepRun->id, 3);
-        $this->assertMonitorDelaySeconds($oldStepRun->id, 10);
-        $this->assertMonitorDelaySeconds($oldStepRun->id, 25);
-        $this->assertMonitorDelaySeconds($oldStepRun->id, 60);
+        $this->assertMonitorDelaySeconds($stepRun->id, 25);
+        $this->assertMonitorDelaySeconds($stepRun->id, 60);
     }
 
     private function assertMonitorDelaySeconds(int $stepRunId, int $expectedSeconds): void
@@ -208,7 +224,10 @@ class WorkflowStepRunWatchdogTest extends TestCase
             'stage' => 'task-10',
             'message' => 'Task 10 von 19 laeuft.',
             'isRunning' => true,
-            'pid' => 4242,
+            'browserIdentity' => [
+                'runnerProcessId' => 4242,
+                'runner_process_id' => 4242,
+            ],
             'at' => $heartbeatAt->toIso8601String(),
             'livePreviewPollIntervalSeconds' => 3,
             'events' => [[

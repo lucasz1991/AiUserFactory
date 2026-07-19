@@ -27,6 +27,7 @@ class WorkflowCopilotVisionServiceTest extends TestCase
                     'message' => ['content' => json_encode([
                         'page_type' => 'login',
                         'ui_state' => 'login_form_visible',
+                        'browser_screen_description' => 'Im Browserfenster ist eine Anmeldeseite sichtbar. Mittig befindet sich ein Formular mit einem deutlich beschrifteten Login-Button.',
                         'goal_progress' => 0.35,
                         'blockers' => ['Der konfigurierte Selector passt nicht.'],
                         'relevant_elements' => [
@@ -37,6 +38,7 @@ class WorkflowCopilotVisionServiceTest extends TestCase
                         'suggested_task_actions' => [
                             [
                                 'task_key' => 'browser.click',
+                                'workflow_task_key' => 'login-click',
                                 'element_ref' => 'el_login',
                                 'parameters' => ['selector' => 'button[data-testid="login"]'],
                                 'reason' => 'Den sichtbaren Button pruefen.',
@@ -100,9 +102,11 @@ class WorkflowCopilotVisionServiceTest extends TestCase
         $this->assertSame('vision-fallback', $result['model']);
         $this->assertTrue($result['fallback_used']);
         $this->assertSame('continue', $result['verdict']);
+        $this->assertStringContainsString('Im Browserfenster ist eine Anmeldeseite sichtbar', $result['browser_screen_description']);
         $this->assertFalse($result['safe_pause']);
         $this->assertSame(['el_login'], array_column($result['relevant_elements'], 'element_ref'));
         $this->assertSame(['browser.click'], array_column($result['suggested_task_actions'], 'task_key'));
+        $this->assertSame('login-click', data_get($result, 'suggested_task_actions.0.workflow_task_key'));
         $this->assertSame(['error', 'success'], array_column($result['attempts'], 'status'));
         $this->assertSame(['vision-primary', 'vision-fallback'], array_column($result['attempts'], 'model'));
 
@@ -112,6 +116,14 @@ class WorkflowCopilotVisionServiceTest extends TestCase
         $this->assertSame('vision-fallback', data_get($requests[1][0]->data(), 'model'));
         $this->assertStringContainsString(
             'Vollstaendiger Task-, Routing- und Workflow-Kontext',
+            (string) data_get($requests[1][0]->data(), 'messages.0.content.0.text'),
+        );
+        $this->assertStringContainsString(
+            'sichtbare Browseransicht so konkret, dass sie einem Benutzer vorgelesen werden kann',
+            (string) data_get($requests[1][0]->data(), 'messages.0.content.0.text'),
+        );
+        $this->assertStringContainsString(
+            'browser_screen_description',
             (string) data_get($requests[1][0]->data(), 'messages.0.content.0.text'),
         );
         $this->assertStringContainsString(

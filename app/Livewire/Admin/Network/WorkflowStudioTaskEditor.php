@@ -75,6 +75,32 @@ class WorkflowStudioTaskEditor extends WorkflowManager
         parent::prepareTaskFromCatalog($stepId, $taskKey, $position);
     }
 
+    public function closeAddStepModal(): void
+    {
+        $this->showAddStepModal = false;
+        $this->resetValidation();
+    }
+
+    public function closeEditStepModal(): void
+    {
+        $this->showEditStepModal = false;
+        $this->resetValidation();
+    }
+
+    public function closeAddTaskModal(): void
+    {
+        $this->showAddTaskModal = false;
+        $this->resetValidation();
+    }
+
+    public function closeEditTaskModal(): void
+    {
+        $this->showEditTaskModal = false;
+        $this->editingTaskLoopPairSegment = '';
+        $this->editingTaskLoopPairEndKey = '';
+        $this->resetValidation();
+    }
+
     public function addStep(): void
     {
         if ($this->mutateDefinition('Neue Liste im Workflow Studio angelegt.', fn () => parent::addStep())) {

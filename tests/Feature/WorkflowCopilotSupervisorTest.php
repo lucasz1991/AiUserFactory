@@ -128,6 +128,7 @@ class WorkflowCopilotSupervisorTest extends TestCase
 
         $observation = $this->observation();
         $vision = $this->visionResult('continue');
+        $vision['browser_screen_description'] = 'Im Browserfenster ist mittig ein Loginformular mit einem sichtbaren Anmeldebutton dargestellt.';
         $observations = Mockery::mock(WorkflowCopilotObservationService::class);
         $observations->shouldReceive('observe')->once()->andReturn($observation);
         $visionService = Mockery::mock(WorkflowCopilotVisionService::class);
@@ -166,6 +167,12 @@ class WorkflowCopilotSupervisorTest extends TestCase
             'workflow_copilot_session_id' => $session->id,
             'event_type' => 'vision.analysis_started',
         ]);
+        $visionEvent = $session->events()->where('event_type', 'vision.analysis_completed')->firstOrFail();
+        $this->assertSame(
+            $vision['browser_screen_description'],
+            data_get($visionEvent->payload_json, 'browser_screen_description'),
+        );
+        $this->assertStringContainsString('Browseransicht:', (string) $visionEvent->message);
         $evidenceEvent = $session->events()->where('event_type', 'repair.evidence_evaluated')->firstOrFail();
         $decisionEvent = $session->events()->where('event_type', 'repair.decision_planned')->firstOrFail();
         $this->assertSame('login_form', data_get($evidenceEvent->payload_json, 'vision.ui_state'));

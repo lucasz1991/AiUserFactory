@@ -9,8 +9,8 @@ use App\Models\NetworkNode;
 use App\Models\Person;
 use App\Models\Workflow;
 use App\Models\WorkflowCopilotSession;
-use App\Models\WorkflowRun;
 use App\Models\WorkflowOptimizationPlan;
+use App\Models\WorkflowRun;
 use App\Models\WorkflowStudioSession;
 use App\Services\Workflows\WorkflowCopilotLaunchRequest;
 use App\Services\Workflows\WorkflowCopilotLaunchService;
@@ -94,8 +94,7 @@ class WorkflowStudio extends Component
         bool $embedded = false,
         string $initialMode = 'interactive',
         ?int $runId = null,
-    ): void
-    {
+    ): void {
         $this->workflowId = (int) $workflow->getKey();
         $this->embedded = $embedded;
         $requestedMode = $embedded ? $initialMode : (string) request()->query('mode', $initialMode);
@@ -314,14 +313,29 @@ class WorkflowStudio extends Component
 
     public function restartRun(): void
     {
-        app(WorkflowStudioControlService::class)->assertUserControl($this->session());
-        $run = $this->activeRun();
-        if ($run && ! in_array($run->status, ['completed', 'failed', 'cancelled', 'timed_out', 'lost'], true)) {
-            app(WorkflowExecutionService::class)->cancel($run, 'Workflow-Lauf wurde fuer den Neustart beendet.');
-        }
-        $this->activeRunId = null;
-        $this->session()->forceFill(['active_workflow_run_id' => null, 'status' => 'draft'])->save();
-        $this->startRun();
+        $this->perform('run.restarted', function (): array {
+            $session = $this->session();
+            app(WorkflowStudioControlService::class)->assertUserControl($session);
+
+            if ($run = $this->activeRun()) {
+                app(WorkflowExecutionService::class)->terminate(
+                    $run,
+                    'Workflow-Lauf und zugehoerige Node-Prozesse wurden fuer den Neustart beendet.',
+                );
+            }
+
+            $this->activeRunId = null;
+            $session->forceFill([
+                'active_workflow_run_id' => null,
+                'status' => 'draft',
+                'finished_at' => null,
+            ])->save();
+
+            $newRun = $this->startInteractiveRun();
+            app(WorkflowStudioControlService::class)->lock($this->session(), 'interactive', auth()->user());
+
+            return $this->result((string) $newRun->status, 'Workflow-Test wurde neu gestartet.', $newRun);
+        });
     }
 
     public function runProbe(?string $confirmationId = null): void

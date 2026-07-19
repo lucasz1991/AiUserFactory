@@ -3560,6 +3560,7 @@ class WorkflowCopilotSupervisorService
 
                 return [
                     'task_key' => Str::limit(trim((string) data_get($action, 'task_key', '')), 191, ''),
+                    'workflow_task_key' => Str::limit(trim((string) data_get($action, 'workflow_task_key', '')), 191, '') ?: null,
                     'element_ref' => $elementRef,
                     'reason' => Str::limit(trim((string) data_get($action, 'reason', '')), 300, ''),
                     'confidence' => is_numeric(data_get($action, 'confidence'))
@@ -3598,6 +3599,7 @@ class WorkflowCopilotSupervisorService
             'task_key' => $checkpoint['task_key'] ?? null,
             'page_type' => Str::limit(trim((string) ($vision['page_type'] ?? 'unknown')), 120, ''),
             'ui_state' => Str::limit(trim((string) ($vision['ui_state'] ?? 'unknown_browser_state')), 160, ''),
+            'browser_screen_description' => Str::limit(trim((string) ($vision['browser_screen_description'] ?? '')), 3000, ''),
             'goal_progress' => $vision['goal_progress'] ?? null,
             'confidence' => is_numeric($vision['confidence'] ?? null)
                 ? round(max(0, min(1, (float) $vision['confidence'])), 3)
@@ -3620,6 +3622,7 @@ class WorkflowCopilotSupervisorService
                 'state_signature',
                 'page_type',
                 'ui_state',
+                'browser_screen_description',
                 'goal_progress',
                 'confidence',
                 'verdict',
@@ -3673,6 +3676,11 @@ class WorkflowCopilotSupervisorService
                 .' ('.$confidence.').',
             'Entscheidung: '.$verdict.'.',
         ];
+        $browserDescription = trim((string) ($analysis['browser_screen_description'] ?? ''));
+
+        if ($browserDescription !== '') {
+            $parts[] = 'Browseransicht: '.$browserDescription;
+        }
         $elements = collect($analysis['relevant_elements'] ?? [])
             ->map(function (array $element): string {
                 $label = trim((string) ($element['semantic_label'] ?? ''));

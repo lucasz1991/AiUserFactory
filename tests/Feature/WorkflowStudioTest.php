@@ -369,6 +369,48 @@ class WorkflowStudioTest extends TestCase
         Queue::assertPushed(RunWorkflowJob::class, 1);
     }
 
+    public function test_restart_force_terminates_the_old_run_and_records_the_new_run_result_and_event(): void
+    {
+        Queue::fake();
+        [$workflow, $step] = $this->workflow();
+        $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
+        $session = app(WorkflowStudioSessionService::class)->open($workflow, $admin, 'manual', 'ask_critical');
+        $oldRun = WorkflowRun::query()->create([
+            'run_uuid' => (string) str()->uuid(),
+            'workflow_id' => $workflow->id,
+            'workflow_revision' => 0,
+            'current_workflow_step_id' => $step->id,
+            'status' => 'waiting',
+            'requested_by' => 'workflow-studio',
+            'queued_at' => now()->subMinute(),
+            'started_at' => now()->subMinute(),
+            'context_json' => ['next_task_key' => 'first-task'],
+            'result_json' => [],
+        ]);
+        app(WorkflowStudioSessionService::class)->attachRun($session, $oldRun);
+        $this->actingAs($admin);
+
+        $component = Livewire::test(WorkflowStudio::class, ['workflow' => $workflow->fresh()])
+            ->call('restartRun')
+            ->assertHasNoErrors()
+            ->assertSet('lastActionResult.status', 'queued')
+            ->assertSet('lastActionResult.message', 'Workflow-Test wurde neu gestartet.');
+
+        $newRun = $workflow->runs()->latest('id')->firstOrFail();
+        $this->assertNotSame($oldRun->id, $newRun->id);
+        $this->assertSame('cancelled', $oldRun->fresh()->status);
+        $this->assertNotNull(data_get($oldRun->fresh()->result_json, 'process_termination.at'));
+        $this->assertSame($newRun->id, $session->fresh()->active_workflow_run_id);
+        $this->assertNotNull($session->fresh()->mode_locked_at);
+        $this->assertDatabaseHas('workflow_studio_events', [
+            'workflow_studio_session_id' => $session->id,
+            'event_type' => 'run.restarted',
+            'message' => 'Workflow-Test wurde neu gestartet.',
+        ]);
+        $component->assertSee('Workflow-Test wurde neu gestartet.');
+        Queue::assertPushed(RunWorkflowJob::class, 1);
+    }
+
     public function test_task_navigation_moves_the_selection_across_lists_without_executing_tasks(): void
     {
         Queue::fake();
@@ -609,6 +651,38 @@ class WorkflowStudioTest extends TestCase
         $this->assertSame('Task im Studio bearbeitet', data_get($step->fresh()->task_cards, '0.title'));
         $this->assertSame(1, $workflow->fresh()->copilot_revision);
         $this->assertSame(2, $workflow->studioRevisions()->count());
+    }
+
+    public function test_studio_task_editor_has_explicit_livewire_close_actions_for_each_child_modal(): void
+    {
+        [$workflow] = $this->workflow();
+        $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
+        $session = app(WorkflowStudioSessionService::class)->open($workflow, $admin, 'manual', 'ask_critical');
+        $this->actingAs($admin);
+
+        Livewire::test(WorkflowStudioTaskEditor::class, [
+            'workflow' => $workflow,
+            'studioSessionId' => $session->id,
+        ])
+            ->assertSeeHtml('wire:click="closeAddStepModal"')
+            ->assertSeeHtml('wire:click="closeEditStepModal"')
+            ->assertSeeHtml('wire:click="closeAddTaskModal"')
+            ->assertSeeHtml('wire:click="closeEditTaskModal"')
+            ->set('showAddStepModal', true)
+            ->call('closeAddStepModal')
+            ->assertSet('showAddStepModal', false)
+            ->set('showEditStepModal', true)
+            ->call('closeEditStepModal')
+            ->assertSet('showEditStepModal', false)
+            ->set('showAddTaskModal', true)
+            ->call('closeAddTaskModal')
+            ->assertSet('showAddTaskModal', false)
+            ->set('showEditTaskModal', true)
+            ->call('closeEditTaskModal')
+            ->assertSet('showEditTaskModal', false);
+
+        $studioView = File::get(resource_path('views/livewire/admin/network/workflow-studio.blade.php'));
+        $this->assertStringNotContainsString('x-on:keydown.escape.window="$wire.closeStudioPanel()"', $studioView);
     }
 
     public function test_paused_studio_builder_can_insert_a_catalog_task_and_records_a_revision(): void
