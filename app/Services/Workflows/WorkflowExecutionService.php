@@ -1732,6 +1732,23 @@ class WorkflowExecutionService
             $nextTaskKey = $currentTaskKey;
         }
 
+        // Eine innerhalb derselben Liste aufgeloeste Fehlerroute durchlaeuft
+        // continueAfterStep() nicht. Deshalb muessen Retry-Limit und Historie
+        // hier persistiert werden; andernfalls startet jeder Studio-Klick mit
+        // einem frischen Node-Runner und dieselbe Rueckroute kann endlos greifen.
+        if ($routedFailure && $nextAction === 'next_task' && is_array($failureRoute)) {
+            if ($this->failedBackRouteExceeded($run, $stepRun, $outcome, $failureRoute, $context, $result)) {
+                $result = $this->sameStateRetryBlockedResult($result, $failureRoute);
+                $workflowMayContinue = false;
+                $routedFailure = false;
+                $nextTaskKey = $currentTaskKey;
+            } else {
+                $this->recordRoute($run, $stepRun, $outcome, $failureRoute, $context, $result);
+                $run = $run->fresh();
+                $context = is_array($run->context_json) ? $run->context_json : [];
+            }
+        }
+
         $pauseAfterTask = (bool) ($context['manual_pause_requested'] ?? false) || $studioSingleTask;
         unset($context['studio_single_task']);
 

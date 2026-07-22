@@ -537,6 +537,104 @@ class WorkflowStudioTest extends TestCase
         Queue::assertPushed(RunWorkflowJob::class, 1);
     }
 
+    public function test_interactive_run_blocks_a_repeated_backward_task_route_after_its_retry_limit(): void
+    {
+        Queue::fake();
+        [$workflow, $step] = $this->workflow();
+        $tasks = $step->task_cards;
+        $tasks[] = [
+            'key' => 'second-task',
+            'task_key' => 'browser.open_url',
+            'title' => 'Zweiter Task',
+            'url' => 'https://example.test',
+            'on_error' => [
+                'type' => 'card',
+                'action_key' => $step->action_key,
+                'step' => $step->action_key,
+                'card_key' => 'first-task',
+                'card' => 'first-task',
+                'max_attempts' => 1,
+            ],
+        ];
+        $config = $step->config_json;
+        $config['tasks'] = $tasks;
+        $step->forceFill(['config_json' => $config])->save();
+        $run = WorkflowRun::query()->create([
+            'run_uuid' => (string) str()->uuid(),
+            'workflow_id' => $workflow->id,
+            'current_workflow_step_id' => $step->id,
+            'status' => 'running',
+            'requested_by' => 'test',
+            'queued_at' => now(),
+            'context_json' => [
+                'interactive_debug' => true,
+                'studio_single_task' => true,
+                'next_task_key' => 'second-task',
+            ],
+            'result_json' => [],
+        ]);
+        $stepRun = WorkflowStepRun::query()->create([
+            'workflow_run_id' => $run->id,
+            'workflow_step_id' => $step->id,
+            'status' => 'running',
+            'started_at' => now(),
+            'result_json' => [],
+        ])->load(['workflowRun', 'workflowStep']);
+        $failedResult = [
+            'ok' => true,
+            'status' => 'success',
+            'statusMessage' => 'URL konnte nicht geoeffnet werden.',
+            'routeRequested' => true,
+            'routeOutcome' => 'failed',
+            'completedTaskKey' => 'second-task',
+            'tasks' => [['key' => 'second-task', 'status' => 'failed']],
+        ];
+        $execution = app(WorkflowExecutionService::class);
+        $method = (new ReflectionClass($execution))->getMethod('continueInteractiveDebugTask');
+
+        $method->invoke($execution, $stepRun, $failedResult, true);
+
+        $run->refresh();
+        $stepRun->refresh();
+        $this->assertSame('paused', $run->status);
+        $this->assertSame('first-task', data_get($run->context_json, 'next_task_key'));
+        $this->assertSame([1], array_values(data_get($run->context_json, 'route_attempts', [])));
+        $this->assertCount(1, data_get($run->context_json, 'route_history', []));
+        $this->assertTrue((bool) data_get($run->context_json, 'manual_debug_last_task.routed_failure'));
+
+        $context = $run->context_json;
+        unset(
+            $context['manual_pause_requested'],
+            $context['manual_pause_requested_at'],
+            $context['manual_pause_checkpoint'],
+        );
+        $context['studio_single_task'] = true;
+        $context['next_task_key'] = 'second-task';
+        $run->forceFill([
+            'status' => 'running',
+            'context_json' => $context,
+        ])->save();
+        $stepRun->forceFill([
+            'status' => 'running',
+            'result_json' => [],
+            'error_message' => null,
+        ])->save();
+
+        $method->invoke($execution, $stepRun, $failedResult, true);
+
+        $run->refresh();
+        $stepRun->refresh();
+        $this->assertSame('paused', $run->status);
+        $this->assertSame('second-task', data_get($run->context_json, 'next_task_key'));
+        $this->assertSame([1], array_values(data_get($run->context_json, 'route_attempts', [])));
+        $this->assertCount(1, data_get($run->context_json, 'route_history', []));
+        $this->assertFalse((bool) data_get($run->context_json, 'manual_debug_last_task.routed_failure'));
+        $this->assertTrue((bool) data_get($stepRun->result_json, 'retry_blocked'));
+        $this->assertSame('same_state_retry_blocked', data_get($stepRun->result_json, 'diagnostic_reason_code'));
+        $this->assertSame('Fehlerroute wurde im gleichen Zustand zu oft wiederholt.', $stepRun->error_message);
+        Queue::assertNothingPushed();
+    }
+
     public function test_copilot_checkpoint_treats_a_configured_error_branch_as_continuable(): void
     {
         [$workflow, $step] = $this->workflow();
