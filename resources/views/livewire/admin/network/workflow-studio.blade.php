@@ -47,7 +47,7 @@
     data-workflow-studio-shell
     data-workflow-studio-mode="{{ $embedded ? 'embedded' : 'standalone' }}"
     class="{{ $embedded ? 'relative h-[100dvh]' : 'fixed inset-0 top-0 z-[70] h-[100dvh]' }} flex min-h-0 flex-col overflow-hidden bg-slate-100 text-slate-900"
-    wire:poll.2s="refreshStudio"
+    wire:poll.{{ $studioPollSeconds ?? 2 }}s="refreshStudio"
 >
     @php
         $runStatus = $run?->status ?? 'draft';

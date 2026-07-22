@@ -19,17 +19,26 @@ class Kernel extends ConsoleKernel
      */
     protected function schedule(Schedule $schedule): void
     {
+        // Prozess-Hygiene (Sync/Reaper/Expire/Reconcile) MUSS auch dann laufen,
+        // wenn kein queue:work-Daemon aktiv oder der Worker vom Copilot-
+        // Supervisor monopolisiert ist. Darum synchron im Scheduler-Prozess
+        // (dispatchSync) statt ueber die database-Queue (->job()). Sonst bleiben
+        // gestallte Laeufe ewig 'waiting' und geparkte Browser werden nie
+        // aufgeraeumt (Haupt-Ursache fuer die Prozess-Akkumulation).
         if (Schema::hasTable('managed_processes')) {
-            $schedule->job(new SyncManagedProcessesJob)
+            $schedule->call(static fn () => SyncManagedProcessesJob::dispatchSync())
+                ->name('managed-processes-sync')
                 ->everyMinute()
                 ->withoutOverlapping(5);
-            $schedule->job(new SuperviseManagedProcessesJob)
+            $schedule->call(static fn () => SuperviseManagedProcessesJob::dispatchSync())
+                ->name('managed-processes-supervise')
                 ->everyMinute()
                 ->withoutOverlapping(5);
         }
 
         if (Schema::hasTable('workflow_step_runs')) {
-            $schedule->job(new ExpireWorkflowRunsJob)
+            $schedule->call(static fn () => ExpireWorkflowRunsJob::dispatchSync())
+                ->name('workflow-runs-expire')
                 ->everyMinute()
                 ->withoutOverlapping(5);
         }
@@ -37,7 +46,8 @@ class Kernel extends ConsoleKernel
         if (Schema::hasTable('workflow_copilot_sessions')
             && Schema::hasTable('workflow_copilot_events')
             && Schema::hasTable('workflow_runs')) {
-            $schedule->job(new ReconcileWorkflowCopilotSessionsJob)
+            $schedule->call(static fn () => ReconcileWorkflowCopilotSessionsJob::dispatchSync())
+                ->name('workflow-copilot-reconcile')
                 ->everyMinute()
                 ->withoutOverlapping(5);
         }
@@ -48,6 +58,14 @@ class Kernel extends ConsoleKernel
                 ->everyMinute()
                 ->withoutOverlapping(5);
         }
+
+        // Taegliches Aufraeumen: erledigte Prozess-Zeilen, alte Lauf-Verzeichnisse
+        // und verwaiste Browser-Profile, damit storage/ und managed_processes
+        // nicht unbegrenzt wachsen.
+        $schedule->command('workflow:prune-artifacts')
+            ->dailyAt('04:20')
+            ->timezone(config('app.timezone', 'Europe/Berlin'))
+            ->withoutOverlapping(30);
 
         $settings = app(NetworkActivityPlanningSettings::class)->get();
 

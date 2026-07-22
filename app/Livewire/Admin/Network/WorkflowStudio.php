@@ -937,6 +937,14 @@ class WorkflowStudio extends Component
         );
         $selectedTaskIndex = $selectedTaskIndex === false ? null : (int) $selectedTaskIndex;
 
+        // Poll-Takt an die tatsaechliche Aktivitaet koppeln: nur bei laufendem/
+        // wartendem Lauf oder aktivem Copilot eng (2s) pollen, sonst traege (15s).
+        // Ein offener Studio-Tab erzeugte bisher bedingungslos ~30 Requests/min
+        // und leerte damit den PHP-FPM-Pool der Domain.
+        $liveRunActive = $run && in_array((string) $run->status, ['queued', 'running', 'waiting', 'stop_requested', 'unreachable'], true);
+        $copilotActive = $copilotSession && in_array((string) $copilotSession->status, ['running', 'repairing', 'verifying'], true);
+        $studioPollSeconds = ($liveRunActive || $copilotActive) ? 2 : 15;
+
         $view = view('livewire.admin.network.workflow-studio', [
             'workflow' => $workflow,
             'session' => $session,
@@ -948,10 +956,16 @@ class WorkflowStudio extends Component
             'events' => $session->events()->latest('sequence')->limit(40)->get()->reverse()->values(),
             'checkpoints' => $run?->checkpoints()->latest('sequence')->limit(30)->get() ?? collect(),
             'taskAttempts' => $run?->taskAttempts()->latest('id')->limit(30)->get() ?? collect(),
-            'persons' => Person::query()->orderBy('sort_order')->orderBy('id')->limit(500)->get(),
+            'persons' => Person::query()
+                ->select(['id', 'sort_order', 'person_first_name', 'person_last_name', 'person_alias', 'profile_label'])
+                ->orderBy('sort_order')
+                ->orderBy('id')
+                ->limit(500)
+                ->get(),
             'networkNodes' => NetworkNode::query()->available()->orderBy('name')->get(),
             'permissionModes' => WorkflowCopilotPermissionMode::cases(),
             'taskCount' => $taskNavigation->count(),
+            'studioPollSeconds' => $studioPollSeconds,
             'selectedTaskNumber' => $selectedTaskIndex === null ? null : $selectedTaskIndex + 1,
             'hasPreviousTask' => $selectedTaskIndex !== null && $selectedTaskIndex > 0,
             'hasNextTask' => $selectedTaskIndex !== null && $selectedTaskIndex < $taskNavigation->count() - 1,

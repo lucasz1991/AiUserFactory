@@ -55,6 +55,14 @@ let browserFallbackReason = null;
 let connectedToExistingBrowser = false;
 let browserDisconnected = false;
 let shutdownInProgress = false;
+// Endzustand des Laufs, damit finalizeBrowserLifecycle den status.json nicht
+// faelschlich von 'failed' auf 'completed' zurueckflippt.
+let finalRunState = 'completed';
+// Referenz auf den echten Task-Kontext, damit der Preview-Timer beim Abschluss
+// wirklich gestoppt wird (frueher wurde ein Dummy-Objekt uebergeben -> Leak).
+let activeRunContext = null;
+// Verhindert doppelte Fatal-Behandlung durch parallele Crash-Signale.
+let fatalErrorHandled = false;
 let debugManifestDirty = false;
 let debugManifestLastWriteAtMs = 0;
 const DEBUG_MANIFEST_WRITE_INTERVAL_MS = 2000;
@@ -2228,6 +2236,26 @@ function shouldKeepWorkflowBrowserProcessAlive() {
   return true;
 }
 
+// Obergrenze, wie lange ein geparkter Keep-Alive-Prozess ohne Fortschritt
+// weiterlaufen darf, bevor er den Browser schliesst und sich selbst beendet.
+// Verhindert das unbegrenzte Akkumulieren von Node+Chromium-Paaren, wenn ein
+// Workflow ohne browser.close-Task endet oder PHP den Prozess nie aufraeumt.
+function keepWorkflowBrowserMaxIdleMs() {
+  const raw = runtime.keepWorkflowBrowserMaxIdleMs ?? runtime.keep_workflow_browser_max_idle_ms;
+
+  if (raw === 0 || raw === '0') {
+    return 0; // explizit deaktiviert
+  }
+
+  const configured = Number(raw);
+
+  if (Number.isFinite(configured) && configured > 0) {
+    return configured;
+  }
+
+  return 900000; // Default: 15 Minuten
+}
+
 async function keepWorkflowBrowserAlive(state = 'completed', stage = 'workflow-browser-kept-active', message = 'Workflow-Browser bleibt aktiv.') {
   if (!shouldKeepWorkflowBrowserProcessAlive()) {
     if (
@@ -2252,8 +2280,14 @@ async function keepWorkflowBrowserAlive(state = 'completed', stage = 'workflow-b
     return;
   }
 
-  pushEvent('workflow-browser-kept-active', 'Workflow-Browser bleibt aktiv bis ein Browser-schliessen-Task ihn beendet.');
+  const maxIdleMs = keepWorkflowBrowserMaxIdleMs();
+  const idleNote = maxIdleMs > 0
+    ? ` (Leerlauf-Limit ${Math.round(maxIdleMs / 1000)}s)`
+    : '';
+  pushEvent('workflow-browser-kept-active', `Workflow-Browser bleibt aktiv bis ein Browser-schliessen-Task ihn beendet${idleNote}.`);
   writeStatus(state, stage, message);
+
+  const keptAliveSinceMs = Date.now();
 
   await new Promise((resolve) => {
     const interval = setInterval(async () => {
@@ -2268,6 +2302,26 @@ async function keepWorkflowBrowserAlive(state = 'completed', stage = 'workflow-b
 
       if (openWindows <= 0) {
         clearInterval(interval);
+        resolve();
+
+        return;
+      }
+
+      // Selbst-Aufraeumung: nach dem Leerlauf-Limit den Browser schliessen und
+      // den Prozess enden lassen, statt ihn unbegrenzt geparkt zu halten.
+      if (maxIdleMs > 0 && (Date.now() - keptAliveSinceMs) >= maxIdleMs) {
+        clearInterval(interval);
+        pushEvent(
+          'workflow-browser-idle-timeout',
+          `Workflow-Browser wird nach Erreichen des Leerlauf-Limits (${Math.round(maxIdleMs / 1000)}s) geschlossen.`,
+        );
+
+        try {
+          await closeWorkflowBrowser(state);
+        } catch (error) {
+          pushEvent('workflow-browser-idle-close-failed', error.message);
+        }
+
         resolve();
       }
     }, 3000);
@@ -2303,9 +2357,36 @@ async function closeWorkflowBrowser(state = 'cancelled') {
   writeStatus(state, stage, message);
 
   if (typeof browser.close === 'function') {
-    await browser.close().catch((error) => {
-      pushEvent('workflow-browser-close-failed', error.message);
-    });
+    // Chromium-Close kann bei defektem Browser haengen. Nach 10s hart per
+    // SIGKILL auf den Browser-Prozess nachfassen, damit kein Waise zurueckbleibt.
+    const browserProcess = typeof browser.process === 'function' ? browser.process() : null;
+    let closeTimer = null;
+
+    await Promise.race([
+      browser.close().catch((error) => {
+        pushEvent('workflow-browser-close-failed', error.message);
+      }),
+      new Promise((resolve) => {
+        closeTimer = setTimeout(resolve, 10000);
+
+        if (typeof closeTimer.unref === 'function') {
+          closeTimer.unref();
+        }
+      }),
+    ]);
+
+    if (closeTimer) {
+      clearTimeout(closeTimer);
+    }
+
+    if (browserProcess && browserProcess.pid && !browserProcess.killed) {
+      try {
+        browserProcess.kill('SIGKILL');
+        pushEvent('workflow-browser-force-killed', 'Browser-Prozess nach Schliess-Timeout hart beendet.');
+      } catch (error) {
+        pushEvent('workflow-browser-force-kill-failed', error.message);
+      }
+    }
   }
 
   browser = null;
@@ -2314,8 +2395,10 @@ async function closeWorkflowBrowser(state = 'cancelled') {
 }
 
 async function finalizeBrowserLifecycle(state = 'completed') {
-  const context = { __workflowPreviewTimer: null };
-  stopPreviewLoop(context);
+  // Den ECHTEN Task-Kontext stoppen, damit der per-Task-Preview-Timer
+  // (__workflowPreviewTimer) wirklich freigegeben wird und keine dauerhaften
+  // Screenshot-/DOM-Dumps im geparkten Prozess weiterlaufen.
+  stopPreviewLoop(activeRunContext || { __workflowPreviewTimer: null });
 
   if (state === 'cancelled') {
     await closeWorkflowBrowser(state);
@@ -2394,6 +2477,60 @@ process.once('SIGTERM', () => {
 
 process.once('SIGINT', () => {
   handleShutdownSignal('SIGINT').catch(() => process.exit(0));
+});
+
+// Ohne diese Handler friert der Prozess bei einem unerwarteten Fehler auf
+// 'running' ein (status.json wird nie final geschrieben) und bleibt als Waise
+// mit offenem Chromium haengen. Hier: failed-Status schreiben, Browser
+// best-effort schliessen, dann beenden.
+function handleFatalError(source, error) {
+  if (fatalErrorHandled || shutdownInProgress) {
+    return;
+  }
+
+  fatalErrorHandled = true;
+  finalRunState = 'failed';
+  const messageText = error && error.message ? error.message : String(error);
+
+  const result = {
+    ok: false,
+    status: 'failed',
+    statusMessage: `Runner-Absturz (${source}): ${messageText}`,
+    error: (error && error.stack) || messageText,
+    tasks: taskResults,
+    browserWindows: lastBrowserWindows,
+    browserWsEndpoint: browserWsEndpoint(),
+    browserIdentity: browserIdentityPayload(),
+    events,
+    finishedAt: now(),
+  };
+
+  try {
+    flushDebugArtifactManifest(true);
+    writeJson(runtime.resultPath, result);
+    writeStatus('failed', 'failed', result.statusMessage, { result });
+  } catch {
+    // Schreibfehler beim Abbruch ignorieren – Prozess endet trotzdem.
+  }
+
+  const forceExitTimer = setTimeout(() => process.exit(1), 12000);
+
+  if (typeof forceExitTimer.unref === 'function') {
+    forceExitTimer.unref();
+  }
+
+  Promise.resolve()
+    .then(() => closeWorkflowBrowser('failed'))
+    .catch(() => {})
+    .finally(() => process.exit(1));
+}
+
+process.on('unhandledRejection', (reason) => {
+  handleFatalError('unhandledRejection', reason);
+});
+
+process.on('uncaughtException', (error) => {
+  handleFatalError('uncaughtException', error);
 });
 
 function embeddedFrameKeyForTask(task = {}) {
@@ -2540,6 +2677,9 @@ async function run() {
     windows: lastBrowserWindows,
     activeBrowserWindow: 'main',
   };
+
+  // Modulweite Referenz fuer finalizeBrowserLifecycle (Preview-Timer-Stop).
+  activeRunContext = context;
 
   const runtimeTasks = runtime.tasks || [];
   const maxRouteTransitions = routeTransitionLimit(runtimeTasks);
@@ -3298,6 +3438,7 @@ async function run() {
 
 run()
   .catch((error) => {
+    finalRunState = 'failed';
     const result = {
       ok: false,
       status: 'failed',
@@ -3325,7 +3466,7 @@ run()
   .finally(async () => {
     flushDebugArtifactManifest(true);
 
-    if (!shutdownInProgress) {
-      await finalizeBrowserLifecycle();
+    if (!shutdownInProgress && !fatalErrorHandled) {
+      await finalizeBrowserLifecycle(finalRunState);
     }
   });

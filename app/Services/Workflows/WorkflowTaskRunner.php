@@ -63,6 +63,7 @@ class WorkflowTaskRunner
             'headlessEnabled' => (bool) ($settings['headless_enabled'] ?? false),
             'navigationTimeoutMs' => ((int) ($settings['navigation_timeout_seconds'] ?? 120)) * 1000,
             'observationTimeoutMs' => min(180000, max(30000, ((int) ($settings['observation_timeout_seconds'] ?? 60)) * 1000)),
+            'keepWorkflowBrowserMaxIdleMs' => $this->keepWorkflowBrowserMaxIdleMs($settings),
             'scriptName' => 'run_step.cjs',
             'executionTarget' => 'client_controller',
             'devDebug' => $this->devDebugRuntimeConfig($run, $step, $stepRun, false),
@@ -130,9 +131,18 @@ class WorkflowTaskRunner
             'browserEngine' => $settings['browser_engine'] ?? 'cloak-with-chrome-fallback',
             'cloakHumanizeEnabled' => (bool) ($settings['cloak_humanize_enabled'] ?? false),
             'cloakHumanPreset' => $settings['cloak_human_preset'] ?? '',
-            'headlessEnabled' => (bool) ($settings['headless_enabled'] ?? false),
+            // System-Ausfuehrung: der Node-Prozess laeuft auf demselben Host wie
+            // PHP. Auf Linux-Servern ohne X-Display standardmaessig headless, damit
+            // Chromium ueberhaupt startet; lokal (Windows) sichtbar zum Debuggen.
+            // Explizit gesetztes headless_enabled hat Vorrang.
+            'headlessEnabled' => (bool) ($settings['headless_enabled'] ?? (PHP_OS_FAMILY === 'Linux')),
+            // --no-sandbox aus PHP durchreichen (frueher toter Code im Node). Nur
+            // aktiv, wenn per Setting gewaehlt – Chromium auf gemanagten Linux-
+            // Hosts ohne User-Namespaces braucht das oft, um ueberhaupt zu starten.
+            'chromiumNoSandbox' => (bool) ($settings['chromium_no_sandbox'] ?? false),
             'navigationTimeoutMs' => ((int) ($settings['navigation_timeout_seconds'] ?? 120)) * 1000,
             'observationTimeoutMs' => min(180000, max(30000, ((int) ($settings['observation_timeout_seconds'] ?? 60)) * 1000)),
+            'keepWorkflowBrowserMaxIdleMs' => $this->keepWorkflowBrowserMaxIdleMs($settings),
             'scriptName' => 'run_step.cjs',
             'devDebug' => $this->devDebugRuntimeConfig($run, $step, $stepRun),
         ];
@@ -1110,6 +1120,24 @@ class WorkflowTaskRunner
     protected function runDirectory(string $runId): string
     {
         return storage_path('app/workflow-task-runs/'.$runId);
+    }
+
+    /**
+     * Obergrenze in Millisekunden, wie lange ein geparkter Keep-Alive-Browser-
+     * Prozess ohne Fortschritt weiterlaufen darf, bevor er sich selbst beendet.
+     * 0 deaktiviert die Selbst-Aufraeumung (nicht empfohlen). Default 15 Minuten.
+     */
+    protected function keepWorkflowBrowserMaxIdleMs(array $settings): int
+    {
+        $seconds = (int) ($settings['browser_keep_alive_max_idle_seconds'] ?? 900);
+
+        if ($seconds <= 0) {
+            return 0;
+        }
+
+        // Zwischen 1 und 60 Minuten begrenzen, damit ein Fehlwert die
+        // Selbst-Aufraeumung nicht praktisch aushebelt.
+        return max(60, min(3600, $seconds)) * 1000;
     }
 
     protected function workflowBrowserProfilePath(WorkflowRun $run, WorkflowStep $step, array $runtimeContext = []): string

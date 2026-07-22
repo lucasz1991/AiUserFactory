@@ -11,6 +11,7 @@ use App\Models\WorkflowRun;
 use App\Models\WorkflowStepRun;
 use App\Services\Workflows\WorkflowExecutionService;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Schema;
 use Livewire\Component;
 
@@ -75,6 +76,15 @@ class ProcessMonitor extends Component
         if (! Schema::hasTable('managed_processes')) {
             $this->notice = 'Die Tabelle managed_processes ist noch nicht migriert.';
 
+            return;
+        }
+
+        // Poll-getriebene Syncs (autoRefresh, showNotice=false) global auf max.
+        // 1x/10s drosseln, damit mehrere offene Monitor-Tabs nicht dauerhaft
+        // teure ps-Scans im FPM-Worker ausloesen. Der Poll rendert weiterhin
+        // alle 5s aus der DB; nur der eigentliche Prozess-Scan wird gedeckelt.
+        // Ein expliziter Button-Klick (showNotice=true) synchronisiert immer.
+        if (! $showNotice && ! Cache::add('managed-processes-sync-throttle', true, 10)) {
             return;
         }
 

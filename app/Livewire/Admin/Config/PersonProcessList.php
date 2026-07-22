@@ -11,6 +11,7 @@ use App\Services\Mail\WebmailSessionRunner;
 use App\Services\Processes\ManagedProcessInventory;
 use App\Services\Workflows\WorkflowExecutionService;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Schema;
 use Livewire\Component;
 
@@ -215,6 +216,13 @@ class PersonProcessList extends Component
         if (! Schema::hasTable('managed_processes')) {
             $this->notice = 'Die Tabelle managed_processes ist noch nicht migriert.';
 
+            return;
+        }
+
+        // Poll-getriebene Syncs (autoRefresh) global auf max. 1x/10s drosseln –
+        // teilt sich den Throttle-Key mit ProcessMonitor, sodass mehrere offene
+        // Prozess-Ansichten zusammen hoechstens alle 10s einen ps-Scan ausloesen.
+        if (! $showNotice && ! Cache::add('managed-processes-sync-throttle', true, 10)) {
             return;
         }
 

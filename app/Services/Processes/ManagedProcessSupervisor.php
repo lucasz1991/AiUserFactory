@@ -18,6 +18,14 @@ class ManagedProcessSupervisor
 
     private const ORPHAN_RUNNING_GRACE_SECONDS = 180;
 
+    // Obergrenze, wie lange ein geparkter Keep-Alive-Browser-Prozess ohne
+    // Fortschritt (keine StepRun-Aktivitaet, kein Status-Update) geschuetzt
+    // bleibt. Danach behandelt der Reaper ihn als verwaist und beendet ihn.
+    // Bewusst laenger als das node-seitige Selbst-Aufraeum-Limit (Default
+    // 15 Min), damit der Prozess sich normalerweise selbst beendet und der
+    // Reaper nur der Rueckfall fuer haengende/verwaiste Faelle ist.
+    private const KEEP_ALIVE_MAX_IDLE_SECONDS = 1800;
+
     public function __construct(
         protected ManagedProcessInventory $inventory,
     ) {}
@@ -193,6 +201,8 @@ class ManagedProcessSupervisor
             return false;
         }
 
+        $hasWindows = false;
+
         foreach ([
             data_get($run->context_json, 'browser_windows'),
             data_get($run->context_json, 'browserWindows'),
@@ -200,11 +210,63 @@ class ManagedProcessSupervisor
             data_get($status, 'result.browserWindows'),
         ] as $windows) {
             if (is_array($windows) && $windows !== []) {
-                return true;
+                $hasWindows = true;
+
+                break;
             }
         }
 
-        return false;
+        if (! $hasWindows) {
+            return false;
+        }
+
+        // Idle-TTL: Ein geparkter Browser bleibt nur geschuetzt, solange der Lauf
+        // in den letzten KEEP_ALIVE_MAX_IDLE_SECONDS Fortschritt hatte. Ohne diese
+        // Grenze lebten Keep-Alive-Prozesse wartender/pausierter Laeufe unbegrenzt
+        // weiter und fuellten den Server-RAM.
+        return $this->keepAliveIdleSeconds($process, $status, $run) < self::KEEP_ALIVE_MAX_IDLE_SECONDS;
+    }
+
+    /**
+     * Sekunden seit dem juengsten Aktivitaetssignal des Laufs (Status-Update,
+     * Prozess-Heartbeat, letzte StepRun-Aenderung). Je kleiner, desto frischer.
+     */
+    protected function keepAliveIdleSeconds(ManagedProcess $process, array $status, WorkflowRun $run): int
+    {
+        $now = now();
+        $newest = null;
+
+        $consider = static function (mixed $timestamp) use (&$newest): void {
+            if (! $timestamp) {
+                return;
+            }
+
+            $carbon = $timestamp instanceof Carbon ? $timestamp : Carbon::parse($timestamp);
+
+            if ($newest === null || $carbon->greaterThan($newest)) {
+                $newest = $carbon;
+            }
+        };
+
+        $consider($this->parseStatusTimestamp($status['finishedAt'] ?? $status['finished_at'] ?? $status['at'] ?? null));
+        $consider($process->heartbeat_at);
+        $consider($process->last_seen_at);
+        $consider($run->updated_at);
+        $consider(
+            WorkflowStepRun::query()
+                ->where('workflow_run_id', $run->id)
+                ->max('updated_at')
+        );
+
+        if ($newest === null) {
+            $consider($process->started_at);
+        }
+
+        if ($newest === null) {
+            return self::KEEP_ALIVE_MAX_IDLE_SECONDS;
+        }
+
+        return max(0, $newest->diffInSeconds($now));
     }
 
     protected function statusAgeSeconds(ManagedProcess $process, array $status): int
@@ -625,9 +687,17 @@ class ManagedProcessSupervisor
             return;
         }
 
+        // Auf Linux zusaetzlich die gesamte Prozessgruppe beenden (kill -KILL
+        // -PGID). Da run_step.cjs per setsid gestartet wird, ist der Node-Root
+        // der Gruppenfuehrer — so werden auch die nicht als managed erfassten
+        // Chromium-Kindprozesse (Renderer, GPU, Zygote) mitgenommen statt als
+        // RAM-Waisen zurueckzubleiben.
         $result = PHP_OS_FAMILY === 'Windows'
             ? Process::timeout(10)->run(['taskkill', '/PID', (string) $pid, '/T', '/F'])
-            : Process::timeout(10)->run(['kill', '-KILL', (string) $pid]);
+            : Process::timeout(10)->run(['sh', '-lc', sprintf(
+                'kill -KILL -%1$d 2>/dev/null; pkill -KILL -P %1$d 2>/dev/null; kill -KILL %1$d 2>/dev/null; true',
+                $pid,
+            )]);
 
         if (! $result->successful()) {
             Log::warning('Managed process supervisor could not stop stale process.', [
@@ -674,13 +744,19 @@ class ManagedProcessSupervisor
                 $force ? '/F' : null,
             ])));
         } else {
+            $signal = $force ? 'KILL' : 'TERM';
+
             foreach ($pids as $pid) {
-                Process::timeout(5)->run([
-                    'kill',
-                    '-'.($force ? 'KILL' : 'TERM'),
-                    (string) $pid,
-                ]);
+                Process::timeout(5)->run(['kill', '-'.$signal, (string) $pid]);
             }
+
+            // Prozessgruppe des Roots (setsid -> Node-Root ist PGID) mitnehmen,
+            // damit auch die Chromium-Kindprozesse beendet werden.
+            Process::timeout(5)->run(['sh', '-lc', sprintf(
+                'kill -%1$s -%2$d 2>/dev/null; pkill -%1$s -P %2$d 2>/dev/null; true',
+                $signal,
+                $rootPid,
+            )]);
         }
 
         ManagedProcess::query()

@@ -205,6 +205,12 @@ class WorkflowExecutionService
                 }
             }
 
+            // Harte Obergrenze gegen Prozess-Akkumulation: Ein genuin neuer Lauf
+            // (Copilot-/Studio-Wiederverwendung ist oben schon per return
+            // abgefangen) wird nur gestartet, solange nicht bereits zu viele
+            // Laeufe aktiv sind und je einen Node+Chromium-Prozess halten.
+            $this->assertConcurrentRunCapacity();
+
             $attributes = [
                 'run_uuid' => (string) Str::uuid(),
                 'workflow_id' => $lockedWorkflow->id,
@@ -255,6 +261,50 @@ class WorkflowExecutionService
         }
 
         return $run;
+    }
+
+    /**
+     * Verhindert, dass zu viele Workflow-Laeufe gleichzeitig aktiv sind. Jeder
+     * nicht-finale Lauf haelt potenziell einen Node+Chromium-Prozess; ohne diese
+     * Grenze fuellt wiederholtes Testen den Server-RAM linear bis zum Ausfall.
+     */
+    protected function assertConcurrentRunCapacity(): void
+    {
+        $limit = $this->maxConcurrentWorkflowRuns();
+
+        if ($limit <= 0) {
+            return; // 0 = Cap deaktiviert
+        }
+
+        $active = WorkflowRun::query()
+            ->whereIn('status', ['queued', 'running', 'waiting', 'paused', 'stop_requested', 'unreachable'])
+            ->count();
+
+        if ($active >= $limit) {
+            throw new \RuntimeException(sprintf(
+                'Es sind bereits %d Workflow-Laeufe gleichzeitig aktiv (Limit %d). Bitte laufende Tests beenden oder kurz abwarten, bevor ein neuer Lauf startet.',
+                $active,
+                $limit,
+            ));
+        }
+    }
+
+    protected function maxConcurrentWorkflowRuns(): int
+    {
+        try {
+            $configured = (int) ($this->mailRegistration->settings()['max_concurrent_workflow_runs'] ?? 0);
+        } catch (\Throwable) {
+            $configured = 0;
+        }
+
+        if ($configured < 0) {
+            return 0;
+        }
+
+        // Ohne Konfiguration ein konservativer Default, der einen einzelnen
+        // mehrschrittigen Lauf (Owner + transiente Step-Prozesse) nie faelschlich
+        // blockiert, aber ausufernde Akkumulation stoppt.
+        return $configured > 0 ? $configured : 5;
     }
 
     public function advance(int|WorkflowRun $workflowRun): void
@@ -1629,6 +1679,10 @@ class WorkflowExecutionService
         $run = $stepRun->workflowRun->fresh();
         $step = $stepRun->workflowStep;
         $context = is_array($run->context_json) ? $run->context_json : [];
+        // Owner-Prozess-ID sichern, bevor external_run_id weiter unten genullt
+        // wird – sonst findet closeWorkflowTaskProcesses den geparkten Browser
+        // spaeter nicht mehr.
+        $ownerRunId = trim((string) $stepRun->external_run_id);
         $currentTaskKey = trim((string) (
             $result['completedTaskKey']
             ?? $result['completed_task_key']
@@ -1656,6 +1710,13 @@ class WorkflowExecutionService
         }
         $run = $run->fresh();
         $context = is_array($run->context_json) ? $run->context_json : [];
+
+        // Browser-Endpoint und Fensterzustand in den Run-Context uebernehmen,
+        // damit der naechste Einzeltask-Schritt per puppeteer.connect denselben
+        // Chromium weiterverwendet, statt ein neues Node+Chromium-Paar zu starten
+        // (frueher fehlte dieser Merge im interaktiven Pfad -> ein Prozess pro Klick).
+        $context = $this->mergeWorkflowBrowserState($context, $result);
+        $context = $this->rememberBrowserOwnerRunId($context, $ownerRunId);
 
         $studioSingleTask = (bool) ($context['studio_single_task'] ?? false);
 
@@ -1730,6 +1791,7 @@ class WorkflowExecutionService
     {
         $run = $stepRun->workflowRun->fresh();
         $context = is_array($run->context_json) ? $run->context_json : [];
+        $ownerRunId = trim((string) $stepRun->external_run_id);
         $probe = is_array($context['studio_probe'] ?? null) ? $context['studio_probe'] : [];
         $returnCursor = is_array($probe['return_cursor'] ?? null) ? $probe['return_cursor'] : [];
         $context['studio_probe_result'] = [
@@ -1744,6 +1806,11 @@ class WorkflowExecutionService
         } else {
             unset($context['next_task_key']);
         }
+
+        // Auch nach einer Selektor-Probe den Browser-Endpoint erhalten, damit die
+        // Studio-Sitzung denselben Chromium weiterverwendet.
+        $context = $this->mergeWorkflowBrowserState($context, $result);
+        $context = $this->rememberBrowserOwnerRunId($context, $ownerRunId);
 
         $stepRun->forceFill([
             'status' => 'waiting',
@@ -2747,21 +2814,49 @@ class WorkflowExecutionService
 
     protected function closeWorkflowTaskProcesses(WorkflowRun $run, string $message): void
     {
-        $run->stepRuns()
+        // Aktuell verlinkte Owner (external_run_id noch auf einem StepRun) UND
+        // historische Owner aus dem Context zusammenfuehren. Letztere entstehen
+        // im interaktiven Stepping, wo external_run_id nach jedem Task genullt
+        // wird – ohne diese Liste bliebe der geparkte Browser-Owner ungekillt.
+        $externalRunIds = $run->stepRuns()
             ->where('external_run_type', 'workflow-task')
             ->whereNotNull('external_run_id')
-            ->get()
-            ->each(function (WorkflowStepRun $stepRun) use ($message): void {
-                $externalRunId = trim((string) $stepRun->external_run_id);
+            ->pluck('external_run_id')
+            ->map(fn (mixed $id): string => trim((string) $id))
+            ->all();
 
-                if ($externalRunId !== '') {
-                    try {
-                        $this->workflowTasks->closeRun($externalRunId, $message);
-                    } catch (\Throwable) {
-                        // Cleanup ist best-effort; der Workflow-Status wurde bereits final gespeichert.
-                    }
-                }
-            });
+        $historical = data_get($run->context_json, 'browser_owner_run_ids');
+        if (is_array($historical)) {
+            $externalRunIds = [...$externalRunIds, ...array_map(fn (mixed $id): string => trim((string) $id), $historical)];
+        }
+
+        foreach (array_unique(array_filter($externalRunIds)) as $externalRunId) {
+            try {
+                $this->workflowTasks->closeRun($externalRunId, $message);
+            } catch (\Throwable) {
+                // Cleanup ist best-effort; der Workflow-Status wurde bereits final gespeichert.
+            }
+        }
+    }
+
+    /**
+     * Merkt sich die external_run_id eines browserhaltenden Prozesses im
+     * Run-Context (max. 20), damit closeWorkflowTaskProcesses den geparkten
+     * Browser-Owner auch nach dem Nullen von step_runs.external_run_id findet.
+     */
+    protected function rememberBrowserOwnerRunId(array $context, string $externalRunId): array
+    {
+        $externalRunId = trim($externalRunId);
+
+        if ($externalRunId === '') {
+            return $context;
+        }
+
+        $owners = is_array($context['browser_owner_run_ids'] ?? null) ? $context['browser_owner_run_ids'] : [];
+        $owners[] = $externalRunId;
+        $context['browser_owner_run_ids'] = array_values(array_slice(array_unique($owners), -20));
+
+        return $context;
     }
 
     protected function nextStepForRun(WorkflowRun $run): ?WorkflowStep
