@@ -1272,6 +1272,9 @@ class WorkflowStudio extends Component
         $workflow = $this->workflow()->load('steps');
         $this->validateWorkflowDefinition($workflow);
         $inputs = $this->decodeObject($this->workflowInputs, 'Workflow-Eingaben');
+        // Personenwahl auf der Sitzung persistieren, damit mount() sie nach
+        // einem Reload wieder vorfindet (der Run-Context allein ueberlebt das nicht).
+        $session->forceFill(['person_id' => $this->personId !== '' ? (int) $this->personId : null])->save();
         $context = [
             'workflow_studio_session_id' => $session->getKey(),
             'interactive_debug' => true,

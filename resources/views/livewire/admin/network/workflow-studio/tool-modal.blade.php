@@ -16,7 +16,8 @@
 <div
     wire:key="workflow-studio-tool-modal-{{ $activeToolModal }}"
     wire:click.self="closeToolModal"
-    class="absolute inset-0 z-[64] flex items-center justify-center bg-slate-950/35 p-3 backdrop-blur-sm sm:p-6"
+    {{-- Standard-z-Skala statt Arbitrary-Klasse: z-40 existiert in jedem (auch alten/gecachten) CSS-Build --}}
+    class="absolute inset-0 z-40 flex items-center justify-center bg-slate-950/35 p-3 backdrop-blur-sm sm:p-6"
     role="dialog"
     aria-modal="true"
     aria-label="{{ $toolTitle }}"

@@ -126,6 +126,17 @@
 
         @if(! $autonomousMode)
             <div class="flex min-w-0 flex-wrap items-center gap-2 border-t border-slate-100 px-4 py-2.5 lg:px-6">
+                {{-- Anders als das Select in den Copilot-Einstellungen bleibt die Personenwahl hier auch nach dem Modus-Lock zwischen Laeufen aenderbar; der Kontext wird erst beim Start in den Run-Context eingefroren --}}
+                <label class="flex items-center gap-2 rounded-xl border border-slate-200 bg-white py-1 pl-3 pr-1" title="Person / Testkontext für diesen Lauf">
+                    <span class="shrink-0 text-[9px] font-black uppercase tracking-[0.16em] text-slate-400">Person</span>
+                    <select wire:model="personId" @disabled($isActive || $isPaused) class="h-8 max-w-[200px] rounded-lg border-slate-200 bg-white text-[11px] font-bold text-slate-700 shadow-sm focus:border-cyan-500 focus:ring-cyan-500 disabled:cursor-not-allowed disabled:opacity-40">
+                        <option value="">Keine Person</option>
+                        @foreach($persons as $person)
+                            <option value="{{ $person->id }}">{{ $person->display_name }}</option>
+                        @endforeach
+                    </select>
+                </label>
+
                 <div class="flex items-center gap-1 rounded-xl border border-slate-200 bg-slate-50 p-1">
                     <button type="button" wire:click="startRun" @disabled($isActive || $isPaused) class="inline-flex h-8 items-center gap-2 rounded-lg bg-slate-900 px-3 text-[11px] font-bold text-white shadow-sm transition hover:bg-slate-800 active:translate-y-px disabled:cursor-not-allowed disabled:opacity-35">
                         <span aria-hidden="true">▶</span> Bis Ende starten
@@ -172,7 +183,8 @@
     @include('livewire.admin.network.workflow-studio.browser-windows')
     @include('livewire.admin.network.workflow-studio.tool-bar')
 
-    <main class="relative min-h-0 flex-1 overflow-hidden bg-slate-100 p-3">
+    {{-- isolate kapselt die Diagramm-/Overlay-z-Werte (Minimap z-10/z-20, Lade-Overlay z-50) in einen eigenen Stacking-Kontext, damit sie nie mit den Shell-Modalen konkurrieren --}}
+    <main class="relative isolate min-h-0 flex-1 overflow-hidden bg-slate-100 p-3">
         <section class="h-full min-h-0 min-w-0" aria-label="Workflow-Vorschau und Live-Ausführung">
             @include('livewire.admin.network.workflow-studio.browser')
         </section>
@@ -189,7 +201,7 @@
     @endif
 
     @if($showCopilotSettingsModal)
-        <div wire:key="workflow-studio-copilot-settings" wire:click.self="$set('showCopilotSettingsModal', false)" class="absolute inset-0 z-[64] flex items-center justify-center bg-slate-950/35 p-3 backdrop-blur-sm sm:p-6" role="dialog" aria-modal="true" aria-label="Copilot-Einstellungen">
+        <div wire:key="workflow-studio-copilot-settings" wire:click.self="$set('showCopilotSettingsModal', false)" class="absolute inset-0 z-40 flex items-center justify-center bg-slate-950/35 p-3 backdrop-blur-sm sm:p-6" role="dialog" aria-modal="true" aria-label="Copilot-Einstellungen">
             <section class="flex max-h-full w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-white/70 bg-white shadow-2xl">
                 <header class="flex shrink-0 items-center justify-between gap-4 border-b border-slate-200 px-4 py-3 sm:px-5"><div><p class="text-[9px] font-black uppercase tracking-[0.18em] text-cyan-700">Workflow-Copilot</p><h2 class="mt-1 text-base font-bold text-slate-950">Einstellungen und Start</h2><p class="mt-1 text-xs text-slate-500">Ziel, Testkontext und Berechtigungen dieser Studio-Sitzung.</p></div><button type="button" wire:click="$set('showCopilotSettingsModal', false)" class="h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 hover:bg-slate-100">Schließen ×</button></header>
                 <div class="min-h-0 flex-1 overflow-y-auto">
@@ -200,7 +212,7 @@
     @endif
 
     @if($activeStudioPanel === 'builder' && ! $autonomousMode)
-        <div wire:key="workflow-studio-builder-modal" wire:click.self="closeStudioPanel" class="absolute inset-0 z-[65] flex items-stretch justify-center bg-slate-950/45 p-2 backdrop-blur-sm sm:p-5" role="dialog" aria-modal="true" aria-label="Workflow bearbeiten">
+        <div wire:key="workflow-studio-builder-modal" wire:click.self="closeStudioPanel" class="absolute inset-0 z-50 flex items-stretch justify-center bg-slate-950/45 p-2 backdrop-blur-sm sm:p-5" role="dialog" aria-modal="true" aria-label="Workflow bearbeiten">
             <section class="flex min-h-0 w-full max-w-[1720px] flex-col overflow-hidden rounded-2xl border border-white/30 bg-slate-100 shadow-2xl">
                 <header class="flex shrink-0 items-center justify-between gap-4 border-b border-slate-200 bg-white px-4 py-3 sm:px-5">
                     <div><p class="text-[9px] font-black uppercase tracking-[0.18em] text-cyan-700">Interaktiver Test</p><h2 class="mt-1 text-base font-bold text-slate-950">Workflow und Task bearbeiten</h2></div>

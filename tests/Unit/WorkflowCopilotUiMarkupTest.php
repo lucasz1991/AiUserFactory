@@ -50,7 +50,6 @@ class WorkflowCopilotUiMarkupTest extends TestCase
     {
         $root = dirname(__DIR__, 2);
         $studio = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-studio.blade.php');
-        $studioCopilot = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-studio/copilot.blade.php');
         $chat = file_get_contents($root.'/resources/views/livewire/tools/chatbot.blade.php');
 
         $this->assertStringContainsString('wire:click="stopRun"', $studio);
@@ -91,6 +90,25 @@ class WorkflowCopilotUiMarkupTest extends TestCase
         $this->assertStringContainsString('timerProgressBar: true', $studio);
         $this->assertStringContainsString("import Swal from 'sweetalert2'", $javascript);
         $this->assertStringContainsString("import 'sweetalert2/dist/sweetalert2.min.css'", $javascript);
+    }
+
+    public function test_studio_overlays_use_standard_z_scale_and_toolbar_offers_person_context(): void
+    {
+        $root = dirname(__DIR__, 2);
+        $studio = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-studio.blade.php');
+        $toolModal = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-studio/tool-modal.blade.php');
+
+        // Studio-Modale muessen auf der Standard-z-Skala liegen: Arbitrary-Klassen
+        // wie z-[64] fehlen in aelteren bzw. browser-gecachten CSS-Builds, fallen
+        // dann auf z-index:auto zurueck und geraten hinter die Diagramm-Tasks.
+        $this->assertStringNotContainsString('z-[64]', $studio.$toolModal);
+        $this->assertStringNotContainsString('z-[65]', $studio.$toolModal);
+        $this->assertStringContainsString('z-40', $toolModal);
+        $this->assertStringContainsString('relative isolate', $studio);
+
+        // Die interaktive Toolbar muss die Personen-Auswahl fuer den Teststart anbieten.
+        $this->assertStringContainsString('wire:model="personId"', $studio);
+        $this->assertStringContainsString('Keine Person', $studio);
     }
 
     public function test_copilot_settings_expose_vision_fallback_order_and_default_budgets(): void
