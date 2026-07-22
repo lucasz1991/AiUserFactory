@@ -30,6 +30,7 @@ class WorkflowCopilotPlanningService
         protected WorkflowTaskOrderingService $taskOrdering,
         protected WorkflowCopilotPromptContextService $promptContexts,
         protected WorkflowDefinitionValidator $validator,
+        protected WorkflowRetryRouteAutoRepairService $retryRouteRepair,
     ) {}
 
     public function needsInitialPlan(Workflow $workflow): bool
@@ -158,7 +159,9 @@ class WorkflowCopilotPlanningService
             }
 
             $lockedWorkflow->syncIncludedWorkflowReferences();
-            $this->validator->assertValid($lockedWorkflow->fresh(['steps']) ?? $lockedWorkflow, $successCriteria, $workflowInputs);
+            $freshWorkflow = $lockedWorkflow->fresh(['steps']) ?? $lockedWorkflow;
+            $this->retryRouteRepair->repair($freshWorkflow);
+            $this->validator->assertValid($freshWorkflow, $successCriteria, $workflowInputs);
         });
 
         return $normalized;

@@ -15,6 +15,7 @@ class WorkflowCopilotLaunchService
     public function __construct(
         protected WorkflowCopilotPlanningService $planning,
         protected WorkflowDefinitionValidator $validator,
+        protected WorkflowRetryRouteAutoRepairService $retryRouteRepair,
         protected WorkflowCopilotSessionService $sessions,
         protected WorkflowCopilotPreflightService $preflight,
         protected WorkflowCopilotAiUsageTracker $usageTracker,
@@ -37,6 +38,7 @@ class WorkflowCopilotLaunchService
         }
 
         $needsInitialPlan = $this->planning->needsInitialPlan($workflow);
+        $autoRepairedRoutes = $needsInitialPlan ? [] : $this->retryRouteRepair->repair($workflow);
         $validation = $needsInitialPlan
             ? [
                 'valid' => true,
@@ -45,6 +47,9 @@ class WorkflowCopilotLaunchService
                 'task_count' => 0,
             ]
             : $this->validator->assertValid($workflow, $request->successCriteria, $request->workflowInputs);
+        if ($autoRepairedRoutes !== []) {
+            $validation['auto_repaired_routes'] = $autoRepairedRoutes;
+        }
         $attributes = $request->sessionAttributes();
         $attributes['state']['definition_validation'] = $validation;
         $attributes['state']['launch_source'] = $request->source;

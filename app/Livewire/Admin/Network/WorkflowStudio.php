@@ -17,6 +17,7 @@ use App\Services\Workflows\WorkflowCopilotLaunchService;
 use App\Services\Workflows\WorkflowCopilotSessionService;
 use App\Services\Workflows\WorkflowDefinitionValidator;
 use App\Services\Workflows\WorkflowExecutionService;
+use App\Services\Workflows\WorkflowRetryRouteAutoRepairService;
 use App\Services\Workflows\WorkflowStudioAuthorizationService;
 use App\Services\Workflows\WorkflowStudioCheckpointService;
 use App\Services\Workflows\WorkflowStudioControlService;
@@ -1455,6 +1456,8 @@ class WorkflowStudio extends Component
             ->filter()
             ->values()
             ->all();
+
+        app(WorkflowRetryRouteAutoRepairService::class)->repair($workflow);
 
         app(WorkflowDefinitionValidator::class)->assertValid(
             $workflow,
