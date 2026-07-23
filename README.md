@@ -185,6 +185,12 @@ Statuswerte: `geplant`, `in_arbeit`, `verifiziert`, `blockiert`.
 
 | 2026-07-23 | Claude | verifiziert | **Spurenmodell fuer die Parallelarbeit** im Abschnitt „Umsetzungsauftrag" ergaenzt (dateibasierte Spuren A–F, Anspruchs- und README-Regeln, konfliktfreie Kombinationen, bekannte Kreuzungen) und **Paket P2b** umgesetzt. Beanspruchte Spuren: **F** (nur neue Testdateien) sowie **E** lesend — `WorkflowTaskCatalog.php` und `ClientWorkflowBundleCompiler.php` wurden **nicht** geaendert, beide Spuren sind wieder `frei`. Codex' P1-Dateien (`preview.cjs`, `run_step.cjs`, `WorkflowTaskRunner.php`, `WorkflowsIndex.php`, `WorkflowManager.php`, `WorkflowExecutionService.php`, `PruneWorkflowProcessArtifacts.php`) wurden nicht angefasst. Neue Datei `tests/Unit/WorkflowTaskScriptRegistryTest.php` sichert den Vertrag zwischen PHP-Katalog und Node-Task-Skripten: jeder Katalogeintrag hat ein `node_script`, die Datei existiert, das Skript exportiert `run()` und meldet denselben `key`; zusaetzlich wird geprueft, dass `normalizeRuntimeTask()` dem Katalog nie widerspricht. **Neuer Befund fuer P2a** (im Abschnitt „Befund fuer Codex: P2a ist keine reine Loeschung" dokumentiert): Die zweite Registry ist **nicht** vollstaendig redundant — 17 von 19 Keys sind identisch, aber `loop.for_each_element` traegt eine echte Fallunterscheidung (Legacy-DOM-Schleife bei gesetztem Selector, `WorkflowTaskRunner.php:1087`/`:1093-1095`) und `data.save_workflow_data` existiert **nur** im Runner (`:1115`), nicht im Katalog, wird aber in `WorkflowExecutionService.php:4118` ausgewertet und von `persist_mail_account.cjs:3` eingebunden. Beide Sonderfaelle sind jetzt per Test festgenagelt. | `DB_CONNECTION=sqlite DB_DATABASE=:memory: php artisan test tests/Unit/WorkflowTaskScriptRegistryTest.php` -> 5 Tests, 12 Assertions, gruen. Regressionslauf der angrenzenden Tests: `... php artisan test tests/Unit/WorkflowCollectionTaskCatalogTest.php tests/Unit/WorkflowRouteSemanticsTest.php tests/Feature/GoogleSearchImportTemplateTest.php` -> 12 Tests, 493 Assertions, gruen. Vorab manuell verifiziert: alle 47 Katalogeintraege haben ein `node_script`, alle Dateien existieren, alle exportieren `run()` mit passendem Key. Kein `node/workflows`-Code geaendert, daher kein ClientController-Sync noetig (Regel 7). | Risiko: Test 3 und 4 lesen per Reflection `WorkflowTaskRunner::normalizeRuntimeTask()` — eine Datei aus Codex' Spur B. Bei Entfernen der Methode ueberspringen sich beide Tests selbst mit Hinweis auf P2a, brechen also nicht. Naechster Schritt: sobald Codex Spur B und E freigibt, P2a mit den beiden dokumentierten Sonderfaellen umsetzen; bis dahin bleibt Claude in freien Spuren (P6-Vorbereitung) und stimmt jede weitere Beanspruchung ueber die Spurentafel ab. |
 
+| 2026-07-23 | Claude | verifiziert | **P6-Teil „Runtime-Fingerabdruck" umgesetzt** (Spuren E, F, G — alle drei danach wieder `frei`; Codex' P1-Dateien wurden nicht angefasst). Neue Datei `app/Services/Workflows/WorkflowRuntimeFingerprint.php`: kanonischer SHA-256 ueber `node/workflows` (nur `.cjs`, `*.test.cjs` ausgeschlossen, damit reine Testaenderungen keinen falschen Sync-Alarm ausloesen; Pfade relativ, `/`-normalisiert und sortiert; **Zeilenenden auf LF normalisiert und BOM entfernt**, sonst liefert derselbe Code auf einem Windows-Checkout mit `core.autocrlf=true` einen anderen Hash als auf Linux und der Abgleich waere wertlos). Dazu `compare()` fuer die Drift-Auswertung (`missingRemote`, `missingLocal`, `changed`). Neue Datei `app/Console/Commands/ShowWorkflowRuntimeHash.php` (`php artisan workflow:runtime-hash`, Optionen `--files`, `--json`, `--expect=`; Exit-Code 1 bei Abweichung, damit Deploy/CI Regel 7 erzwingen koennen) — `Kernel.php` blieb unberuehrt, weil `commands()` das Verzeichnis ohnehin per `$this->load()` einliest. `ClientWorkflowBundleCompiler.php` gibt `runtimeHash` und `runtimeHashAlgorithm` im Bundle aus; die Ergaenzung ist rein additiv, `schemaVersion` bleibt `1`. | `DB_CONNECTION=sqlite DB_DATABASE=:memory: php artisan test tests/Unit/WorkflowRuntimeFingerprintTest.php` -> 9 Tests, 140 Assertions, gruen (darunter: identischer Hash fuer CRLF+BOM vs. LF, Hashwechsel bei Inhalts- **und** bei Pfadaenderung, Testdateien ohne Einfluss, leeres Verzeichnis). `... php artisan test tests/Feature/ClientControllerReliableWorkflowTest.php` -> 7 Tests, 63 Assertions, gruen (um zwei Assertions auf `workflow_bundle.runtimeHash` erweitert). `... php artisan test tests/Unit/WorkflowTaskScriptRegistryTest.php` -> 5 Tests, 12 Assertions, gruen. Befehl manuell geprueft: Ausgabe `sha256, 59 Dateien unter node/workflows`; Exit-Code 1 bei falschem und 0 bei korrektem `--expect`. Kein `node/workflows`-Code geaendert, daher kein ClientController-Sync noetig (Regel 7). | Risiko: Der Hash ist bisher **einseitig** — er wird erzeugt und mitgeschickt, aber noch von niemandem geprueft. Der Nutzen entsteht erst, wenn der ClientController den mitgelieferten `runtimeHash` gegen seine eigene Kopie haelt und bei Abweichung den Lauf ablehnt oder einen Sync anfordert; das liegt ausserhalb dieses Repos. Zweitens gilt: aendert sich `node/workflows` (z. B. durch P1/P4/P5), aendert sich der Hash — das ist beabsichtigt, macht aber jeden fest verdrahteten Erwartungswert kurzlebig, deshalb `--expect` nur aus dem tatsaechlichen Client-Stand speisen. Naechster Schritt: **P2a** ist weiterhin blockiert, bis Spur B (`WorkflowTaskRunner.php`) frei ist, und muss die beiden dokumentierten Sonderfaelle (`loop.for_each_element`-Legacy-Zweig, katalogloser Key `data.save_workflow_data`) beruecksichtigen. Frei und unabhaengig waeren als naechstes **P2c** (Preload in `run_step.cjs`, Spur A) und **P3** (Push statt Poll, Spur D). |
+
+| 2026-07-23 | Codex | verifiziert | **Gezielte Bestandsmigration ohne Codebereichsanspruch abgeschlossen:** Der lokale Workflow 3 „Google Suche – Ergebnisse“, Schritt 8 „Ergebnisse erfassen“, wurde nach einer privaten ZIP-Sicherung atomar von fünf Legacy-Karten (`loop.for_each_element` → Reader → `data.append_to_array` → `loop.end` → Rückgabe) auf zwei Karten umgestellt: `browser.read_searchengine_result` liest im Batch aus `#search` / `.MjjYud, .g`, filtert Werbeelemente per Standarderkennung, Selector und Text, dedupliziert URLs und schreibt höchstens drei Treffer nach `top_results`; `data.workflow_return` gibt dieses Array direkt zurück. Die bestehenden Step-Routen blieben unverändert, Claudes P2/P6-Dateien und alle anderen Workflows unberührt. Sicherung: `storage/app/private/workflow-exports/0fcee556-b68c-4122-8394-fc1684d85db2.zip` (Downloadname `workflow-3-google-suche-ergebnisse-vor-batch-migration-2026-07-23-023019.zip`). | Direkte Prüfung gegen die lokale MySQL-Datenbank `AiUserFactory`: exakt die zwei erwarteten Tasks, alle drei Legacy-Tasktypen abwesend, Container-/Item-/Ausgabe-Konfiguration gesetzt; `WorkflowDefinitionValidator`: `valid=true`, 0 Diagnosen. SQLite-Regressionslauf (`GoogleSearchImportTemplateTest`, `WorkflowCollectionTaskCatalogTest`, `WorkflowDefinitionValidatorTest`): 17 Tests/516 Assertions grün. Node-Collection-Suite: 18/18 grün. | Es wurde bewusst kein Workflow- oder Queue-Lauf gestartet, damit keine externe Google-Aktion und kein vorhandener Queue-Job ungefragt ausgeführt wird. Restrisiko: Google kann seine DOM-Klassen ändern oder Consent-/Bot-Seiten zeigen; dann müssen nur die konfigurierten Container-/Item-Selector angepasst werden. Der Stand vor der Migration ist über das private ZIP wiederherstellbar. |
+
+| 2026-07-23 | Claude | verifiziert | **Feature R1 umgesetzt** (Spur H, danach wieder `frei`; Codex' Spuren A–D unberuehrt). Fachlicher Ausloeser: Nach dem Loeschen einer Task-Karte brach der Teststart mit `Die Ziel-Task \`buttonlink-klicken\` existiert in der Zielliste nicht.` ab. Jetzt oeffnet sich stattdessen ein Bestaetigungsdialog. Neue Datei `app/Services/Workflows/WorkflowRouteTargetAutoRepairService.php` mit `analyze()` (findet, aendert nichts — spiegelt `WorkflowDefinitionValidator::validateRoute()` exakt, damit Befund und Diagnose nicht auseinanderlaufen) und `repair()` (idempotent, persistiert je Liste, ruft `unsetRelation('steps')` damit eine direkt folgende Validierung den neuen Stand sieht). Standardroute ist **nicht erfunden**, sondern aus dem Ausfuehrungsvertrag abgeleitet: Erfolgsrouten fallen auf die naechste Karte derselben Liste zurueck, sonst `step: next`, sonst `type: end` — exakt das, was die Runtime ohne Route ohnehin tut; Fehlerrouten (`on_error`, `status_routes` mit `error`/`failed`/`timeout`/`cancelled`/`aborted`) enden explizit mit `type: fail`, weil der Vertrag eine fehlende Route als echten Fehler kennt und stilles Weiterlaufen gefaehrlicher waere. In `WorkflowStudio.php`: `validateWorkflowDefinition()` mit `intent`-Parameter, neues `guardMissingRouteTargets()`, die Aktionen `applyRouteRepairAndStart()` und `closeRouteRepairModal()`, Event `workflow.route_targets_defaulted` (Level `warning`). Modal in `workflow-studio.blade.php` zeigt je Befund Liste, Karte, Routenfeld, altes Ziel (durchgestrichen) und neues Ziel — die Reparatur laeuft nie still. Bleiben nach der Reparatur andere Fehler bestehen, werden sie aufgelistet und der Start-Button ist deaktiviert. | `DB_CONNECTION=sqlite DB_DATABASE=:memory: php artisan test tests/Unit/WorkflowRouteTargetAutoRepairServiceTest.php` -> 11 Tests, 32 Assertions, gruen (u. a. Nachweis, dass nach `repair()` die Diagnose `route_task_missing` verschwindet, dass die Reparatur idempotent ist und unbeteiligte Karten unveraendert bleiben). `... php artisan test tests/Feature/WorkflowStudioRouteRepairPromptTest.php` -> 6 Tests, 19 Assertions, gruen. Regression: `... php artisan test tests/Feature/WorkflowStudioTest.php` -> 26 Tests, 194 Assertions, unveraendert gruen. Kein `node/workflows`-Code geaendert, daher kein ClientController-Sync noetig (Regel 7). | Risiko/Abgrenzung: (1) Der **Copilot-Startpfad** (`WorkflowCopilotLaunchService`, `WorkflowCopilotPlanningService`) validiert weiterhin hart und ohne Dialog — ein autonomer Lauf hat keine Oberflaeche zum Bestaetigen. Ob der Copilot selbstaendig auf Standardrouten zurueckfallen darf, ist eine Produktentscheidung und bewusst offen gelassen. (2) Die Reparatur hebt die Workflow-Revision **nicht** an, analog zum bestehenden `WorkflowRetryRouteAutoRepairService`; bei einem pausierten Lauf greift danach der normale Rebase-Pfad. (3) `applyRouteRepairAndStart()` startet den Test in derselben Interaktion — schlaegt der Start danach aus einem anderen Grund fehl, erscheint dieser Fehler wie gewohnt im Studio-Banner, die Reparatur bleibt aber gespeichert. Naechster Schritt: offen fuer Codex — **P2c** (Preload in `run_step.cjs`, Spur A frei) und **P3** (Push statt Poll, Spur D frei); **P2a** braucht weiterhin Spur B und die zwei dokumentierten Sonderfaelle. |
+
 Neue Eintraege immer unten anhaengen. Ein Eintrag gilt erst als `verifiziert`,
 wenn die ausgefuehrten Testkommandos und verbleibende Risiken genannt sind.
 
@@ -208,6 +214,8 @@ node --test tests/Node/workflow_dom_snapshot_source.test.cjs
 php artisan test tests/Unit/WorkflowTaskScriptRegistryTest.php
 php artisan test tests/Unit/WorkflowRuntimeFingerprintTest.php
 php artisan test tests/Feature/ClientControllerReliableWorkflowTest.php
+php artisan test tests/Unit/WorkflowRouteTargetAutoRepairServiceTest.php
+php artisan test tests/Feature/WorkflowStudioRouteRepairPromptTest.php
 ```
 
 Falls die lokale Standard-Datenbank auf eine nicht vorhandene MySQL-Datenbank
@@ -265,6 +273,7 @@ und nicht paketbasiert** — Dateien sind die tatsaechliche Konfliktgrenze.
 
 | Spur | Exklusive Dateien | Enthaelt | Status | Agent |
 | --- | --- | --- | --- | --- |
+| **H — Routen-Selbstheilung (Teststart)** | `app/Services/Workflows/WorkflowRouteTargetAutoRepairService.php` (neu), `app/Livewire/Admin/Network/WorkflowStudio.php`, `resources/views/livewire/admin/network/workflow-studio.blade.php` | Feature R1 (siehe unten) | `frei` — R1 vollstaendig erledigt | Claude (erledigt) |
 | **A — Node-Runtime** | `node/workflows/run_step.cjs`, `node/workflows/tasks/lib/preview.cjs` | G1, G3 | `frei` — P1 verifiziert | — |
 | **B — PHP-Runner & Einstellungen** | `app/Services/Workflows/WorkflowTaskRunner.php`, `app/Livewire/Admin/Network/WorkflowsIndex.php` | G2a, G6 | `frei` — P1 verifiziert | — |
 | **C — Housekeeping** | `app/Console/Commands/PruneWorkflowProcessArtifacts.php`, `app/Console/Kernel.php` | G5 | `frei` — P1 verifiziert | — |
@@ -281,6 +290,80 @@ B ∥ E, B ∥ F, C ∥ D, C ∥ E, C ∥ F, D ∥ E, D ∥ F, E ∥ F.
 **Bekannte Kreuzungen:** P2a braucht B + E gleichzeitig. P4/P5 beruehren
 A + B + D und werden **nicht** parallel bearbeitet — ein Agent nimmt alle drei,
 der andere arbeitet in E oder F weiter.
+
+### Feature R1 — Fehlende Routenziele blockieren den Teststart nicht mehr
+
+**Auftrag (Fachseite, 2026-07-23):** Wird eine Task-Karte geloescht, zeigen die
+Routen anderer Karten weiterhin auf ihren Key. Der Teststart bricht dann mit
+`Workflow-Definition ist nicht ausfuehrbar: Die Ziel-Task \`X\` existiert in der
+Zielliste nicht.` ab. Statt einer reinen Fehlermeldung soll ein Modal erscheinen,
+das entweder **schliesst** oder die fehlenden Verzweigungen **auf die Standardroute
+setzt und den Test direkt startet**.
+
+**Betroffene Diagnosen** (`WorkflowDefinitionValidator.php:408`, `:413`):
+`route_task_missing` (Ziel-Karte fehlt) und `route_step_missing` (Ziel-Liste
+fehlt).
+
+**Definition „Standardroute"** — abgeleitet aus dem Ausfuehrungsvertrag, nicht
+erfunden:
+
+| Routenart | Standardroute | Begruendung |
+| --- | --- | --- |
+| Erfolgsrouten (`next`, `on_partial`, nicht-fehlerhafte `status_routes`) | naechste Karte derselben Liste; sonst `step: next`; sonst `type: end` | entspricht exakt dem, was die Runtime ohne Route tut (`run_step.cjs`: ohne `task.next` laeuft der Index sequenziell weiter) |
+| Fehlerrouten (`on_error`, fehlerhafte `status_routes`) | `type: fail` | Der Vertrag kennt „ungueltige/fehlende Route" als echten Fehler. Ein stilles Weiterlaufen waere gefaehrlicher als ein expliziter, terminaler `fail`. |
+
+Die Reparatur wird **nie still** ausgefuehrt: das Modal listet jede Aenderung
+(Liste, Karte, Feld, altes Ziel, neues Ziel) einzeln auf, bevor der Nutzer
+bestaetigt.
+
+**Vorbild:** `WorkflowRetryRouteAutoRepairService` (repariert
+`unbounded_backward_retry_route` vor der Startvalidierung, aufgerufen in
+`WorkflowStudio.php:1477`). R1 folgt demselben Muster, aber **bestaetigungs-
+pflichtig** statt automatisch — ein fehlendes Routenziel ist ein echter
+Strukturverlust und soll dem Nutzer bewusst werden.
+
+**Schritte** (Zwischenstaende werden hier nachgetragen):
+
+1. ✅ **Erledigt 2026-07-23.** Service `WorkflowRouteTargetAutoRepairService`
+   (neue Datei) mit `analyze()` (findet, aendert nichts) und `repair()`
+   (schreibt und persistiert). `analyze()` spiegelt `validateRoute()` exakt, damit
+   Befund und Diagnose nicht auseinanderlaufen. `repair()` ist idempotent und
+   ruft `unsetRelation('steps')`, damit eine direkt anschliessende Validierung den
+   neuen Stand sieht. Test: `tests/Unit/WorkflowRouteTargetAutoRepairServiceTest.php`,
+   11 Tests / 32 Assertions gruen — inklusive Nachweis, dass nach `repair()` die
+   Diagnose `route_task_missing` verschwindet und unbeteiligte Karten unveraendert
+   bleiben.
+2. ✅ **Erledigt 2026-07-23.** Studio-Anbindung in `WorkflowStudio.php` und
+   `workflow-studio.blade.php`:
+   * `validateWorkflowDefinition()` bekam einen `intent`-Parameter
+     (`start_run` | `single_task` | `resume_run`) und ruft davor
+     `guardMissingRouteTargets()`.
+   * Gibt es Befunde, werden `showRouteRepairModal`, `routeRepairFindings`,
+     `routeRepairBlockingMessages` und `routeRepairIntent` gesetzt; die
+     `DomainException` bleibt erhalten, damit `perform()` weiterhin sauber
+     abbricht — sie traegt jetzt nur eine kurze Meldung, die auf den Dialog
+     verweist.
+   * `routeRepairBlockingMessages` enthaelt alle **uebrigen** Fehler-Diagnosen
+     (alles ausser `route_task_missing`/`route_step_missing`). Sind welche
+     vorhanden, ist der Start-Button deaktiviert — der Dialog verspricht keinen
+     Start, der danach doch scheitert.
+   * `applyRouteRepairAndStart()` prueft die Nutzerkontrolle, repariert,
+     protokolliert das Event `workflow.route_targets_defaulted` (Level `warning`)
+     und ruft anschliessend genau die Aktion auf, die den Dialog ausgeloest hat.
+   * `closeRouteRepairModal()` verwirft nur den Dialog und aendert nichts.
+   * Das Modal zeigt je Befund Liste, Karte, Routenfeld sowie altes Ziel
+     (durchgestrichen) und neues Ziel — die Reparatur laeuft nie still.
+
+   Tests: `tests/Feature/WorkflowStudioRouteRepairPromptTest.php`, 6 Tests /
+   19 Assertions gruen. Regression: `tests/Feature/WorkflowStudioTest.php`
+   26 Tests / 194 Assertions unveraendert gruen.
+
+**Bewusst nicht geaendert:** Der Copilot-Startpfad
+(`WorkflowCopilotLaunchService`, `WorkflowCopilotPlanningService`) validiert
+weiterhin hart und ohne Dialog. Ein autonomer Lauf hat keine Oberflaeche, an der
+jemand bestaetigen koennte; dort ist der harte Abbruch richtig. Wer das aendern
+will, muesste entscheiden, ob der Copilot selbstaendig auf Standardrouten
+zurueckfallen darf — das ist eine Produktentscheidung, keine Implementierungsfrage.
 
 ### Befund fuer Codex: P2a ist keine reine Loeschung
 

@@ -18,6 +18,7 @@ use App\Services\Workflows\WorkflowCopilotSessionService;
 use App\Services\Workflows\WorkflowDefinitionValidator;
 use App\Services\Workflows\WorkflowExecutionService;
 use App\Services\Workflows\WorkflowRetryRouteAutoRepairService;
+use App\Services\Workflows\WorkflowRouteTargetAutoRepairService;
 use App\Services\Workflows\WorkflowStudioAuthorizationService;
 use App\Services\Workflows\WorkflowStudioCheckpointService;
 use App\Services\Workflows\WorkflowStudioControlService;
@@ -102,6 +103,18 @@ class WorkflowStudio extends Component
     public bool $showCopilotSettingsModal = false;
 
     public bool $showSelectorProbeModal = false;
+
+    /** Feature R1: Dialog fuer Verzweigungen, deren Ziel geloescht wurde. */
+    public bool $showRouteRepairModal = false;
+
+    /** @var array<int,array<string,mixed>> Befunde aus WorkflowRouteTargetAutoRepairService::analyze() */
+    public array $routeRepairFindings = [];
+
+    /** @var array<int,string> Fehler, die auch nach der Reparatur bestehen bleiben */
+    public array $routeRepairBlockingMessages = [];
+
+    /** Welche Aktion nach der Reparatur fortgesetzt wird. */
+    public string $routeRepairIntent = 'start_run';
 
     public string $activeToolModal = '';
 
@@ -258,7 +271,7 @@ class WorkflowStudio extends Component
         $this->perform('run.resumed', function (): array {
             app(WorkflowStudioControlService::class)->assertUserControl($this->session());
             $run = $this->activeRunOrFail();
-            $this->rebasePausedRunRevision($run);
+            $this->rebasePausedRunRevision($run, 'resume_run');
             $response = app(WorkflowExecutionService::class)->resumeManualPause($run);
 
             return $this->result('running', $response['message'], $run->fresh());
@@ -288,7 +301,7 @@ class WorkflowStudio extends Component
             if ($run->status !== 'paused') {
                 throw new DomainException('Die laufende Task muss zuerst beendet oder der Lauf pausiert werden.');
             }
-            $this->rebasePausedRunRevision($run);
+            $this->rebasePausedRunRevision($run, 'single_task');
             $response = app(WorkflowExecutionService::class)->resumeManualPause(
                 $run,
                 $this->selectedStepId !== '' ? (int) $this->selectedStepId : null,
@@ -1284,7 +1297,7 @@ class WorkflowStudio extends Component
         }
 
         $workflow = $this->workflow()->load('steps');
-        $this->validateWorkflowDefinition($workflow);
+        $this->validateWorkflowDefinition($workflow, $singleTask ? 'single_task' : 'start_run');
         $inputs = $this->decodeObject($this->workflowInputs, 'Workflow-Eingaben');
         // Personenwahl auf der Sitzung persistieren, damit mount() sie nach
         // einem Reload wieder vorfindet (der Run-Context allein ueberlebt das nicht).
@@ -1426,10 +1439,10 @@ class WorkflowStudio extends Component
         return true;
     }
 
-    private function rebasePausedRunRevision(WorkflowRun $run): void
+    private function rebasePausedRunRevision(WorkflowRun $run, string $intent = 'resume_run'): void
     {
         $workflow = $this->workflow()->load('steps');
-        $this->validateWorkflowDefinition($workflow);
+        $this->validateWorkflowDefinition($workflow, $intent);
         $currentRevision = (int) $workflow->copilot_revision;
 
         if ((int) $run->workflow_revision === $currentRevision) {
@@ -1466,20 +1479,117 @@ class WorkflowStudio extends Component
         );
     }
 
-    private function validateWorkflowDefinition(Workflow $workflow): void
+    private function validateWorkflowDefinition(Workflow $workflow, string $intent = 'start_run'): void
     {
         $criteria = collect(preg_split('/\r\n|\r|\n/', $this->successCriteria) ?: [])
             ->map(fn (string $criterion): string => trim($criterion))
             ->filter()
             ->values()
             ->all();
+        $inputs = $this->decodeObject($this->workflowInputs, 'Workflow-Eingaben');
 
         app(WorkflowRetryRouteAutoRepairService::class)->repair($workflow);
 
-        app(WorkflowDefinitionValidator::class)->assertValid(
-            $workflow,
-            $criteria,
-            $this->decodeObject($this->workflowInputs, 'Workflow-Eingaben'),
-        );
+        $this->guardMissingRouteTargets($workflow, $criteria, $inputs, $intent);
+
+        app(WorkflowDefinitionValidator::class)->assertValid($workflow, $criteria, $inputs);
+    }
+
+    /**
+     * Feature R1: Zeigen Verzweigungen auf geloeschte Karten oder Listen, bricht
+     * der Start nicht mehr wortlos ab. Stattdessen wird der Bestaetigungsdialog
+     * geoeffnet, der jede betroffene Route mit ihrer Standardroute zeigt.
+     *
+     * @param  array<int,string>  $criteria
+     * @param  array<string,mixed>  $inputs
+     */
+    private function guardMissingRouteTargets(Workflow $workflow, array $criteria, array $inputs, string $intent): void
+    {
+        $findings = app(WorkflowRouteTargetAutoRepairService::class)->analyze($workflow);
+
+        if ($findings === []) {
+            $this->resetRouteRepairPrompt();
+
+            return;
+        }
+
+        // Fehler, die die Reparatur nicht beseitigt, muessen sichtbar bleiben —
+        // sonst verspricht der Dialog einen Start, der danach doch scheitert.
+        $blocking = collect(app(WorkflowDefinitionValidator::class)->validate($workflow, $criteria, $inputs)['diagnostics'])
+            ->where('severity', 'error')
+            ->reject(fn (array $diagnostic): bool => in_array(
+                (string) ($diagnostic['code'] ?? ''),
+                ['route_task_missing', 'route_step_missing'],
+                true,
+            ))
+            ->pluck('message')
+            ->map(fn (mixed $message): string => (string) $message)
+            ->unique()
+            ->take(5)
+            ->values()
+            ->all();
+
+        $this->routeRepairFindings = $findings;
+        $this->routeRepairBlockingMessages = $blocking;
+        $this->routeRepairIntent = $intent;
+        $this->showRouteRepairModal = true;
+
+        throw new DomainException($blocking === []
+            ? count($findings).' Verzweigung(en) zeigen auf geloeschte Ziele. Bitte im Dialog entscheiden.'
+            : count($findings).' Verzweigung(en) zeigen auf geloeschte Ziele; zusaetzlich blockieren weitere Fehler den Start.');
+    }
+
+    /**
+     * Setzt die fehlenden Verzweigungen auf ihre Standardroute und fuehrt danach
+     * genau die Aktion aus, die den Dialog ausgeloest hat.
+     */
+    public function applyRouteRepairAndStart(): void
+    {
+        $intent = $this->routeRepairIntent;
+        $findings = $this->routeRepairFindings;
+        $this->resetRouteRepairPrompt();
+
+        if ($findings === []) {
+            return;
+        }
+
+        try {
+            app(WorkflowStudioControlService::class)->assertUserControl($this->session());
+            $repaired = app(WorkflowRouteTargetAutoRepairService::class)->repair($this->workflow()->load('steps'));
+
+            app(WorkflowStudioSessionService::class)->appendEvent(
+                $this->session(),
+                'workflow.route_targets_defaulted',
+                count($repaired).' Verzweigung(en) ohne gueltiges Ziel wurden auf die Standardroute gesetzt.',
+                ['repaired' => $repaired, 'intent' => $intent],
+                'warning',
+            );
+        } catch (Throwable $exception) {
+            report($exception);
+            $this->addError('studio', $exception->getMessage());
+            $this->lastActionResult = $this->result('failed', $exception->getMessage());
+            $this->dispatchStudioNotice($this->lastActionResult);
+
+            return;
+        }
+
+        match ($intent) {
+            'single_task' => $this->runSingleTask(),
+            'resume_run' => $this->resumeRun(),
+            default => $this->startRun(),
+        };
+    }
+
+    public function closeRouteRepairModal(): void
+    {
+        $this->resetRouteRepairPrompt();
+    }
+
+    private function resetRouteRepairPrompt(): void
+    {
+        $this->showRouteRepairModal = false;
+        $this->routeRepairFindings = [];
+        $this->routeRepairBlockingMessages = [];
+        $this->routeRepairIntent = 'start_run';
     }
 }

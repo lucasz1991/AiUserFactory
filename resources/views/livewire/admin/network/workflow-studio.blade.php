@@ -200,6 +200,62 @@
         @include('livewire.admin.network.workflow-studio.tool-modal')
     @endif
 
+    @if($showRouteRepairModal)
+        <div wire:key="workflow-studio-route-repair" wire:click.self="closeRouteRepairModal" class="absolute inset-0 z-[70] flex items-center justify-center bg-slate-950/45 p-3 backdrop-blur-sm sm:p-6" role="dialog" aria-modal="true" aria-label="Fehlende Verzweigungen">
+            <section class="flex max-h-full w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-white/70 bg-white shadow-2xl">
+                <header class="flex shrink-0 items-start justify-between gap-4 border-b border-slate-200 px-4 py-3 sm:px-5">
+                    <div>
+                        <p class="text-[9px] font-black uppercase tracking-[0.18em] text-amber-700">Workflow-Struktur</p>
+                        <h2 class="mt-1 text-base font-bold text-slate-950">{{ count($routeRepairFindings) }} Verzweigung(en) ohne gültiges Ziel</h2>
+                        <p class="mt-1 text-xs text-slate-500">Die Zielkarte oder Zielliste wurde gelöscht. Sie können die betroffenen Verzweigungen auf die Standardroute setzen und den Test direkt starten.</p>
+                    </div>
+                    <button type="button" wire:click="closeRouteRepairModal" class="h-9 shrink-0 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 hover:bg-slate-100">Schließen ×</button>
+                </header>
+
+                <div class="min-h-0 flex-1 overflow-y-auto px-4 py-3 sm:px-5">
+                    <ul class="space-y-2">
+                        @foreach($routeRepairFindings as $finding)
+                            <li class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                                <p class="text-xs font-bold text-slate-900">
+                                    {{ $finding['step_name'] ?: $finding['step'] }}
+                                    @if($finding['card'])
+                                        <span class="font-normal text-slate-500">·</span> {{ $finding['card_title'] ?: $finding['card'] }}
+                                    @endif
+                                </p>
+                                <p class="mt-1 text-[11px] text-slate-600">
+                                    <span class="font-semibold">{{ $finding['field_label'] }}</span>
+                                    <span class="mx-1 text-slate-400">zeigt auf</span>
+                                    <span class="rounded bg-rose-100 px-1.5 py-0.5 font-mono text-[10px] font-bold text-rose-800 line-through">{{ $finding['current_target'] }}</span>
+                                    <span class="mx-1 text-slate-400">→ wird</span>
+                                    <span class="rounded bg-emerald-100 px-1.5 py-0.5 font-mono text-[10px] font-bold text-emerald-800">{{ $finding['default_label'] }}</span>
+                                </p>
+                            </li>
+                        @endforeach
+                    </ul>
+
+                    @if($routeRepairBlockingMessages !== [])
+                        <div class="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5">
+                            <p class="text-xs font-bold text-rose-900">Diese Fehler bleiben auch nach der Reparatur bestehen:</p>
+                            <ul class="mt-1 list-disc space-y-0.5 pl-4 text-[11px] text-rose-800">
+                                @foreach($routeRepairBlockingMessages as $message)
+                                    <li>{{ $message }}</li>
+                                @endforeach
+                            </ul>
+                            <p class="mt-1.5 text-[11px] font-semibold text-rose-900">Der Test kann erst nach deren Behebung starten.</p>
+                        </div>
+                    @endif
+                </div>
+
+                <footer class="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-slate-200 bg-slate-50 px-4 py-3 sm:px-5">
+                    <button type="button" wire:click="closeRouteRepairModal" class="h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 hover:bg-slate-100">Schließen</button>
+                    <button type="button" wire:click="applyRouteRepairAndStart" @disabled($routeRepairBlockingMessages !== []) class="h-9 rounded-lg bg-slate-900 px-3.5 text-xs font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40">
+                        Auf Standardroute setzen und Test starten
+                    </button>
+                </footer>
+            </section>
+        </div>
+    @endif
+
     @if($showCopilotSettingsModal)
         <div wire:key="workflow-studio-copilot-settings" wire:click.self="$set('showCopilotSettingsModal', false)" class="absolute inset-0 z-40 flex items-center justify-center bg-slate-950/35 p-3 backdrop-blur-sm sm:p-6" role="dialog" aria-modal="true" aria-label="Copilot-Einstellungen">
             <section class="flex max-h-full w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-white/70 bg-white shadow-2xl">
