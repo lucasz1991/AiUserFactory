@@ -66,6 +66,7 @@ class WorkflowRuntimeArtifactCleanupTest extends TestCase
             $this->makeArtifactDirectory($path);
         }
         foreach ($oldPaths as $path) {
+            touch($path.DIRECTORY_SEPARATOR.'artifact.txt', $oldTimestamp);
             touch($path, $oldTimestamp);
         }
         clearstatcache();

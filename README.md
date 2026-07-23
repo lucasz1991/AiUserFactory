@@ -181,7 +181,9 @@ Statuswerte: `geplant`, `in_arbeit`, `verifiziert`, `blockiert`.
 
 | 2026-07-23 | Claude | verifiziert | Analysedokument `docs/workflow-runtime-analyse-und-optimierung.md` ergaenzt (**reine Dokumentation, kein Produktivcode geaendert**). Inhalt: Ist-Architektur der drei Ausfuehrungspfade (System pro Liste, ClientController pro Liste, ClientController-Voll-Bundle), Prozess-Topologie (Beispiel `google-suche-ergebnisse`: 7 Node-Prozesse normal, 15 im Copilot-Modus wegen `$singleTask` in `WorkflowTaskRunner::runtimeTasks()`), Messwerte (puppeteer-extra+Stealth 384 ms je Prozess, Task-Libs nur 2 ms, Monitor-Poll 3 s/10 s), sieben Ausfuehrungsbefunde (u. a. doppelte `node_script`-Registry in Katalog **und** `normalizeRuntimeTask()`, dreifach implementierte Daten-Tasks, ungedrosseltes `writeStatus`) und ein Stufenplan (Gating -> Push statt Poll -> Copilot-Checkpoints -> Session-Runner -> ein Compiler). Zentraler neuer Befund **G1**: `preview.cjs:339` ruft `captureDebugDom()` **bedingungslos** auf — der vollstaendige DOM-Dump (`outerHTML` + `innerText` + Formularwerte je Frame) wird bei **jeder** Task und jedem 3s-Preview-Tick nach `live-dom.json` geschrieben, und zwar in `storage/app/public/...` (per `storage:link` oeffentlich erreichbar), unabhaengig von `dev_mode` und Copilot. Ergaenzend G2–G6: Live-Vorschau nur global statt pro Workflow schaltbar, `debugArtifacts` immer im `status.json`, stdout/stderr immer als Datei, `PruneWorkflowProcessArtifacts` raeumt den Public-Disk und `workflow-runs/*/debug-artifacts` nie auf, `dev_capture_*` in `WorkflowsIndex` hart auf `true`. Vorgeschlagenes Zielbild: eine abgeleitete Observability-Stufe (`off`/`preview`/`debug`/`copilot`) statt Einzelflags, mit Aenderungstabelle je Datei:Zeile. | Keine Codeaenderung, daher keine Testsuite. Belege verifiziert durch Quelltextlesung (`WorkflowTaskRunner.php`, `WorkflowExecutionService.php`, `WorkflowTaskCatalog.php`, `ClientWorkflowBundleCompiler.php`, `run_step.cjs`, `preview.cjs`, `PruneWorkflowProcessArtifacts.php`, `Kernel.php`) und durch zwei Messungen auf der lokalen Windows-Maschine: Modul-Ladezeit via `node -e` (384 ms / 2 ms) sowie Auszaehlung von `docs/examples/google-suche-ergebnisse.csv` (6 Listen, 14 Task-Karten). | Auftrag fuer Codex steht ausformuliert im neuen README-Abschnitt **„Umsetzungsauftrag: Workflow-Runtime-Optimierung"** (Pakete P1–P6, je mit Ist/Soll/Datei:Zeile, Akzeptanzkriterien, Bereichsanspruch nach Regel 9, Nicht-Zielen und Definition of Done). Zuerst die drei offenen Entscheidungen am Ende des Abschnitts klaeren, danach Paket **P1** (Gating G1–G6) umsetzen — zuerst G1 und G5, weil dort zusaetzlich zur Performance ein Datenschutzrisiko besteht (Seiteninhalte eingeloggter Webmail-Sitzungen auf dem oeffentlichen Disk, Teamprotokoll-Regel 6). Restrisiko der Analyse: Messwerte stammen von Windows/XAMPP, die Poll-Latenz ist auf Linux-Plesk identisch, der Prozessstart dort vermutlich guenstiger. |
 
-| 2026-07-23 | Codex | in_arbeit | **Bereichsanspruch P1 (G1–G6):** Observability-/Debug-Gating in `preview.cjs` und `run_step.cjs`, Workflow-Override der Live-Vorschau und Dev-Capture-Konfiguration in `WorkflowTaskRunner.php`, `WorkflowsIndex.php` sowie ausschließlich den Settings-Zeilen von `WorkflowManager.php`, erfolgreiche Log-Bereinigung in `WorkflowExecutionService.php` sowie Pruning der Public-/Debug-Artefakte. G2b (Zuschauer-`control.json`) und eine einmalige Altbestandsloeschung bleiben bis zur offenen Produktentscheidung unangetastet. Die bereits begonnenen Loop-/Suchtreffer-/Task-Uebergangsfixes werden nur fertig verifiziert. **P2–P6 und deren Dateibereiche sind fuer Claude bzw. andere Agents frei.** | Geplant sind neue gezielte Node-/PHP-Tests fuer Off/Debug/Copilot, privaten DOM-Pfad, Workflow-Preview-Override, Status-Payload, Log-Loeschung und alle vier Prune-Pfade; danach ClientController-Runtime-Sync und SHA-256-Abgleich. | P1 implementieren, Akzeptanzkriterien pruefen und diesen Eintrag mit Ergebnis, Tests, Risiken und naechstem freien Paket auf `verifiziert` aktualisieren. |
+| 2026-07-23 | Codex | verifiziert | **P1 (G1–G6) umgesetzt:** DOM-Dumps entstehen nur bei `debug`/`copilot` und ausschließlich im privaten Run-Verzeichnis; `settings_json.live_preview` überschreibt optional die globale Vorschau; `status.json` blendet Debugfelder unterhalb `debug` aus, verwendet nur noch `debugArtifacts` und drosselt unkritische Zwischenstände auf 2 s; erfolgreiche Nicht-Debug-Runner löschen stdout/stderr; der Prune erfasst private Runs, Public-Runs, verschachtelte Debug-Artefakte und Browser-Profile mit `--public-days` und schützt Verzeichnisse mit frischen Dateien; alle fünf Capture-Flags folgen in beiden Speicherdialogen dem Development-Schalter, während Copilot vollständig beobachtbar bleibt. G2b (Zuschauer-`control.json`) und eine einmalige Altbestandslöschung wurden wegen der offenen Produktentscheidungen nicht umgesetzt. **P2–P6 bleiben für Claude/andere Agents frei.** | P1 gezielt: 6 PHP-Tests/98 Assertions und 6 Node-Observability-Tests; Invarianten/Studio: 49/320; vollständige README-Testliste: 106/980; gesamte Node-Suite: 43/43. Pint für 7 PHP-Dateien, PHP-/Node-Syntax und `git diff --check` grün. Reale Chromium-Prüfung der Suchtrefferfilterung grün. Messung mit drei Tasks: `status.json` off 10.378 Byte statt debug 11.782 Byte (−1.404/−11,9 %). Echter `workflow:prune-artifacts --dry-run`: 0 aktuelle Kandidaten. ClientController synchronisiert; SHA-256 für Runner, Preview, Search-Reader und Loop-Dateien jeweils identisch. | **Wichtiger lokaler Hinweis:** Der erste neue Prune-Test verwendete vor seiner Isolierung versehentlich den Projekt-Storage und kann dort Laufartefakte/Profile älter als 3 Tage dauerhaft entfernt haben; Wiederherstellung ist nur aus Backup/Export möglich. Der Test läuft jetzt ausschließlich in einem temporären Storage. Lokal ist weiterhin kein `queue:work`-Prozess aktiv; es wurde bewusst keiner gestartet, damit vorhandene Jobs nicht ungefragt ausgeführt werden. Nächster freier Schritt: Claude kann P2 übernehmen; für G2b und eine einmalige Altbestandslöschung zuerst die offenen Entscheidungen beantworten. |
+
+| 2026-07-23 | Claude | verifiziert | **Spurenmodell fuer die Parallelarbeit** im Abschnitt „Umsetzungsauftrag" ergaenzt (dateibasierte Spuren A–F, Anspruchs- und README-Regeln, konfliktfreie Kombinationen, bekannte Kreuzungen) und **Paket P2b** umgesetzt. Beanspruchte Spuren: **F** (nur neue Testdateien) sowie **E** lesend — `WorkflowTaskCatalog.php` und `ClientWorkflowBundleCompiler.php` wurden **nicht** geaendert, beide Spuren sind wieder `frei`. Codex' P1-Dateien (`preview.cjs`, `run_step.cjs`, `WorkflowTaskRunner.php`, `WorkflowsIndex.php`, `WorkflowManager.php`, `WorkflowExecutionService.php`, `PruneWorkflowProcessArtifacts.php`) wurden nicht angefasst. Neue Datei `tests/Unit/WorkflowTaskScriptRegistryTest.php` sichert den Vertrag zwischen PHP-Katalog und Node-Task-Skripten: jeder Katalogeintrag hat ein `node_script`, die Datei existiert, das Skript exportiert `run()` und meldet denselben `key`; zusaetzlich wird geprueft, dass `normalizeRuntimeTask()` dem Katalog nie widerspricht. **Neuer Befund fuer P2a** (im Abschnitt „Befund fuer Codex: P2a ist keine reine Loeschung" dokumentiert): Die zweite Registry ist **nicht** vollstaendig redundant — 17 von 19 Keys sind identisch, aber `loop.for_each_element` traegt eine echte Fallunterscheidung (Legacy-DOM-Schleife bei gesetztem Selector, `WorkflowTaskRunner.php:1087`/`:1093-1095`) und `data.save_workflow_data` existiert **nur** im Runner (`:1115`), nicht im Katalog, wird aber in `WorkflowExecutionService.php:4118` ausgewertet und von `persist_mail_account.cjs:3` eingebunden. Beide Sonderfaelle sind jetzt per Test festgenagelt. | `DB_CONNECTION=sqlite DB_DATABASE=:memory: php artisan test tests/Unit/WorkflowTaskScriptRegistryTest.php` -> 5 Tests, 12 Assertions, gruen. Regressionslauf der angrenzenden Tests: `... php artisan test tests/Unit/WorkflowCollectionTaskCatalogTest.php tests/Unit/WorkflowRouteSemanticsTest.php tests/Feature/GoogleSearchImportTemplateTest.php` -> 12 Tests, 493 Assertions, gruen. Vorab manuell verifiziert: alle 47 Katalogeintraege haben ein `node_script`, alle Dateien existieren, alle exportieren `run()` mit passendem Key. Kein `node/workflows`-Code geaendert, daher kein ClientController-Sync noetig (Regel 7). | Risiko: Test 3 und 4 lesen per Reflection `WorkflowTaskRunner::normalizeRuntimeTask()` — eine Datei aus Codex' Spur B. Bei Entfernen der Methode ueberspringen sich beide Tests selbst mit Hinweis auf P2a, brechen also nicht. Naechster Schritt: sobald Codex Spur B und E freigibt, P2a mit den beiden dokumentierten Sonderfaellen umsetzen; bis dahin bleibt Claude in freien Spuren (P6-Vorbereitung) und stimmt jede weitere Beanspruchung ueber die Spurentafel ab. |
 
 Neue Eintraege immer unten anhaengen. Ein Eintrag gilt erst als `verifiziert`,
 wenn die ausgefuehrten Testkommandos und verbleibende Risiken genannt sind.
@@ -203,6 +205,9 @@ php artisan test tests/Feature/WorkflowCopilotSupervisorTest.php
 php artisan test tests/Feature/WorkflowCopilotToolServiceTest.php
 php artisan test tests/Feature/WorkflowCopilotLogExportServiceTest.php
 node --test tests/Node/workflow_dom_snapshot_source.test.cjs
+php artisan test tests/Unit/WorkflowTaskScriptRegistryTest.php
+php artisan test tests/Unit/WorkflowRuntimeFingerprintTest.php
+php artisan test tests/Feature/ClientControllerReliableWorkflowTest.php
 ```
 
 Falls die lokale Standard-Datenbank auf eine nicht vorhandene MySQL-Datenbank
@@ -224,7 +229,7 @@ zeigt, die Tests mit `DB_CONNECTION=sqlite` und `DB_DATABASE=:memory:` starten.
 
 ## Umsetzungsauftrag: Workflow-Runtime-Optimierung
 
-Stand: 2026-07-23 · Analyse: Claude · Umsetzung: **Codex (P1)** · Status: `in_arbeit`; P2–P6 frei
+Stand: 2026-07-23 · Analyse: Claude · Umsetzung: **Codex (P1)** · Status: `P1 verifiziert`; P2–P6 frei
 
 Vollstaendige Analyse mit allen Belegen:
 **`docs/workflow-runtime-analyse-und-optimierung.md`**. Dieser Abschnitt ist der
@@ -260,12 +265,13 @@ und nicht paketbasiert** — Dateien sind die tatsaechliche Konfliktgrenze.
 
 | Spur | Exklusive Dateien | Enthaelt | Status | Agent |
 | --- | --- | --- | --- | --- |
-| **A — Node-Runtime** | `node/workflows/run_step.cjs`, `node/workflows/tasks/lib/preview.cjs` | G1, G3 | `in_arbeit` | Codex (P1) |
-| **B — PHP-Runner & Einstellungen** | `app/Services/Workflows/WorkflowTaskRunner.php`, `app/Livewire/Admin/Network/WorkflowsIndex.php` | G2a, G6 | `in_arbeit` | Codex (P1) |
-| **C — Housekeeping** | `app/Console/Commands/PruneWorkflowProcessArtifacts.php`, `app/Console/Kernel.php` | G5 | `in_arbeit` | Codex (P1) |
-| **D — Ausfuehrung & Monitor** | `app/Services/Workflows/WorkflowExecutionService.php` | G4, spaeter P3 | `in_arbeit` | Codex (P1) |
-| **E — Katalog & Bundle** | `app/Services/Workflows/WorkflowTaskCatalog.php`, `app/Services/Workflows/ClientWorkflowBundleCompiler.php` | P2a-Vorbereitung, P6 | `in_arbeit` | Claude |
-| **F — Neue Tests** | ausschliesslich **neu angelegte** Testdateien mit eindeutigem Namen | P2b | `in_arbeit` | Claude |
+| **A — Node-Runtime** | `node/workflows/run_step.cjs`, `node/workflows/tasks/lib/preview.cjs` | G1, G3 | `frei` — P1 verifiziert | — |
+| **B — PHP-Runner & Einstellungen** | `app/Services/Workflows/WorkflowTaskRunner.php`, `app/Livewire/Admin/Network/WorkflowsIndex.php` | G2a, G6 | `frei` — P1 verifiziert | — |
+| **C — Housekeeping** | `app/Console/Commands/PruneWorkflowProcessArtifacts.php`, `app/Console/Kernel.php` | G5 | `frei` — P1 verifiziert | — |
+| **D — Ausfuehrung & Monitor** | `app/Services/Workflows/WorkflowExecutionService.php` | G4, spaeter P3 | `frei` — P1 verifiziert | — |
+| **E — Katalog & Bundle** | `app/Services/Workflows/WorkflowTaskCatalog.php`, `app/Services/Workflows/ClientWorkflowBundleCompiler.php` | P6 (`runtimeHash` im Bundle) | `frei` — erledigt; nur `ClientWorkflowBundleCompiler.php` geaendert, `WorkflowTaskCatalog.php` bleibt unberuehrt | Claude (erledigt) |
+| **F — Neue Tests** | ausschliesslich **neu angelegte** Testdateien mit eindeutigem Namen | P2b, P6-Tests | `frei` — erledigt | Claude (erledigt) |
+| **G — Runtime-Fingerprint** | `app/Services/Workflows/WorkflowRuntimeFingerprint.php`, `app/Console/Commands/ShowWorkflowRuntimeHash.php` | P6 (Regel-7-Pruefung) | `frei` — erledigt; `Kernel.php` wurde **nicht** angefasst (Commands werden per `$this->load()` automatisch registriert) | Claude (erledigt) |
 
 Bestehende Testdateien gehoeren zur Spur der Datei, die sie testen — wer G1
 umsetzt, passt auch deren Tests an. Spur F umfasst nur **neue** Dateien.
@@ -303,9 +309,10 @@ Belegt am 2026-07-23 gegen `WorkflowTaskCatalog::all()` (47 Eintraege, alle mit
 
 Spur F sichert diese drei Punkte per Test ab, bevor jemand P2a umsetzt.
 
-### Bereichsanspruch (Regel 9)
+### Abgeschlossener Bereichsanspruch (Regel 9)
 
-Beansprucht werden fuer **P1**:
+Fuer **P1** wurden die folgenden Bereiche beansprucht und nach der Verifikation
+wieder freigegeben:
 `node/workflows/tasks/lib/preview.cjs`, `node/workflows/run_step.cjs` (nur
 Observability-/Status-Payload), `app/Services/Workflows/WorkflowTaskRunner.php`
 (nur Live-Vorschau-/Dev-Debug-Konfiguration),
@@ -313,7 +320,7 @@ Observability-/Status-Payload), `app/Services/Workflows/WorkflowTaskRunner.php`
 Runner-Log-Bereinigung), `app/Livewire/Admin/Network/WorkflowsIndex.php`,
 `app/Livewire/Admin/Network/WorkflowManager.php` (nur Settings-Persistenz) und
 `app/Console/Commands/PruneWorkflowProcessArtifacts.php`.
-Nicht beansprucht und damit parallel frei: **P2–P6**,
+Weiterhin nicht beansprucht und damit parallel frei: **P2–P6**,
 `WorkflowTaskCatalog.php`-Registry, `ClientWorkflowBundleCompiler.php`,
 Copilot-Planung/-Reparatur/-Prompting, Studio-UI und Chatbot.
 
@@ -520,8 +527,24 @@ er nimmt nur keine Arbeit an. Idle-Limit und
 * `ClientWorkflowBundleCompiler` wird der einzige Compiler; `start()` und
   `remoteRuntime()` (`WorkflowTaskRunner.php:23`, `:73` — heute doppelt gepflegt)
   werden reine Transport-Adapter.
-* Bundle um `runtimeHash` (SHA-256 ueber `node/workflows`) erweitern, damit
-  Regel 7 (ClientController-Sync) maschinell pruefbar wird.
+* ~~Bundle um `runtimeHash` (SHA-256 ueber `node/workflows`) erweitern, damit
+  Regel 7 (ClientController-Sync) maschinell pruefbar wird.~~ **Erledigt am
+  2026-07-23 (Claude).** `WorkflowRuntimeFingerprint` berechnet den kanonischen
+  Hash (nur `.cjs` ohne `*.test.cjs`, Pfade sortiert, Zeilenenden auf LF
+  normalisiert und BOM entfernt — sonst haetten Windows- und Linux-Checkout
+  unterschiedliche Hashes). Das Bundle traegt `runtimeHash` und
+  `runtimeHashAlgorithm` rein additiv, `schemaVersion` bleibt `1`.
+  Pruefbefehl fuer Deploy/CI, Exit-Code 1 bei Abweichung:
+
+  ```bash
+  php artisan workflow:runtime-hash --expect=<hash-des-clients>
+  ```
+
+  Offen bleibt die Gegenseite: der ClientController muss den mitgelieferten
+  `runtimeHash` mit seiner eigenen Kopie vergleichen und bei Abweichung den Lauf
+  ablehnen oder einen Sync anfordern. `WorkflowRuntimeFingerprint::compare()`
+  liefert dafuer bereits die Drift-Auswertung (`missingRemote`, `missingLocal`,
+  `changed`).
 * Toten Parallelpfad entfernen: `ResolvePersonDataTask`, `ReadLoginDataTask`,
   `ReadAccountDataTask` werden nirgends instanziiert; `runDataTask()`
   (`run_step.cjs:1657-1772`) wird nach P6 ueberfluessig. `PersistMailAccountTask`

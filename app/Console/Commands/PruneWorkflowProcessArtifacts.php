@@ -101,8 +101,7 @@ class PruneWorkflowProcessArtifacts extends Command
         int $days,
         bool $dryRun,
         array $nestedContainerNames = [],
-    ): int
-    {
+    ): int {
         if (! File::isDirectory($basePath)) {
             return 0;
         }
@@ -178,6 +177,21 @@ class PruneWorkflowProcessArtifacts extends Command
     {
         $modifiedAt = @filemtime($directory);
 
-        return $modifiedAt !== false && $modifiedAt < $thresholdTs;
+        if ($modifiedAt === false || $modifiedAt >= $thresholdTs) {
+            return false;
+        }
+
+        try {
+            foreach (File::allFiles($directory) as $file) {
+                if ($file->getMTime() >= $thresholdTs) {
+                    return false;
+                }
+            }
+        } catch (\Throwable) {
+            // Bei unlesbaren Artefakten niemals auf Verdacht rekursiv loeschen.
+            return false;
+        }
+
+        return true;
     }
 }

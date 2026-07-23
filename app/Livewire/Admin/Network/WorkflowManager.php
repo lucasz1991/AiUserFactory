@@ -349,6 +349,9 @@ class WorkflowManager extends Component
         $developmentEnabled = (bool) $validated['workflowDevelopment'];
         $settings['dev_mode'] = $developmentEnabled;
         $settings['dev_capture_dom_before_step'] = $developmentEnabled;
+        $settings['dev_capture_dom_after_step'] = $developmentEnabled;
+        $settings['dev_capture_screenshot_before_step'] = $developmentEnabled;
+        $settings['dev_capture_screenshot_after_step'] = $developmentEnabled;
         $settings['dev_keep_artifacts'] = $developmentEnabled;
 
         $workflow->forceFill([

@@ -10,6 +10,7 @@ use App\Models\WorkflowRun;
 use App\Models\WorkflowStep;
 use App\Models\WorkflowStepRun;
 use App\Services\Workflows\WorkflowExecutionService;
+use App\Services\Workflows\WorkflowRuntimeFingerprint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
 use Tests\TestCase;
@@ -164,6 +165,13 @@ class ClientControllerReliableWorkflowTest extends TestCase
         $this->assertNull($job->expires_at);
         $this->assertCount(2, data_get($job->payload_json, 'workflow_bundle.steps'));
         $this->assertSame('wait', data_get($job->payload_json, 'workflow_bundle.steps.0.defaultNext'));
+        // Regel 7: das Bundle traegt den Fingerabdruck der Node-Runtime, mit der
+        // es erzeugt wurde, damit der Client seinen eigenen Stand abgleichen kann.
+        $this->assertSame(
+            app(WorkflowRuntimeFingerprint::class)->hash(),
+            data_get($job->payload_json, 'workflow_bundle.runtimeHash'),
+        );
+        $this->assertSame('sha256', data_get($job->payload_json, 'workflow_bundle.runtimeHashAlgorithm'));
         $this->assertSame(2, $run->stepRuns()->count());
         $this->assertSame($first->id, $run->fresh()->current_workflow_step_id);
 

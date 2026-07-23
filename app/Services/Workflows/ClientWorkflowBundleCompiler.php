@@ -9,6 +9,7 @@ class ClientWorkflowBundleCompiler
 {
     public function __construct(
         protected WorkflowTaskRunner $workflowTasks,
+        protected WorkflowRuntimeFingerprint $runtimeFingerprint,
     ) {}
 
     public function compile(WorkflowRun $run): array
@@ -68,6 +69,12 @@ class ClientWorkflowBundleCompiler
             'reasons' => array_values(array_unique($reasons)),
             'bundle' => [
                 'schemaVersion' => 1,
+                // Fingerabdruck der Node-Runtime, mit der dieses Bundle erzeugt
+                // wurde. Der Client kann damit pruefen, ob seine eigene
+                // node/workflows-Kopie demselben Stand entspricht (Regel 7).
+                // Rein additiv, deshalb bleibt schemaVersion unveraendert 1.
+                'runtimeHash' => $this->runtimeFingerprint->hash(),
+                'runtimeHashAlgorithm' => WorkflowRuntimeFingerprint::ALGORITHM,
                 'workflowRunId' => $run->id,
                 'workflowRunUuid' => $run->run_uuid,
                 'workflowId' => $run->workflow_id,

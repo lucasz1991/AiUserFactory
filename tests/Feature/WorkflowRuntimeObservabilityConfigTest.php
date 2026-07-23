@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Livewire\Admin\Network\WorkflowManager;
 use App\Livewire\Admin\Network\WorkflowsIndex;
 use App\Models\Workflow;
 use App\Models\WorkflowRun;
@@ -153,6 +154,31 @@ class WorkflowRuntimeObservabilityConfigTest extends TestCase
         $this->assertDevelopmentSettings($editedSettings, false);
     }
 
+    public function test_workflow_manager_persists_all_development_capture_flags_consistently(): void
+    {
+        [$workflow] = $this->runtimeModels();
+        $workflow->forceFill(['settings_json' => [
+            'live_preview' => false,
+            ...$this->developmentSettingsForTest(true),
+        ]])->save();
+
+        $manager = app(WorkflowManager::class);
+        $manager->mount($workflow->fresh());
+        $manager->workflowDevelopment = false;
+        $manager->saveWorkflow();
+
+        $disabledSettings = $workflow->fresh()->settings_json;
+        $this->assertFalse($disabledSettings['live_preview']);
+        $this->assertDevelopmentSettings($disabledSettings, false);
+
+        $manager = app(WorkflowManager::class);
+        $manager->mount($workflow->fresh());
+        $manager->workflowDevelopment = true;
+        $manager->saveWorkflow();
+
+        $this->assertDevelopmentSettings($workflow->fresh()->settings_json, true);
+    }
+
     private function runtimeModels(): array
     {
         $workflow = Workflow::query()->create([
@@ -221,6 +247,19 @@ class WorkflowRuntimeObservabilityConfigTest extends TestCase
         ] as $key) {
             $this->assertSame($expected, $settings[$key], $key);
         }
+    }
+
+    /** @return array<string, bool> */
+    private function developmentSettingsForTest(bool $enabled): array
+    {
+        return [
+            'dev_mode' => $enabled,
+            'dev_capture_dom_before_step' => $enabled,
+            'dev_capture_dom_after_step' => $enabled,
+            'dev_capture_screenshot_before_step' => $enabled,
+            'dev_capture_screenshot_after_step' => $enabled,
+            'dev_keep_artifacts' => $enabled,
+        ];
     }
 
     private function deleteTaskRunArtifacts(string $runId): void
