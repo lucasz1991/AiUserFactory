@@ -73,12 +73,19 @@ class WorkflowCollectionTaskCatalogTest extends TestCase
 
         $loop = $catalog->cardFromDefinition('loop.for_each_element');
         $reader = $catalog->cardFromDefinition('browser.read_element_fields');
+        $searchReader = $catalog->cardFromDefinition('browser.read_searchengine_result');
         $append = $catalog->cardFromDefinition('data.append_to_array');
 
-        $this->assertSame('current_result', $loop['store_current_element_as']);
-        $this->assertSame('result_index', $loop['store_index_as']);
-        $this->assertSame('current_result', $loop['collect_from_variable']);
+        $this->assertSame('1', $loop['iteration_count']);
+        $this->assertSame('current_item', $loop['store_current_item_as']);
+        $this->assertSame('loop_index', $loop['store_index_as']);
+        $this->assertArrayNotHasKey('selector', $loop);
+        $this->assertArrayNotHasKey('collect_to_array', $loop);
         $this->assertSame('current_result', $reader['scope_variable']);
+        $this->assertSame('#search', $searchReader['list_container_selector']);
+        $this->assertSame('.MjjYud, .g, article, [data-result], .result', $searchReader['list_item_selector']);
+        $this->assertSame('top_results', $searchReader['output_array_name']);
+        $this->assertSame('true', $searchReader['exclude_ads']);
         $this->assertSame('top_results', $append['array_name']);
         $this->assertSame('current_result', $append['value_from_variable']);
     }
@@ -103,9 +110,69 @@ class WorkflowCollectionTaskCatalogTest extends TestCase
         }
 
         $loopFields = collect(data_get($catalog['loop.for_each_element'], 'form.extra_fields'))->keyBy('name');
-        $this->assertNotNull($loopFields->get('collect_to_array'));
-        $this->assertNotNull($loopFields->get('completion_target'));
-        $this->assertSame('Zielkarte bei leerer Liste', data_get($loopFields->get('empty_target'), 'label'));
+        $this->assertNotNull($loopFields->get('iteration_count'));
+        $this->assertNotNull($loopFields->get('source_array'));
+        $this->assertNotNull($loopFields->get('condition_variable'));
+        $this->assertNotNull($loopFields->get('store_current_item_as'));
+        $this->assertNull($loopFields->get('collect_to_array'));
+        $this->assertNull($loopFields->get('success_target'));
+        $this->assertFalse((bool) data_get($catalog['loop.for_each_element'], 'form.selector'));
+        $this->assertFalse((bool) data_get($catalog['loop.end'], 'form.browser_window'));
+
+        $searchFields = collect(data_get($catalog['browser.read_searchengine_result'], 'form.extra_fields'))->keyBy('name');
+        $this->assertNotNull($searchFields->get('list_container_selector'));
+        $this->assertNotNull($searchFields->get('list_item_selector'));
+        $this->assertNotNull($searchFields->get('exclude_item_selector'));
+        $this->assertNotNull($searchFields->get('exclude_item_text'));
+        $this->assertNull(data_get($searchFields->get('title_selector'), 'default'));
+        $this->assertNull(data_get($searchFields->get('link_selector'), 'default'));
+    }
+
+    public function test_runtime_uses_pure_control_scripts_but_keeps_legacy_dom_loops_compatible(): void
+    {
+        $reflection = new \ReflectionClass(\App\Services\Workflows\WorkflowTaskRunner::class);
+        $runner = $reflection->newInstanceWithoutConstructor();
+        $normalize = new \ReflectionMethod($runner, 'normalizeRuntimeTask');
+        $normalize->setAccessible(true);
+
+        $control = $normalize->invoke($runner, [
+            'task_key' => 'loop.for_each_element',
+            'kind' => 'browser',
+            'browser_window' => 'main',
+            'iteration_count' => 3,
+        ]);
+        $legacy = $normalize->invoke($runner, [
+            'task_key' => 'loop.for_each_element',
+            'kind' => 'browser',
+            'selector' => '.legacy-result',
+        ]);
+        $end = $normalize->invoke($runner, [
+            'task_key' => 'loop.end',
+            'kind' => 'browser',
+            'browser_window' => 'main',
+        ]);
+
+        $this->assertSame('node/workflows/tasks/loop/for_each_element.cjs', $control['node_script']);
+        $this->assertSame('data', $control['kind']);
+        $this->assertArrayNotHasKey('browser_window', $control);
+        $this->assertSame('node/workflows/tasks/loop/for_each_element_legacy.cjs', $legacy['node_script']);
+        $this->assertSame('browser', $legacy['kind']);
+        $this->assertSame('node/workflows/tasks/loop/end.cjs', $end['node_script']);
+        $this->assertSame('data', $end['kind']);
+        $this->assertArrayNotHasKey('browser_window', $end);
+    }
+
+    public function test_continuous_studio_runtime_is_not_segmented_like_single_task_or_copilot(): void
+    {
+        $reflection = new \ReflectionClass(\App\Services\Workflows\WorkflowTaskRunner::class);
+        $runner = $reflection->newInstanceWithoutConstructor();
+        $segment = new \ReflectionMethod($runner, 'shouldSegmentTasks');
+        $segment->setAccessible(true);
+
+        $this->assertFalse($segment->invoke($runner, ['interactive_debug' => true]));
+        $this->assertTrue($segment->invoke($runner, ['studio_single_task' => true, 'interactive_debug' => true]));
+        $this->assertTrue($segment->invoke($runner, ['copilot_supervised' => true]));
+        $this->assertFalse($segment->invoke($runner, ['segment_tasks' => false, 'copilot_supervised' => true]));
     }
 
     public function test_fill_field_exposes_explicit_fixed_or_workflow_variable_sources(): void

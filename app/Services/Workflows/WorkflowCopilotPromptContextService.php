@@ -168,8 +168,8 @@ class WorkflowCopilotPromptContextService
             'task_semantics' => [
                 'decision.element_exists' => 'Element gefunden ergibt condition_true, nicht gefunden condition_false. Beide Ergebnisse sind technisch erfolgreich. next und on_error bilden fachliche Verzweigungen; nur type=fail ist ein Workflowfehler.',
                 'input.fill_field' => 'value_source=fixed nutzt value/input. value_source=workflow_variable nutzt workflow_variable; value_fallback ist nur der optionale Ersatzwert. Ein Variablenname darf nie als Literal in das Feld geschrieben werden.',
-                'loop.for_each_element' => 'Automatische Laeufe behandeln Loop-Start bis loop.end als wiederholbares Segment. Im Studio ist jede Karte einzeln testbar; Scope, Cursor und Array-Zustand werden zwischen den Klicks persistiert. Reader und Consumer stehen zwischen Start und Ende.',
-                'data.append_to_array' => 'Haengt den Wert aus value_from_variable dauerhaft an workflow_variables[array_name] an. Der Producer der Variable muss innerhalb desselben Loop-Durchlaufs vor dem Consumer liegen; nicht gleichzeitig mit collect_to_array fuer dasselbe Array verwenden.',
+                'loop.for_each_element' => 'Reiner Loop-Start ohne DOM-Zugriff: iteration_count oder source_array bestimmen die Durchlaeufe, eine optionale Bedingung kann vor jeder Iteration abbrechen. Alle Body-Tasks stehen bis zum einstellungslosen loop.end; Index und aktuelles Array-Element werden zwischen Studio-Schritten persistiert.',
+                'data.append_to_array' => 'Haengt den Wert aus value_from_variable dauerhaft an workflow_variables[array_name] an. Der Producer der Variable muss vor dem Consumer liegen.',
                 'data.validate_inputs' => 'Nur ein fehlender Wert mit required=true fuehrt zum failed-Zweig. Fehlen ausschliesslich optionale Werte oder existieren keine Definitionen, ist die Task erfolgreich. Die Ausgabegruppe enthaelt Direktwerte, _inputs mit set/present/used_default und _summary.',
                 'data.workflow_return' => 'Setzt den expliziten Rueckgabewert des Workflows. Erfolgskriterien fuer einen Rueckgabewert pruefen diesen Wert, nicht irgendeine zufaellige interne Variable.',
                 'browser.open_browser_session' => 'Laedt Cookies/Storage und oeffnet standardmaessig die letzte gespeicherte URL; eine konfigurierte URL ueberschreibt dieses Ziel.',
@@ -558,14 +558,23 @@ class WorkflowCopilotPromptContextService
         $push($task['output_array_name'] ?? $task['outputArrayName'] ?? null, 'array');
 
         if ($catalogKey === 'loop.for_each_element') {
-            $push($task['store_current_element_as'] ?? $task['storeCurrentElementAs'] ?? 'current_result', 'element_scope');
-            $push($task['store_index_as'] ?? $task['storeIndexAs'] ?? 'result_index', 'int');
-            $push($task['collect_to_array'] ?? $task['collectToArray'] ?? null, 'array');
+            $legacyDomLoop = filled($task['selector'] ?? $task['element_selector'] ?? null);
+            $push($legacyDomLoop
+                ? ($task['store_current_element_as'] ?? $task['storeCurrentElementAs'] ?? 'current_result')
+                : ($task['store_current_item_as'] ?? $task['storeCurrentItemAs'] ?? 'current_item'), $legacyDomLoop ? 'element_scope' : 'mixed');
+            $push($task['store_index_as'] ?? $task['storeIndexAs'] ?? ($legacyDomLoop ? 'result_index' : 'loop_index'), 'int');
+            if ($legacyDomLoop) {
+                $push($task['collect_to_array'] ?? $task['collectToArray'] ?? null, 'array');
+            }
         }
         if ($catalogKey === 'data.append_to_array') {
             $push($task['array_name'] ?? $task['arrayName'] ?? null, 'array');
         }
-        if (in_array($catalogKey, ['browser.read_element_fields', 'browser.read_searchengine_result'], true)
+        if ($catalogKey === 'browser.read_element_fields' && blank($task['output_variable'] ?? $task['outputVariable'] ?? null)) {
+            $push('current_result', 'object');
+        }
+        if ($catalogKey === 'browser.read_searchengine_result'
+            && blank($task['list_item_selector'] ?? $task['listItemSelector'] ?? null)
             && blank($task['output_variable'] ?? $task['outputVariable'] ?? null)
         ) {
             $push('current_result', 'object');

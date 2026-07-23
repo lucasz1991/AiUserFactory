@@ -7,7 +7,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const loopTask = require('../../node/workflows/tasks/loop/for_each_element.cjs');
+const controlLoopTask = require('../../node/workflows/tasks/loop/for_each_element.cjs');
+const loopTask = require('../../node/workflows/tasks/loop/for_each_element_legacy.cjs');
 const loopEndTask = require('../../node/workflows/tasks/loop/end.cjs');
 const readFieldsTask = require('../../node/workflows/tasks/browser/read_element_fields.cjs');
 const readSearchResultTask = require('../../node/workflows/tasks/browser/read_searchengine_result.cjs');
@@ -41,6 +42,23 @@ class FakeHandle {
   }
 }
 
+class FakeBulkSearchItem extends FakeHandle {
+  constructor(outcome) {
+    super();
+    this.outcome = outcome;
+    this.extractionPayload = null;
+  }
+
+  async evaluate(callback, payload) {
+    if (payload?.selectors) {
+      this.extractionPayload = payload;
+      return structuredClone(this.outcome);
+    }
+
+    return super.evaluate(callback, payload);
+  }
+}
+
 function searchResult(title, url, description) {
   const titleHandle = new FakeHandle({ text: `  ${title}  ` });
   const linkHandle = new FakeHandle({ href: url });
@@ -51,6 +69,121 @@ function searchResult(title, url, description) {
     '.description': [descriptionHandle],
   });
 }
+
+test('control loop repeats its body by count without opening or querying a page', async () => {
+  const loopInput = {
+    key: 'count-loop',
+    iteration_count: 2,
+    loop_end_key: 'count-loop-end',
+    store_index_as: 'loop_index',
+  };
+  const context = { workflow_variables: {}, input: loopInput };
+
+  const first = await controlLoopTask.run(context);
+  assert.equal(first.ok, true);
+  assert.equal(first.current_index, 0);
+  assert.equal(first.loop_complete, false);
+  assert.equal(context.workflow_variables.loop_index, 0);
+
+  context.input = { loop_start_key: 'count-loop' };
+  const firstEnd = await loopEndTask.run(context);
+  assert.equal(firstEnd.route_target_key, 'count-loop');
+
+  context.input = loopInput;
+  const second = await controlLoopTask.run(context);
+  assert.equal(second.current_index, 1);
+  assert.equal(second.completed_iterations, 1);
+
+  context.input = { loop_start_key: 'count-loop' };
+  const secondEnd = await loopEndTask.run(context);
+  assert.equal(secondEnd.route_target_key, 'count-loop');
+
+  context.input = loopInput;
+  const complete = await controlLoopTask.run(context);
+  assert.equal(complete.loop_complete, true);
+  assert.equal(complete.completed_iterations, 2);
+  assert.equal(complete.route_target_key, 'count-loop-end');
+  assert.equal(context.workflow_variables.loop_index, null);
+
+  context.input = { loop_start_key: 'count-loop' };
+  const finalEnd = await loopEndTask.run(context);
+  assert.equal(finalEnd.loop_complete, true);
+  assert.equal(finalEnd.route_target_key, undefined);
+
+  const restartedContext = {
+    workflow_variables: structuredClone(context.workflow_variables),
+    input: loopInput,
+  };
+  const restarted = await controlLoopTask.run(restartedContext);
+  assert.equal(restarted.loop_complete, false);
+  assert.equal(restarted.current_index, 0);
+  assert.equal(restarted.completed_iterations, 0);
+});
+
+test('control loop exposes array items and checks its condition before every iteration', async () => {
+  const loopInput = {
+    key: 'array-loop',
+    source_array: 'search_results',
+    iteration_count: 0,
+    condition_variable: 'continue_loop',
+    condition_operator: 'truthy',
+    store_current_item_as: 'current_result',
+    store_index_as: 'result_index',
+    loop_end_key: 'array-loop-end',
+  };
+  const context = {
+    workflow_variables: {
+      search_results: [{ url: '/one' }, { url: '/two' }],
+      continue_loop: true,
+    },
+    input: loopInput,
+  };
+
+  const first = await controlLoopTask.run(context);
+  assert.equal(first.current_index, 0);
+  assert.deepEqual(context.workflow_variables.current_result, { url: '/one' });
+
+  context.workflow_variables.continue_loop = false;
+  context.workflowVariables = context.workflow_variables;
+  const stopped = await controlLoopTask.run(context);
+  assert.equal(stopped.loop_complete, true);
+  assert.equal(stopped.completion_reason, 'condition_false');
+  assert.equal(stopped.completed_iterations, 1);
+  assert.equal(stopped.route_target_key, 'array-loop-end');
+  assert.equal(context.workflow_variables.current_result, null);
+});
+
+test('control loop cursor survives isolated processes and rejects a non-array source', async () => {
+  const input = {
+    key: 'isolated-control-loop',
+    source_array: 'items',
+    iteration_count: 0,
+    store_current_item_as: 'current_item',
+    loop_end_key: 'isolated-control-loop-end',
+  };
+  const firstContext = {
+    workflow_variables: { items: ['one', 'two'] },
+    input,
+  };
+  const first = await controlLoopTask.run(firstContext);
+  assert.equal(first.current_index, 0);
+  assert.equal(firstContext.workflow_variables.current_item, 'one');
+
+  const secondContext = {
+    workflow_variables: structuredClone(firstContext.workflow_variables),
+    input,
+  };
+  const second = await controlLoopTask.run(secondContext);
+  assert.equal(second.current_index, 1);
+  assert.equal(secondContext.workflow_variables.current_item, 'two');
+
+  const invalid = await controlLoopTask.run({
+    workflow_variables: { items: 'not-an-array' },
+    input: { ...input, key: 'invalid-source-loop' },
+  });
+  assert.equal(invalid.ok, false);
+  assert.equal(invalid.reason_code, 'loop_source_not_array');
+});
 
 test('generic element loop reads fields and appends a deduplicated result array', async () => {
   const handles = [
@@ -408,6 +541,101 @@ test('search result wrapper reads the href from an anchor loop scope after proce
   assert.equal(result.selectors_used.url, ':scope');
 });
 
+test('search result reader extracts and filters a complete list in one task', async () => {
+  const first = new FakeBulkSearchItem({
+    result: { titel: 'First', url: 'https://one.example/', description: 'One', site_name: 'one.example', breadcrumb: '' },
+    selectorsUsed: { titel: 'h3', url: 'a[href]' },
+  });
+  const items = [
+    new FakeBulkSearchItem({ excluded: true, excludedBy: 'selector' }),
+    first,
+    new FakeBulkSearchItem({ excluded: true, excludedBy: 'text', excludedPattern: 'Werbung' }),
+    new FakeBulkSearchItem({
+      result: { titel: 'First duplicate', url: 'https://one.example/', description: '', site_name: 'one.example', breadcrumb: '' },
+      selectorsUsed: { titel: 'h3', url: 'a[href]' },
+    }),
+    new FakeBulkSearchItem({ invalid: true, invalidReason: 'required_url_missing' }),
+    new FakeBulkSearchItem({
+      result: { titel: 'Second', url: 'https://two.example/', description: 'Two', site_name: 'two.example', breadcrumb: '' },
+      selectorsUsed: { titel: '[role="heading"]', url: 'a[href]' },
+    }),
+  ];
+  const container = new FakeHandle({}, { '.result': items });
+  const context = {
+    page: {
+      $$: async (selector) => (selector === '#results' ? [container] : []),
+      url: () => 'https://search.example/?q=test',
+    },
+    workflow_variables: {},
+    input: {
+      list_container_selector: '#results',
+      list_item_selector: '.result',
+      output_array_name: 'top_results',
+      exclude_item_selector: '.advertisement',
+      exclude_item_text: 'Werbung\nSponsored',
+      exclude_ads: true,
+      limit: 2,
+      dedupe_by_url: true,
+    },
+  };
+
+  const result = await readSearchResultTask.run(context);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.mode, 'list');
+  assert.equal(result.matched_count, 6);
+  assert.equal(result.excluded_count, 2);
+  assert.equal(result.invalid_count, 1);
+  assert.equal(result.duplicate_count, 1);
+  assert.equal(result.selected_count, 2);
+  assert.deepEqual(result.result.map((entry) => entry.titel), ['First', 'Second']);
+  assert.deepEqual(context.workflow_variables.top_results, result.result);
+  assert.equal(first.extractionPayload.selectors.title[0], 'h3');
+  assert.ok(first.extractionPayload.selectors.description.includes('.snippet'));
+  assert.ok(first.extractionPayload.excludeSelector.includes('.advertisement'));
+  assert.ok(first.extractionPayload.excludeSelector.includes('[data-ad]'));
+});
+
+test('search result list filters before applying limit and reports selector/list failures', async () => {
+  const excluded = new FakeBulkSearchItem({ excluded: true, excludedBy: 'automatic_ad_label' });
+  const valid = new FakeBulkSearchItem({
+    result: { titel: 'Organic', url: 'https://organic.example/', description: '', site_name: 'organic.example', breadcrumb: '' },
+    selectorsUsed: { titel: 'h3', url: 'a[href]' },
+  });
+  const container = new FakeHandle({}, { '.result': [excluded, valid] });
+  const result = await readSearchResultTask.run({
+    page: {
+      $$: async (selector) => (selector === '#results' ? [container] : []),
+      url: () => 'https://search.example/',
+    },
+    workflow_variables: {},
+    input: {
+      list_container_selector: '#results',
+      list_item_selector: '.result',
+      output_array_name: 'results',
+      limit: 1,
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.selected_count, 1);
+  assert.equal(result.result[0].titel, 'Organic');
+  assert.equal(result.excluded_by_automatic_ad_count, 1);
+
+  const missingContainer = await readSearchResultTask.run({
+    page: { $$: async () => [], url: () => 'https://search.example/' },
+    input: { list_container_selector: '#missing', list_item_selector: '.result' },
+  });
+  assert.equal(missingContainer.ok, false);
+  assert.equal(missingContainer.reason_code, 'list_container_missing');
+
+  const invalidSelector = await readSearchResultTask.run({
+    page: { $$: async () => { throw new Error('Invalid selector'); }, url: () => 'https://search.example/' },
+    input: { list_container_selector: '[', list_item_selector: '.result' },
+  });
+  assert.equal(invalidSelector.ok, false);
+  assert.equal(invalidSelector.reason_code, 'selector_invalid');
+});
+
 test('loop cursor survives isolated single-task runner processes', async () => {
   const handles = [
     new FakeHandle({ identity: 'item:one', text: 'One' }),
@@ -548,6 +776,87 @@ test('workflow runner follows a dynamic target returned by a collection decision
     const result = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
     assert.equal(result.ok, true);
     assert.deepEqual(result.tasks.map((task) => task.key), ['enough-results', 'fallback-return']);
+    assert.equal(result.completedTaskKey, 'fallback-return');
+    assert.equal(result.completed_task_key, 'fallback-return');
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('workflow runner repeats the tasks between pure loop start and loop end', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'control-loop-'));
+  const runtimePath = path.join(directory, 'runtime.json');
+  const resultPath = path.join(directory, 'result.json');
+  const statusPath = path.join(directory, 'status.json');
+  fs.writeFileSync(runtimePath, JSON.stringify({
+    resultPath,
+    statusPath,
+    runDirectory: directory,
+    livePreviewEnabled: false,
+    workflow: {
+      workflow_variables: {
+        source_items: ['one', 'two'],
+        collected_items: [],
+      },
+    },
+    tasks: [
+      {
+        key: 'items-loop',
+        task_key: 'loop.for_each_element',
+        title: 'Loop start',
+        kind: 'data',
+        runner: 'node',
+        node_script: 'node/workflows/tasks/loop/for_each_element.cjs',
+        source_array: 'source_items',
+        iteration_count: 0,
+        store_current_item_as: 'current_item',
+        store_index_as: 'item_index',
+        loop_end_key: 'items-loop-end',
+      },
+      {
+        key: 'collect-item',
+        task_key: 'data.append_to_array',
+        title: 'Collect item',
+        kind: 'data',
+        runner: 'node',
+        node_script: 'node/workflows/tasks/data/append_to_array.cjs',
+        array_name: 'collected_items',
+        value_from_variable: 'current_item',
+      },
+      {
+        key: 'items-loop-end',
+        task_key: 'loop.end',
+        title: 'Loop end',
+        kind: 'data',
+        runner: 'node',
+        node_script: 'node/workflows/tasks/loop/end.cjs',
+        loop_start_key: 'items-loop',
+      },
+      {
+        key: 'return-items',
+        task_key: 'data.workflow_return',
+        title: 'Return items',
+        kind: 'data',
+        runner: 'node',
+        node_script: 'node/workflows/tasks/data/workflow_return.cjs',
+        selector: 'collected_items',
+      },
+    ],
+  }));
+
+  const processResult = spawnSync(process.execPath, [path.resolve(__dirname, '../../node/workflows/run_step.cjs'), runtimePath], {
+    cwd: path.resolve(__dirname, '../..'),
+    encoding: 'utf8',
+    timeout: 15000,
+  });
+
+  try {
+    assert.equal(processResult.status, 0, processResult.stderr || processResult.stdout);
+    const result = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.workflowReturn, ['one', 'two']);
+    assert.equal(result.workflowVariables.item_index, null);
+    assert.equal(result.workflowVariables.current_item, null);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

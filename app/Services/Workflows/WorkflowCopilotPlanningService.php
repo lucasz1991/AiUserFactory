@@ -189,7 +189,7 @@ class WorkflowCopilotPlanningService
             'Erwartetes JSON-Schema: {"summary":"...","assumptions":["..."],"steps":[{"name":"...","action_key":"stabiler-step-key","type":"browser_task|data_task|preparation|data_processing|browser_control|interaction|decision|cleanup|wait","description":"...","routes":{"success":{"type":"step","step":"next"},"failed":{"type":"step","step":"fehlerbehandlung"}},"tasks":[{"key":"stabiler-task-key","task_key":"catalog.key","title":"...","description":"...","parameters":{"url":"...","selector":"...","workflow_variable":"...","browser_window":"main"},"next":{"type":"card","card":"naechste-task"},"on_error":{"type":"step","step":"fehlerbehandlung"}}]}]}',
             'Felder in parameters duerfen nur aus der parameters-Liste des jeweiligen Katalogeintrags stammen. next, on_partial, on_error und status_routes sind Routingfelder und keine normalen parameters.',
             'decision.element_exists braucht fuer den gefundenen und den nicht gefundenen Fall unterschiedliche Ziele. Optionales Fehlen darf nicht zu einem Klick auf das fehlende Element oder in eine Selbstschleife routen.',
-            'Fuer Sammlungen: loop.for_each_element, danach ein Reader und das gekoppelte loop.end verwenden. Entweder collect_to_array am Loop oder data.append_to_array einsetzen, nicht beides fuer dasselbe Array. Normaler Abschluss, leere Liste und technischer Fehler brauchen getrennte Ziele.',
+            'Loop-Regel: loop.for_each_element ist ausschliesslich Loop-Start und erhaelt iteration_count oder source_array sowie optional eine Bedingung. DOM-Suche, Lesen und Filtern muessen eigene Tasks sein. Alle zu wiederholenden Tasks stehen zwischen Loop-Start und dem automatisch gekoppelten loop.end; loop.end hat keine Fachparameter.',
             'Nutze bei unbekannten Selektoren robuste leere/default Werte, damit die Live-Optimierung sie anhand der echten Seite pruefen kann. Fuer bekannte Eingabefelder semantische Attribute wie title, aria-label, placeholder oder name statt generierter IDs verwenden.',
         ]);
     }
@@ -276,8 +276,6 @@ class WorkflowCopilotPlanningService
                         'key' => $endKey,
                         'title' => 'Loop-Ende: '.$card['title'],
                         'description' => 'Automatisches Endsegment fuer '.$card['title'].'.',
-                        'browser_window' => $card['browser_window'] ?? 'main',
-                        'browser_window_name' => $card['browser_window_name'] ?? $card['browser_window'] ?? 'main',
                         'loop_pair_id' => $pairId,
                         'loop_pair_segment' => 'end',
                         'loop_start_key' => $cardKey,

@@ -1276,7 +1276,7 @@ class WorkflowCopilotRepairServiceTest extends TestCase
         $this->assertSame('data.append_to_array', data_get($tasks, '2.task_key'));
     }
 
-    public function test_structural_planner_can_wrap_existing_collection_tasks_in_an_atomic_visual_loop(): void
+    public function test_structural_planner_rejects_visual_dom_work_from_loop_start(): void
     {
         [$workflow, $step] = $this->workflowWithTasks([[
             'key' => 'append-result',
@@ -1361,40 +1361,25 @@ class WorkflowCopilotRepairServiceTest extends TestCase
             $session,
             $step->fresh(),
             [
-                'task_key' => 'append-result',
+                'task_key' => 'read-result',
                 'successful' => false,
                 'outcome' => 'failed',
-                'result' => ['ok' => false, 'statusMessage' => 'Kein Wert zum Anhaengen gefunden.'],
+                'result' => ['ok' => false, 'statusMessage' => 'Suchtreffer-Scope ist nicht aktiv.'],
             ],
             $observation,
             $vision,
         );
 
-        $this->assertSame('restart_with_workflow_changes', $plan['action']);
-        $this->assertCount(3, $plan['operations']);
-        $this->assertSame('loop.for_each_element', data_get($plan, 'operations.0.task_catalog_key'));
-        $this->assertSame('move_task', data_get($plan, 'operations.1.type'));
-        $this->assertSame('move_task', data_get($plan, 'operations.2.type'));
-
-        $service->applyStructuralOperations(
-            $workflow->fresh(),
-            $plan['operations'],
-            $session->fresh(),
-            $observation,
-        );
+        $this->assertSame('pause', $plan['action']);
+        $this->assertSame(0, data_get($plan, 'decision_trace.accepted_operation_count'));
+        $this->assertSame('loop_dom_parameters_forbidden', data_get($plan, 'decision_trace.rejected_operations.0.reason_code'));
+        $this->assertStringContainsString('reiner Kontrollfluss', $plan['reason']);
 
         $tasks = $step->fresh()->task_cards;
-        $this->assertSame('loop.for_each_element', data_get($tasks, '0.task_key'));
-        $this->assertSame('browser.read_searchengine_result', data_get($tasks, '1.task_key'));
-        $this->assertSame('data.append_to_array', data_get($tasks, '2.task_key'));
-        $this->assertSame('loop.end', data_get($tasks, '3.task_key'));
-        $this->assertSame(data_get($tasks, '0.loop_pair_id'), data_get($tasks, '3.loop_pair_id'));
-        $this->assertSame(data_get($tasks, '3.key'), data_get($tasks, '0.empty_target'));
-        $this->assertSame('current_result', data_get($tasks, '0.store_current_element_as'));
-        $this->assertSame(3, data_get($tasks, '0.limit'));
+        $this->assertSame(['data.append_to_array', 'browser.read_searchengine_result'], array_column($tasks, 'task_key'));
     }
 
-    public function test_collection_dependency_is_repaired_from_existing_result_selector_without_model_pause(): void
+    public function test_legacy_collection_without_loop_pauses_for_batch_reader_migration(): void
     {
         [$workflow, $step] = $this->workflowWithTasks([[
             'key' => 'append-result',
@@ -1451,29 +1436,12 @@ class WorkflowCopilotRepairServiceTest extends TestCase
             [],
         );
 
-        $this->assertSame('restart_with_workflow_changes', $plan['action']);
-        $this->assertSame('deterministic_collection_dependency', data_get($plan, 'decision_trace.source'));
-        $this->assertCount(3, $plan['operations']);
-        $this->assertSame('collection_dependency', data_get($plan, 'operations.0.purpose'));
-        $this->assertSame('div#search a:has(div[data-rpos])', data_get($plan, 'operations.0.parameters.selector'));
-        $this->assertSame(3, data_get($plan, 'operations.0.parameters.limit'));
-        $this->assertSame('read-result', data_get($plan, 'operations.1.task_key'));
-        $this->assertSame('append-result', data_get($plan, 'operations.2.task_key'));
-
-        $service->applyStructuralOperations(
-            $workflow->fresh(),
-            $plan['operations'],
-            $session->fresh(),
-        );
+        $this->assertSame('pause', $plan['action']);
+        $this->assertSame('deterministic_collection_dependency_migration_required', data_get($plan, 'decision_trace.source'));
+        $this->assertStringContainsString('Batchmodus', $plan['reason']);
 
         $tasks = $step->fresh()->task_cards;
-        $this->assertSame('loop.for_each_element', data_get($tasks, '0.task_key'));
-        $this->assertSame('browser.read_searchengine_result', data_get($tasks, '1.task_key'));
-        $this->assertSame('data.append_to_array', data_get($tasks, '2.task_key'));
-        $this->assertSame('loop.end', data_get($tasks, '3.task_key'));
-        $this->assertSame('div#search a:has(div[data-rpos])', data_get($tasks, '0.selector'));
-        $this->assertSame(3, data_get($tasks, '0.limit'));
-        $this->assertSame(data_get($tasks, '0.loop_pair_id'), data_get($tasks, '3.loop_pair_id'));
+        $this->assertSame(['data.append_to_array', 'browser.read_searchengine_result'], array_column($tasks, 'task_key'));
     }
 
     public function test_empty_required_search_collection_uses_observed_heading_link_selector_without_model_pause(): void
@@ -1544,6 +1512,55 @@ class WorkflowCopilotRepairServiceTest extends TestCase
             '#search a:has(h3), #search a:has(h2)',
             data_get($plan, 'changes.selector'),
         );
+    }
+
+    public function test_empty_batch_search_collection_repairs_the_reader_not_the_loop(): void
+    {
+        [, $step] = $this->workflowWithTasks([[
+            'key' => 'read-results',
+            'task_key' => 'browser.read_searchengine_result',
+            'title' => 'Suchmaschinentreffer lesen',
+            'list_container_selector' => '#search',
+            'list_item_selector' => '.old-result',
+            'output_array_name' => 'top_results',
+        ]]);
+        $session = app(WorkflowCopilotSessionService::class)->start($step->workflow, [
+            'goal' => 'Google-Ergebnisse als Array zurueckgeben.',
+        ]);
+        $ai = Mockery::mock(AiConnectionService::class);
+        $ai->shouldNotReceive('json');
+        $this->app->instance(AiConnectionService::class, $ai);
+
+        $plan = app(WorkflowCopilotRepairService::class)->plan(
+            $session,
+            $step->fresh(),
+            [
+                'task_key' => 'read-results',
+                'successful' => false,
+                'outcome' => 'failed',
+                'result' => ['businessGap' => ['reason_code' => 'required_collection_empty']],
+            ],
+            [
+                'page' => ['url' => 'https://www.google.com/search?q=test', 'state' => 'search_results', 'window' => 'main'],
+                'dom' => ['ui_state' => 'search_results'],
+                'interaction_map' => [[
+                    'element_ref' => 'el_search_results',
+                    'tag' => 'a',
+                    'text' => 'Erster Treffer',
+                    'visible' => true,
+                    'enabled' => true,
+                    'selector_candidates' => ['#volatile-result-id', '#search a:has(h3), #search a:has(h2)'],
+                    'window' => 'main',
+                ]],
+                'evidence_sufficient' => true,
+            ],
+            [],
+        );
+
+        $this->assertSame('probe_update', $plan['action']);
+        $this->assertSame('browser.read_searchengine_result', $plan['task_catalog_key']);
+        $this->assertSame('#search a:has(h3), #search a:has(h2)', data_get($plan, 'changes.list_item_selector'));
+        $this->assertArrayNotHasKey('selector', $plan['changes']);
     }
 
     public function test_missing_required_workflow_return_is_inserted_from_existing_array_without_model_pause(): void

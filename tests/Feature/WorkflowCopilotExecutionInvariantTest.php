@@ -146,6 +146,73 @@ class WorkflowCopilotExecutionInvariantTest extends TestCase
         Queue::assertPushed(RunWorkflowJob::class, fn (RunWorkflowJob $job): bool => $job->workflowRunId === $run->id);
     }
 
+    public function test_interactive_continuous_runtime_is_batched_while_one_shot_stays_segmented(): void
+    {
+        [$workflow, $step] = $this->workflow();
+        $run = WorkflowRun::query()->create([
+            'run_uuid' => (string) str()->uuid(),
+            'workflow_id' => $workflow->id,
+            'status' => 'running',
+            'context_json' => [
+                'execution_target' => 'system',
+                'interactive_debug' => true,
+                'next_task_key' => 'first-task',
+            ],
+            'result_json' => [],
+        ]);
+        $stepRun = WorkflowStepRun::query()->create([
+            'workflow_run_id' => $run->id,
+            'workflow_step_id' => $step->id,
+            'status' => 'running',
+            'result_json' => [],
+        ]);
+        $method = new ReflectionMethod(WorkflowExecutionService::class, 'workflowRuntimeContext');
+        $method->setAccessible(true);
+        $execution = app(WorkflowExecutionService::class);
+
+        $continuous = $method->invoke($execution, $run->fresh(), $step, $stepRun);
+        $this->assertFalse($continuous['copilotSupervised']);
+        $this->assertFalse($continuous['segmentTasks']);
+
+        $run->forceFill(['context_json' => [
+            ...$run->context_json,
+            'studio_single_task' => true,
+        ]])->save();
+        $single = $method->invoke($execution, $run->fresh(), $step, $stepRun);
+
+        $this->assertFalse($single['copilotSupervised']);
+        $this->assertTrue($single['studioSingleTask']);
+        $this->assertTrue($single['segmentTasks']);
+    }
+
+    public function test_normal_dev_run_captures_after_only_while_single_task_keeps_before_and_after(): void
+    {
+        [$workflow, $step] = $this->workflow();
+        $workflow->forceFill(['settings_json' => ['dev_mode' => true]])->save();
+        $stepRun = (new WorkflowStepRun)->forceFill(['id' => 9002]);
+        $runner = app(WorkflowTaskRunner::class);
+        $method = new ReflectionMethod($runner, 'devDebugRuntimeConfig');
+        $method->setAccessible(true);
+        $run = (new WorkflowRun)->forceFill([
+            'workflow_id' => $workflow->id,
+            'run_uuid' => (string) str()->uuid(),
+            'context_json' => ['execution_target' => 'system'],
+        ]);
+        $run->setRelation('workflow', $workflow->fresh());
+
+        $continuous = $method->invoke($runner, $run, $step, $stepRun, true);
+        $this->assertTrue($continuous['enabled']);
+        $this->assertFalse($continuous['captureDomBeforeStep']);
+        $this->assertFalse($continuous['captureScreenshotBeforeStep']);
+        $this->assertTrue($continuous['captureDomAfterStep']);
+        $this->assertTrue($continuous['captureScreenshotAfterStep']);
+
+        $run->context_json = ['execution_target' => 'system', 'studio_single_task' => true];
+        $single = $method->invoke($runner, $run, $step, $stepRun, true);
+        $this->assertTrue($single['captureDomBeforeStep']);
+        $this->assertTrue($single['captureScreenshotBeforeStep']);
+    }
+
     public function test_supervised_runtime_keeps_a_paired_dom_loop_atomic_and_continues_after_its_end(): void
     {
         [, $step] = $this->workflow();

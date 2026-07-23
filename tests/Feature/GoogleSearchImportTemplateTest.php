@@ -29,6 +29,15 @@ class GoogleSearchImportTemplateTest extends TestCase
 
         $workflow = Workflow::query()->where('slug', 'google-suche-ergebnisse')->with('steps')->firstOrFail();
         $this->assertSame(6, $workflow->steps->count());
+        $collectionTasks = $workflow->steps->firstWhere('action_key', 'ergebnisse-erfassen')?->task_cards ?? [];
+        $this->assertSame(
+            ['browser.read_searchengine_result', 'data.workflow_return'],
+            array_column($collectionTasks, 'task_key'),
+        );
+        $this->assertSame('#search', data_get($collectionTasks, '0.list_container_selector'));
+        $this->assertSame('a:has(h3)', data_get($collectionTasks, '0.list_item_selector'));
+        $this->assertSame('top_results', data_get($collectionTasks, '0.output_array_name'));
+        $this->assertSame('.uEierd, [data-text-ad], [data-ad], [data-sponsored]', data_get($collectionTasks, '0.exclude_item_selector'));
 
         $validation = app(WorkflowDefinitionValidator::class)->validate(
             $workflow,

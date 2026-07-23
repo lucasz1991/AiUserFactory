@@ -19,7 +19,6 @@ class WorkflowCopilotRepairService
         'browser.hover',
         'input.fill_field',
         'input.submit',
-        'loop.for_each_element',
         'mail.check_address_availability',
         'mail.fill_address',
         'mail.generate_address',
@@ -672,20 +671,16 @@ class WorkflowCopilotRepairService
             if ($catalogKey === 'loop.for_each_element') {
                 $pairId = 'loop-'.(string) Str::uuid();
                 $endKey = $this->uniqueStructuralTaskKey($step, $cardKey.'-end');
-                $browserWindow = trim((string) ($card['browser_window_name'] ?? $card['browser_window'] ?? 'main')) ?: 'main';
                 $card = array_replace($card, [
                     'loop_pair_id' => $pairId,
                     'loop_pair_segment' => 'start',
                     'loop_start_key' => $cardKey,
                     'loop_end_key' => $endKey,
-                    'empty_target' => $endKey,
                 ]);
                 $endCard = $this->catalog->cardFromDefinition('loop.end', [
                     'key' => $endKey,
                     'title' => 'Loop-Ende: '.($card['title'] ?? $cardKey),
                     'description' => 'Automatisches Endsegment fuer '.($card['title'] ?? $cardKey).'.',
-                    'browser_window' => $browserWindow,
-                    'browser_window_name' => $browserWindow,
                     'loop_pair_id' => $pairId,
                     'loop_pair_segment' => 'end',
                     'loop_start_key' => $cardKey,
@@ -899,66 +894,34 @@ class WorkflowCopilotRepairService
             }
         }
 
-        $workflow = Workflow::query()
-            ->with(['steps' => fn ($query) => $query->ordered()])
-            ->find($step->workflow_id);
-
-        if (! $workflow) {
-            return [];
-        }
-
-        $operations = [];
-        $insertPosition = $loopIndex !== false ? (int) $loopIndex + 1 : (int) $consumerIndex;
-        $selectorEvidence = [];
-
         if ($loopIndex === false) {
-            $selectorEvidence = $this->collectionSelectorEvidenceForPlan($workflow, $step, $producer);
-
-            if ($selectorEvidence === []) {
-                return [];
-            }
-
-            $selector = (string) $selectorEvidence['selector'];
-            $browserWindow = trim((string) (
-                $producer['browser_window_name']
-                ?? $producer['browser_window']
-                ?? $selectorEvidence['browser_window']
-                ?? 'main'
-            )) ?: 'main';
-            $limit = $this->collectionLimit($session, $task, $producer);
-            $parameters = [
-                'selector' => $selector,
-                'element_selector' => $selector,
-                'browser_window' => $browserWindow,
-                'browser_window_name' => $browserWindow,
-                'limit' => $limit,
-                'only_visible' => 'true',
-                'store_current_element_as' => $scopeVariable,
-                'store_index_as' => 'result_index',
-            ];
-            $operations[] = [
-                'type' => 'insert_task',
-                'purpose' => 'collection_dependency',
-                'step_action_key' => (string) $step->action_key,
-                'task_catalog_key' => 'loop.for_each_element',
-                'card_key' => $this->uniqueStructuralTaskKey($step, 'Copilot Ergebnis-Loop'),
-                'title' => 'Ergebnisse durchlaufen',
-                'description' => 'Durchlaeuft den bereits konfigurierten Ergebnisbereich, bevor Reader und Array-Append ausgefuehrt werden.',
-                'parameters' => $parameters,
-                'insert_position' => $insertPosition,
-                'selector_source_step_action_key' => $selectorEvidence['step_action_key'],
-                'selector_source_task_key' => $selectorEvidence['task_key'],
-                'evidence_selector' => $selector,
-                'evidence_window' => $browserWindow,
-            ];
+            return array_replace(
+                $this->pausePlan(
+                    (string) ($task['key'] ?? ''),
+                    'Die alte Reader-plus-Append-Sammlung besitzt keinen Legacy-DOM-Loop. Ein neuer Loop darf keine DOM-Suche mehr uebernehmen; die Sammlung muss auf den Batchmodus von Suchmaschinentreffer lesen mit list_item_selector und output_array_name migriert werden.',
+                ),
+                [
+                    'decision_trace' => [
+                        'source' => 'deterministic_collection_dependency_migration_required',
+                        'requested_action' => 'pause',
+                        'dependency' => [
+                            'variable' => $sourceVariable,
+                            'producer_index' => (int) $producerIndex,
+                            'consumer_index' => (int) $consumerIndex,
+                            'loop_index' => null,
+                        ],
+                    ],
+                ],
+            );
         }
 
-        $operations[] = [
+        $insertPosition = (int) $loopIndex + 1;
+        $operations = [[
             'type' => 'move_task',
             'step_action_key' => (string) $step->action_key,
             'task_key' => (string) ($producer['key'] ?? ''),
             'insert_position' => $insertPosition + 1,
-        ];
+        ]];
         $operations[] = [
             'type' => 'move_task',
             'step_action_key' => (string) $step->action_key,
@@ -970,16 +933,12 @@ class WorkflowCopilotRepairService
             'action' => 'restart_with_workflow_changes',
             'task_key' => (string) ($task['key'] ?? ''),
             'operations' => $operations,
-            'reason' => $loopIndex === false
-                ? 'Die Array-Task lief vor ihrem Datenproduzenten und der Reader hatte keinen aktiven DOM-Loop. Der vorhandene Ergebnis-Selector wird als Loop verwendet; Reader und Append werden in ausfuehrbare Reihenfolge gebracht.'
-                : 'Reader und Array-Append lagen ausserhalb oder in falscher Reihenfolge innerhalb des bereits konfigurierten DOM-Loops. Beide Tasks werden in den Loop und in Producer-vor-Consumer-Reihenfolge verschoben.',
+            'reason' => 'Reader und Array-Append lagen ausserhalb oder in falscher Reihenfolge innerhalb des bereits konfigurierten Legacy-DOM-Loops. Beide Tasks werden in Producer-vor-Consumer-Reihenfolge verschoben.',
             'planning_handoff' => [
                 'planner_profile' => 'deterministic_collection_dependency',
                 'source_variable' => $sourceVariable,
                 'producer_task_key' => $producer['key'] ?? null,
                 'consumer_task_key' => $task['key'] ?? null,
-                'selector_source_step' => $selectorEvidence['step_action_key'] ?? null,
-                'selector_source_task' => $selectorEvidence['task_key'] ?? null,
             ],
             'decision_trace' => [
                 'source' => 'deterministic_collection_dependency',
@@ -992,7 +951,7 @@ class WorkflowCopilotRepairService
                     'variable' => $sourceVariable,
                     'producer_index' => (int) $producerIndex,
                     'consumer_index' => (int) $consumerIndex,
-                    'loop_index' => $loopIndex === false ? null : (int) $loopIndex,
+                    'loop_index' => (int) $loopIndex,
                 ],
             ],
         ];
@@ -1061,7 +1020,13 @@ class WorkflowCopilotRepairService
         array $checkpoint,
         array $observation,
     ): array {
-        if ((string) ($task['task_key'] ?? '') !== 'loop.for_each_element'
+        $catalogTaskKey = (string) ($task['task_key'] ?? '');
+        $isLegacyLoop = $catalogTaskKey === 'loop.for_each_element'
+            && filled($task['selector'] ?? $task['element_selector'] ?? null);
+        $isBatchSearchReader = $catalogTaskKey === 'browser.read_searchengine_result'
+            && filled($task['list_item_selector'] ?? $task['listItemSelector'] ?? null);
+
+        if ((! $isLegacyLoop && ! $isBatchSearchReader)
             || data_get($checkpoint, 'result.businessGap.reason_code') !== 'required_collection_empty') {
             return [];
         }
@@ -1092,15 +1057,28 @@ class WorkflowCopilotRepairService
                 ->all(),
         );
 
-        if ($selector === null
-            || $selector === trim((string) ($task['selector'] ?? $task['element_selector'] ?? ''))) {
+        $currentSelector = $isBatchSearchReader
+            ? trim((string) ($task['list_item_selector'] ?? $task['listItemSelector'] ?? ''))
+            : trim((string) ($task['selector'] ?? $task['element_selector'] ?? ''));
+
+        if ($selector === null || $selector === $currentSelector) {
             return [];
         }
 
-        $changes = $this->normalizeChanges($step, $task, [
-            'selector' => $selector,
-            'element_selector' => $selector,
-        ], false, $this->observationDomains($observation));
+        // Legacy-DOM-Loops werden nicht mehr im Katalog angeboten, muessen fuer
+        // bereits gespeicherte Workflows aber weiterhin deterministisch
+        // reparierbar bleiben. Der Selector stammt hier ausschliesslich aus der
+        // beobachteten Interaktionskarte; neue Workflows aendern direkt den
+        // list_item_selector der zustaendigen Reader-Task.
+        $changes = $isLegacyLoop
+            ? ['selector' => $selector, 'element_selector' => $selector]
+            : $this->normalizeChanges(
+                $step,
+                $task,
+                ['list_item_selector' => $selector],
+                false,
+                $this->observationDomains($observation),
+            );
 
         if ($changes === []) {
             return [];
@@ -1109,19 +1087,19 @@ class WorkflowCopilotRepairService
         return [
             'action' => 'probe_update',
             'task_key' => (string) ($task['key'] ?? ''),
-            'task_catalog_key' => 'loop.for_each_element',
+            'task_catalog_key' => $catalogTaskKey,
             'changes' => $changes,
             'probe_task' => array_replace($task, $changes, [
                 'key' => (string) ($task['key'] ?? '').'--copilot-probe',
-                'title' => ($task['title'] ?? 'Ergebnis-Loop').' (Copilot-Probe)',
+                'title' => ($task['title'] ?? ($isBatchSearchReader ? 'Suchmaschinentreffer lesen' : 'Legacy-Ergebnis-Loop')).' (Copilot-Probe)',
             ]),
-            'reason' => 'Der bisherige Sammlungsselector lieferte trotz sichtbarer Suchergebnisse keine Treffer. Die DOM-Beobachtung weist einen stabilen, ueberschriftenbasierten Selector fuer die sichtbaren Ergebnislinks aus; dieser wird vor einer Revision als Loop-Probe ausgefuehrt.',
+            'reason' => 'Der bisherige Listenelement-Selector lieferte trotz sichtbarer Suchergebnisse keine Treffer. Die DOM-Beobachtung weist einen stabilen, ueberschriftenbasierten Selector fuer die sichtbaren Ergebnislinks aus; dieser wird direkt an der zuständigen Leser-Task geprueft.',
             'selector_candidates' => [$selector],
             'original_task_key' => (string) ($task['key'] ?? ''),
             'decision_trace' => [
                 'source' => 'deterministic_empty_collection_selector',
                 'page_state' => $pageState,
-                'previous_selector' => $task['selector'] ?? $task['element_selector'] ?? null,
+                'previous_selector' => $currentSelector,
                 'selected_selector' => $selector,
             ],
         ];
@@ -2509,6 +2487,7 @@ class WorkflowCopilotRepairService
             .'Eine optionale IF-Pruefung braucht getrennte Found-/Not-Found-Routen; ein Handler darf bei bereits verschwundenem Hindernis nicht zur IF-Pruefung zurueckspringen. '
             .'Verwende type=fail nur, wenn der gesamte Workflow bewusst terminal scheitern soll. Behebbare Fehler routen zu einer vorhandenen card oder einem step. '
             .'Fuer input.fill_field setzt eine Workflow-Variable immer gemeinsam changes.value_source=workflow_variable und changes.workflow_variable; ein fester Wert setzt changes.value_source=fixed sowie changes.value und changes.input. '
+            .'loop.for_each_element ist ausschliesslich ein nicht-visueller Kontroll-Loop mit iteration_count oder source_array. Er darf niemals Selector-, DOM-, Limit- oder Sammelparameter erhalten. Suchtrefferlisten werden direkt mit browser.read_searchengine_result, list_container_selector, list_item_selector und output_array_name gelesen. '
             .'Schema: {"action":"retry|update_task|continue_route|structural_update|pause","element_ref":"el_... oder leer","changes":{},"operations":[],"reason":"konkreter Befund"}. '
             .'Nach structural_update wird der Workflow revisioniert von Anfang an getestet. Die Aenderung muss danach auch im unveraenderlichen Kontrolllauf ohne Copilot-Skip funktionieren. '
             .'Zustandsveraendernde Tasks und entsprechende insert_task-Operationen duerfen nur eine passende trusted_vision_element_ref verwenden; deren Selector wird nicht vom Modell uebernommen. '
@@ -2541,6 +2520,39 @@ class WorkflowCopilotRepairService
         $normalized = [];
         $contextDomains = $this->observationDomains($observation);
         $operationList = collect($operations)->values();
+
+        $legacyDomLoopOperation = $operationList->search(function (mixed $operation): bool {
+            if (! is_array($operation)
+                || Str::lower(trim((string) ($operation['type'] ?? ''))) !== 'insert_task'
+                || trim((string) ($operation['task_catalog_key'] ?? $operation['task_key'] ?? '')) !== 'loop.for_each_element') {
+                return false;
+            }
+
+            $parameters = is_array($operation['parameters'] ?? null) ? $operation['parameters'] : [];
+
+            return collect([
+                'selector',
+                'element_selector',
+                'input_selector',
+                'store_current_element_as',
+                'collect_to_array',
+                'limit',
+                'offset',
+                'only_visible',
+            ])->contains(fn (string $field): bool => array_key_exists($field, $parameters));
+        });
+
+        if ($legacyDomLoopOperation !== false) {
+            $this->recordStructuralRejection(
+                $rejections,
+                (int) $legacyDomLoopOperation,
+                'insert_task',
+                'loop_dom_parameters_forbidden',
+                'Loop-Start ist reiner Kontrollfluss und darf keine DOM-, Selector- oder Sammelparameter erhalten. Suchlisten muessen direkt durch browser.read_searchengine_result gelesen werden.',
+            );
+
+            return [];
+        }
 
         if ($operationList->count() > 4) {
             $this->recordStructuralRejection(

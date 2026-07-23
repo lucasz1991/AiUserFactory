@@ -2688,6 +2688,7 @@ async function run() {
   let requestedFailureRouteTask = null;
   let requestedDynamicRoute = null;
   let requestedRouteMessage = null;
+  let lastCompletedTaskKey = '';
   let routeTransitions = 0;
   const routeAttemptCounts = new Map();
   const appliedEmbeddedInputFrames = new Set();
@@ -2995,6 +2996,10 @@ async function run() {
       logical_outcome: result.logical_outcome || result.logicalOutcome || (branchFailed ? 'condition_false' : (ok ? 'success' : 'technical_error')),
       finishedAt: now(),
     });
+
+    if (ok && !branchFailed) {
+      lastCompletedTaskKey = String(task.route_source_task_key || task.parent_task_key || task.key || '').trim();
+    }
 
     const taskEventStage = branchFailed
       ? 'task-condition-not-met'
@@ -3384,6 +3389,10 @@ async function run() {
     workflow_variables: context.workflow_variables || null,
     workflowVariables: context.workflowVariables || null,
     tasks: taskResults,
+    ...(lastCompletedTaskKey ? {
+      completedTaskKey: lastCompletedTaskKey,
+      completed_task_key: lastCompletedTaskKey,
+    } : {}),
     debugArtifacts,
     debug_artifacts: debugArtifacts,
     browserWindows: lastBrowserWindows,

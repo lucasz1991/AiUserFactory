@@ -139,6 +139,11 @@ class WorkflowDefinitionValidator
                 }
 
                 if ($catalogKey === 'loop.for_each_element') {
+                    $sourceArray = trim((string) ($task['source_array'] ?? $task['sourceArray'] ?? ''));
+                    $legacyDomLoop = trim((string) ($task['selector'] ?? $task['element_selector'] ?? '')) !== '';
+                    if (! $legacyDomLoop && $sourceArray !== '' && ! $arrayVariables->contains($sourceArray)) {
+                        $diagnostics[] = $this->diagnostic('error', 'loop_source_array_missing', $step, $cardKey, 'source_array', 'Der Loop verweist auf `'.$sourceArray.'`, aber keine Workflow-Eingabe oder vorhersehbare Task erzeugt dieses Array.', 'Ein vorhandenes Array wie die Ausgabe von Suchmaschinentreffer lesen verwenden.');
+                    }
                     if ($openLoop !== null) {
                         $diagnostics[] = $this->diagnostic('error', 'nested_loop_unsupported', $step, $cardKey, 'loop_pair_id', 'Ein neuer Loop beginnt, bevor der vorherige Loop beendet wurde.', 'Loops in getrennte Listen verschieben oder nacheinander vollstaendig schliessen.');
                     }
@@ -156,7 +161,7 @@ class WorkflowDefinitionValidator
                     }
 
                     if ($loopBody->isEmpty()) {
-                        $diagnostics[] = $this->diagnostic('error', 'loop_body_empty', $step, (string) ($openLoop['key'] ?? ''), 'loop_end_key', 'Zwischen Loop-Start und Loop-Ende befindet sich keine Reader- oder Consumer-Task.', 'Mindestens einen Reader und den benoetigten Array-Consumer in den Loop-Body setzen.');
+                        $diagnostics[] = $this->diagnostic('error', 'loop_body_empty', $step, (string) ($openLoop['key'] ?? ''), 'loop_end_key', 'Zwischen Loop-Start und Loop-Ende befindet sich keine Task.', 'Mindestens eine auszufuehrende Task in den Loop-Body setzen.');
                     }
                     $this->validateLoopCollection($diagnostics, $step, $openLoop, $loopBody);
                     $openLoop = null;
@@ -257,6 +262,10 @@ class WorkflowDefinitionValidator
 
     private function validateLoopCollection(array &$diagnostics, WorkflowStep $step, array $loop, Collection $body): void
     {
+        if (trim((string) ($loop['selector'] ?? $loop['element_selector'] ?? '')) === '') {
+            return;
+        }
+
         $arrayName = trim((string) ($loop['collect_to_array'] ?? $loop['collectToArray'] ?? ''));
         if ($arrayName === '') {
             return;
@@ -311,8 +320,11 @@ class WorkflowDefinitionValidator
                     }
                 }
                 if ($catalogKey === 'loop.for_each_element') {
-                    $variables->push(trim((string) ($task['store_current_element_as'] ?? 'current_result')) ?: 'current_result');
-                    $variables->push(trim((string) ($task['store_index_as'] ?? 'result_index')) ?: 'result_index');
+                    $legacyDomLoop = trim((string) ($task['selector'] ?? $task['element_selector'] ?? '')) !== '';
+                    $variables->push($legacyDomLoop
+                        ? (trim((string) ($task['store_current_element_as'] ?? 'current_result')) ?: 'current_result')
+                        : (trim((string) ($task['store_current_item_as'] ?? 'current_item')) ?: 'current_item'));
+                    $variables->push(trim((string) ($task['store_index_as'] ?? ($legacyDomLoop ? 'result_index' : 'loop_index'))) ?: ($legacyDomLoop ? 'result_index' : 'loop_index'));
                 }
                 if ($catalogKey === 'data.append_to_array') {
                     $name = trim((string) ($task['array_name'] ?? $task['arrayName'] ?? ''));
@@ -321,7 +333,11 @@ class WorkflowDefinitionValidator
                         $arrays->push($name);
                     }
                 }
-                if (in_array($catalogKey, ['browser.read_element_fields', 'browser.read_searchengine_result'], true)
+                if ($catalogKey === 'browser.read_element_fields' && blank($task['output_variable'] ?? null)) {
+                    $variables->push('current_result');
+                }
+                if ($catalogKey === 'browser.read_searchengine_result'
+                    && blank($task['list_item_selector'] ?? $task['listItemSelector'] ?? null)
                     && blank($task['output_variable'] ?? null)
                 ) {
                     $variables->push('current_result');

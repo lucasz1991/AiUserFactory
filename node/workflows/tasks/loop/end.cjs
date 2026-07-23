@@ -1,6 +1,12 @@
 'use strict';
 
-const { cleanName, privateRegistry, resolveVariable, text } = require('../lib/collection.cjs');
+const {
+  cleanName,
+  privateRegistry,
+  resolveVariable,
+  setWorkflowVariable,
+  text,
+} = require('../lib/collection.cjs');
 
 function routeResult(target, outcome) {
   const normalized = text(target);
@@ -37,12 +43,18 @@ async function run(context = {}) {
     || resolveVariable(context, `__workflow_loop_state_${loopStartKey}`, null);
 
   if (!state || state.complete || !state.active) {
+    if (state && (state.complete || !state.active)) {
+      delete states[loopStartKey];
+      setWorkflowVariable(context, `__workflow_loop_state_${loopStartKey}`, null);
+    }
+
     return {
       ok: true,
       status: 'loop_complete',
       statusMessage: 'Loop-Ende ist erreicht; die Schleife ist abgeschlossen.',
       loop_complete: true,
       loop_start_key: loopStartKey,
+      workflow_variables: context.workflow_variables,
     };
   }
 

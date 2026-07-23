@@ -179,6 +179,10 @@ Statuswerte: `geplant`, `in_arbeit`, `verifiziert`, `blockiert`.
 
 | 2026-07-23 | Claude | verifiziert | Importierbaren Google-Such-Workflow als geprueftes Beispiel ergaenzt. Neue Datei `docs/examples/google-suche-ergebnisse.csv` (WorkflowTransferService-Format, format_version 1, Slug `google-suche-ergebnisse`): oeffnet Google, lehnt den Cookiebanner ab, sucht (Variable `search_query`, Fallback "claude ai"), wartet auf die Trefferliste, liest die Top-3-Treffer per Loop + `browser.read_searchengine_result` + `data.append_to_array` und gibt `top_results` via `data.workflow_return` als Array zurueck, dann `browser.close`. Behebt gegenueber dem alten Workflow 15 drei Blocker: fehlender Zielschritt `consent-banner-reject` (`route_step_missing`), 2s-Timeout auf `open_url`, und URL statt Suchbegriff im Suchfeld. Alle Rueckwaerts-`on_error`-Routen sind bounded. | Neuer Feature-Test `GoogleSearchImportTemplateTest`: echter `importCsv`-Roundtrip + `WorkflowDefinitionValidator` -> `valid=true`, 0 error-Diagnosen (6 Assertions, SQLite in-memory gruen). Kein Produktions-Import ausgefuehrt; Slug ist neu, ueberschreibt Workflow 15 nicht. | Realen Testlauf im Studio durchfuehren (Restrisiko: Google kann Bot-/Consent-Interstitials zeigen, die der Cookiebanner-Zweig nicht abdeckt). Skill `workflow-manager` um `references/import-export-format.md` erweitert. |
 
+| 2026-07-23 | Claude | verifiziert | Analysedokument `docs/workflow-runtime-analyse-und-optimierung.md` ergaenzt (**reine Dokumentation, kein Produktivcode geaendert**). Inhalt: Ist-Architektur der drei Ausfuehrungspfade (System pro Liste, ClientController pro Liste, ClientController-Voll-Bundle), Prozess-Topologie (Beispiel `google-suche-ergebnisse`: 7 Node-Prozesse normal, 15 im Copilot-Modus wegen `$singleTask` in `WorkflowTaskRunner::runtimeTasks()`), Messwerte (puppeteer-extra+Stealth 384 ms je Prozess, Task-Libs nur 2 ms, Monitor-Poll 3 s/10 s), sieben Ausfuehrungsbefunde (u. a. doppelte `node_script`-Registry in Katalog **und** `normalizeRuntimeTask()`, dreifach implementierte Daten-Tasks, ungedrosseltes `writeStatus`) und ein Stufenplan (Gating -> Push statt Poll -> Copilot-Checkpoints -> Session-Runner -> ein Compiler). Zentraler neuer Befund **G1**: `preview.cjs:339` ruft `captureDebugDom()` **bedingungslos** auf — der vollstaendige DOM-Dump (`outerHTML` + `innerText` + Formularwerte je Frame) wird bei **jeder** Task und jedem 3s-Preview-Tick nach `live-dom.json` geschrieben, und zwar in `storage/app/public/...` (per `storage:link` oeffentlich erreichbar), unabhaengig von `dev_mode` und Copilot. Ergaenzend G2–G6: Live-Vorschau nur global statt pro Workflow schaltbar, `debugArtifacts` immer im `status.json`, stdout/stderr immer als Datei, `PruneWorkflowProcessArtifacts` raeumt den Public-Disk und `workflow-runs/*/debug-artifacts` nie auf, `dev_capture_*` in `WorkflowsIndex` hart auf `true`. Vorgeschlagenes Zielbild: eine abgeleitete Observability-Stufe (`off`/`preview`/`debug`/`copilot`) statt Einzelflags, mit Aenderungstabelle je Datei:Zeile. | Keine Codeaenderung, daher keine Testsuite. Belege verifiziert durch Quelltextlesung (`WorkflowTaskRunner.php`, `WorkflowExecutionService.php`, `WorkflowTaskCatalog.php`, `ClientWorkflowBundleCompiler.php`, `run_step.cjs`, `preview.cjs`, `PruneWorkflowProcessArtifacts.php`, `Kernel.php`) und durch zwei Messungen auf der lokalen Windows-Maschine: Modul-Ladezeit via `node -e` (384 ms / 2 ms) sowie Auszaehlung von `docs/examples/google-suche-ergebnisse.csv` (6 Listen, 14 Task-Karten). | Auftrag fuer Codex steht ausformuliert im neuen README-Abschnitt **„Umsetzungsauftrag: Workflow-Runtime-Optimierung"** (Pakete P1–P6, je mit Ist/Soll/Datei:Zeile, Akzeptanzkriterien, Bereichsanspruch nach Regel 9, Nicht-Zielen und Definition of Done). Zuerst die drei offenen Entscheidungen am Ende des Abschnitts klaeren, danach Paket **P1** (Gating G1–G6) umsetzen — zuerst G1 und G5, weil dort zusaetzlich zur Performance ein Datenschutzrisiko besteht (Seiteninhalte eingeloggter Webmail-Sitzungen auf dem oeffentlichen Disk, Teamprotokoll-Regel 6). Restrisiko der Analyse: Messwerte stammen von Windows/XAMPP, die Poll-Latenz ist auf Linux-Plesk identisch, der Prozessstart dort vermutlich guenstiger. |
+
+| 2026-07-23 | Codex | in_arbeit | **Bereichsanspruch P1 (G1–G6):** Observability-/Debug-Gating in `preview.cjs` und `run_step.cjs`, Workflow-Override der Live-Vorschau und Dev-Capture-Konfiguration in `WorkflowTaskRunner.php`/`WorkflowsIndex.php`, erfolgreiche Log-Bereinigung in `WorkflowExecutionService.php` sowie Pruning der Public-/Debug-Artefakte. G2b (Zuschauer-`control.json`) und eine einmalige Altbestandsloeschung bleiben bis zur offenen Produktentscheidung unangetastet. Die bereits begonnenen Loop-/Suchtreffer-/Task-Uebergangsfixes werden nur fertig verifiziert. **P2–P6 und deren Dateibereiche sind fuer Claude bzw. andere Agents frei.** | Geplant sind neue gezielte Node-/PHP-Tests fuer Off/Debug/Copilot, privaten DOM-Pfad, Workflow-Preview-Override, Status-Payload, Log-Loeschung und alle vier Prune-Pfade; danach ClientController-Runtime-Sync und SHA-256-Abgleich. | P1 implementieren, Akzeptanzkriterien pruefen und diesen Eintrag mit Ergebnis, Tests, Risiken und naechstem freien Paket auf `verifiziert` aktualisieren. |
+
 Neue Eintraege immer unten anhaengen. Ein Eintrag gilt erst als `verifiziert`,
 wenn die ausgefuehrten Testkommandos und verbleibende Risiken genannt sind.
 
@@ -217,6 +221,288 @@ zeigt, die Tests mit `DB_CONNECTION=sqlite` und `DB_DATABASE=:memory:` starten.
   und Vision-Evidenz verifiziert. Der produktive Klick und die echte
   OpenRouter-Kostenmeldung muessen nach Deployment in einem neuen Lauf von
   Workflow 15 bestaetigt werden.
+
+## Umsetzungsauftrag: Workflow-Runtime-Optimierung
+
+Stand: 2026-07-23 · Analyse: Claude · Umsetzung: **Codex (P1)** · Status: `in_arbeit`; P2–P6 frei
+
+Vollstaendige Analyse mit allen Belegen:
+**`docs/workflow-runtime-analyse-und-optimierung.md`**. Dieser Abschnitt ist der
+ausfuehrbare Auftrag. Vor Beginn das Analysedokument einmal ganz lesen — die
+Begruendungen werden hier nicht wiederholt.
+
+### Bereichsanspruch (Regel 9)
+
+Beansprucht werden fuer **P1**:
+`node/workflows/tasks/lib/preview.cjs`, `node/workflows/run_step.cjs` (nur
+Observability-/Status-Payload), `app/Services/Workflows/WorkflowTaskRunner.php`
+(nur Live-Vorschau-/Dev-Debug-Konfiguration),
+`app/Services/Workflows/WorkflowExecutionService.php` (nur erfolgreiche
+Runner-Log-Bereinigung), `app/Livewire/Admin/Network/WorkflowsIndex.php` und
+`app/Console/Commands/PruneWorkflowProcessArtifacts.php`.
+Nicht beansprucht und damit parallel frei: **P2–P6**,
+`WorkflowTaskCatalog.php`-Registry, `ClientWorkflowBundleCompiler.php`,
+Copilot-Planung/-Reparatur/-Prompting, Studio-UI und Chatbot.
+
+### Ausgangslage in Zahlen
+
+| Groesse | Wert | Quelle |
+| --- | --- | --- |
+| Node-Prozesse je Lauf, Copilot aus | 1 pro Liste + 1 geparkter Browser-Owner | `WorkflowTaskRunner::runtimeTasks()` |
+| Node-Prozesse je Lauf, Copilot an | **1 pro Task-Karte** + 1 | `WorkflowTaskRunner.php:479`, `:501` |
+| Beispiel `google-suche-ergebnisse` (6 Listen / 14 Karten) | 7 bzw. **15** Prozesse | ausgezaehlt |
+| `require('puppeteer-extra')` + Stealth | 384 ms je Prozess | gemessen |
+| alle Task-Libs zusammen | 2 ms | gemessen |
+| Monitor-Poll | 3 s (erste 60 s), danach 10 s | `WorkflowExecutionService.php:50`, `:56` |
+
+**Merksatz fuer die Umsetzung:** Die Task-Skripte sind nicht das Problem (2 ms).
+Teuer sind die Prozessgrenzen und vor allem die Poll-Wartezeit zwischen ihnen.
+Ein Zusammenbuendeln der `.cjs`-Dateien zu einer Datei ist ausdruecklich **kein**
+Ziel und bringt nichts.
+
+---
+
+### Paket P1 — Gating: ohne Copilot laeuft nichts Unnoetiges mit
+
+**Zielbild.** Eine abgeleitete Observability-Stufe statt vieler Einzelflags:
+
+| Stufe | Wann aktiv | Screenshots | DOM-Dump | Phasen-Artefakte | `status.json` | stdout/stderr |
+| --- | --- | --- | --- | --- | --- | --- |
+| `off` | Standard: Copilot aus, Development aus | nein | nein | nein | gedrosselt, ohne Debugfelder | nach Erfolg loeschen |
+| `preview` | Vorschau-Modal offen | im Intervall | nein | nein | + Fensterstatus | nach Erfolg loeschen |
+| `debug` | Development-Schalter an | Intervall + je Task | ja | ja | vollstaendig | behalten |
+| `copilot` | aktive Copilot-Sitzung | wie `debug` | ja | ja + Vision | vollstaendig | behalten |
+
+Effektive Stufe = Maximum aus (Workflow-`dev_mode`, aktive Copilot-Sitzung,
+angehaengter Vorschau-Zuschauer). `copilotObservation` bleibt uebergeordnet — die
+Copilot-Automatik darf sich durch P1 **nicht** aendern.
+
+#### G1 — DOM-Dump ist ungated (zuerst umsetzen, Datenschutz)
+
+*Ist:* `node/workflows/tasks/lib/preview.cjs:339` ruft in `captureWindow()`
+**bedingungslos** `captureDebugDom()`. Das serialisiert je Frame
+`document.documentElement.outerHTML`, `document.body.innerText` und alle
+Formularwerte und schreibt sie nach `live-dom.json` (`preview.cjs:276-307`). Die
+einzige Bedingung ist `enabled(context)` — also die **Live-Vorschau**, nicht
+`dev_mode`. Weil die Task-Skripte `captureTaskPreview(context, result, force = true)`
+aufrufen, wird die Intervallsperre (`preview.cjs:317`) umgangen: der Dump faellt
+**je Task** und zusaetzlich je 3-Sekunden-Tick an. Zielpfad ist
+`storage/app/public/workflow-task-runs/{runId}/live-dom.json`
+(`WorkflowTaskRunner.php:81`, `:127` + `preview.cjs:98-107`) — ueber `storage:link`
+oeffentlich erreichbar, mit dem Inhalt eingeloggter Webmail-Sitzungen.
+
+*Soll:*
+
+1. **G1a** `captureDebugDom()` nur aufrufen, wenn die effektive Stufe >= `debug`
+   ist. Kennzeichen im Kontext, z. B. `context.preview.captureDom === true`.
+2. **G1b** Den Wert bereitstellen: `context.devDebug` existiert heute **nicht**
+   (geprueft). In `run_step.cjs:2656-2679` beim Aufbau des `context` ein
+   `devDebug`-Feld aus `devDebugConfig()` (`run_step.cjs:1216`) ergaenzen und
+   `preview.captureDom` daraus ableiten.
+3. **G1c** Den Dump in das **private** Lauf-Verzeichnis schreiben, nicht neben
+   das oeffentliche PNG. `context.runDirectory` existiert bereits
+   (`run_step.cjs:2672`) und zeigt auf `storage/app/workflow-task-runs/{runId}`.
+   `debugDomPathFor()` entsprechend umstellen.
+
+*Akzeptanz:* Lauf mit `dev_mode = false` und ohne Copilot-Sitzung erzeugt **keine**
+`*-dom.json` — weder im privaten noch im oeffentlichen Verzeichnis. Lauf mit
+`dev_mode = true` erzeugt sie ausschliesslich im privaten Verzeichnis.
+
+#### G2 — Live-Vorschau ist global statt pro Workflow
+
+*Ist:* `live_preview_enabled` kommt aus den globalen Prozess-Einstellungen
+(`WorkflowTaskRunner.php:28`, `:78`; UI `app/Livewire/Admin/Config/ProcessSettings.php`),
+Default `true`. Kein Workflow-Schalter, keine Kopplung an einen Zuschauer. Der
+Screenshot-Timer (`run_step.cjs:2182`) laeuft bei jedem Lauf und schreibt je Tick
+zusaetzlich ein `writeStatus(...)` (`run_step.cjs:2195`).
+
+*Soll:*
+
+* **G2a (jetzt)** `settings_json.live_preview` als Workflow-Override einfuehren
+  (`null` = globale Einstellung, `true`/`false` = erzwungen). In
+  `WorkflowTaskRunner::start()` und `::remoteRuntime()` auswerten.
+* **G2b (erst nach Entscheidung zu offener Frage 1)** Zuschauer-Kopplung: PHP
+  schreibt beim Oeffnen/Schliessen des Vorschau-Modals eine `control.json` ins
+  Lauf-Verzeichnis, der Preview-Tick liest sie und pausiert ohne Zuschauer. Der
+  Runner liest bereits zur Laufzeit Dateien nach (`run_step.cjs:2430`), das Muster
+  ist also vorhanden.
+
+*Akzeptanz:* G2a darf das Verhalten bei unveraenderten Einstellungen **nicht**
+aendern (Regressionsschutz fuer das Vorschau-Modal).
+
+#### G3 — `status.json` traegt Debugfelder immer
+
+*Ist:* `statusPayload()` (`run_step.cjs:307-309`) haengt `events`,
+`debugArtifacts` **und** `debug_artifacts` immer an, auch bei leeren Arrays; die
+Redaktionslaeufe darueber laufen trotzdem. Zusaetzlich serialisiert
+`statusPayload()` bei **jedem** Aufruf die komplette Task-Liste einzeln durch
+`redactPublicSecrets()` (`run_step.cjs:298-306`).
+
+*Soll:* `events`/`debugArtifacts` nur ab Stufe `debug` anhaengen; die Doppelung
+`debug_artifacts` entfernen. Zusaetzlich Throttle nach Vorbild von
+`flushDebugArtifactManifest()` (`run_step.cjs:1328`, Intervall
+`DEBUG_MANIFEST_WRITE_INTERVAL_MS = 2000`), mit erzwungenem Schreiben bei
+Zustandswechseln (`starting`, `failed`, `completed`, `cancelled`).
+
+*Akzeptanz:* Anzahl geschriebener Bytes nach `status.json` sinkt bei Stufe `off`
+messbar; UI-Statusanzeige bleibt funktional.
+
+#### G4 — stdout/stderr immer als Datei
+
+*Ist:* `WorkflowTaskRunner.php:85-86` legt je Lauf `stdout.log` und `stderr.log`
+an; `spawnDetachedProcess()` leitet immer dorthin (`:1363-1364`, `:1374-1376`).
+Bei Prozess-pro-Task sind das zwei zusaetzliche Dateien je Task-Karte.
+
+*Soll:* Dateien weiterhin anlegen (Crash-Diagnose), aber bei Stufe `off` nach
+**erfolgreichem** Abschluss loeschen. Hook: `WorkflowExecutionService::completeStepRun()`
+(`WorkflowExecutionService.php:2574`).
+
+*Akzeptanz:* Nach einem fehlerfreien Lauf ohne Development liegen keine
+`stdout.log`/`stderr.log` mehr im Lauf-Verzeichnis; nach einem fehlgeschlagenen
+Lauf schon.
+
+#### G5 — Public-Disk wird nie aufgeraeumt
+
+*Ist:* `PruneWorkflowProcessArtifacts` (`app/Console/Commands/PruneWorkflowProcessArtifacts.php:32-41`,
+taeglich 04:20 via `app/Console/Kernel.php:65`) prunt nur
+`storage/app/workflow-task-runs` und `storage/app/browser-profiles/workflows`.
+**Nicht** geprunt: `storage/app/public/workflow-task-runs` und
+`storage/app/workflow-runs/*/debug-artifacts` — genau dort liegen Screenshots und
+`live-dom.json`.
+
+*Soll:* Beide Pfade in den Prune aufnehmen, mit eigener Option
+(`--public-days`, Default wie `--run-days`). Zusaetzlich einen Einmal-Befehl fuer
+den Altbestand bereitstellen, falls offene Frage 2 so entschieden wird.
+
+*Akzeptanz:* `workflow:prune-artifacts --dry-run` listet Kandidaten aus allen vier
+Pfaden.
+
+#### G6 — `dev_capture_*` hart auf `true`
+
+*Ist:* `WorkflowsIndex.php:299-300` und `:429-430` setzen bei jedem Speichern
+`dev_capture_dom_before_step = true` und `dev_keep_artifacts = true`, unabhaengig
+vom Development-Schalter. In `WorkflowTaskRunner::devDebugRuntimeConfig()`
+(`WorkflowTaskRunner.php:1210-1214`) defaulten die uebrigen `dev_capture_*`-Flags
+mit `?? true`. Solange `dev_mode` aus ist, greift die uebergeordnete
+`$enabled`-Pruefung — sobald jemand Development einschaltet, sind aber sofort
+**alle** Capture-Arten aktiv, ohne Abstufung.
+
+*Soll:* Flags an `dev_mode` koppeln statt hart `true`; Defaults in
+`devDebugRuntimeConfig()` auf `false` drehen. `copilotObservation` bleibt
+unveraendert der uebergeordnete Ausloeser.
+
+*Akzeptanz:* `WorkflowCopilotExecutionInvariantTest` bleibt gruen; ein neuer Test
+belegt, dass bei `dev_mode = false` und ohne Copilot-Sitzung alle
+`captureDom*`/`captureScreenshot*`-Flags `false` sind.
+
+---
+
+### Paket P2 — Registry, Preload, Fail-Fast
+
+* **P2a** `WorkflowTaskRunner::normalizeRuntimeTask()` (`WorkflowTaskRunner.php:1089-1122`)
+  entfernen. Die dort gepflegte `match`-Liste (~18 Keys) ist eine **zweite**
+  Registry neben `WorkflowTaskCatalog` (47 `node_script`-Eintraege). `node_script`
+  und `runner` kuenftig ausschliesslich aus dem Katalog.
+* **P2b** Neuer Test: fuer jeden Katalogeintrag existiert die `node_script`-Datei
+  und exportiert `run`. Heute faellt das erst zur Laufzeit auf
+  (`run_step.cjs:2779`).
+* **P2c** Preload: in `run_step.cjs` vor der Task-Schleife (`run_step.cjs:2697`)
+  alle in `runtime.tasks` referenzierten `node_script` einmal `require`-en, Fehler
+  sofort als Startfehler melden. Das ist die Fachidee „alle benoetigten
+  Task-Skripte vorher sammeln" auf Modulebene — der Laufzeitgewinn ist gering
+  (2 ms), der Gewinn liegt im Fail-Fast.
+
+### Paket P3 — Push statt Poll (groesster Zeitgewinn)
+
+`run_step.cjs` meldet Fortschritt und Ergebnis ueber einen HMAC-signierten
+internen HTTP-Callback; `MonitorWorkflowStepRunJob` bleibt ausschliesslich
+Watchdog (Schwelle `WATCHDOG_STALL_SECONDS = 120`,
+`WorkflowExecutionService.php:47`). Vorbild ist der ClientController-Pfad, der
+laut README-Kopf bereits ohne Queue-Worker fuer Live-Fortschritt und Routing
+auskommt. Ziel: die 3–10 s Leerlauf je Schritt entfallen.
+
+### Paket P4 — Copilot-Checkpoints ohne Prozessgrenze
+
+`$singleTask` (`WorkflowTaskRunner.php:459`, `:479`, `:501`) entfaellt als
+Steuerung. Stattdessen haelt der Runner nach jedem Task an einem Checkpoint an,
+meldet Screenshot und DOM per Callback (P3) und wartet auf `resume`/`repair`.
+Semantik identisch, aber ein Prozess statt einer pro Karte. Die
+Checkpoint-Persistenz existiert bereits (`WorkflowStudioCheckpointService`).
+**Invariante:** `WorkflowCopilotExecutionInvariantTest` muss unveraendert gruen
+bleiben.
+
+### Paket P5 — Session-Runner
+
+Ein langlebiger Node-Prozess **pro Workflow-Lauf** statt pro Liste. Haelt Browser,
+Puppeteer, geladene Task-Module und Kontext im Speicher; Steuerung ueber
+Kommandokanal (stdin-JSONL oder Named Pipe/Unix-Socket) mit
+`run_task`, `pause`, `resume`, `rewind`, `inject_task`, `stop`. Der heutige
+Keep-Alive-Parkmodus (`run_step.cjs:2259`, `setInterval` alle 3 s, Idle-Limit
+15 min) wird zum Kommando-Empfaenger ausgebaut — er ist bereits ein halber Daemon,
+er nimmt nur keine Arbeit an. Idle-Limit und
+`ManagedProcessInventory`/`ManagedProcessSupervisor` bleiben als Schutz.
+
+### Paket P6 — Ein Compiler, Aufraeumen
+
+* `ClientWorkflowBundleCompiler` wird der einzige Compiler; `start()` und
+  `remoteRuntime()` (`WorkflowTaskRunner.php:23`, `:73` — heute doppelt gepflegt)
+  werden reine Transport-Adapter.
+* Bundle um `runtimeHash` (SHA-256 ueber `node/workflows`) erweitern, damit
+  Regel 7 (ClientController-Sync) maschinell pruefbar wird.
+* Toten Parallelpfad entfernen: `ResolvePersonDataTask`, `ReadLoginDataTask`,
+  `ReadAccountDataTask` werden nirgends instanziiert; `runDataTask()`
+  (`run_step.cjs:1657-1772`) wird nach P6 ueberfluessig. `PersistMailAccountTask`
+  bleibt (genutzt in `WorkflowExecutionService.php:3967`).
+
+---
+
+### Reihenfolge und Definition of Done
+
+| Paket | Aufwand | Wirkung | Abhaengigkeit |
+| --- | --- | --- | --- |
+| **P1** (G1, G5 zuerst) | klein | jeder Lauf; behebt Datenschutzrisiko | keine |
+| **P2** | klein | Fail-Fast, eine Registry | keine |
+| **P3** | mittel | groesster Zeitgewinn | keine |
+| **P4** | mittel | Copilot 15 -> 1 Prozess | P3 |
+| **P5** | gross | Normalbetrieb 7 -> 1 Prozess | P3, P4 |
+| **P6** | mittel | Wartbarkeit, kein `portable=false`-Fallback mehr | P5 |
+
+Ein Paket gilt als fertig, wenn:
+
+1. die genannten Akzeptanzkriterien belegt sind,
+2. die Testliste unter „Relevante Tests" gruen ist, ergaenzt um die neuen Tests,
+3. bei Aenderungen unter `node/workflows` der ClientController-Sync erfolgt ist
+   (Regel 7, SHA-256-Gleichheit),
+4. im Arbeitsprotokoll Ergebnis, ausgefuehrte Testkommandos, Risiken und der
+   naechste Schritt nachgetragen sind (Regel 8).
+
+### Messgroessen fuer Vorher/Nachher
+
+Je Lauf erfassen: (1) Anzahl gestarteter Node-Prozesse, (2) Summe der
+Prozess-Startzeiten, (3) Summe der Wartezeit zwischen Task-Ende und naechstem
+Task-Start, (4) Anzahl und Gesamtgroesse geschriebener Dateien unter
+`storage/app/workflow-task-runs`, `storage/app/public/workflow-task-runs` und
+`storage/app/workflow-runs`, (5) Anzahl `writeStatus`-Aufrufe und geschriebene
+Bytes. Kennzahl 3 belegt P3, Kennzahl 4 belegt P1.
+
+### Nicht-Ziele
+
+* Die `.cjs`-Task-Skripte zu **einer** Bundle-Datei zusammenfassen. Gemessener
+  Ladeaufwand aller Task-Libs: 2 ms. Kein Nutzen, Verlust an Uebersicht.
+* Aenderungen an Copilot-Planung, -Reparatur oder -Prompting.
+* Aenderungen am Ausfuehrungsvertrag (IF-Routen sind keine Fehler) oder an der
+  Routing-Semantik.
+
+### Offene Entscheidungen (vor P1 klaeren)
+
+1. Soll die Live-Vorschau bei Stufe `off` vollstaendig entfallen oder mit stark
+   erhoehtem Intervall (z. B. 15 s) weiterlaufen, damit die Uebersichtsliste
+   weiterhin ein Vorschaubild zeigt? Betrifft G2b.
+2. Sollen bereits erzeugte `live-dom.json` im oeffentlichen Verzeichnis einmalig
+   geloescht werden (eigener Einmal-Befehl), oder reicht der erweiterte Prune?
+   Betrifft G5.
+3. Bleibt der Prozess-pro-Liste-Pfad nach P5 als Rueckfallebene erhalten oder
+   wird er entfernt? Betrifft P5 und P6.
 
 ## Workflow Studio (2026-07-19)
 

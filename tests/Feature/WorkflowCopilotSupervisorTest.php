@@ -1531,6 +1531,65 @@ class WorkflowCopilotSupervisorTest extends TestCase
         $this->assertSame('top_results', data_get($returnGap, 'payload.source_array'));
     }
 
+    public function test_empty_batch_search_reader_is_a_business_gap_and_exposes_its_array(): void
+    {
+        $workflow = Workflow::query()->create([
+            'name' => 'Leere Batch Ergebnisliste',
+            'slug' => 'leere-batch-ergebnisliste',
+            'description' => '',
+            'category' => 'test',
+            'is_active' => true,
+            'is_locked' => false,
+            'trigger_type' => 'manual',
+            'settings_json' => [],
+        ]);
+        $step = $workflow->steps()->create([
+            'name' => 'Ergebnisse direkt lesen',
+            'type' => WorkflowStep::TYPE_DATA_PROCESSING,
+            'action_key' => 'ergebnisse-direkt-lesen',
+            'position' => 10,
+            'is_enabled' => true,
+            'config_json' => ['tasks' => [[
+                'key' => 'read-results',
+                'task_key' => 'browser.read_searchengine_result',
+                'title' => 'Suchmaschinentreffer lesen',
+                'list_container_selector' => '#search',
+                'list_item_selector' => '.result',
+                'output_array_name' => 'top_results',
+                'allow_empty' => true,
+            ]]],
+        ]);
+        $session = app(WorkflowCopilotSessionService::class)->start($workflow, [
+            'goal' => 'Google-Ergebnisse als Array zurueckgeben.',
+            'success_criteria' => ['assertions' => ['Rueckgabewert = array']],
+        ]);
+        $checkpoint = [
+            'task_key' => 'read-results',
+            'successful' => true,
+            'result' => [
+                'tasks' => [[
+                    'key' => 'read-results',
+                    'task_key' => 'browser.read_searchengine_result',
+                    'selected_count' => 0,
+                    'status' => 'success',
+                ]],
+            ],
+        ];
+        $service = app(WorkflowCopilotSupervisorService::class);
+        $method = new \ReflectionMethod($service, 'successfulCheckpointBusinessGap');
+
+        $gap = $method->invoke($service, $session, $step, $checkpoint);
+        $this->assertSame('required_collection_empty', data_get($gap, 'payload.reason_code'));
+        $this->assertSame('.result', data_get($gap, 'payload.selector'));
+        $this->assertSame(['top_results'], data_get($gap, 'payload.array_consumers'));
+
+        $checkpoint['result']['tasks'][0]['selected_count'] = 2;
+        $checkpoint['result']['workflow_variables']['top_results'] = [['titel' => 'One'], ['titel' => 'Two']];
+        $returnGap = $method->invoke($service, $session, $step, $checkpoint);
+        $this->assertSame('required_workflow_return_missing', data_get($returnGap, 'payload.reason_code'));
+        $this->assertSame('top_results', data_get($returnGap, 'payload.source_array'));
+    }
+
     public function test_failed_reader_inside_loop_persists_distinct_resume_and_failure_task_keys(): void
     {
         $workflow = Workflow::query()->create([

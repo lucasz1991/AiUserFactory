@@ -604,48 +604,40 @@ class WorkflowTaskCatalog
                 ],
             ],
             'loop.for_each_element' => [
-                'label' => 'Fuer jedes DOM-Element',
-                'kind' => 'browser',
+                'label' => 'Loop-Start',
+                'kind' => 'data',
                 'runner' => 'node',
                 'node_script' => 'node/workflows/tasks/loop/for_each_element.cjs',
-                'timeout_seconds' => 30,
-                'description' => 'Iteriert Treffer eines DOM-Selectors, loest Elemente pro Durchlauf frisch auf und kann Reader-Ausgaben direkt in einem Workflow-Array sammeln.',
+                'timeout_seconds' => 5,
+                'description' => 'Startet einen reinen Kontroll-Loop mit fester Durchlaufzahl oder ueber ein vorhandenes Workflow-Array und beendet ihn optional ueber eine Bedingung.',
                 'form' => [
-                    'selector' => true,
-                    'selector_label' => 'Treffer-Selector',
-                    'selector_placeholder' => '#search .g, .product-card, [data-result]',
+                    'browser_window' => false,
+                    'selector' => false,
                     'value' => false,
                     'url' => false,
                     'success_payload' => false,
                     'failure_payload' => false,
                     'extra_fields' => [
-                        ['name' => 'limit', 'label' => 'Maximale Treffer', 'type' => 'number', 'min' => 0, 'max' => 10000, 'default' => '0', 'help' => '0 verarbeitet alle Treffer.', 'tab' => 'Schleife'],
-                        ['name' => 'offset', 'label' => 'Treffer ueberspringen', 'type' => 'number', 'min' => 0, 'max' => 10000, 'default' => '0', 'tab' => 'Schleife'],
-                        ['name' => 'only_visible', 'label' => 'Nur sichtbare Elemente', 'default' => 'true', 'placeholder' => 'true oder false', 'tab' => 'Schleife'],
-                        ['name' => 'store_current_element_as', 'label' => 'Aktuelles Element als', 'default' => 'current_result', 'placeholder' => 'current_result', 'tab' => 'Variablen'],
-                        ['name' => 'store_index_as', 'label' => 'Index als', 'default' => 'result_index', 'placeholder' => 'result_index', 'tab' => 'Variablen'],
-                        ['name' => 'collect_to_array', 'label' => 'Direkt in Array sammeln', 'placeholder' => 'top_results', 'help' => 'Optional. Speichert nach jedem erfolgreichen Durchlauf den Wert der Sammelvariable direkt in diesem Workflow-Array.', 'tab' => 'Sammlung'],
-                        ['name' => 'collect_from_variable', 'label' => 'Sammelvariable', 'default' => 'current_result', 'placeholder' => 'current_result', 'help' => 'Variable, die ein Reader im Loop-Body erzeugt. Wird nur verwendet, wenn ein Ziel-Array eingetragen ist.', 'tab' => 'Sammlung'],
-                        ['name' => 'collect_dedupe_by', 'label' => 'Deduplizieren nach', 'placeholder' => 'url oder product.id', 'help' => 'Optionaler Objektpfad. Bereits vorhandene Werte mit demselben Feldwert werden nicht erneut gespeichert.', 'tab' => 'Sammlung'],
-                        ['name' => 'collect_max_items', 'label' => 'Maximale Array-Eintraege', 'type' => 'number', 'min' => 0, 'max' => 100000, 'default' => '0', 'help' => '0 bedeutet unbegrenzt. Das Loop-Limit bleibt davon getrennt.', 'tab' => 'Sammlung'],
-                        ['name' => 'success_target', 'label' => 'Zielkarte je Treffer', 'placeholder' => 'Karten-Key von read_element_fields', 'help' => 'Optional. Ohne Eingabe wird die normale Erfolgsroute verwendet.', 'tab' => 'Routen'],
-                        ['name' => 'completion_target', 'label' => 'Zielkarte nach Abschluss', 'placeholder' => 'Karten-Key nach dem Loop', 'help' => 'Optional. Ohne Ziel wird automatisch ueber das gekoppelte Loop-Ende hinter die Schleife gesprungen.', 'tab' => 'Routen'],
-                        ['name' => 'empty_target', 'label' => 'Zielkarte bei leerer Liste', 'placeholder' => 'Karten-Key fuer den Leerfall', 'help' => 'Optionaler Sonderweg, wenn bereits die erste Suche keine Elemente liefert.', 'tab' => 'Routen'],
-                        ['name' => 'error_target', 'label' => 'Zielkarte bei Fehler', 'placeholder' => 'Karten-Key der Fehlerbehandlung', 'tab' => 'Routen'],
+                        ['name' => 'iteration_count', 'label' => 'Anzahl Durchlaeufe', 'type' => 'number', 'min' => 0, 'max' => 100000, 'default' => '1', 'help' => 'Ohne Quell-Array ist dies die exakte Anzahl. Mit Quell-Array begrenzt der Wert dessen Laenge; 0 verarbeitet das gesamte Array.', 'tab' => 'Loop'],
+                        ['name' => 'source_array', 'label' => 'Quell-Array (optional)', 'placeholder' => 'search_results', 'help' => 'Name einer bereits vorhandenen Workflow-Array-Variable. Die Loop selbst liest oder sucht keine DOM-Elemente.', 'tab' => 'Loop'],
+                        ['name' => 'condition_variable', 'label' => 'Bedingungsvariable (optional)', 'placeholder' => 'continue_loop', 'help' => 'Die Bedingung wird vor jedem neuen Durchlauf geprueft. Leer bedeutet: nur nach Anzahl bzw. Array-Laenge steuern.', 'tab' => 'Bedingung'],
+                        ['name' => 'condition_operator', 'label' => 'Bedingungsoperator', 'type' => 'select', 'default' => 'truthy', 'options' => ['truthy' => 'ist wahr', 'falsy' => 'ist falsch', 'equals' => 'ist gleich', 'not_equals' => 'ist ungleich', 'greater_than' => 'ist groesser als', 'greater_or_equal' => 'ist groesser oder gleich', 'less_than' => 'ist kleiner als', 'less_or_equal' => 'ist kleiner oder gleich', 'contains' => 'enthaelt', 'not_contains' => 'enthaelt nicht'], 'tab' => 'Bedingung'],
+                        ['name' => 'condition_value', 'label' => 'Vergleichswert', 'placeholder' => 'true, 10 oder Text', 'help' => 'Nur fuer vergleichende Operatoren erforderlich.', 'tab' => 'Bedingung'],
+                        ['name' => 'store_current_item_as', 'label' => 'Aktuelles Array-Element als', 'default' => 'current_item', 'placeholder' => 'current_item', 'help' => 'Bei einem Quell-Array steht hier im Body das aktuelle Element bereit.', 'tab' => 'Variablen'],
+                        ['name' => 'store_index_as', 'label' => 'Loop-Index als', 'default' => 'loop_index', 'placeholder' => 'loop_index', 'help' => 'Nullbasierter Index des aktuellen Durchlaufs.', 'tab' => 'Variablen'],
                     ],
                 ],
             ],
             'loop.end' => [
                 'label' => 'Loop-Ende',
-                'kind' => 'browser',
+                'kind' => 'data',
                 'runner' => 'node',
                 'node_script' => 'node/workflows/tasks/loop/end.cjs',
-                'browser_window' => 'main',
-                'timeout_seconds' => 15,
-                'description' => 'Automatisches Endsegment einer Schleife. Springt zur Startkarte zurueck, solange die Schleife aktiv ist.',
+                'timeout_seconds' => 5,
+                'description' => 'Markiert ohne eigene Fach-Einstellungen das Ende des Loop-Blocks und springt bei einem aktiven Durchlauf zum gekoppelten Loop-Start zurueck.',
                 'hidden_from_library' => true,
                 'form' => [
-                    'browser_window' => true,
+                    'browser_window' => false,
                     'selector' => false,
                     'value' => false,
                     'url' => false,
@@ -732,7 +724,7 @@ class WorkflowTaskCatalog
                 'runner' => 'node',
                 'node_script' => 'node/workflows/tasks/browser/read_searchengine_result.cjs',
                 'timeout_seconds' => 30,
-                'description' => 'Komfortabler, aber engine-unabhaengiger Wrapper fuer Titel, URL, Beschreibung, Site-Name und Breadcrumb eines aktuellen Loop-Treffers.',
+                'description' => 'Erkennt eine Trefferliste, filtert Werbung und liest alle gewuenschten Suchtreffer in einem Durchlauf. Detailselektoren sind optional und werden automatisch ergaenzt.',
                 'form' => [
                     'selector' => false,
                     'value' => false,
@@ -740,17 +732,27 @@ class WorkflowTaskCatalog
                     'success_payload' => false,
                     'failure_payload' => false,
                     'extra_fields' => [
-                        ['name' => 'scope_variable', 'label' => 'Loop-Scope', 'default' => 'current_result', 'placeholder' => 'current_result', 'tab' => 'Quelle'],
-                        ['name' => 'output_variable', 'label' => 'Ausgabevariable', 'default' => 'current_result', 'placeholder' => 'current_result', 'tab' => 'Quelle'],
-                        ['name' => 'title_selector', 'label' => 'Titel-Selector', 'default' => 'h3', 'placeholder' => 'h3, .result-title', 'tab' => 'Selektoren'],
-                        ['name' => 'link_selector', 'label' => 'Link-Selector', 'default' => 'a', 'placeholder' => 'a[href]', 'tab' => 'Selektoren'],
-                        ['name' => 'description_selector', 'label' => 'Description-Selector', 'placeholder' => '.VwiC3b, .snippet, .description', 'tab' => 'Selektoren'],
-                        ['name' => 'site_name_selector', 'label' => 'Site-Name-Selector', 'placeholder' => '.site-name', 'tab' => 'Selektoren'],
-                        ['name' => 'breadcrumb_selector', 'label' => 'Breadcrumb-Selector', 'placeholder' => '.breadcrumb', 'tab' => 'Selektoren'],
+                        ['name' => 'list_container_selector', 'label' => 'Listencontainer-Selector', 'default' => '#search', 'placeholder' => '#search, main, .results', 'help' => 'Bereich, in dem die Treffer liegen. Leer bedeutet: gesamte Seite.', 'span' => 'full', 'tab' => 'Trefferliste'],
+                        ['name' => 'list_item_selector', 'label' => 'Listenelement-Selector', 'default' => '.MjjYud, .g, article, [data-result], .result', 'placeholder' => '.result, article, [data-result]', 'help' => 'Jedes gefundene Element wird genau einmal als Treffer ausgewertet.', 'span' => 'full', 'tab' => 'Trefferliste'],
+                        ['name' => 'output_array_name', 'label' => 'Ausgabe-Array', 'default' => 'top_results', 'placeholder' => 'top_results', 'format' => 'variable_path', 'tab' => 'Trefferliste'],
+                        ['name' => 'limit', 'label' => 'Maximale Treffer', 'type' => 'number', 'min' => 0, 'max' => 100000, 'default' => '10', 'help' => '0 bedeutet unbegrenzt.', 'tab' => 'Trefferliste'],
+                        ['name' => 'offset', 'label' => 'Treffer ueberspringen', 'type' => 'number', 'min' => 0, 'max' => 100000, 'default' => '0', 'tab' => 'Trefferliste'],
+                        ['name' => 'title_selector', 'label' => 'Titel-Selector (optional)', 'placeholder' => 'h3, .result-title', 'help' => 'Leer lassen fuer automatische Erkennung.', 'tab' => 'Datenfelder'],
+                        ['name' => 'link_selector', 'label' => 'Link-Selector (optional)', 'placeholder' => 'a[href]', 'help' => 'Leer lassen fuer automatische Erkennung.', 'tab' => 'Datenfelder'],
+                        ['name' => 'description_selector', 'label' => 'Beschreibung-Selector (optional)', 'placeholder' => '.VwiC3b, .snippet, .description', 'help' => 'Leer lassen fuer automatische Erkennung.', 'tab' => 'Datenfelder'],
+                        ['name' => 'site_name_selector', 'label' => 'Site-Name-Selector (optional)', 'placeholder' => '.site-name, cite', 'help' => 'Ohne Treffer wird der Hostname aus der URL verwendet.', 'tab' => 'Datenfelder'],
+                        ['name' => 'breadcrumb_selector', 'label' => 'Breadcrumb-Selector (optional)', 'placeholder' => '.breadcrumb, cite', 'help' => 'Leer lassen fuer automatische Erkennung.', 'tab' => 'Datenfelder'],
                         ['name' => 'fallbacks', 'label' => 'Fallbacks (JSON)', 'type' => 'textarea', 'rows' => 5, 'span' => 'full', 'placeholder' => '{"title":["[role=heading]"],"link":["a[href]"],"description":[".VwiC3b",".snippet"]}', 'tab' => 'Fallbacks'],
-                        ['name' => 'visible_only', 'label' => 'Nur sichtbare Felder', 'default' => 'true', 'placeholder' => 'true oder false', 'tab' => 'Optionen'],
+                        ['name' => 'exclude_ads', 'label' => 'Werbung automatisch ausschliessen', 'type' => 'select', 'default' => 'true', 'options' => ['true' => 'Ja', 'false' => 'Nein'], 'tab' => 'Filter'],
+                        ['name' => 'exclude_item_selector', 'label' => 'Elemente per Klasse/Selector ausschliessen', 'placeholder' => '.ad, .sponsored, [data-ad]', 'help' => 'Filtert ein Listenelement, wenn es selbst oder ein Kind auf diesen CSS-Selector passt.', 'span' => 'full', 'tab' => 'Filter'],
+                        ['name' => 'exclude_item_text', 'label' => 'Elemente per Text ausschliessen', 'type' => 'textarea', 'rows' => 4, 'span' => 'full', 'placeholder' => "Anzeige\nWerbung\nGesponsert\nSponsored", 'help' => 'Ein Suchmuster pro Zeile; Gross-/Kleinschreibung wird ignoriert.', 'tab' => 'Filter'],
+                        ['name' => 'dedupe_by_url', 'label' => 'Doppelte URLs entfernen', 'type' => 'select', 'default' => 'true', 'options' => ['true' => 'Ja', 'false' => 'Nein'], 'tab' => 'Filter'],
+                        ['name' => 'allow_empty', 'label' => 'Leere Trefferliste erlauben', 'type' => 'select', 'default' => 'false', 'options' => ['false' => 'Nein', 'true' => 'Ja'], 'tab' => 'Filter'],
+                        ['name' => 'visible_only', 'label' => 'Nur sichtbare Listenelemente', 'type' => 'select', 'default' => 'true', 'options' => ['true' => 'Ja', 'false' => 'Nein'], 'tab' => 'Optionen'],
                         ['name' => 'normalize_url', 'label' => 'Relative URLs normalisieren', 'default' => 'true', 'placeholder' => 'true oder false', 'tab' => 'Optionen'],
                         ['name' => 'trim_text', 'label' => 'Text trimmen', 'default' => 'true', 'placeholder' => 'true oder false', 'tab' => 'Optionen'],
+                        ['name' => 'scope_variable', 'label' => 'Legacy: einzelner Loop-Scope', 'placeholder' => 'current_result', 'help' => 'Nur fuer alte Workflows ohne Listenelement-Selector.', 'tab' => 'Kompatibilitaet'],
+                        ['name' => 'output_variable', 'label' => 'Legacy: einzelne Ausgabevariable', 'placeholder' => 'current_result', 'help' => 'Nur fuer alte Workflows ohne Listenelement-Selector.', 'tab' => 'Kompatibilitaet'],
                     ],
                 ],
             ],
@@ -1603,12 +1605,16 @@ class WorkflowTaskCatalog
     {
         return match ($taskKey) {
             'loop.for_each_element' => [
-                'Aktiviert pro Durchlauf ein DOM-Element als privaten Scope und schreibt Index/Metadaten in Workflow-Variablen.',
-                'Kann den vom Reader erzeugten Wert automatisch in collect_to_array sammeln.',
-                'Liefert matched_count, selected_count, visited_count, processed_count, skipped_count und collected_count.',
+                'Schreibt den nullbasierten Loop-Index und bei einem Quell-Array dessen aktuelles Element in benannte Workflow-Variablen.',
+                'Liefert current_iteration, completed_iterations, iteration_count, condition_met und loop_complete.',
             ],
             'loop.end' => ['Springt bei einer aktiven Schleife zur gekoppelten Startkarte zurueck; nach Abschluss laeuft der Workflow hinter dem Loop weiter.'],
-            'browser.read_element_fields', 'browser.read_searchengine_result' => ['Schreibt das gelesene Objekt unter output_variable in workflow_variables und liefert dasselbe Objekt als result.'],
+            'browser.read_element_fields' => ['Schreibt das gelesene Objekt unter output_variable in workflow_variables und liefert dasselbe Objekt als result.'],
+            'browser.read_searchengine_result' => [
+                'Schreibt im Listenmodus alle gefilterten Treffer unter output_array_name in workflow_variables und liefert sie als result-Array.',
+                'Liefert matched_count, excluded_count, invalid_count, duplicate_count und selected_count zur Diagnose.',
+                'Alte Konfigurationen ohne list_item_selector lesen weiterhin genau ein Objekt aus scope_variable.',
+            ],
             'data.append_to_array' => ['Schreibt das vollstaendige Array unter array_name in workflow_variables und meldet new_length, appended, deduped und limit_reached.'],
             'data.validate_inputs' => [
                 'Speichert alle deklarierten Direktwerte unter dem Namen der Ausgabegruppe.',
@@ -1642,11 +1648,9 @@ class WorkflowTaskCatalog
 
         return match ($taskKey) {
             'loop.for_each_element' => [
-                'success_target startet den Loop-Body fuer jeden Treffer.',
-                'completion_target wird nach mindestens einem verarbeiteten Treffer verwendet.',
-                'empty_target gilt nur, wenn die Trefferliste von Anfang an leer ist.',
-                'Ohne Abschlussziel springt die Task automatisch zum gekoppelten loop.end und danach hinter die Schleife.',
-                'error_target behandelt Selector-, DOM- und Array-Speicherfehler.',
+                'Bei einem aktiven Durchlauf folgt immer die direkt naechste Task im Loop-Body.',
+                'Ist die Anzahl erreicht oder die Bedingung nicht mehr erfuellt, springt Loop-Start zum gekoppelten loop.end und der Workflow laeuft dahinter weiter.',
+                'Der Loop besitzt keine fachlichen Zielrouten; sein Kontrollfluss ergibt sich ausschliesslich aus Start, Body und Ende.',
             ],
             'loop.end' => ['Solange der Loop aktiv ist, erfolgt automatisch ein Ruecksprung zur gekoppelten Startkarte. Das Loop-Ende darf nicht separat umgeroutet oder aus dem Paar geloest werden.'],
             'decision.array_length' => ['success_target gilt bei erfuelltem Vergleich, error_target bei nicht erfuelltem Vergleich. Beide Ziele sollten fachlich verschieden sein.'],
@@ -1662,16 +1666,17 @@ class WorkflowTaskCatalog
     {
         return match ($taskKey) {
             'loop.for_each_element' => [
-                'Ein Reader muss zwischen Loop-Start und Loop-Ende stehen, bevor dessen Ausgabe gesammelt werden kann.',
-                'collect_from_variable und output_variable des Readers muessen denselben Namen verwenden.',
-                'Loop-Limit begrenzt Durchlaeufe; collect_max_items begrenzt nur die gespeicherte Array-Laenge.',
-                'Das DOM-Element wird vor jeder Iteration anhand einer stabilen Identitaet frisch aufgeloest.',
-                'Im Studio wird der aktuelle Scope als Selector, Offset und Index serialisiert, damit die folgende Reader-Task in einem separaten Einzelschritt fortsetzen kann.',
+                'Loop-Start sucht, liest und filtert keine DOM-Elemente. Solche Arbeit gehoert in eine eigene Task vor oder innerhalb des Loop-Blocks.',
+                'Ohne source_array steuert iteration_count die exakte Anzahl; mit source_array begrenzt ein positiver Wert die Array-Laenge und 0 verarbeitet das gesamte Array.',
+                'Die optionale Bedingung wird vor jedem neuen Durchlauf ausgewertet.',
+                'Cursor und Kontrollstatus werden als Workflow-Variablen persistiert und funktionieren dadurch auch bei einzelnen Studio-Schritten.',
             ],
             'browser.read_searchengine_result' => [
-                'Alle Selektoren werden relativ zum aktuellen Loop-Scope ausgewertet.',
-                'Ist der Scope selbst ein Link und link_selector findet keinen untergeordneten Link, wird die href des Scope-Elements verwendet.',
-                'Fuer Google-Ergebnisse ist beispielsweise #search a:has(h3) als Loop-Selector mit h3 als title_selector kompatibel.',
+                'list_container_selector begrenzt die Suche auf die Trefferliste; list_item_selector definiert genau ein Ergebnis pro Element.',
+                'Werbeelemente werden vor Offset und Limit per CSS-Selector, Textmuster und optionaler Standarderkennung entfernt.',
+                'Titel-, Link-, Beschreibungs-, Site- und Breadcrumb-Selektoren sind optional; konfigurierte Selektoren haben Vorrang vor Fallbacks und automatischen Heuristiken.',
+                'Der gesamte Listenmodus laeuft in einer Task und benoetigt keinen DOM-Loop und kein data.append_to_array.',
+                'Konfigurationen ohne list_item_selector verwenden aus Kompatibilitaetsgruenden weiterhin den alten einzelnen Loop-Scope.',
             ],
             'loop.end' => ['Diese interne Task wird vom Studio automatisch mit loop_pair_id und loop_start_key erzeugt und gemeinsam mit dem Loop-Start verwaltet.'],
             'data.append_to_array' => [
@@ -1696,15 +1701,24 @@ class WorkflowTaskCatalog
     {
         return match ($taskKey) {
             'loop.for_each_element' => [
-                'produces_scope' => true,
-                'scope_variable_field' => 'store_current_element_as',
-                'scope_is_persistable' => true,
+                'produces_scope' => false,
+                'source_array_field' => 'source_array',
+                'current_item_variable_field' => 'store_current_item_as',
+                'index_variable_field' => 'store_index_as',
+                'control_state_is_persistable' => true,
             ],
-            'browser.read_element_fields', 'browser.read_searchengine_result' => [
+            'browser.read_element_fields' => [
                 'consumes_scope' => true,
                 'scope_variable_field' => 'scope_variable',
                 'selectors_are_relative' => true,
                 'scope_self_supported' => true,
+            ],
+            'browser.read_searchengine_result' => [
+                'consumes_scope' => false,
+                'list_container_field' => 'list_container_selector',
+                'list_item_field' => 'list_item_selector',
+                'detail_selectors_are_relative_to_item' => true,
+                'legacy_scope_supported' => true,
             ],
             default => [],
         };
@@ -1714,14 +1728,20 @@ class WorkflowTaskCatalog
     {
         return match ($taskKey) {
             'loop.for_each_element' => [
-                'body_producers' => ['browser.read_element_fields', 'browser.read_searchengine_result'],
-                'body_consumers' => ['data.append_to_array'],
                 'paired_with' => ['loop.end'],
-                'collection_modes' => ['collect_to_array', 'data.append_to_array'],
+                'accepts_source' => ['fixed_iteration_count', 'workflow_array'],
+                'body_accepts' => ['browser', 'input', 'wait', 'data', 'decision'],
+                'legacy_dom_loops' => 'runtime_compatible',
             ],
-            'browser.read_element_fields', 'browser.read_searchengine_result' => [
+            'browser.read_element_fields' => [
                 'requires_preceding' => ['loop.for_each_element'],
                 'compatible_consumers' => ['data.append_to_array', 'data.workflow_return'],
+            ],
+            'browser.read_searchengine_result' => [
+                'requires_preceding' => [],
+                'produces' => ['workflow_array'],
+                'compatible_consumers' => ['loop.for_each_element', 'decision.array_length', 'data.workflow_return'],
+                'legacy_scope_mode' => true,
             ],
             'data.append_to_array' => [
                 'requires_variable_producer' => true,
@@ -1735,8 +1755,8 @@ class WorkflowTaskCatalog
     protected function failureModeDocumentation(string $taskKey): array
     {
         return match ($taskKey) {
-            'loop.for_each_element' => ['selector_missing', 'loop_element_missing_after_refresh', 'array_not_array', 'value_missing'],
-            'browser.read_searchengine_result' => ['scope_missing', 'required_title_missing', 'required_url_missing'],
+            'loop.for_each_element' => ['loop_source_missing', 'loop_source_not_array', 'loop_end_missing'],
+            'browser.read_searchengine_result' => ['list_container_missing', 'list_items_missing', 'valid_result_missing', 'selector_invalid', 'scope_missing'],
             'data.append_to_array' => ['array_not_array', 'value_missing'],
             default => [],
         };
@@ -1746,16 +1766,17 @@ class WorkflowTaskCatalog
     {
         return match ($taskKey) {
             'loop.for_each_element' => [[
-                'name' => 'Suchergebnisse als Array sammeln',
-                'sequence' => ['loop.for_each_element', 'browser.read_searchengine_result', 'data.append_to_array', 'loop.end', 'data.workflow_return'],
-                'invariant' => 'Reader output_variable entspricht append value_from_variable; Loop limit entspricht der gewuenschten Maximalzahl.',
+                'name' => 'Vorhandenes Array durchlaufen',
+                'sequence' => ['browser.read_searchengine_result', 'loop.for_each_element', '<Loop-Body>', 'loop.end', 'data.workflow_return'],
+                'invariant' => 'Die Reader-Task erzeugt source_array; Loop-Start stellt store_current_item_as und store_index_as bereit und hat keine DOM-Selektoren.',
             ]],
             'browser.read_searchengine_result' => [[
-                'name' => 'Google Ergebnislink als Scope',
-                'loop_selector' => '#search a:has(h3)',
-                'title_selector' => 'h3',
-                'link_selector' => 'a',
-                'link_fallback' => ':scope',
+                'name' => 'Suchtreffer ohne DOM-Loop als Array lesen',
+                'sequence' => ['browser.read_searchengine_result', 'data.workflow_return'],
+                'list_container_selector' => '#search',
+                'list_item_selector' => '.MjjYud, .g',
+                'exclude_item_selector' => '.ad, .sponsored, [data-ad]',
+                'output_array_name' => 'top_results',
             ]],
             default => [],
         };

@@ -47,13 +47,13 @@ class WorkflowExecutionService
     private const WATCHDOG_STALL_SECONDS = 120;
 
     /** Adaptive Monitor-Taktung: enger Poll fuer junge aktive Step-Runs. */
-    private const MONITOR_FAST_POLL_SECONDS = 3;
+    private const MONITOR_FAST_POLL_SECONDS = 1;
 
     /** Alter in Sekunden, bis zu dem ein aktiver Step-Run als jung gilt. */
     private const MONITOR_FAST_POLL_WINDOW_SECONDS = 60;
 
     /** Bisheriger Standard-Poll fuer aeltere aktive Step-Runs. */
-    private const MONITOR_DEFAULT_POLL_SECONDS = 10;
+    private const MONITOR_DEFAULT_POLL_SECONDS = 3;
 
     public function __construct(
         protected MailAccountRegistrationRunner $mailRegistration,
@@ -4401,6 +4401,9 @@ class WorkflowExecutionService
             ?? $contextValue($workflowVariables, 'workflow_return_key', 'workflowReturnKey');
         $generatedPassword = $contextValue($context, 'new_password', 'generated_password', 'generated-password')
             ?? $contextValue($workflowVariables, 'new_password', 'generated_password', 'generated-password');
+        $copilotSupervised = $this->isCopilotSupervisedRun($run);
+        $studioSingleTask = (bool) ($context['studio_single_task'] ?? false);
+        $segmentTasks = $copilotSupervised || $studioSingleTask;
 
         return [
             'workflowRunId' => $run->id,
@@ -4419,8 +4422,12 @@ class WorkflowExecutionService
             'next_task_route_source_key' => trim((string) data_get($run->context_json, 'next_task_route_source_key', '')) ?: null,
             'workflowCopilotSessionId' => (int) data_get($run->context_json, 'workflow_copilot_session_id', 0) ?: null,
             'workflow_copilot_session_id' => (int) data_get($run->context_json, 'workflow_copilot_session_id', 0) ?: null,
-            'copilotSupervised' => (bool) data_get($run->context_json, 'copilot_supervised', false) || (bool) data_get($run->context_json, 'interactive_debug', false),
-            'copilot_supervised' => (bool) data_get($run->context_json, 'copilot_supervised', false) || (bool) data_get($run->context_json, 'interactive_debug', false),
+            'copilotSupervised' => $copilotSupervised,
+            'copilot_supervised' => $copilotSupervised,
+            'studioSingleTask' => $studioSingleTask,
+            'studio_single_task' => $studioSingleTask,
+            'segmentTasks' => $segmentTasks,
+            'segment_tasks' => $segmentTasks,
             'copilotTransientTask' => data_get($run->context_json, 'copilot_transient_task'),
             'copilot_transient_task' => data_get($run->context_json, 'copilot_transient_task'),
             'personId' => data_get($run->context_json, 'person_id'),

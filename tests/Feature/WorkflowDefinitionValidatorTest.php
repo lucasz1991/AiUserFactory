@@ -154,6 +154,54 @@ class WorkflowDefinitionValidatorTest extends TestCase
         $this->assertContains('loop_collection_producer_missing', collect($result['diagnostics'])->pluck('code'));
     }
 
+    public function test_batch_search_array_can_feed_a_pure_control_loop_and_workflow_return(): void
+    {
+        $workflow = $this->workflow();
+        $step = $workflow->steps()->create([
+            'name' => 'Batch search and loop',
+            'type' => WorkflowStep::TYPE_DATA_PROCESSING,
+            'action_key' => 'batch-search-loop',
+            'position' => 10,
+            'is_enabled' => true,
+            'config_json' => ['tasks' => [[
+                'key' => 'read-results',
+                'task_key' => 'browser.read_searchengine_result',
+                'list_container_selector' => '#search',
+                'list_item_selector' => '.result',
+                'output_array_name' => 'top_results',
+            ], [
+                'key' => 'loop-start',
+                'task_key' => 'loop.for_each_element',
+                'source_array' => 'top_results',
+                'iteration_count' => 3,
+                'loop_end_key' => 'loop-end',
+            ], [
+                'key' => 'body',
+                'task_key' => 'wait.seconds',
+                'value' => 0,
+            ], [
+                'key' => 'loop-end',
+                'task_key' => 'loop.end',
+                'loop_start_key' => 'loop-start',
+            ], [
+                'key' => 'return-results',
+                'task_key' => 'data.workflow_return',
+                'selector' => 'top_results',
+            ]]],
+        ]);
+
+        $valid = app(WorkflowDefinitionValidator::class)->validate($workflow, ['Rueckgabewert = array']);
+        $this->assertTrue($valid['valid'], json_encode($valid['diagnostics'], JSON_PRETTY_PRINT));
+
+        $config = $step->config_json;
+        $config['tasks'][1]['source_array'] = 'missing_results';
+        $step->forceFill(['config_json' => $config])->save();
+        $invalid = app(WorkflowDefinitionValidator::class)->validate($workflow->fresh('steps'), ['Rueckgabewert = array']);
+
+        $this->assertFalse($invalid['valid']);
+        $this->assertContains('loop_source_array_missing', collect($invalid['diagnostics'])->pluck('code'));
+    }
+
     public function test_active_embedded_workflows_and_legacy_terminal_routes_are_executable(): void
     {
         $embedded = $this->workflow();

@@ -890,7 +890,13 @@ class WorkflowCopilotSupervisorService
         $taskKey = $failureTaskKey !== '' ? $failureTaskKey : $resumeTaskKey;
         $task = collect($step->task_cards)->firstWhere('key', $taskKey);
 
-        if (! is_array($task) || (string) ($task['task_key'] ?? '') !== 'loop.for_each_element') {
+        $catalogTaskKey = is_array($task) ? (string) ($task['task_key'] ?? '') : '';
+        $isLegacyCollectionLoop = $catalogTaskKey === 'loop.for_each_element'
+            && filled($task['selector'] ?? $task['element_selector'] ?? null);
+        $isBatchSearchReader = $catalogTaskKey === 'browser.read_searchengine_result'
+            && filled($task['list_item_selector'] ?? $task['listItemSelector'] ?? null);
+
+        if (! is_array($task) || (! $isLegacyCollectionLoop && ! $isBatchSearchReader)) {
             return $this->missingRequiredWorkflowReturnGap($session, $checkpoint);
         }
 
@@ -898,17 +904,27 @@ class WorkflowCopilotSupervisorService
         $taskResult = collect(is_array($result['tasks'] ?? null) ? $result['tasks'] : [])
             ->first(fn (mixed $candidate): bool => is_array($candidate)
                 && (string) ($candidate['key'] ?? '') === $taskKey);
-        $matchedCount = is_array($taskResult) && is_numeric($taskResult['matched_count'] ?? null)
-            ? (int) $taskResult['matched_count']
-            : (is_numeric($result['matched_count'] ?? null) ? (int) $result['matched_count'] : null);
+        $matchedCount = is_array($taskResult) && is_numeric($taskResult['selected_count'] ?? $taskResult['matched_count'] ?? null)
+            ? (int) ($taskResult['selected_count'] ?? $taskResult['matched_count'])
+            : (is_numeric($result['selected_count'] ?? $result['matched_count'] ?? null)
+                ? (int) ($result['selected_count'] ?? $result['matched_count'])
+                : null);
 
         if ($matchedCount !== 0) {
             return $this->missingRequiredWorkflowReturnGap($session, $checkpoint);
         }
 
-        $collectsArray = collect($step->task_cards)->contains(
-            fn (array $candidate): bool => (string) ($candidate['task_key'] ?? '') === 'data.append_to_array',
-        );
+        $collectionArrays = collect($step->task_cards)
+            ->map(function (array $candidate): string {
+                return match ((string) ($candidate['task_key'] ?? '')) {
+                    'data.append_to_array' => trim((string) ($candidate['array_name'] ?? $candidate['arrayName'] ?? '')),
+                    'browser.read_searchengine_result' => trim((string) ($candidate['output_array_name'] ?? $candidate['outputArrayName'] ?? '')),
+                    default => '',
+                };
+            })
+            ->filter()
+            ->values();
+        $collectsArray = $collectionArrays->isNotEmpty();
         $expectation = Str::lower(implode(' ', array_filter([
             (string) $session->goal,
             json_encode($session->success_criteria_json, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
@@ -920,17 +936,14 @@ class WorkflowCopilotSupervisorService
         }
 
         return [
-            'message' => 'Der Ergebnis-Loop wurde technisch beendet, hat aber keinen einzigen Treffer gefunden. Da dieser Step ein Ergebnis-Array erzeugen soll, wird der leere Loop als fachlicher Fehler repariert statt als Erfolg fortgesetzt.',
+            'message' => ($isBatchSearchReader ? 'Die Suchtrefferliste' : 'Der Legacy-Ergebnis-Loop').' wurde technisch verarbeitet, hat aber keinen einzigen Treffer erzeugt. Da dieser Step ein Ergebnis-Array liefern soll, wird die leere Sammlung als fachlicher Fehler repariert statt als Erfolg fortgesetzt.',
             'payload' => [
                 'reason_code' => 'required_collection_empty',
                 'matched_count' => 0,
-                'selector' => $task['selector'] ?? $task['element_selector'] ?? null,
-                'array_consumers' => collect($step->task_cards)
-                    ->filter(fn (array $candidate): bool => (string) ($candidate['task_key'] ?? '') === 'data.append_to_array')
-                    ->pluck('array_name')
-                    ->filter()
-                    ->values()
-                    ->all(),
+                'selector' => $isBatchSearchReader
+                    ? ($task['list_item_selector'] ?? $task['listItemSelector'] ?? null)
+                    : ($task['selector'] ?? $task['element_selector'] ?? null),
+                'array_consumers' => $collectionArrays->all(),
             ],
         ];
     }
@@ -965,8 +978,13 @@ class WorkflowCopilotSupervisorService
         }
 
         $sourceArray = $tasks
-            ->filter(fn (array $candidate): bool => (string) ($candidate['task_key'] ?? '') === 'data.append_to_array')
-            ->pluck('array_name')
+            ->map(function (array $candidate): string {
+                return match ((string) ($candidate['task_key'] ?? '')) {
+                    'data.append_to_array' => trim((string) ($candidate['array_name'] ?? $candidate['arrayName'] ?? '')),
+                    'browser.read_searchengine_result' => trim((string) ($candidate['output_array_name'] ?? $candidate['outputArrayName'] ?? '')),
+                    default => '',
+                };
+            })
             ->map(fn (mixed $name): string => trim((string) $name))
             ->filter()
             ->first(function (string $name) use ($result): bool {

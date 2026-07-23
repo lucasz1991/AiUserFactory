@@ -2679,6 +2679,16 @@ class WorkflowManager extends Component
                 : [])
             ->map(fn (array $field): string => preg_replace('/[^A-Za-z0-9_.-]+/', '', (string) ($field['name'] ?? '')) ?: '')
             ->filter()
+            ->merge([
+                'only_visible',
+                'store_current_element_as',
+                'collect_to_array',
+                'collect_from_variable',
+                'collect_dedupe_by',
+                'collect_max_items',
+                'completion_target',
+                'empty_target',
+            ])
             ->push('workflow_input_variables')
             ->unique()
             ->values()
@@ -2866,15 +2876,12 @@ class WorkflowManager extends Component
     protected function loopEndTaskForStart(array $startTask, string $endKey, string $pairId): array
     {
         $startKey = trim((string) ($startTask['key'] ?? '')) ?: 'loop-start';
-        $browserWindow = $this->normalizeBrowserWindowName((string) ($startTask['browser_window_name'] ?? $startTask['browser_window'] ?? 'main'));
         $title = trim((string) ($startTask['title'] ?? 'Loop'));
 
         return $this->taskCardFromDefinition('loop.end', [
             'key' => $endKey,
             'title' => 'Loop-Ende: '.($title !== '' ? $title : $startKey),
             'description' => 'Automatisches Endsegment fuer '.($title !== '' ? $title : $startKey).'.',
-            'browser_window' => $browserWindow,
-            'browser_window_name' => $browserWindow,
             'loop_pair_id' => $pairId,
             'loop_pair_segment' => 'end',
             'loop_start_key' => $startKey,

@@ -145,8 +145,8 @@ class WorkflowStepRunWatchdogTest extends TestCase
         $execution->monitorStepRun($youngStepRun->id);
         $execution->monitorStepRun($oldStepRun->id);
 
-        $this->assertMonitorDelaySeconds($youngStepRun->id, 3);
-        $this->assertMonitorDelaySeconds($oldStepRun->id, 10);
+        $this->assertMonitorDelaySeconds($youngStepRun->id, 1);
+        $this->assertMonitorDelaySeconds($oldStepRun->id, 3);
     }
 
     public function test_schedule_monitor_keeps_explicit_delays_for_non_workflow_runtimes(): void

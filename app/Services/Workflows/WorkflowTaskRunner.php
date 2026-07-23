@@ -31,7 +31,7 @@ class WorkflowTaskRunner
         $tasks = $this->runtimeTasks(
             $step,
             trim((string) ($runtimeContext['nextTaskKey'] ?? $runtimeContext['next_task_key'] ?? '')) ?: null,
-            (bool) ($runtimeContext['copilotSupervised'] ?? $runtimeContext['copilot_supervised'] ?? false),
+            $this->shouldSegmentTasks($runtimeContext),
             ! (bool) ($runtimeContext['studioSingleTask'] ?? $runtimeContext['studio_single_task'] ?? false),
         );
         $transientTask = $runtimeContext['copilotTransientTask'] ?? $runtimeContext['copilot_transient_task'] ?? null;
@@ -91,7 +91,7 @@ class WorkflowTaskRunner
         $tasks = $this->runtimeTasks(
             $step,
             trim((string) ($runtimeContext['nextTaskKey'] ?? $runtimeContext['next_task_key'] ?? '')) ?: null,
-            (bool) ($runtimeContext['copilotSupervised'] ?? $runtimeContext['copilot_supervised'] ?? false),
+            $this->shouldSegmentTasks($runtimeContext),
             ! (bool) ($runtimeContext['studioSingleTask'] ?? $runtimeContext['studio_single_task'] ?? false),
         );
 
@@ -506,6 +506,16 @@ class WorkflowTaskRunner
             $tasks,
             [(int) $step->workflow_id],
         );
+    }
+
+    protected function shouldSegmentTasks(array $runtimeContext): bool
+    {
+        if (array_key_exists('segmentTasks', $runtimeContext) || array_key_exists('segment_tasks', $runtimeContext)) {
+            return (bool) ($runtimeContext['segmentTasks'] ?? $runtimeContext['segment_tasks'] ?? false);
+        }
+
+        return (bool) ($runtimeContext['studioSingleTask'] ?? $runtimeContext['studio_single_task'] ?? false)
+            || (bool) ($runtimeContext['copilotSupervised'] ?? $runtimeContext['copilot_supervised'] ?? false);
     }
 
     protected function expandRuntimeTasks(
@@ -1084,11 +1094,15 @@ class WorkflowTaskRunner
 
     protected function normalizeRuntimeTask(array $task): array
     {
+        $legacyDomLoop = (string) ($task['task_key'] ?? '') === 'loop.for_each_element'
+            && trim((string) ($task['selector'] ?? $task['element_selector'] ?? '')) !== '';
         $script = match ((string) ($task['task_key'] ?? '')) {
             'browser.hover' => 'node/workflows/tasks/browser/hover.cjs',
             'browser.scroll' => 'node/workflows/tasks/browser/scroll.cjs',
             'browser.open_browser_session' => 'node/workflows/tasks/browser/open_browser_session.cjs',
-            'loop.for_each_element' => 'node/workflows/tasks/loop/for_each_element.cjs',
+            'loop.for_each_element' => $legacyDomLoop
+                ? 'node/workflows/tasks/loop/for_each_element_legacy.cjs'
+                : 'node/workflows/tasks/loop/for_each_element.cjs',
             'loop.end' => 'node/workflows/tasks/loop/end.cjs',
             'browser.read_element_fields' => 'node/workflows/tasks/browser/read_element_fields.cjs',
             'browser.read_searchengine_result' => 'node/workflows/tasks/browser/read_searchengine_result.cjs',
@@ -1113,6 +1127,12 @@ class WorkflowTaskRunner
 
         $task['runner'] = 'node';
         $task['node_script'] = $script;
+
+        if ((string) ($task['task_key'] ?? '') === 'loop.end'
+            || ((string) ($task['task_key'] ?? '') === 'loop.for_each_element' && ! $legacyDomLoop)) {
+            $task['kind'] = 'data';
+            unset($task['browser_window'], $task['browser_window_name']);
+        }
 
         return $task;
     }
@@ -1183,6 +1203,8 @@ class WorkflowTaskRunner
         $settings = is_array($run->workflow?->settings_json) ? $run->workflow->settings_json : [];
         $copilotObservation = (int) $run->workflow_copilot_session_id > 0
             || (int) data_get($run->context_json, 'workflow_copilot_session_id', 0) > 0;
+        $studioSingleTask = (bool) data_get($run->context_json, 'studio_single_task', false);
+        $captureBeforeByDefault = $copilotObservation || $studioSingleTask;
         $enabled = $localArtifacts && (
             $copilotObservation
             || filter_var($settings['dev_mode'] ?? false, FILTER_VALIDATE_BOOL)
@@ -1203,9 +1225,9 @@ class WorkflowTaskRunner
             'enabled' => $enabled,
             'dev_mode' => $enabled,
             'copilotObservation' => $copilotObservation,
-            'captureDomBeforeStep' => $copilotObservation || (bool) ($settings['dev_capture_dom_before_step'] ?? true),
+            'captureDomBeforeStep' => $copilotObservation || (bool) ($settings['dev_capture_dom_before_step'] ?? $captureBeforeByDefault),
             'captureDomAfterStep' => $copilotObservation || (bool) ($settings['dev_capture_dom_after_step'] ?? true),
-            'captureScreenshotBeforeStep' => $copilotObservation || (bool) ($settings['dev_capture_screenshot_before_step'] ?? true),
+            'captureScreenshotBeforeStep' => $copilotObservation || (bool) ($settings['dev_capture_screenshot_before_step'] ?? $captureBeforeByDefault),
             'captureScreenshotAfterStep' => $copilotObservation || (bool) ($settings['dev_capture_screenshot_after_step'] ?? true),
             'keepArtifacts' => $copilotObservation || (bool) ($settings['dev_keep_artifacts'] ?? true),
             'status' => trim((string) ($settings['dev_status'] ?? '')),
