@@ -71,7 +71,14 @@ class WorkflowRuntimeObservabilityConfigTest extends TestCase
         $this->assertFalse($normal['enabled']);
         $this->assertCaptureFlags($normal, false);
 
-        $workflow->forceFill(['settings_json' => ['dev_mode' => true]])->save();
+        $workflow->forceFill(['settings_json' => [
+            'dev_mode' => true,
+            'dev_capture_dom_before_step' => 'false',
+            'dev_capture_dom_after_step' => 'false',
+            'dev_capture_screenshot_before_step' => 'false',
+            'dev_capture_screenshot_after_step' => 'false',
+            'dev_keep_artifacts' => 'false',
+        ]])->save();
         $run->setRelation('workflow', $workflow->fresh());
         $developmentWithoutExplicitCaptures = $runner->debugConfig($run, $step, $stepRun);
 

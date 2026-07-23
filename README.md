@@ -231,6 +231,78 @@ Vollstaendige Analyse mit allen Belegen:
 ausfuehrbare Auftrag. Vor Beginn das Analysedokument einmal ganz lesen — die
 Begruendungen werden hier nicht wiederholt.
 
+### Koordination Claude ↔ Codex: Spurenmodell
+
+An diesem Auftrag arbeiten **zwei Agents parallel**. Regel 9 („nicht still
+denselben Bereich bearbeiten") reicht hier nicht, weil sich die Pakete Dateien
+teilen. Zusaetzlich gilt daher das folgende Modell. Es ist bewusst **dateibasiert
+und nicht paketbasiert** — Dateien sind die tatsaechliche Konfliktgrenze.
+
+**Regeln**
+
+1. **Eine Spur = ein exklusiver Dateisatz.** Ein Agent aendert ausschliesslich
+   Dateien seiner Spur. Kein „nur schnell eine Zeile" in einer fremden Spur.
+2. **Erst eintragen, dann arbeiten.** Vor der ersten Codeaenderung Spur in der
+   Tafel unten auf `in_arbeit` setzen. Wer zuerst eintraegt, hat die Spur. Ist
+   eine Spur belegt: **nicht warten**, eine freie Spur nehmen.
+3. **README-Konflikte vermeiden.** Die README ist die einzige Datei, die beide
+   Agents anfassen. Darum: nur eigene Zeilen bearbeiten, im Arbeitsprotokoll
+   **nur unten** anhaengen, fremde Zeilen und Tabellen **nie** umformatieren,
+   umsortieren oder in der Schreibweise vereinheitlichen.
+4. **Spuruebergreifender Bedarf wird nicht selbst erledigt.** Wer eine fremde
+   Datei braucht, aendert sie nicht, sondern traegt eine `Uebergabe`-Zeile in die
+   Tafel ein (was, wofuer). Der Spur-Eigentuemer erledigt es oder gibt frei.
+5. **Kleine Einheiten.** Ein Befund je Anspruch, danach Spur auf `frei` setzen.
+6. **Neue Dateien sind konfliktfrei**, solange der Dateiname eindeutig ist. Neue
+   Tests sind deshalb immer ein sicherer Parallelweg.
+
+**Spurentafel**
+
+| Spur | Exklusive Dateien | Enthaelt | Status | Agent |
+| --- | --- | --- | --- | --- |
+| **A — Node-Runtime** | `node/workflows/run_step.cjs`, `node/workflows/tasks/lib/preview.cjs` | G1, G3 | `in_arbeit` | Codex (P1) |
+| **B — PHP-Runner & Einstellungen** | `app/Services/Workflows/WorkflowTaskRunner.php`, `app/Livewire/Admin/Network/WorkflowsIndex.php` | G2a, G6 | `in_arbeit` | Codex (P1) |
+| **C — Housekeeping** | `app/Console/Commands/PruneWorkflowProcessArtifacts.php`, `app/Console/Kernel.php` | G5 | `in_arbeit` | Codex (P1) |
+| **D — Ausfuehrung & Monitor** | `app/Services/Workflows/WorkflowExecutionService.php` | G4, spaeter P3 | `in_arbeit` | Codex (P1) |
+| **E — Katalog & Bundle** | `app/Services/Workflows/WorkflowTaskCatalog.php`, `app/Services/Workflows/ClientWorkflowBundleCompiler.php` | P2a-Vorbereitung, P6 | `in_arbeit` | Claude |
+| **F — Neue Tests** | ausschliesslich **neu angelegte** Testdateien mit eindeutigem Namen | P2b | `in_arbeit` | Claude |
+
+Bestehende Testdateien gehoeren zur Spur der Datei, die sie testen — wer G1
+umsetzt, passt auch deren Tests an. Spur F umfasst nur **neue** Dateien.
+
+**Konfliktfreie Kombinationen:** A ∥ C, A ∥ D, A ∥ E, A ∥ F, B ∥ C, B ∥ D,
+B ∥ E, B ∥ F, C ∥ D, C ∥ E, C ∥ F, D ∥ E, D ∥ F, E ∥ F.
+**Bekannte Kreuzungen:** P2a braucht B + E gleichzeitig. P4/P5 beruehren
+A + B + D und werden **nicht** parallel bearbeitet — ein Agent nimmt alle drei,
+der andere arbeitet in E oder F weiter.
+
+### Befund fuer Codex: P2a ist keine reine Loeschung
+
+Bei der Vorbereitung von Spur E (P2a, `normalizeRuntimeTask()` entfernen) hat
+sich gezeigt, dass die zweite Registry **nicht vollstaendig redundant** ist.
+Belegt am 2026-07-23 gegen `WorkflowTaskCatalog::all()` (47 Eintraege, alle mit
+`node_script`, alle Dateien auf der Platte vorhanden):
+
+* **17 von 19** Keys in `WorkflowTaskRunner::normalizeRuntimeTask()`
+  (`WorkflowTaskRunner.php:1089-1112`) liefern **exakt denselben** `node_script`
+  wie der Katalog — diese sind ersatzlos streichbar.
+* **`loop.for_each_element`** ist die Ausnahme mit echter Logik: der Katalog
+  zeigt immer auf `loop/for_each_element.cjs`, `normalizeRuntimeTask()` waehlt
+  aber bei gesetztem Selector `loop/for_each_element_legacy.cjs`
+  (`WorkflowTaskRunner.php:1087`, `:1093-1095`). Diese Fallunterscheidung muss
+  erhalten bleiben — entweder als Katalogfeld (z. B. `node_script_legacy`) oder
+  als bewusst verbleibender Sonderfall.
+* **`data.save_workflow_data`** existiert **nur** in `normalizeRuntimeTask()`
+  (`WorkflowTaskRunner.php:1115`), **nicht** im Katalog. Der Key wird in
+  `WorkflowExecutionService.php:4118` weiterhin ausgewertet, das Skript
+  `node/workflows/tasks/data/save_workflow_data.cjs` existiert und wird von
+  `persist_mail_account.cjs:3` als Bibliothek eingebunden. Ein ersatzloses
+  Loeschen der Registry wuerde diesen Key unauffindbar machen. Vor P2a
+  entscheiden: in den Katalog aufnehmen oder als reine Bibliothek fuehren und
+  den Key aus `WorkflowExecutionService.php:4118` entfernen.
+
+Spur F sichert diese drei Punkte per Test ab, bevor jemand P2a umsetzt.
+
 ### Bereichsanspruch (Regel 9)
 
 Beansprucht werden fuer **P1**:

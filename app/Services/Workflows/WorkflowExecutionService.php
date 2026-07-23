@@ -2586,6 +2586,61 @@ class WorkflowExecutionService
             'logs_json' => $this->logsFromExternalStatus($result),
             'error_message' => null,
         ])->save();
+
+        $this->cleanupSuccessfulWorkflowTaskLogs($stepRun, $result);
+    }
+
+    protected function cleanupSuccessfulWorkflowTaskLogs(WorkflowStepRun $stepRun, array $result): void
+    {
+        if ($stepRun->external_run_type !== 'workflow-task'
+            || ! (bool) ($result['ok'] ?? false)) {
+            return;
+        }
+
+        $this->cleanupWorkflowTaskRunnerLogs((string) $stepRun->external_run_id);
+    }
+
+    protected function cleanupWorkflowTaskRunnerLogs(string $externalRunId): void
+    {
+        $externalRunId = trim($externalRunId);
+
+        if ($externalRunId === '' || preg_match('/\A[A-Za-z0-9][A-Za-z0-9_-]{0,127}\z/D', $externalRunId) !== 1) {
+            return;
+        }
+
+        $runDirectory = storage_path('app/workflow-task-runs/'.$externalRunId);
+        $runtimePath = $runDirectory.DIRECTORY_SEPARATOR.'runtime.json';
+
+        if (! File::isFile($runtimePath)) {
+            return;
+        }
+
+        try {
+            $runtime = json_decode(File::get($runtimePath), true, 512, JSON_THROW_ON_ERROR);
+        } catch (\Throwable) {
+            // Bei unlesbarer Konfiguration Diagnose-Logs sicherheitshalber behalten.
+            return;
+        }
+
+        if (! is_array($runtime)) {
+            return;
+        }
+
+        $debugEnabled = filter_var(data_get($runtime, 'devDebug.enabled', false), FILTER_VALIDATE_BOOL);
+        $observability = data_get($runtime, 'observability.level', data_get($runtime, 'observability', ''));
+        $observabilityLevel = is_string($observability) ? strtolower(trim($observability)) : '';
+
+        if ($debugEnabled || in_array($observabilityLevel, ['debug', 'copilot'], true)) {
+            return;
+        }
+
+        foreach (['stdout.log', 'stderr.log'] as $filename) {
+            $path = $runDirectory.DIRECTORY_SEPARATOR.$filename;
+
+            if (File::isFile($path)) {
+                File::delete($path);
+            }
+        }
     }
 
     protected function failStepRun(WorkflowStepRun $stepRun, string $message, ?array $result = null): void
@@ -2740,7 +2795,30 @@ class WorkflowExecutionService
 
         $this->releaseClientReservation($run);
         $this->closeWorkflowTaskProcesses($run, 'Workflow-Lauf wurde abgeschlossen; zugehoerige Browser-Prozesse wurden geschlossen.');
+        $this->cleanupSuccessfulWorkflowRunLogs($run);
         $this->notifyCopilotRunFinished($run);
+    }
+
+    protected function cleanupSuccessfulWorkflowRunLogs(WorkflowRun $run): void
+    {
+        $externalRunIds = $run->stepRuns()
+            ->where('external_run_type', 'workflow-task')
+            ->whereNotNull('external_run_id')
+            ->pluck('external_run_id')
+            ->map(fn (mixed $id): string => trim((string) $id))
+            ->all();
+        $historical = data_get($run->context_json, 'browser_owner_run_ids');
+
+        if (is_array($historical)) {
+            $externalRunIds = [...$externalRunIds, ...array_map(
+                fn (mixed $id): string => trim((string) $id),
+                $historical,
+            )];
+        }
+
+        foreach (array_unique(array_filter($externalRunIds)) as $externalRunId) {
+            $this->cleanupWorkflowTaskRunnerLogs($externalRunId);
+        }
     }
 
     protected function failRun(WorkflowRun $run, string $message): void

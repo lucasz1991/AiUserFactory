@@ -1205,6 +1205,8 @@ class WorkflowTaskRunner
             || (int) data_get($run->context_json, 'workflow_copilot_session_id', 0) > 0;
         $developmentEnabled = filter_var($settings['dev_mode'] ?? false, FILTER_VALIDATE_BOOL)
             || filter_var($settings['development'] ?? false, FILTER_VALIDATE_BOOL);
+        $developmentCaptureEnabled = fn (string $key): bool => $developmentEnabled
+            && filter_var($settings[$key] ?? false, FILTER_VALIDATE_BOOL);
         $enabled = $localArtifacts && (
             $copilotObservation
             || $developmentEnabled
@@ -1224,11 +1226,11 @@ class WorkflowTaskRunner
             'enabled' => $enabled,
             'dev_mode' => $enabled,
             'copilotObservation' => $copilotObservation,
-            'captureDomBeforeStep' => $copilotObservation || ($developmentEnabled && (bool) ($settings['dev_capture_dom_before_step'] ?? false)),
-            'captureDomAfterStep' => $copilotObservation || ($developmentEnabled && (bool) ($settings['dev_capture_dom_after_step'] ?? false)),
-            'captureScreenshotBeforeStep' => $copilotObservation || ($developmentEnabled && (bool) ($settings['dev_capture_screenshot_before_step'] ?? false)),
-            'captureScreenshotAfterStep' => $copilotObservation || ($developmentEnabled && (bool) ($settings['dev_capture_screenshot_after_step'] ?? false)),
-            'keepArtifacts' => $copilotObservation || ($developmentEnabled && (bool) ($settings['dev_keep_artifacts'] ?? false)),
+            'captureDomBeforeStep' => $copilotObservation || $developmentCaptureEnabled('dev_capture_dom_before_step'),
+            'captureDomAfterStep' => $copilotObservation || $developmentCaptureEnabled('dev_capture_dom_after_step'),
+            'captureScreenshotBeforeStep' => $copilotObservation || $developmentCaptureEnabled('dev_capture_screenshot_before_step'),
+            'captureScreenshotAfterStep' => $copilotObservation || $developmentCaptureEnabled('dev_capture_screenshot_after_step'),
+            'keepArtifacts' => $copilotObservation || $developmentCaptureEnabled('dev_keep_artifacts'),
             'status' => trim((string) ($settings['dev_status'] ?? '')),
             'storageDisk' => 'local',
             'storagePath' => $relativeDirectory,
