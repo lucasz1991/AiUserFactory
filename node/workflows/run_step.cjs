@@ -66,6 +66,12 @@ let fatalErrorHandled = false;
 let debugManifestDirty = false;
 let debugManifestLastWriteAtMs = 0;
 const DEBUG_MANIFEST_WRITE_INTERVAL_MS = 2000;
+let pendingStatusWrite = null;
+let pendingStatusWriteTimer = null;
+let lastStatusWriteAtMs = 0;
+let lastStatusState = '';
+const STATUS_WRITE_INTERVAL_MS = 2000;
+const TERMINAL_STATUS_STATES = new Set(['failed', 'completed', 'cancelled']);
 
 function now() {
   return new Date().toISOString();
@@ -261,10 +267,34 @@ function publicWorkflow(workflow = null) {
   return copy;
 }
 
-function statusPayload(state, stage, message, extra = {}) {
+function publicStatusExtra(extra = {}, includeDebug = false) {
   const publicExtra = redactPublicSecrets(extra);
 
-  return {
+  if (!publicExtra || typeof publicExtra !== 'object') {
+    return {};
+  }
+
+  delete publicExtra.debugArtifacts;
+  delete publicExtra.debug_artifacts;
+  delete publicExtra.events;
+
+  if (publicExtra.result && typeof publicExtra.result === 'object') {
+    delete publicExtra.result.debugArtifacts;
+    delete publicExtra.result.debug_artifacts;
+    delete publicExtra.result.events;
+  }
+
+  if (!includeDebug) {
+    delete publicExtra.debug;
+  }
+
+  return publicExtra;
+}
+
+function statusPayload(state, stage, message, extra = {}) {
+  const includeDebug = debugObservabilityEnabled();
+  const publicExtra = publicStatusExtra(extra, includeDebug);
+  const payload = {
     runId: runtime.runId,
     workflow: publicWorkflow(runtime.workflow || null),
     workflowRunId: runtime.workflowRunId,
@@ -278,6 +308,7 @@ function statusPayload(state, stage, message, extra = {}) {
     state,
     stage,
     message,
+    observabilityLevel: effectiveObservabilityLevel(),
     isRunning: ['queued', 'starting', 'running'].includes(state),
     startedAt,
     at: now(),
@@ -295,7 +326,7 @@ function statusPayload(state, stage, message, extra = {}) {
     browserProfilePath: runtime.browserProfilePath || null,
     browserWsEndpoint: browserWsEndpoint(),
     browserIdentity: browserIdentityPayload(),
-    tasks: runtime.tasks.map((task) => {
+    tasks: (Array.isArray(runtime.tasks) ? runtime.tasks : []).map((task) => {
       const result = taskResults.find((candidate) => candidate.key === task.key);
 
       if (result) {
@@ -304,12 +335,16 @@ function statusPayload(state, stage, message, extra = {}) {
 
       return redactPublicSecrets({ ...task, status: task.status || 'configured' });
     }),
-    events: redactPublicSecrets(events),
-    debugArtifacts: redactPublicSecrets(debugArtifacts),
-    debug_artifacts: redactPublicSecrets(debugArtifacts),
     browserWindows: lastBrowserWindows,
     ...publicExtra,
   };
+
+  if (includeDebug) {
+    payload.events = redactPublicSecrets(events);
+    payload.debugArtifacts = redactPublicSecrets(debugArtifacts);
+  }
+
+  return payload;
 }
 
 function pushEvent(stage, message, extra = {}) {
@@ -320,8 +355,68 @@ function pushEvent(stage, message, extra = {}) {
   }
 }
 
+function statusWriteIntervalMs() {
+  const configured = Number(runtime.statusWriteIntervalMs || runtime.status_write_interval_ms || STATUS_WRITE_INTERVAL_MS);
+
+  return Math.max(250, Math.min(60000, configured || STATUS_WRITE_INTERVAL_MS));
+}
+
+function statusWriteMustBeImmediate(state, stage) {
+  return lastStatusState !== state
+    || TERMINAL_STATUS_STATES.has(state)
+    || stage === 'task-started';
+}
+
+function clearPendingStatusWrite() {
+  pendingStatusWrite = null;
+
+  if (pendingStatusWriteTimer) {
+    clearTimeout(pendingStatusWriteTimer);
+    pendingStatusWriteTimer = null;
+  }
+}
+
+function commitStatusWrite(entry) {
+  clearPendingStatusWrite();
+  writeJson(runtime.statusPath, statusPayload(entry.state, entry.stage, entry.message, entry.extra));
+  lastStatusWriteAtMs = Date.now();
+  lastStatusState = entry.state;
+}
+
+function schedulePendingStatusWrite(delayMs) {
+  if (pendingStatusWriteTimer) {
+    return;
+  }
+
+  pendingStatusWriteTimer = setTimeout(() => {
+    const entry = pendingStatusWrite;
+    pendingStatusWrite = null;
+    pendingStatusWriteTimer = null;
+
+    if (entry) {
+      commitStatusWrite(entry);
+    }
+  }, Math.max(1, delayMs));
+
+  if (typeof pendingStatusWriteTimer.unref === 'function') {
+    pendingStatusWriteTimer.unref();
+  }
+}
+
 function writeStatus(state, stage, message, extra = {}) {
-  writeJson(runtime.statusPath, statusPayload(state, stage, message, extra));
+  const entry = { state, stage, message, extra };
+  const elapsedMs = Date.now() - lastStatusWriteAtMs;
+  const interval = statusWriteIntervalMs();
+
+  if (statusWriteMustBeImmediate(state, stage) || lastStatusWriteAtMs === 0 || elapsedMs >= interval) {
+    commitStatusWrite(entry);
+    return true;
+  }
+
+  pendingStatusWrite = entry;
+  schedulePendingStatusWrite(interval - elapsedMs);
+
+  return false;
 }
 
 function trackBrowserLifecycle(nextBrowser) {
@@ -1219,10 +1314,68 @@ function devDebugConfig() {
     : (runtime.dev_debug && typeof runtime.dev_debug === 'object' ? runtime.dev_debug : {});
 }
 
-function devDebugEnabled() {
-  const config = devDebugConfig();
+function normalizeObservabilityLevel(value) {
+  const normalized = String(value || '').trim().toLowerCase();
 
-  return config.enabled === true || config.dev_mode === true;
+  return ['off', 'preview', 'debug', 'copilot'].includes(normalized)
+    ? normalized
+    : '';
+}
+
+function observabilityRank(level) {
+  return {
+    off: 0,
+    preview: 1,
+    debug: 2,
+    copilot: 3,
+  }[normalizeObservabilityLevel(level)] ?? 0;
+}
+
+function effectiveObservabilityLevel() {
+  const config = devDebugConfig();
+  const runtimeObservability = runtime.observability && typeof runtime.observability === 'object'
+    ? runtime.observability
+    : {};
+  const candidates = [
+    typeof runtime.observability === 'string' ? runtime.observability : runtimeObservability.level,
+    runtime.observabilityLevel,
+    runtime.observability_level,
+    config.observability,
+    config.level,
+  ];
+  let effectiveLevel = 'off';
+
+  for (const candidate of candidates) {
+    const level = normalizeObservabilityLevel(candidate);
+
+    if (level && observabilityRank(level) > observabilityRank(effectiveLevel)) {
+      effectiveLevel = level;
+    }
+  }
+
+  if (config.copilotObservation === true || config.copilot_observation === true) {
+    return 'copilot';
+  }
+
+  if (config.enabled === true || config.dev_mode === true) {
+    effectiveLevel = observabilityRank(effectiveLevel) < observabilityRank('debug')
+      ? 'debug'
+      : effectiveLevel;
+  }
+
+  if (effectiveLevel === 'off' && runtime.livePreviewEnabled !== false) {
+    return 'preview';
+  }
+
+  return effectiveLevel;
+}
+
+function debugObservabilityEnabled() {
+  return observabilityRank(effectiveObservabilityLevel()) >= observabilityRank('debug');
+}
+
+function devDebugEnabled() {
+  return debugObservabilityEnabled();
 }
 
 function cleanFileSegment(value, fallback = 'item') {
@@ -2653,6 +2806,17 @@ async function run() {
 
   const workflowContext = isPlainObject(runtime.workflow) ? runtime.workflow : {};
   const initialWorkflowVariables = workflowVariablesFromContext({ workflow: workflowContext });
+  const runDirectory = runtime.runDirectory || path.dirname(runtime.resultPath);
+  const observabilityLevel = effectiveObservabilityLevel();
+  const debugEnabled = debugObservabilityEnabled();
+  const contextDevDebug = {
+    ...devDebugConfig(),
+    enabled: debugEnabled,
+    dev_mode: debugEnabled,
+    observability: observabilityLevel,
+    level: observabilityLevel,
+    captureDom: debugEnabled,
+  };
   const context = {
     ...workflowContext,
     workflow: workflowContext,
@@ -2663,14 +2827,24 @@ async function run() {
       livePreviewPath: runtime.livePreviewPath,
       livePreviewRelativePath: runtime.livePreviewRelativePath,
       intervalMs: runtime.livePreviewIntervalMs || 3000,
+      observability: observabilityLevel,
+      captureDom: debugEnabled,
+      debugDomDirectory: runDirectory,
     },
+    devDebug: contextDevDebug,
+    observability: {
+      level: observabilityLevel,
+      debug: debugEnabled,
+      copilot: observabilityLevel === 'copilot',
+    },
+    observabilityLevel,
     livePreviewEnabled: runtime.livePreviewEnabled !== false,
     livePreviewIntervalMs: runtime.livePreviewIntervalMs || 3000,
     livePreviewIntervalSeconds: runtime.livePreviewIntervalSeconds || 3,
     livePreviewPath: runtime.livePreviewPath,
     livePreviewRelativePath: runtime.livePreviewRelativePath,
-    runDirectory: runtime.runDirectory || path.dirname(runtime.resultPath),
-    workflowTaskRunDirectory: runtime.runDirectory || path.dirname(runtime.resultPath),
+    runDirectory,
+    workflowTaskRunDirectory: runDirectory,
     timeoutMs: runtime.observationTimeoutMs || 90000,
     pages: [],
     browserWindows: lastBrowserWindows,
@@ -3258,7 +3432,6 @@ async function run() {
       };
 
       failedResult.debugArtifacts = debugArtifacts;
-      failedResult.debug_artifacts = debugArtifacts;
 
       flushDebugArtifactManifest(true);
       writeJson(runtime.resultPath, failedResult);
@@ -3394,7 +3567,6 @@ async function run() {
       completed_task_key: lastCompletedTaskKey,
     } : {}),
     debugArtifacts,
-    debug_artifacts: debugArtifacts,
     browserWindows: lastBrowserWindows,
     browserWsEndpoint: browserWsEndpoint(),
     browserIdentity: browserIdentityPayload(),
@@ -3455,7 +3627,6 @@ run()
       error: error.stack || error.message,
       tasks: taskResults,
       debugArtifacts,
-      debug_artifacts: debugArtifacts,
       browserWindows: lastBrowserWindows,
       browserWsEndpoint: browserWsEndpoint(),
       browserIdentity: browserIdentityPayload(),

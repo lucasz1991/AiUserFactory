@@ -346,9 +346,10 @@ class WorkflowManager extends Component
             'workflowDevelopment' => ['boolean'],
         ]);
         $settings = is_array($workflow->settings_json) ? $workflow->settings_json : [];
-        $settings['dev_mode'] = (bool) $validated['workflowDevelopment'];
-        $settings['dev_capture_dom_before_step'] = true;
-        $settings['dev_keep_artifacts'] = true;
+        $developmentEnabled = (bool) $validated['workflowDevelopment'];
+        $settings['dev_mode'] = $developmentEnabled;
+        $settings['dev_capture_dom_before_step'] = $developmentEnabled;
+        $settings['dev_keep_artifacts'] = $developmentEnabled;
 
         $workflow->forceFill([
             'name' => trim($validated['workflowName']),

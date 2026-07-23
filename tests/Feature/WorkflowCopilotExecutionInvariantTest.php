@@ -185,10 +185,14 @@ class WorkflowCopilotExecutionInvariantTest extends TestCase
         $this->assertTrue($single['segmentTasks']);
     }
 
-    public function test_normal_dev_run_captures_after_only_while_single_task_keeps_before_and_after(): void
+    public function test_normal_dev_run_respects_explicit_capture_flags_even_for_single_task_execution(): void
     {
         [$workflow, $step] = $this->workflow();
-        $workflow->forceFill(['settings_json' => ['dev_mode' => true]])->save();
+        $workflow->forceFill(['settings_json' => [
+            'dev_mode' => true,
+            'dev_capture_dom_after_step' => true,
+            'dev_capture_screenshot_after_step' => true,
+        ]])->save();
         $stepRun = (new WorkflowStepRun)->forceFill(['id' => 9002]);
         $runner = app(WorkflowTaskRunner::class);
         $method = new ReflectionMethod($runner, 'devDebugRuntimeConfig');
@@ -209,8 +213,10 @@ class WorkflowCopilotExecutionInvariantTest extends TestCase
 
         $run->context_json = ['execution_target' => 'system', 'studio_single_task' => true];
         $single = $method->invoke($runner, $run, $step, $stepRun, true);
-        $this->assertTrue($single['captureDomBeforeStep']);
-        $this->assertTrue($single['captureScreenshotBeforeStep']);
+        $this->assertFalse($single['captureDomBeforeStep']);
+        $this->assertFalse($single['captureScreenshotBeforeStep']);
+        $this->assertTrue($single['captureDomAfterStep']);
+        $this->assertTrue($single['captureScreenshotAfterStep']);
     }
 
     public function test_supervised_runtime_keeps_a_paired_dom_loop_atomic_and_continues_after_its_end(): void

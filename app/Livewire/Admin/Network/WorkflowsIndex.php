@@ -284,6 +284,7 @@ class WorkflowsIndex extends Component
 
         $group = $this->normalizeGroup($validated['newWorkflowGroup']);
         $subcategory = $this->normalizeSubcategory($validated['newWorkflowSubcategory'] ?? '');
+        $developmentSettings = $this->developmentSettings((bool) $validated['newWorkflowDevelopment']);
         $workflow = Workflow::query()->create([
             'name' => trim($validated['newWorkflowName']),
             'slug' => $this->uniqueSlug($validated['newWorkflowName']),
@@ -295,9 +296,8 @@ class WorkflowsIndex extends Component
             'trigger_type' => 'manual',
             'settings_json' => [
                 'created_from' => 'workflows-index',
-                'dev_mode' => (bool) $validated['newWorkflowDevelopment'],
-                'dev_capture_dom_before_step' => true,
-                'dev_keep_artifacts' => true,
+                'live_preview' => null,
+                ...$developmentSettings,
                 'studio' => ['permission_mode' => $validated['newWorkflowPermissionMode']],
             ],
         ]);
@@ -425,9 +425,10 @@ class WorkflowsIndex extends Component
         $group = $this->normalizeGroup($validated['editingWorkflowGroup']);
         $subcategory = $this->normalizeSubcategory($validated['editingWorkflowSubcategory'] ?? '');
         $settings = is_array($workflow->settings_json) ? $workflow->settings_json : [];
-        $settings['dev_mode'] = (bool) $validated['editingWorkflowDevelopment'];
-        $settings['dev_capture_dom_before_step'] = true;
-        $settings['dev_keep_artifacts'] = true;
+        $settings = array_replace(
+            $settings,
+            $this->developmentSettings((bool) $validated['editingWorkflowDevelopment']),
+        );
 
         $workflow->forceFill([
             'name' => trim($validated['editingWorkflowName']),
@@ -532,6 +533,18 @@ class WorkflowsIndex extends Component
         }
 
         return $slug;
+    }
+
+    protected function developmentSettings(bool $enabled): array
+    {
+        return [
+            'dev_mode' => $enabled,
+            'dev_capture_dom_before_step' => $enabled,
+            'dev_capture_dom_after_step' => $enabled,
+            'dev_capture_screenshot_before_step' => $enabled,
+            'dev_capture_screenshot_after_step' => $enabled,
+            'dev_keep_artifacts' => $enabled,
+        ];
     }
 
     protected function uniqueDuplicateName(string $name): string

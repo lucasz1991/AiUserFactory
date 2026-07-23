@@ -6,6 +6,13 @@ const path = require('path');
 const pageKeys = new WeakMap();
 let nextPageKey = 1;
 
+const OBSERVABILITY_LEVELS = Object.freeze({
+  off: 0,
+  preview: 1,
+  debug: 2,
+  copilot: 3,
+});
+
 function normalizeText(value) {
   return String(value ?? '').trim();
 }
@@ -28,6 +35,62 @@ function enabled(context = {}) {
   return preview.enabled !== false
     && context.livePreviewEnabled !== false
     && context.previewEnabled !== false;
+}
+
+function normalizeObservabilityLevel(value) {
+  const normalized = normalizeText(value).toLowerCase();
+
+  return Object.prototype.hasOwnProperty.call(OBSERVABILITY_LEVELS, normalized)
+    ? normalized
+    : '';
+}
+
+function observabilityLevel(context = {}) {
+  const preview = context.preview || context.livePreview || {};
+  const devDebug = context.devDebug || context.dev_debug || {};
+  const observability = context.observability || {};
+  const candidates = [
+    typeof observability === 'string' ? observability : observability.level,
+    context.observabilityLevel,
+    context.observability_level,
+    preview.observability,
+    preview.observabilityLevel,
+    preview.observability_level,
+    devDebug.observability,
+    devDebug.level,
+  ];
+  let effectiveLevel = 'off';
+
+  for (const candidate of candidates) {
+    const level = normalizeObservabilityLevel(candidate);
+
+    if (level && OBSERVABILITY_LEVELS[level] > OBSERVABILITY_LEVELS[effectiveLevel]) {
+      effectiveLevel = level;
+    }
+  }
+
+  if (devDebug.copilotObservation === true || devDebug.copilot_observation === true) {
+    return 'copilot';
+  }
+
+  if (
+    preview.captureDom === true
+    || preview.capture_dom === true
+    || devDebug.captureDom === true
+    || devDebug.capture_dom === true
+    || devDebug.enabled === true
+    || devDebug.dev_mode === true
+  ) {
+    effectiveLevel = OBSERVABILITY_LEVELS.debug > OBSERVABILITY_LEVELS[effectiveLevel]
+      ? 'debug'
+      : effectiveLevel;
+  }
+
+  return effectiveLevel;
+}
+
+function debugDomEnabled(context = {}) {
+  return OBSERVABILITY_LEVELS[observabilityLevel(context)] >= OBSERVABILITY_LEVELS.debug;
 }
 
 function pageKey(page, fallbackIndex = 0) {
@@ -95,26 +158,26 @@ function relativeWithSuffix(relativePath, suffix) {
   return `${base}-${suffix}${ext}`;
 }
 
-function debugDomPathFor(livePreviewPath) {
-  if (!livePreviewPath) {
+function debugDomPathFor(windowConfig = {}, context = {}) {
+  const preview = context.preview || context.livePreview || {};
+  const privateRunDirectory = normalizeText(
+    preview.debugDomDirectory
+    || preview.debug_dom_directory
+    || context.debugDomDirectory
+    || context.debug_dom_directory
+    || context.runDirectory
+    || context.workflowTaskRunDirectory,
+  );
+
+  if (!privateRunDirectory) {
     return '';
   }
 
-  const ext = path.extname(livePreviewPath) || '.png';
-  const base = livePreviewPath.slice(0, -ext.length);
+  const livePreviewFilename = path.basename(normalizeText(windowConfig.livePreviewPath) || 'live.png');
+  const ext = path.extname(livePreviewFilename) || '.png';
+  const base = livePreviewFilename.slice(0, -ext.length) || 'live';
 
-  return `${base}-dom.json`;
-}
-
-function debugDomRelativePathFor(livePreviewRelativePath) {
-  if (!livePreviewRelativePath) {
-    return '';
-  }
-
-  const ext = path.extname(livePreviewRelativePath) || '.png';
-  const base = livePreviewRelativePath.slice(0, -ext.length);
-
-  return `${base}-dom.json`;
+  return path.join(privateRunDirectory, `${base}-dom.json`);
 }
 
 function windowPath(context, index, windowConfig = {}) {
@@ -273,8 +336,8 @@ async function frameDomSnapshot(frame) {
   }
 }
 
-async function captureDebugDom(windowConfig, capture = {}) {
-  const debugDomPath = debugDomPathFor(windowConfig.livePreviewPath);
+async function captureDebugDom(windowConfig, context = {}, capture = {}) {
+  const debugDomPath = debugDomPathFor(windowConfig, context);
 
   if (!debugDomPath || !windowConfig.page || typeof windowConfig.page.frames !== 'function') {
     return {};
@@ -302,7 +365,6 @@ async function captureDebugDom(windowConfig, capture = {}) {
 
   return {
     debugDomPath,
-    debugDomRelativePath: debugDomRelativePathFor(windowConfig.livePreviewRelativePath),
   };
 }
 
@@ -336,9 +398,11 @@ async function captureWindow(windowConfig, context = {}, force = false) {
   const targetId = typeof windowConfig.page.target === 'function'
     ? String(windowConfig.page.target()?._targetId || '')
     : '';
-  const debugDom = await captureDebugDom(windowConfig, { url, title, targetId }).catch((error) => ({
-    debugDomError: error.message,
-  }));
+  const debugDom = debugDomEnabled(context)
+    ? await captureDebugDom(windowConfig, context, { url, title, targetId }).catch((error) => ({
+      debugDomError: error.message,
+    }))
+    : {};
   Object.assign(windowConfig, {
     url,
     title,

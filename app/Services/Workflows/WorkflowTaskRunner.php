@@ -25,7 +25,7 @@ class WorkflowTaskRunner
         $settings = $this->mailSettings->settings();
         $timezone = $this->workflowTimezone($runtimeContext);
         $runId = (string) Str::uuid();
-        $livePreviewEnabled = (bool) ($settings['live_preview_enabled'] ?? true);
+        $livePreviewEnabled = $this->livePreviewEnabled($run, $settings);
         $livePreviewIntervalSeconds = max(1, min(60, (int) ($settings['live_preview_interval_seconds'] ?? 3)));
 
         $tasks = $this->runtimeTasks(
@@ -75,7 +75,7 @@ class WorkflowTaskRunner
         $settings = $this->mailSettings->settings();
         $timezone = $this->workflowTimezone($runtimeContext);
         $runId = (string) Str::uuid();
-        $livePreviewEnabled = (bool) ($settings['live_preview_enabled'] ?? true);
+        $livePreviewEnabled = $this->livePreviewEnabled($run, $settings);
         $livePreviewIntervalSeconds = max(1, min(60, (int) ($settings['live_preview_interval_seconds'] ?? 3)));
         $runDirectory = $this->runDirectory($runId);
         $publicRunDirectory = storage_path('app/public/'.$this->publicRunRelativeDirectory($runId));
@@ -1203,12 +1203,11 @@ class WorkflowTaskRunner
         $settings = is_array($run->workflow?->settings_json) ? $run->workflow->settings_json : [];
         $copilotObservation = (int) $run->workflow_copilot_session_id > 0
             || (int) data_get($run->context_json, 'workflow_copilot_session_id', 0) > 0;
-        $studioSingleTask = (bool) data_get($run->context_json, 'studio_single_task', false);
-        $captureBeforeByDefault = $copilotObservation || $studioSingleTask;
+        $developmentEnabled = filter_var($settings['dev_mode'] ?? false, FILTER_VALIDATE_BOOL)
+            || filter_var($settings['development'] ?? false, FILTER_VALIDATE_BOOL);
         $enabled = $localArtifacts && (
             $copilotObservation
-            || filter_var($settings['dev_mode'] ?? false, FILTER_VALIDATE_BOOL)
-            || filter_var($settings['development'] ?? false, FILTER_VALIDATE_BOOL)
+            || $developmentEnabled
         );
 
         if (! $localArtifacts) {
@@ -1225,11 +1224,11 @@ class WorkflowTaskRunner
             'enabled' => $enabled,
             'dev_mode' => $enabled,
             'copilotObservation' => $copilotObservation,
-            'captureDomBeforeStep' => $copilotObservation || (bool) ($settings['dev_capture_dom_before_step'] ?? $captureBeforeByDefault),
-            'captureDomAfterStep' => $copilotObservation || (bool) ($settings['dev_capture_dom_after_step'] ?? true),
-            'captureScreenshotBeforeStep' => $copilotObservation || (bool) ($settings['dev_capture_screenshot_before_step'] ?? $captureBeforeByDefault),
-            'captureScreenshotAfterStep' => $copilotObservation || (bool) ($settings['dev_capture_screenshot_after_step'] ?? true),
-            'keepArtifacts' => $copilotObservation || (bool) ($settings['dev_keep_artifacts'] ?? true),
+            'captureDomBeforeStep' => $copilotObservation || ($developmentEnabled && (bool) ($settings['dev_capture_dom_before_step'] ?? false)),
+            'captureDomAfterStep' => $copilotObservation || ($developmentEnabled && (bool) ($settings['dev_capture_dom_after_step'] ?? false)),
+            'captureScreenshotBeforeStep' => $copilotObservation || ($developmentEnabled && (bool) ($settings['dev_capture_screenshot_before_step'] ?? false)),
+            'captureScreenshotAfterStep' => $copilotObservation || ($developmentEnabled && (bool) ($settings['dev_capture_screenshot_after_step'] ?? false)),
+            'keepArtifacts' => $copilotObservation || ($developmentEnabled && (bool) ($settings['dev_keep_artifacts'] ?? false)),
             'status' => trim((string) ($settings['dev_status'] ?? '')),
             'storageDisk' => 'local',
             'storagePath' => $relativeDirectory,
@@ -1243,6 +1242,20 @@ class WorkflowTaskRunner
             'stepPosition' => (int) $step->position,
             'stepActionKey' => (string) $step->action_key,
         ];
+    }
+
+    protected function livePreviewEnabled(WorkflowRun $run, array $processSettings): bool
+    {
+        $globalEnabled = filter_var($processSettings['live_preview_enabled'] ?? true, FILTER_VALIDATE_BOOL);
+        $workflowSettings = is_array($run->workflow?->settings_json) ? $run->workflow->settings_json : [];
+
+        if (! array_key_exists('live_preview', $workflowSettings) || $workflowSettings['live_preview'] === null) {
+            return $globalEnabled;
+        }
+
+        $override = filter_var($workflowSettings['live_preview'], FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE);
+
+        return $override ?? $globalEnabled;
     }
 
     protected function publicRuntimeContext(array $runtimeContext): array
