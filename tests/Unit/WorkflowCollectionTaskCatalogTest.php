@@ -130,23 +130,20 @@ class WorkflowCollectionTaskCatalogTest extends TestCase
 
     public function test_runtime_uses_pure_control_scripts_but_keeps_legacy_dom_loops_compatible(): void
     {
-        $reflection = new \ReflectionClass(\App\Services\Workflows\WorkflowTaskRunner::class);
-        $runner = $reflection->newInstanceWithoutConstructor();
-        $normalize = new \ReflectionMethod($runner, 'normalizeRuntimeTask');
-        $normalize->setAccessible(true);
+        $catalog = app(WorkflowTaskCatalog::class);
 
-        $control = $normalize->invoke($runner, [
+        $control = $catalog->resolveRuntimeTask([
             'task_key' => 'loop.for_each_element',
             'kind' => 'browser',
             'browser_window' => 'main',
             'iteration_count' => 3,
         ]);
-        $legacy = $normalize->invoke($runner, [
+        $legacy = $catalog->resolveRuntimeTask([
             'task_key' => 'loop.for_each_element',
             'kind' => 'browser',
             'selector' => '.legacy-result',
         ]);
-        $end = $normalize->invoke($runner, [
+        $end = $catalog->resolveRuntimeTask([
             'task_key' => 'loop.end',
             'kind' => 'browser',
             'browser_window' => 'main',

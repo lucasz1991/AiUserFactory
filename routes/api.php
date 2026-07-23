@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Ai\AiConnectionController;
 use App\Http\Controllers\Api\ClientControllerApiController;
+use App\Http\Controllers\Api\WorkflowRuntimeCallbackController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
@@ -33,6 +34,11 @@ Route::prefix('client-controller')->group(function (): void {
     Route::post('/job-result', [ClientControllerApiController::class, 'reportJobResult']);
     Route::post('/rebind', [ClientControllerApiController::class, 'rebind']);
 });
+
+Route::post(
+    '/workflow-runtime/step-runs/{workflowStepRun}/{externalRunId}/completed',
+    [WorkflowRuntimeCallbackController::class, 'completed'],
+)->middleware('signed:relative')->name('workflow-runtime.completed');
 
 Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
     return $request->user();

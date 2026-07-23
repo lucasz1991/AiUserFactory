@@ -191,17 +191,33 @@
                                             </div>
                                             <div class="flex w-full flex-wrap justify-center gap-0.5">
                                                 @foreach($miniStep['tasks'] as $miniTask)
+                                                    @php
+                                                        // Feature R3: Alles bleibt sichtbar. Aeltere Durchlaeufe
+                                                        // verblassen ueber die Deckkraft, verschwinden aber nie.
+                                                        $miniFreshness = (int) ($miniTask['freshness'] ?? 0);
+                                                        $miniPasses = (int) ($miniTask['passes'] ?? 0);
+                                                        $miniRan = $miniPasses > 0 || in_array($miniTask['status'], ['completed', 'success', 'failed', 'timeout', 'skipped', 'not_executed'], true);
+                                                        $miniOpacity = $miniTask['active'] || ! $miniRan ? 100 : max(45, min(100, $miniFreshness ?: 100));
+                                                        $miniTitle = $miniTask['title'].' · '.$miniTask['status'].($miniPasses > 1 ? ' · '.$miniPasses.'× gelaufen' : '');
+                                                    @endphp
                                                     <span
-                                                        title="{{ $miniTask['title'] }}"
+                                                        title="{{ $miniTitle }}"
+                                                        style="opacity: {{ $miniOpacity / 100 }}"
                                                         @class([
-                                                            'block h-2.5 w-3 rounded-sm border',
-                                                            'border-amber-500 bg-amber-400 shadow-sm shadow-amber-300/50' => $miniTask['active'] || in_array($miniTask['status'], ['running', 'waiting'], true),
-                                                            'border-emerald-500 bg-emerald-400' => ! $miniTask['active'] && in_array($miniTask['status'], ['completed', 'success'], true),
-                                                            'border-red-500 bg-red-400' => ! $miniTask['active'] && in_array($miniTask['status'], ['failed', 'timeout'], true),
-                                                            'border-slate-300 bg-slate-300' => ! $miniTask['active'] && in_array($miniTask['status'], ['skipped', 'not_executed'], true),
-                                                            'border-slate-300 bg-white' => ! $miniTask['active'] && ! in_array($miniTask['status'], ['running', 'waiting', 'completed', 'success', 'failed', 'timeout', 'skipped', 'not_executed'], true),
+                                                            'block h-2.5 rounded-sm border',
+                                                            'w-3' => ! $miniTask['active'],
+                                                            // Der aktive Task ist breiter und geringelt: er ist auch
+                                                            // ohne Farbunterscheidung sofort auffindbar.
+                                                            'w-5 ring-2 ring-amber-400/70' => $miniTask['active'],
+                                                            'border-amber-600 bg-amber-400 shadow-sm shadow-amber-300/60' => $miniTask['active'] || in_array($miniTask['status'], ['running', 'waiting'], true),
+                                                            'border-emerald-600 bg-emerald-400' => ! $miniTask['active'] && in_array($miniTask['status'], ['completed', 'success'], true),
+                                                            'border-red-600 bg-red-400' => ! $miniTask['active'] && in_array($miniTask['status'], ['failed', 'timeout'], true),
+                                                            'border-slate-400 bg-slate-300' => ! $miniTask['active'] && in_array($miniTask['status'], ['skipped', 'not_executed'], true),
+                                                            // Noch nicht gelaufen: heller Umriss ohne Fuellung — klar
+                                                            // vom bereits gelaufenen Grau unterscheidbar.
+                                                            'border-dashed border-slate-300 bg-white' => ! $miniTask['active'] && ! $miniRan,
                                                         ])
-                                                    ></span>
+                                                    >@if($miniPasses > 1)<span class="sr-only">{{ $miniPasses }}× gelaufen</span>@endif</span>
                                                 @endforeach
                                                 @if($miniStep['overflow'] > 0)
                                                     <span class="flex h-2.5 min-w-3 items-center justify-center rounded-sm border border-slate-200 bg-white px-0.5 text-[8px] font-semibold leading-none text-slate-600">

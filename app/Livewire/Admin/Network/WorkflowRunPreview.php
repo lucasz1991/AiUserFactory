@@ -554,9 +554,22 @@ class WorkflowRunPreview extends Component
             ->filter(fn (array $panel): bool => (int) data_get($panel, 'debug.workflowStepId') > 0)
             ->keyBy(fn (array $panel): int => (int) data_get($panel, 'debug.workflowStepId'));
 
+        // Feature R3: Beim Ruecksprung ueberschreibt der neue Lauf `result_json`
+        // der Liste mit den Tasks ab dem Sprungziel. Ohne diese Historie fielen
+        // alle frueher gelaufenen Tasks derselben Liste auf `pending` zurueck und
+        // der zurueckgelegte Weg waere nicht mehr sichtbar.
+        $historyByStep = $this->taskHistoryByStep($workflowRun);
+        $minSequence = (int) $historyByStep
+            ->flatMap(fn (Collection $entries): Collection => $entries->pluck('seq'))
+            ->min();
+        $maxSequence = (int) $historyByStep
+            ->flatMap(fn (Collection $entries): Collection => $entries->pluck('seq'))
+            ->max();
+
         return $steps
-            ->map(function (WorkflowStep $step, int $index) use ($panelsByStepId, $activeStepId, $activeTaskKey): array {
+            ->map(function (WorkflowStep $step, int $index) use ($panelsByStepId, $activeStepId, $activeTaskKey, $historyByStep, $minSequence, $maxSequence): array {
                 $panel = $panelsByStepId->get((int) $step->id, []);
+                $history = $historyByStep->get((int) $step->id, collect());
                 $isActiveStep = (int) $activeStepId === (int) $step->id;
                 $stepStatus = trim((string) data_get($panel, 'status', $isActiveStep ? 'running' : 'pending')) ?: 'pending';
                 $panelTasks = collect(data_get($panel, 'tasks', []))
@@ -566,10 +579,17 @@ class WorkflowRunPreview extends Component
                 $templateTasks = collect($step->task_cards ?? [])->filter(fn (mixed $task): bool => is_array($task))->values();
                 $usedKeys = [];
                 $tasks = $templateTasks
-                    ->map(function (array $task, int $taskIndex) use ($panelTasksByKey, $activeTaskKey, &$usedKeys): array {
+                    ->map(function (array $task, int $taskIndex) use ($panelTasksByKey, $activeTaskKey, $history, $minSequence, $maxSequence, &$usedKeys): array {
                         $taskKey = (string) ($task['key'] ?? 'task-'.$taskIndex);
                         $resultTask = $panelTasksByKey->get($taskKey, []);
-                        $status = trim((string) data_get($resultTask, 'status', data_get($task, 'status', 'pending'))) ?: 'pending';
+                        $historyEntry = $history->get($taskKey);
+                        // Der aktuelle Snapshot hat Vorrang; fehlt die Task dort
+                        // (Ruecksprung hat sie herausgeschnitten), traegt die
+                        // Historie ihren letzten bekannten Zustand.
+                        $status = trim((string) data_get($resultTask, 'status', '')) ?: '';
+                        $status = $status !== ''
+                            ? $status
+                            : (trim((string) ($historyEntry['status'] ?? '')) ?: (trim((string) data_get($task, 'status', '')) ?: 'pending'));
                         $isActive = $activeTaskKey !== '' && $activeTaskKey === $taskKey;
                         $usedKeys[$taskKey] = true;
 
@@ -578,20 +598,25 @@ class WorkflowRunPreview extends Component
                             'title' => (string) ($task['title'] ?? data_get($resultTask, 'title', $taskKey)),
                             'status' => $isActive ? 'running' : $status,
                             'active' => $isActive,
+                            'passes' => (int) ($historyEntry['passes'] ?? 0),
+                            'freshness' => $this->markerFreshness($historyEntry['seq'] ?? null, $minSequence, $maxSequence, $isActive),
                         ];
                     });
 
                 $extraTasks = $panelTasks
                     ->reject(fn (array $task): bool => isset($usedKeys[(string) ($task['key'] ?? '')]))
-                    ->map(function (array $task) use ($activeTaskKey): array {
+                    ->map(function (array $task) use ($activeTaskKey, $history, $minSequence, $maxSequence): array {
                         $taskKey = (string) ($task['key'] ?? '');
                         $isActive = $activeTaskKey !== '' && $activeTaskKey === $taskKey;
+                        $historyEntry = $history->get($taskKey);
 
                         return [
                             'key' => $taskKey,
                             'title' => (string) ($task['title'] ?? $taskKey ?: 'Task'),
                             'status' => $isActive ? 'running' : (trim((string) ($task['status'] ?? 'pending')) ?: 'pending'),
                             'active' => $isActive,
+                            'passes' => (int) ($historyEntry['passes'] ?? 0),
+                            'freshness' => $this->markerFreshness($historyEntry['seq'] ?? null, $minSequence, $maxSequence, $isActive),
                         ];
                     });
 
@@ -603,6 +628,8 @@ class WorkflowRunPreview extends Component
                         'title' => $step->name,
                         'status' => $stepStatus,
                         'active' => $isActiveStep,
+                        'passes' => 0,
+                        'freshness' => $isActiveStep ? 100 : 0,
                     ]]);
                 }
 
@@ -637,6 +664,66 @@ class WorkflowRunPreview extends Component
                 ];
             })
             ->values();
+    }
+
+    /**
+     * Letzter bekannter Zustand je Task aus `context_json.task_history`,
+     * gruppiert nach Liste (Feature R3).
+     *
+     * @return Collection<int, Collection<string, array{seq:int,status:string,passes:int,title:string}>>
+     */
+    protected function taskHistoryByStep(WorkflowRun $workflowRun): Collection
+    {
+        return collect(data_get($workflowRun->context_json, 'task_history', []))
+            ->filter(fn (mixed $entry): bool => is_array($entry) && trim((string) ($entry['task_key'] ?? '')) !== '')
+            ->groupBy(fn (array $entry): int => (int) ($entry['workflow_step_id'] ?? 0))
+            ->map(function (Collection $entries): Collection {
+                $byKey = [];
+
+                foreach ($entries as $entry) {
+                    $taskKey = (string) $entry['task_key'];
+                    $sequence = (int) ($entry['seq'] ?? 0);
+                    $known = $byKey[$taskKey] ?? null;
+
+                    // Mehrfachdurchlaeufe zaehlen, aber nur der juengste Zustand
+                    // bestimmt die Farbe der Markierung.
+                    $byKey[$taskKey] = [
+                        'seq' => max($sequence, (int) ($known['seq'] ?? 0)),
+                        'status' => $sequence >= (int) ($known['seq'] ?? -1)
+                            ? (trim((string) ($entry['status'] ?? '')) ?: 'completed')
+                            : (string) $known['status'],
+                        'passes' => (int) ($known['passes'] ?? 0) + 1,
+                        'title' => trim((string) ($entry['title'] ?? '')) ?: (string) ($known['title'] ?? ''),
+                    ];
+                }
+
+                return collect($byKey);
+            });
+    }
+
+    /**
+     * Frischegrad einer Markierung in Prozent: 100 = juengster Schritt,
+     * kleiner = laenger her. Die Oberflaeche leitet daraus das Verblassen ab.
+     * Alles bleibt sichtbar; es gibt keinen Wert, der eine Markierung ausblendet.
+     */
+    protected function markerFreshness(mixed $sequence, int $minSequence, int $maxSequence, bool $isActive): int
+    {
+        if ($isActive) {
+            return 100;
+        }
+
+        $sequence = (int) $sequence;
+
+        if ($sequence <= 0 || $minSequence <= 0 || $maxSequence <= 0) {
+            return 0;
+        }
+
+        // Untergrenze 45: der aelteste Schritt bleibt deutlich erkennbar.
+        $relativeAge = $maxSequence === $minSequence
+            ? 1.0
+            : ($sequence - $minSequence) / max(1, $maxSequence - $minSequence);
+
+        return (int) round(45 + (55 * min(1.0, max(0.0, $relativeAge))));
     }
 
     protected function embeddedWorkflowCards(WorkflowRun $workflowRun, Collection $stepDebugPanels): Collection

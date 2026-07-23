@@ -173,23 +173,7 @@ class WorkflowCopilotPreflightServiceTest extends TestCase
             null,
         );
         $ai = Mockery::mock(AiConnectionService::class);
-        $ai->shouldReceive('json')
-            ->once()
-            ->withArgs(fn (string $prompt, string $system): bool => str_contains($prompt, 'KEINEN aktuellen DOM')
-                && str_contains($prompt, 'condition_false')
-                && str_contains($prompt, 'type=fail')
-                && str_contains($prompt, 'history_preflight')
-                && str_contains($system, 'Vorab-Planer'))
-            ->andReturn([
-                'action' => 'structural_update',
-                'reason' => 'Bekannte terminale Fehlerroute endet stattdessen kontrolliert.',
-                'operations' => [[
-                    'type' => 'update_task_routes',
-                    'step_action_key' => 'browser-schritt',
-                    'task_key' => 'target-task',
-                    'changes' => ['on_error' => ['type' => 'end']],
-                ]],
-            ]);
+        $ai->shouldNotReceive('json');
         $this->app->instance(AiConnectionService::class, $ai);
 
         app(WorkflowCopilotSupervisorService::class)->supervise($session->id);

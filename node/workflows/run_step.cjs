@@ -38,6 +38,7 @@ const workflowTimezone = runtime.timeZone
   || 'Europe/Berlin';
 process.env.TZ = workflowTimezone;
 const basePath = path.resolve(__dirname, '..', '..');
+const workflowScriptsRoot = path.resolve(basePath, 'node', 'workflows');
 const startedAt = new Date().toISOString();
 const taskResults = [];
 const events = [];
@@ -70,6 +71,9 @@ let pendingStatusWrite = null;
 let pendingStatusWriteTimer = null;
 let lastStatusWriteAtMs = 0;
 let lastStatusState = '';
+let completionCallbackState = '';
+let completionCallbackPromise = null;
+let publicTaskConfigurations = null;
 const STATUS_WRITE_INTERVAL_MS = 2000;
 const TERMINAL_STATUS_STATES = new Set(['failed', 'completed', 'cancelled']);
 
@@ -291,9 +295,19 @@ function publicStatusExtra(extra = {}, includeDebug = false) {
   return publicExtra;
 }
 
+function configuredPublicTasks() {
+  if (publicTaskConfigurations === null) {
+    publicTaskConfigurations = (Array.isArray(runtime.tasks) ? runtime.tasks : [])
+      .map((task) => redactPublicSecrets({ ...task, status: task.status || 'configured' }));
+  }
+
+  return publicTaskConfigurations;
+}
+
 function statusPayload(state, stage, message, extra = {}) {
   const includeDebug = debugObservabilityEnabled();
   const publicExtra = publicStatusExtra(extra, includeDebug);
+  const taskResultsByKey = new Map(taskResults.map((result) => [result.key, result]));
   const payload = {
     runId: runtime.runId,
     workflow: publicWorkflow(runtime.workflow || null),
@@ -305,6 +319,7 @@ function statusPayload(state, stage, message, extra = {}) {
     workflowStepType: runtime.workflowStepType,
     timezone: workflowTimezone,
     timeZone: workflowTimezone,
+    pid: process.pid,
     state,
     stage,
     message,
@@ -326,14 +341,14 @@ function statusPayload(state, stage, message, extra = {}) {
     browserProfilePath: runtime.browserProfilePath || null,
     browserWsEndpoint: browserWsEndpoint(),
     browserIdentity: browserIdentityPayload(),
-    tasks: (Array.isArray(runtime.tasks) ? runtime.tasks : []).map((task) => {
-      const result = taskResults.find((candidate) => candidate.key === task.key);
+    tasks: configuredPublicTasks().map((task) => {
+      const result = taskResultsByKey.get(task.key);
 
       if (result) {
         return redactPublicSecrets({ ...task, ...result });
       }
 
-      return redactPublicSecrets({ ...task, status: task.status || 'configured' });
+      return task;
     }),
     browserWindows: lastBrowserWindows,
     ...publicExtra,
@@ -376,11 +391,81 @@ function clearPendingStatusWrite() {
   }
 }
 
+function completionCallbackConfig() {
+  const config = runtime.completionCallback || runtime.completion_callback;
+
+  if (!config || typeof config !== 'object') {
+    return null;
+  }
+
+  const url = typeof config.url === 'string' ? config.url.trim() : '';
+
+  if (!/^https?:\/\//i.test(url)) {
+    return null;
+  }
+
+  return {
+    url,
+    timeoutMs: Math.max(250, Math.min(10000, Number(config.timeoutMs || config.timeout_ms || 3000))),
+  };
+}
+
+function queueCompletionCallback(state) {
+  if (!TERMINAL_STATUS_STATES.has(state) || completionCallbackState !== '') {
+    return;
+  }
+
+  const callback = completionCallbackConfig();
+
+  if (!callback) {
+    return;
+  }
+
+  completionCallbackState = state;
+  completionCallbackPromise = (async () => {
+    if (typeof fetch !== 'function') {
+      throw new Error('Die Node-Runtime stellt fetch() fuer den Abschluss-Callback nicht bereit.');
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), callback.timeoutMs);
+
+    try {
+      const response = await fetch(callback.url, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          state,
+          runId: runtime.runId,
+          workflowRunId: runtime.workflowRunId,
+          workflowStepRunId: runtime.workflowStepRunId,
+          at: now(),
+        }),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+    } finally {
+      clearTimeout(timeout);
+    }
+  })().catch((error) => {
+    // Der Statusdatei-Monitor bleibt absichtlich als Rueckfall aktiv. Ein
+    // Callback-/Proxyfehler darf deshalb nie den fachlichen Taskstatus aendern.
+    process.stderr.write(`Workflow-Abschluss-Callback fehlgeschlagen: ${String(error?.message || error)}\n`);
+  });
+}
+
 function commitStatusWrite(entry) {
   clearPendingStatusWrite();
   writeJson(runtime.statusPath, statusPayload(entry.state, entry.stage, entry.message, entry.extra));
   lastStatusWriteAtMs = Date.now();
   lastStatusState = entry.state;
+  queueCompletionCallback(entry.state);
 }
 
 function schedulePendingStatusWrite(delayMs) {
@@ -2742,6 +2827,7 @@ function routeMaxAttempts(route = {}) {
 // Rueckwaerts-Routen ohne konfiguriertes max_attempts wuerden sonst bis zum
 // Watchdog zyklieren; jeder Zyklus kann durch Task-Timeouts Minuten kosten.
 const DEFAULT_BACK_ROUTE_ATTEMPTS = 3;
+const MAX_CATALOG_LOOP_ITERATIONS = 100000;
 
 function routeAttemptKey(task = {}, route = {}, targetCardKey = '') {
   return [
@@ -2754,14 +2840,68 @@ function routeAttemptKey(task = {}, route = {}, targetCardKey = '') {
 }
 
 function routeTransitionLimit(tasks = []) {
-  const loopLimit = tasks
-    .filter((task) => String(task?.task_key || '') === 'loop.for_each_element')
-    .reduce((maximum, task) => {
-      const configured = Number(task?.limit ?? 0);
-      return Math.max(maximum, Number.isFinite(configured) && configured > 0 ? Math.floor(configured) : 1000);
-    }, 0);
+  // Loop-Kontrollspruenge besitzen ein separates, erst zur Laufzeit aus dem
+  // echten Loop-Ergebnis abgeleitetes Budget. Dadurch kann ein bloss
+  // konfiguriertes source_array die allgemeine Schutzgrenze nicht aufweichen.
+  return Math.max(100, tasks.length * 20);
+}
 
-  return Math.max(100, tasks.length * 20, loopLimit * 5);
+function configuredLoopIterationLimit(task = {}) {
+  const configuredCount = Number(task?.iteration_count ?? task?.iterationCount);
+
+  if (Number.isFinite(configuredCount) && configuredCount >= 0) {
+    return Math.min(MAX_CATALOG_LOOP_ITERATIONS, Math.floor(configuredCount));
+  }
+
+  const legacyLimit = Number(task?.limit);
+
+  if (Number.isFinite(legacyLimit) && legacyLimit > 0) {
+    return Math.min(MAX_CATALOG_LOOP_ITERATIONS, Math.floor(legacyLimit));
+  }
+
+  return null;
+}
+
+function reportedLoopIterationLimit(task = {}, result = {}) {
+  const reported = Number(
+    result?.iteration_count
+    ?? result?.iterationCount
+    ?? result?.selected_count
+    ?? result?.selectedCount,
+  );
+
+  if (Number.isFinite(reported) && reported >= 0) {
+    return Math.min(MAX_CATALOG_LOOP_ITERATIONS, Math.floor(reported));
+  }
+
+  return configuredLoopIterationLimit(task);
+}
+
+function loopStartKeyForTransition(sourceTask = {}, targetTask = {}) {
+  const sourceType = String(sourceTask?.task_key || '');
+  const targetType = String(targetTask?.task_key || '');
+  const sourceKey = String(sourceTask?.key || '').trim();
+  const targetKey = String(targetTask?.key || '').trim();
+
+  if (
+    sourceType === 'loop.end'
+    && targetType === 'loop.for_each_element'
+    && String(sourceTask?.loop_start_key ?? sourceTask?.loopStartKey ?? '').trim() === targetKey
+    && String(targetTask?.loop_end_key ?? targetTask?.loopEndKey ?? '').trim() === sourceKey
+  ) {
+    return targetKey;
+  }
+
+  if (
+    sourceType === 'loop.for_each_element'
+    && targetType === 'loop.end'
+    && String(sourceTask?.loop_end_key ?? sourceTask?.loopEndKey ?? '').trim() === targetKey
+    && String(targetTask?.loop_start_key ?? targetTask?.loopStartKey ?? '').trim() === sourceKey
+  ) {
+    return sourceKey;
+  }
+
+  return '';
 }
 
 function workflowBoundaryIndex(runtimeTasks = [], frameKey = '', fromIndex = -1, boundaryKey = '') {
@@ -2798,6 +2938,121 @@ function embeddedBoundaryIndexForTask(runtimeTasks = [], task = {}, taskIndex = 
     taskIndex,
     embeddedBoundaryKeyForTask(task) || enclosingEmbeddedBoundaryKeyForTask(task),
   );
+}
+
+function pathIsWithin(rootPath, candidatePath) {
+  const relativePath = path.relative(rootPath, candidatePath);
+
+  return relativePath === '' || (
+    relativePath !== '..'
+    && !relativePath.startsWith(`..${path.sep}`)
+    && !path.isAbsolute(relativePath)
+  );
+}
+
+function canonicalPath(filePath) {
+  return typeof fs.realpathSync.native === 'function'
+    ? fs.realpathSync.native(filePath)
+    : fs.realpathSync(filePath);
+}
+
+function compactModuleLoadError(error) {
+  return String(error?.message || error || 'Unbekannter Fehler')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Laedt alle Node-Task-Module, bevor der erste Task ausgefuehrt wird.
+ *
+ * Neben dem Fail-fast-Verhalten ist dies eine Sicherheitsgrenze: Runtime-Daten
+ * duerfen nur Module unterhalb von node/workflows adressieren. Reale Pfade
+ * werden ebenfalls geprueft, damit ein Symlink die Grenze nicht umgehen kann.
+ */
+function preloadNodeTaskModules(runtimeTasks = []) {
+  const modulesByTask = new Map();
+  const loadResultsByPath = new Map();
+  const preloadErrors = [];
+  const canonicalScriptsRoot = canonicalPath(workflowScriptsRoot);
+
+  runtimeTasks.forEach((task, taskIndex) => {
+    if (!task || task.runner !== 'node') {
+      return;
+    }
+
+    const taskKey = String(task.key || task.task_key || `#${taskIndex + 1}`).trim() || `#${taskIndex + 1}`;
+    const configuredScript = typeof task.node_script === 'string'
+      ? task.node_script.trim()
+      : '';
+    const scriptLabel = configuredScript || '<fehlt>';
+    const errorPrefix = `Task \`${taskKey}\` (Script: \`${scriptLabel}\`)`;
+
+    if (configuredScript === '') {
+      preloadErrors.push(`${errorPrefix}: Konfigurationsfehler: node_script fehlt oder ist kein String.`);
+
+      return;
+    }
+
+    const requestedScriptPath = path.resolve(basePath, configuredScript);
+
+    if (!pathIsWithin(workflowScriptsRoot, requestedScriptPath)) {
+      preloadErrors.push(`${errorPrefix}: Konfigurationsfehler: Pfad liegt ausserhalb von node/workflows.`);
+
+      return;
+    }
+
+    let canonicalScriptPath;
+
+    try {
+      canonicalScriptPath = canonicalPath(requestedScriptPath);
+    } catch (error) {
+      preloadErrors.push(`${errorPrefix}: Ladefehler: ${compactModuleLoadError(error)}`);
+
+      return;
+    }
+
+    if (!pathIsWithin(canonicalScriptsRoot, canonicalScriptPath)) {
+      preloadErrors.push(`${errorPrefix}: Konfigurationsfehler: Reales Pfadziel liegt ausserhalb von node/workflows.`);
+
+      return;
+    }
+
+    let loadResult = loadResultsByPath.get(canonicalScriptPath);
+
+    if (!loadResult) {
+      try {
+        const taskModule = require(canonicalScriptPath);
+
+        loadResult = taskModule && typeof taskModule.run === 'function'
+          ? { taskModule }
+          : { error: 'Exportfehler: Task-Script exportiert keine run()-Funktion.' };
+      } catch (error) {
+        loadResult = { error: `Ladefehler: ${compactModuleLoadError(error)}` };
+      }
+
+      loadResultsByPath.set(canonicalScriptPath, loadResult);
+    }
+
+    if (loadResult.error) {
+      preloadErrors.push(`${errorPrefix}: ${loadResult.error}`);
+
+      return;
+    }
+
+    modulesByTask.set(task, {
+      configuredScript,
+      taskModule: loadResult.taskModule,
+    });
+  });
+
+  if (preloadErrors.length > 0) {
+    throw new Error([
+      `Node-Task-Module konnten nicht vorgeladen werden (${preloadErrors.length} Fehler). Kein Task wurde ausgefuehrt:`,
+      ...preloadErrors.map((message) => `- ${message}`),
+    ].join('\n'));
+  }
+
+  return modulesByTask;
 }
 
 async function run() {
@@ -2856,6 +3111,7 @@ async function run() {
   activeRunContext = context;
 
   const runtimeTasks = runtime.tasks || [];
+  const preloadedNodeTaskModules = preloadNodeTaskModules(runtimeTasks);
   const maxRouteTransitions = routeTransitionLimit(runtimeTasks);
   let taskIndex = 0;
   let requestedSuccessRouteTask = null;
@@ -2865,6 +3121,8 @@ async function run() {
   let lastCompletedTaskKey = '';
   let routeTransitions = 0;
   const routeAttemptCounts = new Map();
+  const loopTransitionCounts = new Map();
+  const loopTransitionLimits = new Map();
   const appliedEmbeddedInputFrames = new Set();
   const preserveBrowserForFailureRoute = startedFromFailureRoute();
   let devDebugTaskExecutionCounter = 0;
@@ -2943,16 +3201,17 @@ async function run() {
         throw new Error(`Runner wird vom Node-Orchestrator nicht unterstuetzt: ${task.runner || '-'}`);
       } else {
 
-        if (!task.node_script) {
-          throw new Error('Task hat kein node_script.');
+        const preloadedModule = preloadedNodeTaskModules.get(task);
+
+        if (!preloadedModule) {
+          throw new Error(`Task-Script wurde nicht vorgeladen: ${task.node_script || task.key || '-'}`);
         }
 
-        const scriptPath = path.resolve(basePath, task.node_script);
-        const module = require(scriptPath);
-
-        if (!module || typeof module.run !== 'function') {
-          throw new Error(`Task-Script exportiert keine run()-Funktion: ${task.node_script}`);
+        if (String(task.node_script || '').trim() !== preloadedModule.configuredScript) {
+          throw new Error(`node_script wurde nach dem Vorladen veraendert: ${task.key || task.task_key || '-'}`);
         }
+
+        const taskModule = preloadedModule.taskModule;
 
         const input = taskInput(task, context);
         const targetBrowserWindow = browserWindowNameForTask(task, input);
@@ -3003,7 +3262,7 @@ async function run() {
             pushEvent('dev-debug-before-failed', error.message, { taskKey: task.key });
           });
 
-          result = await module.run(context);
+          result = await taskModule.run(context);
         }
 
         if (task.task_key === 'browser.close' && !result?.skippedBrowserClose) {
@@ -3187,16 +3446,53 @@ async function run() {
 
     flushDebugArtifactManifest(true);
 
+    if (String(task?.task_key || '') === 'loop.for_each_element') {
+      const reportedLimit = reportedLoopIterationLimit(task, result);
+
+      if (reportedLimit !== null) {
+        // Ein Loop benoetigt einen Ruecksprung pro Durchlauf und abschliessend
+        // genau einen Sprung vom Start zu seinem End-Marker.
+        loopTransitionLimits.set(String(task.key || ''), reportedLimit + 1);
+      }
+
+      const loopEndKey = String(task?.loop_end_key ?? task?.loopEndKey ?? '').trim();
+      const loopEndTask = runtimeTasks.find((candidate) => String(candidate?.key || '') === loopEndKey);
+      const startsRealIteration = (result?.loop_complete === false || result?.loopComplete === false)
+        && loopStartKeyForTransition(task, loopEndTask) === String(task.key || '').trim();
+
+      if (startsRealIteration) {
+        // Allgemeine Body-Routen erhalten je echtem Durchlauf ihr kleines
+        // Schutzbudget neu. Ein Self-Cycle innerhalb desselben Durchlaufs oder
+        // nach einem abgeschlossenen/leeren Loop kann es nicht zuruecksetzen.
+        // Das gilt fuer reine Kontroll-Loops ebenso wie fuer den Legacy-DOM-Loop.
+        routeTransitions = 0;
+      }
+    }
+
     const dynamicRouteTarget = String(result.route_target_key || result.routeTargetKey || '').trim();
 
     if (dynamicRouteTarget !== '') {
       const dynamicTargetIndex = runtimeTasks.findIndex((candidate) => String(candidate.key || '') === dynamicRouteTarget);
 
       if (dynamicTargetIndex >= 0) {
-        routeTransitions += 1;
+        const dynamicTargetTask = runtimeTasks[dynamicTargetIndex];
+        const loopStartKey = loopStartKeyForTransition(task, dynamicTargetTask);
 
-        if (routeTransitions > maxRouteTransitions) {
-          throw new Error('Zu viele dynamische Task-Routenwechsel. Moegliche Schleife in der Task-Konfiguration.');
+        if (loopStartKey !== '') {
+          const loopTransitionLimit = loopTransitionLimits.get(loopStartKey);
+          const loopTransitionCount = (loopTransitionCounts.get(loopStartKey) || 0) + 1;
+
+          if (!Number.isFinite(loopTransitionLimit) || loopTransitionCount > loopTransitionLimit) {
+            throw new Error(`Zu viele Loop-Routenwechsel fuer ${loopStartKey}. Moegliche Endlosschleife in der Loop-Konfiguration.`);
+          }
+
+          loopTransitionCounts.set(loopStartKey, loopTransitionCount);
+        } else {
+          routeTransitions += 1;
+
+          if (routeTransitions > maxRouteTransitions) {
+            throw new Error('Zu viele dynamische Task-Routenwechsel. Moegliche Schleife in der Task-Konfiguration.');
+          }
         }
 
         pushEvent('task-dynamic-route-followed', `Dynamische Task-Route wird fortgesetzt: ${dynamicRouteTarget}.`, {
@@ -3645,6 +3941,10 @@ run()
   })
   .finally(async () => {
     flushDebugArtifactManifest(true);
+
+    if (completionCallbackPromise) {
+      await completionCallbackPromise;
+    }
 
     if (!shutdownInProgress && !fatalErrorHandled) {
       await finalizeBrowserLifecycle(finalRunState);

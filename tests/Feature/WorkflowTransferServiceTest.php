@@ -33,6 +33,7 @@ class WorkflowTransferServiceTest extends TestCase
         $parent->steps()->create($this->stepAttributes('Parent step', 'parent-step', [
             'tasks' => [[
                 'key' => 'run-child',
+                'task_key' => 'workflow.include.'.$child->id,
                 'title' => 'Run child',
                 'runner' => 'workflow',
                 'workflow_id' => $child->id,
@@ -57,6 +58,7 @@ class WorkflowTransferServiceTest extends TestCase
         $task = data_get($importedParent->steps()->firstOrFail()->config_json, 'tasks.0');
 
         $this->assertSame($importedChild->id, (int) data_get($task, 'workflow_id'));
+        $this->assertSame('workflow.include.'.$importedChild->id, data_get($task, 'task_key'));
         $this->assertSame('child-flow', data_get($task, 'workflow_slug'));
         $this->assertTrue($importedParent->includedWorkflows()->whereKey($importedChild->id)->exists());
         $this->assertSame('Child step', $importedChild->steps()->firstOrFail()->name);

@@ -238,6 +238,10 @@
         </div>
     @endif
 
+    @if (session()->has('warning'))
+        <div class="rounded-lg border border-amber-200 bg-amber-50 p-2 text-sm text-amber-900" role="status">{{ session('warning') }}</div>
+    @endif
+
     @if (session()->has('error'))
         <div class="rounded-lg border border-red-200 bg-red-50 p-2 text-sm text-red-900">{{ session('error') }}</div>
     @endif

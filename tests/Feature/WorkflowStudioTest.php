@@ -25,6 +25,7 @@ use App\Services\Workflows\WorkflowStudioSessionService;
 use App\Services\Workflows\WorkflowTaskRunner;
 use DomainException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Facades\Queue;
@@ -282,6 +283,31 @@ class WorkflowStudioTest extends TestCase
             ->set('probeAction', 'probe.keypress')
             ->assertSet('probeValue', 'Enter')
             ->assertSeeHtml('<option value="Tab">Tab</option>');
+    }
+
+    public function test_studio_refresh_only_queries_the_bounded_event_window_and_not_full_revision_history(): void
+    {
+        [$workflow] = $this->workflow();
+        $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
+        $this->actingAs($admin);
+        $component = Livewire::test(WorkflowStudio::class, ['workflow' => $workflow]);
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $component->call('$refresh')->assertHasNoErrors();
+        $queries = collect(DB::getQueryLog())->pluck('query');
+        DB::disableQueryLog();
+
+        $revisionQueries = $queries->filter(
+            fn (string $query): bool => str_contains(strtolower($query), 'workflow_studio_revisions'),
+        );
+        $eventQueries = $queries->filter(
+            fn (string $query): bool => str_contains(strtolower($query), 'workflow_studio_events'),
+        );
+
+        $this->assertCount(0, $revisionQueries, 'Ein Studio-Refresh darf nicht die vollstaendige Revisionshistorie laden.');
+        $this->assertCount(1, $eventQueries, 'Ein Studio-Refresh soll genau das begrenzte sichtbare Eventfenster laden.');
+        $this->assertStringContainsString('limit 40', strtolower((string) $eventQueries->first()));
     }
 
     public function test_diagnostic_tools_and_builder_use_scoped_modals(): void

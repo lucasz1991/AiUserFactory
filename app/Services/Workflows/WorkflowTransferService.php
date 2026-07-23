@@ -450,6 +450,14 @@ class WorkflowTransferService
                 $value['workflow_slug'] = $slug;
                 $value['workflow_id'] = 0;
             }
+
+            $workflowId = (int) ($value['workflow_id'] ?? 0);
+
+            if ($workflowId > 0) {
+                // Include-Keys enthalten die Datenbank-ID und muessen deshalb
+                // beim Import gemeinsam mit workflow_id neu geschrieben werden.
+                $value['task_key'] = 'workflow.include.'.$workflowId;
+            }
         }
 
         return $value;

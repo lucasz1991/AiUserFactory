@@ -12,6 +12,7 @@ use App\Services\Workflows\WorkflowExecutionService;
 use App\Services\Workflows\WorkflowTaskRunner;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Str;
 use Mockery;
 use ReflectionClass;
 use ReflectionMethod;
@@ -95,14 +96,33 @@ class WorkflowCopilotExecutionInvariantTest extends TestCase
             'status' => 'pending',
             'result_json' => [],
         ]);
+        $reservedRunId = null;
         $runner = Mockery::mock(WorkflowTaskRunner::class);
         $runner->shouldReceive('start')
             ->once()
-            ->withArgs(fn (WorkflowRun $runArg, WorkflowStep $stepArg, WorkflowStepRun $stepRunArg): bool => $runArg->is($run)
-                && $stepArg->is($step)
-                && $stepRunArg->is($stepRun))
-            ->andReturn([
-                'runId' => 'wait-task-run',
+            ->withArgs(function (
+                WorkflowRun $runArg,
+                WorkflowStep $stepArg,
+                WorkflowStepRun $stepRunArg,
+                array $runtimeContext,
+                string $runId,
+            ) use ($run, $step, $stepRun, &$reservedRunId): bool {
+                $reservedRunId = $runId;
+
+                return $runArg->is($run)
+                    && $stepArg->is($step)
+                    && $stepRunArg->is($stepRun)
+                    && $runtimeContext !== []
+                    && Str::isUuid($runId);
+            })
+            ->andReturnUsing(fn (
+                WorkflowRun $runArg,
+                WorkflowStep $stepArg,
+                WorkflowStepRun $stepRunArg,
+                array $runtimeContext,
+                string $runId,
+            ): array => [
+                'runId' => $runId,
                 'status' => 'running',
                 'livePreviewPollIntervalSeconds' => 1,
             ]);
@@ -113,7 +133,8 @@ class WorkflowCopilotExecutionInvariantTest extends TestCase
 
         $this->assertSame('waiting', $status);
         $this->assertSame('workflow-task', $stepRun->fresh()->external_run_type);
-        $this->assertSame('wait-task-run', $stepRun->fresh()->external_run_id);
+        $this->assertNotNull($reservedRunId);
+        $this->assertSame($reservedRunId, $stepRun->fresh()->external_run_id);
     }
 
     public function test_manual_run_can_pause_with_persisted_runtime_context_and_resume_at_selected_task(): void

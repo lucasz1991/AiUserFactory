@@ -141,13 +141,17 @@ test('debug capture fails closed when no private run directory is available', as
 
 function executeRuntime(devDebug, options = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workflow-status-observability-'));
+  let scriptDirectory = null;
   const runtimePath = path.join(directory, 'runtime.json');
   const resultPath = path.join(directory, 'result.json');
   const statusPath = path.join(directory, 'status.json');
-  const contextProbePath = path.join(directory, 'context-probe.cjs');
   const taskScript = 'node/workflows/tasks/data/workflow_return.cjs';
 
-  fs.writeFileSync(contextProbePath, `'use strict';
+  try {
+    scriptDirectory = fs.mkdtempSync(path.resolve(__dirname, '../../node/workflows/.test-observability-'));
+    const contextProbePath = path.join(scriptDirectory, 'context-probe.test.cjs');
+
+    fs.writeFileSync(contextProbePath, `'use strict';
 module.exports = {
   key: 'test.context_probe',
   async run(context = {}) {
@@ -168,55 +172,54 @@ module.exports = {
 };
 `);
 
-  fs.writeFileSync(runtimePath, JSON.stringify({
-    resultPath,
-    statusPath,
-    runDirectory: directory,
-    livePreviewEnabled: options.livePreviewEnabled === true,
-    statusWriteIntervalMs: 60000,
-    devDebug,
-    workflow: { workflow_variables: {} },
-    tasks: [
-      {
-        key: 'observe-context',
-        task_key: 'test.context_probe',
-        title: 'Observe context',
-        kind: 'data',
-        runner: 'node',
-        node_script: contextProbePath,
-      },
-      {
-        key: 'return-one',
-        task_key: 'data.workflow_return',
-        title: 'Return one',
-        kind: 'data',
-        runner: 'node',
-        node_script: taskScript,
-        value: 'one',
-      },
-      {
-        key: 'return-two',
-        task_key: 'data.workflow_return',
-        title: 'Return two',
-        kind: 'data',
-        runner: 'node',
-        node_script: taskScript,
-        value: 'two',
-      },
-    ],
-  }));
+    fs.writeFileSync(runtimePath, JSON.stringify({
+      resultPath,
+      statusPath,
+      runDirectory: directory,
+      livePreviewEnabled: options.livePreviewEnabled === true,
+      statusWriteIntervalMs: 60000,
+      devDebug,
+      workflow: { workflow_variables: {} },
+      tasks: [
+        {
+          key: 'observe-context',
+          task_key: 'test.context_probe',
+          title: 'Observe context',
+          kind: 'data',
+          runner: 'node',
+          node_script: contextProbePath,
+        },
+        {
+          key: 'return-one',
+          task_key: 'data.workflow_return',
+          title: 'Return one',
+          kind: 'data',
+          runner: 'node',
+          node_script: taskScript,
+          value: 'one',
+        },
+        {
+          key: 'return-two',
+          task_key: 'data.workflow_return',
+          title: 'Return two',
+          kind: 'data',
+          runner: 'node',
+          node_script: taskScript,
+          value: 'two',
+        },
+      ],
+    }));
 
-  const processResult = spawnSync(
-    process.execPath,
-    [path.resolve(__dirname, '../../node/workflows/run_step.cjs'), runtimePath],
-    {
-      cwd: path.resolve(__dirname, '../..'),
-      encoding: 'utf8',
-      timeout: 15000,
-    },
-  );
+    const processResult = spawnSync(
+      process.execPath,
+      [path.resolve(__dirname, '../../node/workflows/run_step.cjs'), runtimePath],
+      {
+        cwd: path.resolve(__dirname, '../..'),
+        encoding: 'utf8',
+        timeout: 15000,
+      },
+    );
 
-  try {
     assert.equal(processResult.status, 0, processResult.stderr || processResult.stdout);
 
     return {
@@ -225,6 +228,10 @@ module.exports = {
     };
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
+
+    if (scriptDirectory) {
+      fs.rmSync(scriptDirectory, { recursive: true, force: true });
+    }
   }
 }
 

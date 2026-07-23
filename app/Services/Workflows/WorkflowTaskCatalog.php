@@ -7,8 +7,16 @@ use Illuminate\Support\Str;
 
 class WorkflowTaskCatalog
 {
+    private ?array $definitions = null;
+
+    private ?array $taskKeysByNodeScript = null;
+
     public function all(): array
     {
+        if ($this->definitions !== null) {
+            return $this->definitions;
+        }
+
         $tasks = [
             'browser.open' => [
                 'label' => 'Browserfenster oeffnen',
@@ -608,6 +616,19 @@ class WorkflowTaskCatalog
                 'kind' => 'data',
                 'runner' => 'node',
                 'node_script' => 'node/workflows/tasks/loop/for_each_element.cjs',
+                'runtime' => [
+                    'kind' => 'data',
+                    'forget' => ['browser_window', 'browser_window_name'],
+                    'variants' => [[
+                        // Alte Workflows haben den Loop-Start zugleich als
+                        // DOM-Iterator verwendet. Der Selector aktiviert nur
+                        // fuer diese Bestandskarten weiterhin den Legacy-Task.
+                        'when_any_filled' => ['selector', 'element_selector'],
+                        'node_script' => 'node/workflows/tasks/loop/for_each_element_legacy.cjs',
+                        'kind' => 'browser',
+                        'forget' => [],
+                    ]],
+                ],
                 'timeout_seconds' => 5,
                 'description' => 'Startet einen reinen Kontroll-Loop mit fester Durchlaufzahl oder ueber ein vorhandenes Workflow-Array und beendet ihn optional ueber eine Bedingung.',
                 'form' => [
@@ -633,6 +654,10 @@ class WorkflowTaskCatalog
                 'kind' => 'data',
                 'runner' => 'node',
                 'node_script' => 'node/workflows/tasks/loop/end.cjs',
+                'runtime' => [
+                    'kind' => 'data',
+                    'forget' => ['browser_window', 'browser_window_name'],
+                ],
                 'timeout_seconds' => 5,
                 'description' => 'Markiert ohne eigene Fach-Einstellungen das Ende des Loop-Blocks und springt bei einem aktiven Durchlauf zum gekoppelten Loop-Start zurueck.',
                 'hidden_from_library' => true,
@@ -1277,6 +1302,22 @@ class WorkflowTaskCatalog
                     'failure_payload' => true,
                 ],
             ],
+            'data.save_workflow_data' => [
+                'label' => 'Workflow-Daten speichern (Legacy)',
+                'kind' => 'data',
+                'runner' => 'node',
+                'node_script' => 'node/workflows/tasks/data/save_workflow_data.cjs',
+                'timeout_seconds' => 30,
+                'description' => 'Interner Kompatibilitaets-Task fuer bestehende Workflows; neue Karten verwenden data.persist_mail_account.',
+                'hidden_from_library' => true,
+                'form' => [
+                    'selector' => false,
+                    'value' => false,
+                    'url' => false,
+                    'success_payload' => false,
+                    'failure_payload' => true,
+                ],
+            ],
             'data.persist_mail_account' => [
                 'label' => 'Workflow-/Mail-Accountdaten speichern',
                 'kind' => 'data',
@@ -1553,9 +1594,11 @@ class WorkflowTaskCatalog
             ],
         ];
 
-        return collect($tasks)
+        $this->definitions = collect($tasks)
             ->map(fn (array $definition, string $taskKey): array => $this->withDocumentation($taskKey, $definition))
             ->all();
+
+        return $this->definitions;
     }
 
     protected function withDocumentation(string $taskKey, array $definition): array
@@ -1866,6 +1909,144 @@ class WorkflowTaskCatalog
         }
 
         return ['task_key' => $taskKey, ...$definition];
+    }
+
+    /**
+     * Resolves the executable part of a persisted task card from the catalog.
+     *
+     * Persisted runner/script values are deliberately ignored. This keeps the
+     * catalog as the single executable registry while still allowing explicit,
+     * catalog-declared compatibility variants.
+     */
+    public function resolveRuntimeTask(array $task): array
+    {
+        $taskKey = trim((string) ($task['task_key'] ?? ''));
+
+        if ($taskKey === '') {
+            $taskKey = $this->uniqueTaskKeyForNodeScript((string) ($task['node_script'] ?? '')) ?? '';
+
+            if ($taskKey !== '') {
+                $task['task_key'] = $taskKey;
+            }
+        }
+
+        $definition = $taskKey !== '' ? $this->task($taskKey) : null;
+
+        if ($definition === null) {
+            throw new \UnexpectedValueException(
+                'Die Workflow-Task "'.($taskKey !== '' ? $taskKey : '(ohne task_key)').'" ist nicht im Task-Katalog registriert.'
+            );
+        }
+
+        $runtime = is_array($definition['runtime'] ?? null) ? $definition['runtime'] : [];
+        $variants = is_array($runtime['variants'] ?? null) ? $runtime['variants'] : [];
+        unset($runtime['variants']);
+
+        foreach ($variants as $variant) {
+            if (! is_array($variant) || ! $this->runtimeVariantMatches($variant, $task)) {
+                continue;
+            }
+
+            $runtime = array_replace($runtime, Arr::except($variant, ['when_any_filled']));
+            break;
+        }
+
+        $runner = trim((string) ($definition['runner'] ?? ''));
+        $nodeScript = trim((string) ($runtime['node_script'] ?? $definition['node_script'] ?? ''));
+
+        if ($runner === '') {
+            throw new \LogicException('Der Task-Katalog definiert keinen Runner fuer "'.$taskKey.'".');
+        }
+
+        $task['runner'] = $runner;
+
+        if ($runner === 'node') {
+            if ($nodeScript === '') {
+                throw new \LogicException('Der Task-Katalog definiert kein Node-Skript fuer "'.$taskKey.'".');
+            }
+
+            $task['node_script'] = $nodeScript;
+        } else {
+            unset($task['node_script']);
+        }
+
+        if (array_key_exists('kind', $runtime)) {
+            $task['kind'] = (string) $runtime['kind'];
+        }
+
+        foreach (is_array($runtime['forget'] ?? null) ? $runtime['forget'] : [] as $field) {
+            unset($task[(string) $field]);
+        }
+
+        return $task;
+    }
+
+    protected function uniqueTaskKeyForNodeScript(string $nodeScript): ?string
+    {
+        $nodeScript = $this->normalizeNodeScriptReference($nodeScript);
+
+        if ($nodeScript === '') {
+            return null;
+        }
+
+        $taskKeys = array_keys($this->taskKeysByNodeScript()[$nodeScript] ?? []);
+
+        return count($taskKeys) === 1 ? $taskKeys[0] : null;
+    }
+
+    protected function taskKeysByNodeScript(): array
+    {
+        if ($this->taskKeysByNodeScript !== null) {
+            return $this->taskKeysByNodeScript;
+        }
+
+        $index = [];
+
+        foreach ($this->all() as $taskKey => $definition) {
+            $scripts = [(string) ($definition['node_script'] ?? '')];
+
+            foreach (is_array(data_get($definition, 'runtime.variants')) ? data_get($definition, 'runtime.variants') : [] as $variant) {
+                if (is_array($variant)) {
+                    $scripts[] = (string) ($variant['node_script'] ?? '');
+                }
+            }
+
+            foreach (array_unique($scripts) as $script) {
+                $script = $this->normalizeNodeScriptReference($script);
+
+                if ($script !== '') {
+                    $index[$script][(string) $taskKey] = true;
+                }
+            }
+        }
+
+        return $this->taskKeysByNodeScript = $index;
+    }
+
+    protected function normalizeNodeScriptReference(string $nodeScript): string
+    {
+        $nodeScript = str_replace('\\', '/', trim($nodeScript));
+
+        return preg_replace('#^(?:\./)+#', '', $nodeScript) ?? $nodeScript;
+    }
+
+    protected function runtimeVariantMatches(array $variant, array $task): bool
+    {
+        $fields = is_array($variant['when_any_filled'] ?? null) ? $variant['when_any_filled'] : [];
+
+        if ($fields === []) {
+            return false;
+        }
+
+        foreach ($fields as $field) {
+            $value = Arr::get($task, (string) $field);
+
+            if (is_string($value) ? trim($value) !== '' : $value !== null && $value !== []) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public function cardFromDefinition(string $taskKey, array $overrides = []): array

@@ -940,8 +940,8 @@ class WorkflowStudio extends Component
 
     public function render()
     {
-        $workflow = $this->workflow()->load(['steps', 'studioRevisions']);
-        $session = $this->session()->load(['events', 'copilotSession']);
+        $workflow = $this->workflow()->load('steps');
+        $session = $this->session()->load('copilotSession');
         $run = $this->activeRun()?->load(['stepRuns.workflowStep', 'artifacts']);
         $copilotSession = $session->copilotSession;
         $taskNavigation = $this->taskNavigation($workflow);

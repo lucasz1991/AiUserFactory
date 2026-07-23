@@ -16,6 +16,7 @@ use App\Services\Workflows\PersonaActionWorkflowCatalog;
 use App\Services\Workflows\WorkflowCopilotLogExportService;
 use App\Services\Workflows\WorkflowCopilotSessionService;
 use App\Services\Workflows\WorkflowExecutionService;
+use App\Services\Workflows\WorkflowRouteTargetAutoRepairService;
 use App\Services\Workflows\WorkflowRunDebugPackageService;
 use App\Services\Workflows\WorkflowStudioRevisionService;
 use App\Services\Workflows\WorkflowStudioSessionService;
@@ -247,6 +248,13 @@ class WorkflowManager extends Component
     public string $editingTaskLoopPairSegment = '';
 
     public string $editingTaskLoopPairEndKey = '';
+
+    /**
+     * Feature R2: Hinweis des letzten Loeschvorgangs auf Verzweigungen, die
+     * jetzt ins Leere zeigen. Leer, wenn nichts betroffen ist. Das Studio liest
+     * die Eigenschaft, weil es die Session-Flash-Meldung nicht rendert.
+     */
+    public string $lastRemovalRouteWarning = '';
 
     public function mount(Workflow $workflow): void
     {
@@ -1161,9 +1169,53 @@ class WorkflowManager extends Component
             return;
         }
 
-        app(WorkflowTaskOrderingService::class)->removeTask($step, $taskKey);
+        $removedKeys = app(WorkflowTaskOrderingService::class)->removeTask($step, $taskKey);
+        $this->lastRemovalRouteWarning = $this->danglingRouteWarning($removedKeys);
+
+        if ($this->lastRemovalRouteWarning !== '') {
+            session()->flash('warning', 'Step-Karte wurde entfernt. '.$this->lastRemovalRouteWarning);
+
+            return;
+        }
 
         session()->flash('success', 'Step-Karte wurde entfernt.');
+    }
+
+    /**
+     * Feature R2: Meldet, welche Verzweigungen nach dem Loeschen ins Leere
+     * zeigen. Es wird bewusst nur gewarnt und nichts still umgeschrieben — die
+     * Entscheidung faellt im Reparaturdialog beim Teststart (Feature R1).
+     *
+     * @param  list<string>  $removedKeys
+     */
+    protected function danglingRouteWarning(array $removedKeys): string
+    {
+        $workflow = $this->selectedWorkflow();
+
+        if ($workflow === null || $removedKeys === []) {
+            return '';
+        }
+
+        $affected = collect(app(WorkflowRouteTargetAutoRepairService::class)->analyze($workflow->load('steps')))
+            ->filter(fn (array $finding): bool => in_array($finding['target_card'] ?? null, $removedKeys, true));
+
+        if ($affected->isEmpty()) {
+            return '';
+        }
+
+        $origins = $affected
+            ->map(fn (array $finding): string => trim((string) ($finding['card_title'] ?: $finding['card'] ?: $finding['step_name'])))
+            ->filter()
+            ->unique()
+            ->take(3)
+            ->implode(', ');
+
+        return trans_choice(
+            '{1}Achtung: :count Verzweigung zeigt jetzt ins Leere (:origins). Beim naechsten Teststart koennen Sie sie auf die Standardroute setzen lassen.'
+            .'|[2,*]Achtung: :count Verzweigungen zeigen jetzt ins Leere (:origins). Beim naechsten Teststart koennen Sie sie auf die Standardroute setzen lassen.',
+            $affected->count(),
+            ['count' => $affected->count(), 'origins' => $origins],
+        );
     }
 
     public function reorderTaskCard(int $stepId, mixed $item, mixed $position): void

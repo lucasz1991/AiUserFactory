@@ -332,6 +332,9 @@ class WorkflowRouteTargetAutoRepairService
         string $code,
         array $defaultRoute,
     ): array {
+        $targetStep = trim((string) ($route['action_key'] ?? $route['step'] ?? ''));
+        $targetCard = trim((string) ($route['card_key'] ?? $route['card'] ?? ''));
+
         return [
             'step' => (string) $step->action_key,
             'step_name' => (string) $step->name,
@@ -340,6 +343,10 @@ class WorkflowRouteTargetAutoRepairService
             'field' => $field,
             'field_label' => $this->fieldLabel($field),
             'code' => $code,
+            // Rohziele zusaetzlich zum lesbaren Label, damit Aufrufer einen
+            // Treffer einem konkreten geloeschten Key zuordnen koennen (R2).
+            'target_step' => $targetStep === '' ? null : $targetStep,
+            'target_card' => $targetCard === '' ? null : $targetCard,
             'current_target' => $this->routeLabel($route),
             'default_route' => $defaultRoute,
             'default_label' => $this->routeLabel($defaultRoute),

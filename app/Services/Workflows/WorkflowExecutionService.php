@@ -25,6 +25,7 @@ use App\Services\Workflows\Tasks\PersistBrowserSessionTask;
 use App\Services\Workflows\Tasks\PersistMailAccountTask;
 use App\Services\Workflows\Tasks\PersistWebmailSessionTask;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
@@ -54,6 +55,17 @@ class WorkflowExecutionService
 
     /** Bisheriger Standard-Poll fuer aeltere aktive Step-Runs. */
     private const MONITOR_DEFAULT_POLL_SECONDS = 3;
+
+    /** Laenger als das Job-Timeout, damit nur ein Abschlussweg den Step fortsetzt. */
+    private const MONITOR_LOCK_SECONDS = 150;
+
+    /**
+     * Obergrenze der eingefrorenen Task-Ergebnisse je Lauf (Feature R3).
+     * Schuetzt `context_json` vor unbegrenztem Wachstum bei Schleifen, ist aber
+     * gross genug, dass der Laufweg auch nach vielen Rousspruengen sichtbar
+     * bleibt.
+     */
+    private const TASK_HISTORY_LIMIT = 600;
 
     public function __construct(
         protected MailAccountRegistrationRunner $mailRegistration,
@@ -968,6 +980,26 @@ class WorkflowExecutionService
     }
 
     public function monitorStepRun(int $workflowStepRunId): void
+    {
+        $lock = Cache::lock('workflow-step-run-monitor:'.$workflowStepRunId, self::MONITOR_LOCK_SECONDS);
+
+        if (! $lock->get()) {
+            // Callback und bereits eingeplanter Monitor duerfen denselben Step
+            // nicht gleichzeitig abschliessen. Der kurze Retry stellt sicher,
+            // dass ein finales Signal bei Lock-Contention nicht verloren geht.
+            MonitorWorkflowStepRunJob::dispatch($workflowStepRunId)->delay(now()->addSecond());
+
+            return;
+        }
+
+        try {
+            $this->monitorStepRunWithLock($workflowStepRunId);
+        } finally {
+            $lock->release();
+        }
+    }
+
+    protected function monitorStepRunWithLock(int $workflowStepRunId): void
     {
         $stepRun = WorkflowStepRun::query()
             ->with(['workflowRun.workflow.steps', 'workflowStep'])
@@ -2405,25 +2437,43 @@ class WorkflowExecutionService
             'error_message' => null,
         ])->save();
 
+        $externalRunId = (string) Str::uuid();
+        $stepRun->forceFill([
+            'status' => 'running',
+            'external_run_type' => 'workflow-task',
+            'external_run_id' => $externalRunId,
+        ])->save();
+
         $runtimeContext = $this->workflowRuntimeContext($run, $step, $stepRun);
+        $this->clearRouteCursor($run);
         $externalRun = $this->workflowTasks->start(
             $run,
             $step,
             $stepRun,
             $runtimeContext,
+            $externalRunId,
         );
 
-        $this->clearRouteCursor($run);
+        // Check und Update muessen atomar bleiben: Ein Callback kann den Step
+        // genau zwischen einem Model-refresh() und save() abschliessen. Das
+        // bedingte SQL-Update darf einen terminalen Stand nicht resurrecten.
+        $updated = WorkflowStepRun::query()
+            ->whereKey($stepRun->id)
+            ->whereIn('status', ['running', 'waiting'])
+            ->where('external_run_type', 'workflow-task')
+            ->where('external_run_id', (string) ($externalRun['runId'] ?? $externalRunId))
+            ->update([
+                'status' => 'waiting',
+                'result_json' => json_encode($this->publicRunSnapshot($externalRun), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+                'logs_json' => json_encode($this->logsFromExternalStatus($externalRun), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+                'updated_at' => now(),
+            ]);
 
-        $stepRun->forceFill([
-            'status' => 'waiting',
-            'external_run_type' => 'workflow-task',
-            'external_run_id' => $externalRun['runId'] ?? null,
-            'result_json' => $this->publicRunSnapshot($externalRun),
-            'logs_json' => $this->logsFromExternalStatus($externalRun),
-        ])->save();
+        $stepRun->refresh();
 
-        $this->scheduleMonitor($stepRun);
+        if ($updated === 1) {
+            $this->scheduleMonitor($stepRun);
+        }
 
         return 'waiting';
     }
@@ -2575,6 +2625,7 @@ class WorkflowExecutionService
     {
         $startedAt = $stepRun->started_at instanceof Carbon ? $stepRun->started_at : now();
         $finishedAt = now();
+        $observedTaskKeys = $this->observedTaskHistoryKeys($result);
         $result = $this->normalizeStepResult($stepRun, $result);
         $result = $this->withTaskStatuses($stepRun->workflowStep, $result, $taskStatus);
 
@@ -2587,7 +2638,89 @@ class WorkflowExecutionService
             'error_message' => null,
         ])->save();
 
+        $this->recordTaskHistory($stepRun, $result, $observedTaskKeys);
         $this->cleanupSuccessfulWorkflowTaskLogs($stepRun, $result);
+    }
+
+    /**
+     * Friert die Task-Ergebnisse einer abgeschlossenen Liste in
+     * `context_json.task_history` ein (Feature R3).
+     *
+     * Pro Lauf und Liste existiert nur EINE `workflow_step_runs`-Zeile. Springt
+     * der Workflow in eine bereits gelaufene Liste zurueck, ueberschreibt der
+     * neue Lauf deren `result_json` mit den Tasks ab dem Sprungziel — alle
+     * frueheren Ergebnisse dieser Liste waeren damit verloren und die Vorschau
+     * zeigte die Liste als „nie gelaufen". Die Historie haelt sie fest.
+     *
+     * Bewusst nur beim Abschluss einer Liste: der laufende Zustand steht ohnehin
+     * im aktuellen Snapshot, und so bleibt der Schreibaufwand bei einem Vorgang
+     * je Liste statt bei jedem Monitor-Tick.
+     */
+    protected function recordTaskHistory(WorkflowStepRun $stepRun, array $result, array $observedTaskKeys): void
+    {
+        $observedTaskKeys = array_fill_keys($observedTaskKeys, true);
+        $tasks = collect(data_get($result, 'tasks', []))
+            ->filter(function (mixed $task) use ($observedTaskKeys): bool {
+                $taskKey = is_array($task) ? trim((string) ($task['key'] ?? '')) : '';
+
+                return $taskKey !== '' && isset($observedTaskKeys[$taskKey]);
+            })
+            ->values();
+
+        if ($tasks->isEmpty()) {
+            return;
+        }
+
+        $run = $stepRun->workflowRun;
+
+        if (! $run instanceof WorkflowRun) {
+            return;
+        }
+
+        $context = is_array($run->context_json) ? $run->context_json : [];
+        $history = is_array($context['task_history'] ?? null) ? $context['task_history'] : [];
+        $sequence = (int) ($context['task_history_sequence'] ?? count($history));
+        $finishedAt = now()->toIso8601String();
+
+        foreach ($tasks as $task) {
+            $sequence++;
+
+            $history[] = [
+                'seq' => $sequence,
+                'at' => trim((string) ($task['finishedAt'] ?? $task['finished_at'] ?? '')) ?: $finishedAt,
+                'workflow_step_id' => (int) $stepRun->workflow_step_id,
+                'workflow_step_run_id' => (int) $stepRun->id,
+                'task_key' => (string) $task['key'],
+                'status' => trim((string) ($task['status'] ?? '')) ?: 'completed',
+                'title' => trim((string) ($task['title'] ?? '')),
+            ];
+        }
+
+        // Obergrenze schuetzt `context_json` vor unbegrenztem Wachstum bei
+        // Schleifen mit vielen Durchlaeufen. Die juengsten Eintraege bleiben.
+        $context['task_history'] = array_slice($history, -self::TASK_HISTORY_LIMIT);
+        $context['task_history_sequence'] = $sequence;
+
+        $run->forceFill(['context_json' => $context])->save();
+    }
+
+    /**
+     * @return list<string>
+     */
+    protected function observedTaskHistoryKeys(array $result): array
+    {
+        return collect(data_get($result, 'tasks', []))
+            ->filter(fn (mixed $task): bool => is_array($task))
+            ->flatMap(fn (array $task): array => [
+                $task['key'] ?? null,
+                $task['parent_task_key'] ?? null,
+                $task['route_source_task_key'] ?? null,
+            ])
+            ->map(fn (mixed $key): string => trim((string) $key))
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
     }
 
     protected function cleanupSuccessfulWorkflowTaskLogs(WorkflowStepRun $stepRun, array $result): void
@@ -2647,6 +2780,7 @@ class WorkflowExecutionService
     {
         $startedAt = $stepRun->started_at instanceof Carbon ? $stepRun->started_at : now();
         $finishedAt = now();
+        $observedTaskKeys = $result ? $this->observedTaskHistoryKeys($result) : [];
         $result = $result
             ? $this->withTaskStatuses($stepRun->workflowStep, $this->normalizeStepResult($stepRun, $result), 'failed', $message)
             : null;
@@ -2659,6 +2793,10 @@ class WorkflowExecutionService
             'logs_json' => $result ? $this->logsFromExternalStatus($result) : $stepRun->logs_json,
             'error_message' => $message,
         ])->save();
+
+        if ($result) {
+            $this->recordTaskHistory($stepRun, $result, $observedTaskKeys);
+        }
     }
 
     protected function expireStepRun(WorkflowStepRun $stepRun): void
@@ -3690,7 +3828,10 @@ class WorkflowExecutionService
             'route' => $route,
         ];
 
-        $context['route_history'] = array_slice($history, -50);
+        // Feature R3: Die Vorschau zeichnet aus dieser Historie den zurueckgelegten
+        // Weg. Bei 50 Eintraegen fielen die frueheren Linien nach wenigen
+        // Rousspruengen heraus; 300 deckt auch lange Laeufe ab.
+        $context['route_history'] = array_slice($history, -300);
 
         if ($outcome === 'failed' && $this->isBackRoute($run, $stepRun->workflowStep, $route)) {
             $attempts = is_array($context['route_attempts'] ?? null) ? $context['route_attempts'] : [];

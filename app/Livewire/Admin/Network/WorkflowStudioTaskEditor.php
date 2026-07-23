@@ -357,7 +357,11 @@ class WorkflowStudioTaskEditor extends WorkflowManager
     public function removeTaskCard(int $stepId, string $taskKey): void
     {
         if ($this->mutateDefinition('Task im Workflow Studio entfernt.', fn () => parent::removeTaskCard($stepId, $taskKey))) {
-            $this->notifyDefinitionUpdated($stepId, message: 'Task wurde entfernt.');
+            // Feature R2: Der Studio-Editor rendert keine Session-Flash-Meldung,
+            // deshalb wird der Hinweis der Elternklasse in die Notice gehoben.
+            $this->notifyDefinitionUpdated($stepId, message: trim(
+                'Task wurde entfernt. '.$this->lastRemovalRouteWarning,
+            ));
         }
     }
 

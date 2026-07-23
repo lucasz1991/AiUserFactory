@@ -8,8 +8,8 @@ use Illuminate\Console\Command;
 /**
  * Gibt den Fingerabdruck der Workflow-Node-Runtime aus.
  *
- * Damit wird Teamprotokoll-Regel 7 (Sync von `node/workflows` in den
- * ClientController) pruefbar: Hash auf beiden Seiten ausgeben und vergleichen.
+ * Damit wird Teamprotokoll-Regel 7 (Sync der vollstaendigen Workflow-Runtime in
+ * den ClientController) pruefbar: Hash auf beiden Seiten ausgeben und vergleichen.
  * Mit `--expect=` eignet sich der Befehl direkt fuer CI oder Deploy-Skripte —
  * Exit-Code 1 bedeutet „nicht synchron".
  */
@@ -20,7 +20,7 @@ class ShowWorkflowRuntimeHash extends Command
         {--json : Ausgabe als JSON}
         {--expect= : Erwarteten Hash pruefen; Exit-Code 1 bei Abweichung}';
 
-    protected $description = 'Zeigt den SHA-256-Fingerabdruck der Node-Runtime unter node/workflows.';
+    protected $description = 'Zeigt den SHA-256-Fingerabdruck aller ausgefuehrten Workflow-Node-Skripte.';
 
     public function handle(WorkflowRuntimeFingerprint $fingerprint): int
     {
@@ -54,7 +54,7 @@ class ShowWorkflowRuntimeHash extends Command
         ));
 
         if ($summary['fileCount'] === 0) {
-            $this->warn('Es wurden keine Runtime-Dateien gefunden. Stimmt der Pfad node/workflows?');
+            $this->warn('Es wurden keine Runtime-Dateien in den konfigurierten Runtime-Verzeichnissen gefunden.');
         }
 
         if ($this->option('files')) {
@@ -68,7 +68,7 @@ class ShowWorkflowRuntimeHash extends Command
                 $this->info('Synchron: der erwartete Hash stimmt ueberein.');
             } else {
                 $this->error('Nicht synchron. Erwartet: '.$expected);
-                $this->line('node/workflows muss in den ClientController synchronisiert werden (Regel 7).');
+                $this->line('Die Workflow-Runtime muss in den ClientController synchronisiert werden (Regel 7).');
             }
         }
 

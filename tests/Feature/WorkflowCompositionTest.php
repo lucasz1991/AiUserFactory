@@ -76,6 +76,40 @@ class WorkflowCompositionTest extends TestCase
         $this->assertFalse($child->is_edit_locked);
     }
 
+    public function test_legacy_embedded_workflow_without_task_key_remains_executable(): void
+    {
+        $parent = $this->workflow('legacy-parent');
+        $child = $this->workflow('legacy-child');
+        $this->step($child, 'Legacy child list', [$this->waitTask('legacy-child-wait')]);
+        $legacyInclude = $this->workflowTask($child, 'legacy-child-workflow');
+        unset($legacyInclude['task_key']);
+        $parentStep = $this->step($parent, 'Legacy parent list', [$legacyInclude]);
+
+        $tasks = $this->runtimeTasks($parentStep);
+
+        $this->assertCount(2, $tasks);
+        $this->assertSame('node', $tasks[0]['runner']);
+        $this->assertSame('legacy-child-workflow', $tasks[0]['parent_task_key']);
+        $this->assertSame('workflow-boundary', $tasks[1]['runner']);
+    }
+
+    public function test_embedded_workflow_with_stale_include_key_uses_workflow_id_as_runtime_fallback(): void
+    {
+        $parent = $this->workflow('stale-key-parent');
+        $child = $this->workflow('stale-key-child');
+        $this->step($child, 'Stale key child list', [$this->waitTask('stale-key-wait')]);
+        $include = $this->workflowTask($child, 'stale-key-include');
+        $include['task_key'] = 'workflow.include.'.($child->id + 10000);
+        $parentStep = $this->step($parent, 'Stale key parent list', [$include]);
+
+        $tasks = $this->runtimeTasks($parentStep);
+
+        $this->assertCount(2, $tasks);
+        $this->assertSame('node', $tasks[0]['runner']);
+        $this->assertSame($child->id, $tasks[0]['embedded_workflow_id']);
+        $this->assertSame('workflow-boundary', $tasks[1]['runner']);
+    }
+
     public function test_manual_lock_is_part_of_the_effective_edit_lock(): void
     {
         $workflow = $this->workflow('manual-lock');
@@ -528,6 +562,55 @@ class WorkflowCompositionTest extends TestCase
         $this->assertSame($boundary['key'], $runtimeFirst['embedded_workflow_boundary_key']);
         $this->assertSame($boundary['key'], $runtimeSecond['embedded_workflow_boundary_key']);
         $this->assertSame('parent-after-child', data_get($boundary, 'next.card_key'));
+    }
+
+    public function test_embedded_loop_markers_reference_their_prefixed_runtime_keys(): void
+    {
+        $parent = $this->workflow('parent-embedded-loop');
+        $child = $this->workflow('child-embedded-loop');
+        $pairId = 'embedded-loop-pair';
+        $this->step($child, 'Child loop list', [
+            [
+                'key' => 'child-loop-start',
+                'task_key' => 'loop.for_each_element',
+                'title' => 'Child loop start',
+                'kind' => 'data',
+                'runner' => 'node',
+                'node_script' => 'node/workflows/tasks/loop/for_each_element.cjs',
+                'iteration_count' => 2,
+                'loop_pair_id' => $pairId,
+                'loop_pair_segment' => 'start',
+                'loop_start_key' => 'child-loop-start',
+                'loop_end_key' => 'child-loop-end',
+            ],
+            $this->waitTask('child-loop-body'),
+            [
+                'key' => 'child-loop-end',
+                'task_key' => 'loop.end',
+                'title' => 'Child loop end',
+                'kind' => 'data',
+                'runner' => 'node',
+                'node_script' => 'node/workflows/tasks/loop/end.cjs',
+                'loop_pair_id' => $pairId,
+                'loop_pair_segment' => 'end',
+                'loop_start_key' => 'child-loop-start',
+                'loop_end_key' => 'child-loop-end',
+            ],
+        ]);
+        $parentStep = $this->step($parent, 'Parent loop list', [
+            $this->workflowTask($child, 'child-loop-workflow'),
+        ]);
+
+        $tasks = $this->runtimeTasks($parentStep);
+        $runtimeStart = collect($tasks)->firstWhere('task_key', 'loop.for_each_element');
+        $runtimeEnd = collect($tasks)->firstWhere('task_key', 'loop.end');
+
+        $this->assertNotNull($runtimeStart);
+        $this->assertNotNull($runtimeEnd);
+        $this->assertSame($runtimeEnd['key'], $runtimeStart['loop_end_key']);
+        $this->assertSame($runtimeStart['key'], $runtimeStart['loop_start_key']);
+        $this->assertSame($runtimeStart['key'], $runtimeEnd['loop_start_key']);
+        $this->assertSame($runtimeEnd['key'], $runtimeEnd['loop_end_key']);
     }
 
     public function test_unresolved_embedded_workflow_routes_are_not_silently_treated_as_success(): void

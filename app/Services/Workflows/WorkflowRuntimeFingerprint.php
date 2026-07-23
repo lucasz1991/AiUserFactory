@@ -6,8 +6,8 @@ use Illuminate\Support\Facades\File;
 use Symfony\Component\Finder\SplFileInfo;
 
 /**
- * Berechnet einen stabilen Fingerabdruck der Workflow-Node-Runtime unter
- * `node/workflows`.
+ * Berechnet einen stabilen Fingerabdruck aller direkt ausgefuehrten
+ * Workflow-Node-Runtime-Skripte.
  *
  * Zweck: Teamprotokoll-Regel 7 verlangt, dass Aenderungen unter `node/workflows`
  * anschliessend in den ClientController synchronisiert werden. Bisher liess sich
@@ -21,8 +21,10 @@ use Symfony\Component\Finder\SplFileInfo;
  *
  * 1. Nur `.cjs`-Dateien; `*.test.cjs` bleibt aussen vor, damit reine
  *    Testaenderungen keinen falschen „Sync noetig"-Alarm ausloesen.
- * 2. Pfade relativ zu `node/workflows`, immer mit `/` als Trenner, aufsteigend
- *    sortiert.
+ * 2. Vollstaendige Projektpfade unter `node/workflows` und
+ *    `resources/node/register/lib`, immer mit `/` als Trenner, aufsteigend
+ *    sortiert. Der zweite Pfad enthaelt den von `run_step.cjs` direkt geladenen
+ *    Browser-Launcher und seine Laufzeithelfer.
  * 3. Zeilenenden werden vor dem Hashen auf LF normalisiert und ein etwaiges
  *    UTF-8-BOM entfernt. Ohne diesen Schritt liefert dieselbe Datei je nach
  *    `core.autocrlf`-Einstellung unterschiedliche Hashes.
@@ -32,6 +34,12 @@ use Symfony\Component\Finder\SplFileInfo;
 class WorkflowRuntimeFingerprint
 {
     public const RUNTIME_DIRECTORY = 'node/workflows';
+
+    /** @var list<string> */
+    public const RUNTIME_DIRECTORIES = [
+        'node/workflows',
+        'resources/node/register/lib',
+    ];
 
     public const ALGORITHM = 'sha256';
 
@@ -63,21 +71,24 @@ class WorkflowRuntimeFingerprint
             return $this->fileHashes;
         }
 
-        $directory = $this->runtimeDirectory();
-
-        if (! File::isDirectory($directory)) {
-            return $this->fileHashes = [];
-        }
-
         $hashes = [];
 
-        foreach (File::allFiles($directory) as $file) {
-            if (! $this->isRuntimeFile($file)) {
+        foreach ($this->runtimeDirectories() as $relativeDirectory => $directory) {
+            if (! File::isDirectory($directory)) {
                 continue;
             }
 
-            $relativePath = str_replace('\\', '/', $file->getRelativePathname());
-            $hashes[$relativePath] = hash(self::ALGORITHM, $this->canonicalContents($file->getPathname()));
+            foreach (File::allFiles($directory) as $file) {
+                if (! $this->isRuntimeFile($file)) {
+                    continue;
+                }
+
+                $relativePath = str_replace('\\', '/', $file->getRelativePathname());
+                $relativePath = trim((string) $relativeDirectory, '/') === ''
+                    ? $relativePath
+                    : trim((string) $relativeDirectory, '/').'/'.$relativePath;
+                $hashes[$relativePath] = hash(self::ALGORITHM, $this->canonicalContents($file->getPathname()));
+            }
         }
 
         ksort($hashes, SORT_STRING);
@@ -93,7 +104,7 @@ class WorkflowRuntimeFingerprint
     /**
      * Kompakte Zusammenfassung fuer Ausgaben und Bundles.
      *
-     * @return array{hash: string, algorithm: string, fileCount: int, directory: string}
+     * @return array{hash: string, algorithm: string, fileCount: int, directory: string, directories: list<string>}
      */
     public function summary(): array
     {
@@ -101,7 +112,8 @@ class WorkflowRuntimeFingerprint
             'hash' => $this->hash(),
             'algorithm' => self::ALGORITHM,
             'fileCount' => $this->fileCount(),
-            'directory' => self::RUNTIME_DIRECTORY,
+            'directory' => implode(', ', self::RUNTIME_DIRECTORIES),
+            'directories' => self::RUNTIME_DIRECTORIES,
         ];
     }
 
@@ -152,9 +164,12 @@ class WorkflowRuntimeFingerprint
         $this->fileHashes = null;
     }
 
-    protected function runtimeDirectory(): string
+    /** @return array<string, string> */
+    protected function runtimeDirectories(): array
     {
-        return base_path(self::RUNTIME_DIRECTORY);
+        return collect(self::RUNTIME_DIRECTORIES)
+            ->mapWithKeys(fn (string $directory): array => [$directory => base_path($directory)])
+            ->all();
     }
 
     protected function isRuntimeFile(SplFileInfo $file): bool

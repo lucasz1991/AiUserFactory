@@ -30,10 +30,26 @@ class WorkflowRouteMarkupTest extends TestCase
         $this->assertStringContainsString('activeRouteNode: @js($activeRouteNode)', $definition);
         $this->assertStringContainsString('setHoveredRouteNode(node = \'\')', $definition);
         $this->assertStringContainsString('const adjacentSteps', $definition);
-        $this->assertStringContainsString('related ? 1 : 0.5', $definition);
+        $this->assertStringContainsString('line.sourceNode === focusNode || line.targetNode === focusNode', $definition);
         $this->assertStringContainsString('data-minimap-step-column', $source);
         $this->assertStringNotContainsString('const laneY = Math.max(4', $definition);
         $this->assertStringEndsWith('}', trim($definition));
+    }
+
+    /**
+     * Feature R3: In der Vorschau bestimmt zusaetzlich das Alter der Linie die
+     * Deckkraft. Der Hover-Fokus daempft nur noch, statt fest auf 1 / 0.5 zu
+     * setzen — und keine Linie darf dabei unsichtbar werden.
+     */
+    public function test_preview_route_opacity_encodes_age_and_never_reaches_zero(): void
+    {
+        $source = file_get_contents(dirname(__DIR__, 2).'/resources/views/components/workflows/minimap.blade.php');
+        $definition = $this->alpineDefinitionContaining($source, 'routeEvents:');
+
+        $this->assertStringContainsString('line.ageOpacity', $definition);
+        $this->assertStringContainsString('Math.max(0.35', $definition, 'Untergrenze fuer die Alters-Deckkraft fehlt.');
+        $this->assertStringContainsString('Math.max(0.28', $definition, 'Auch unfokussierte Linien bleiben sichtbar.');
+        $this->assertStringNotContainsString('related ? 1 : 0.5', $definition, 'Die alte, altersblinde Deckkraft ist ersetzt.');
     }
 
     public function test_manager_cards_drive_hover_and_active_route_focus(): void

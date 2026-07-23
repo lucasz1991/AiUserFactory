@@ -12,13 +12,23 @@ use App\Services\Processes\ManagedProcessInventory;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\URL;
 use Illuminate\Support\Str;
 
 class WorkflowTaskRunner
 {
+    protected ?WorkflowTaskCatalog $taskCatalog = null;
+
+    protected ?WorkflowRuntimeFingerprint $runtimeFingerprint = null;
+
     public function __construct(
         protected MailAccountRegistrationRunner $mailSettings,
-    ) {}
+        ?WorkflowTaskCatalog $taskCatalog = null,
+        ?WorkflowRuntimeFingerprint $runtimeFingerprint = null,
+    ) {
+        $this->taskCatalog = $taskCatalog;
+        $this->runtimeFingerprint = $runtimeFingerprint;
+    }
 
     public function remoteRuntime(WorkflowRun $run, WorkflowStep $step, WorkflowStepRun $stepRun, array $runtimeContext = []): array
     {
@@ -65,16 +75,27 @@ class WorkflowTaskRunner
             'observationTimeoutMs' => min(180000, max(30000, ((int) ($settings['observation_timeout_seconds'] ?? 60)) * 1000)),
             'keepWorkflowBrowserMaxIdleMs' => $this->keepWorkflowBrowserMaxIdleMs($settings),
             'scriptName' => 'run_step.cjs',
+            'runtimeHash' => $this->runtimeFingerprint()->hash(),
+            'runtimeHashAlgorithm' => WorkflowRuntimeFingerprint::ALGORITHM,
             'executionTarget' => 'client_controller',
             'devDebug' => $this->devDebugRuntimeConfig($run, $step, $stepRun, false),
         ];
     }
 
-    public function start(WorkflowRun $run, WorkflowStep $step, WorkflowStepRun $stepRun, array $runtimeContext = []): array
-    {
+    public function start(
+        WorkflowRun $run,
+        WorkflowStep $step,
+        WorkflowStepRun $stepRun,
+        array $runtimeContext = [],
+        ?string $reservedRunId = null,
+    ): array {
         $settings = $this->mailSettings->settings();
         $timezone = $this->workflowTimezone($runtimeContext);
-        $runId = (string) Str::uuid();
+        $runId = trim((string) $reservedRunId) ?: (string) Str::uuid();
+
+        if (! Str::isUuid($runId)) {
+            throw new \InvalidArgumentException('Die reservierte Workflow-Task-Run-ID ist ungueltig.');
+        }
         $livePreviewEnabled = $this->livePreviewEnabled($run, $settings);
         $livePreviewIntervalSeconds = max(1, min(60, (int) ($settings['live_preview_interval_seconds'] ?? 3)));
         $runDirectory = $this->runDirectory($runId);
@@ -147,6 +168,10 @@ class WorkflowTaskRunner
             'devDebug' => $this->devDebugRuntimeConfig($run, $step, $stepRun),
         ];
 
+        if ($completionCallback = $this->completionCallbackConfig($stepRun, $runId)) {
+            $runtime['completionCallback'] = $completionCallback;
+        }
+
         $initialBrowserWindows = $this->browserWindowsFromRuntimeContext($runtimeContext);
 
         $this->writeJsonFile($statusPath, [
@@ -169,19 +194,15 @@ class WorkflowTaskRunner
         $this->writeJsonFile($configPath, $runtime);
 
         try {
-            $pid = $this->spawnDetachedProcess([
+            $this->spawnDetachedProcess([
                 $this->resolveNodeBinary(),
                 $this->resolveNodeScriptPath(),
                 $configPath,
             ], base_path(), $stdoutPath, $stderrPath, $this->nodeProcessEnvironment($timezone));
 
-            $status = $this->readJsonFile($statusPath) ?: [];
-            $status['pid'] = $pid;
-            $status['state'] = 'starting';
-            $status['stage'] = 'process-started';
-            $status['message'] = 'Workflow-Task-Prozess wurde gestartet.';
-            $status['at'] = now()->toIso8601String();
-            $this->writeJsonFile($statusPath, $status);
+            // Der Node-Prozess schreibt seine PID selbst in jedes Status-Payload.
+            // Ein PHP-Write nach dem Spawn koennte einen bereits terminalen
+            // Status eines sehr kurzen Laufs wieder auf `starting` zuruecksetzen.
         } catch (\Throwable $exception) {
             $this->writeJsonFile($statusPath, [
                 'runId' => $runId,
@@ -539,8 +560,8 @@ class WorkflowTaskRunner
                 continue;
             }
 
-            if ((string) ($task['runner'] ?? '') !== 'workflow') {
-                $runtimeTask = $this->normalizeRuntimeTask($task);
+            if (! $this->isEmbeddedWorkflowTask($task)) {
+                $runtimeTask = $this->taskCatalog()->resolveRuntimeTask($task);
                 $mailboxSource = $this->effectiveEmbeddedMailboxSource($runtimeTask, $inheritedMailboxSource);
                 $browserWindow = $this->mappedEmbeddedBrowserWindowName($embeddedBrowserWindowName, $runtimeTask);
 
@@ -562,6 +583,12 @@ class WorkflowTaskRunner
                 if ($keyPrefix !== '') {
                     $originalKey = trim((string) ($runtimeTask['key'] ?? 'task')) ?: 'task';
                     $runtimeTask['key'] = Str::slug($keyPrefix.'-'.$originalKey);
+
+                    $runtimeTask = $this->remapEmbeddedLoopKeys(
+                        $runtimeTask,
+                        $embeddedRouteMap,
+                        $sourceStepActionKey,
+                    );
                 }
 
                 $runtimeTask = $this->remapEmbeddedTaskRoutes(
@@ -588,7 +615,11 @@ class WorkflowTaskRunner
                 continue;
             }
 
+            $task['runner'] = 'workflow';
+            unset($task['node_script']);
+
             $workflowId = (int) ($task['workflow_id'] ?? 0);
+            $task['task_key'] = 'workflow.include.'.$workflowId;
             $taskKey = trim((string) ($task['key'] ?? 'workflow')) ?: 'workflow';
             $rootTaskKey = $parentTaskKey ?? $taskKey;
             $workflowMailboxSource = $this->effectiveEmbeddedMailboxSource($task, $inheritedMailboxSource);
@@ -822,6 +853,44 @@ class WorkflowTaskRunner
                         (string) $outcome,
                     );
                 }
+            }
+        }
+
+        return $task;
+    }
+
+    /**
+     * Uebersetzt die beiden Loop-Marker mit derselben Kartenmap wie interne
+     * Routen. Ohne diese Anpassung springen eingebettete Loop-Enden auf die
+     * unpraefigierten Editor-Keys, die im expandierten Runtime-Array nicht mehr
+     * existieren.
+     */
+    protected function remapEmbeddedLoopKeys(
+        array $task,
+        array $routeMap,
+        ?string $sourceStepActionKey,
+    ): array {
+        $cards = $routeMap['cards'][$sourceStepActionKey ?? ''] ?? [];
+
+        if (! is_array($cards) || $cards === []) {
+            return $task;
+        }
+
+        foreach ([
+            'loop_start_key' => 'loopStartKey',
+            'loop_end_key' => 'loopEndKey',
+        ] as $canonicalKey => $aliasKey) {
+            $referencedKey = trim((string) ($task[$canonicalKey] ?? $task[$aliasKey] ?? ''));
+            $runtimeKey = $referencedKey !== '' ? trim((string) ($cards[$referencedKey] ?? '')) : '';
+
+            if ($runtimeKey === '') {
+                continue;
+            }
+
+            $task[$canonicalKey] = $runtimeKey;
+
+            if (array_key_exists($aliasKey, $task)) {
+                $task[$aliasKey] = $runtimeKey;
             }
         }
 
@@ -1092,49 +1161,39 @@ class WorkflowTaskRunner
         ];
     }
 
-    protected function normalizeRuntimeTask(array $task): array
+    protected function taskCatalog(): WorkflowTaskCatalog
     {
-        $legacyDomLoop = (string) ($task['task_key'] ?? '') === 'loop.for_each_element'
-            && trim((string) ($task['selector'] ?? $task['element_selector'] ?? '')) !== '';
-        $script = match ((string) ($task['task_key'] ?? '')) {
-            'browser.hover' => 'node/workflows/tasks/browser/hover.cjs',
-            'browser.scroll' => 'node/workflows/tasks/browser/scroll.cjs',
-            'browser.open_browser_session' => 'node/workflows/tasks/browser/open_browser_session.cjs',
-            'loop.for_each_element' => $legacyDomLoop
-                ? 'node/workflows/tasks/loop/for_each_element_legacy.cjs'
-                : 'node/workflows/tasks/loop/for_each_element.cjs',
-            'loop.end' => 'node/workflows/tasks/loop/end.cjs',
-            'browser.read_element_fields' => 'node/workflows/tasks/browser/read_element_fields.cjs',
-            'browser.read_searchengine_result' => 'node/workflows/tasks/browser/read_searchengine_result.cjs',
-            'data.append_to_array' => 'node/workflows/tasks/data/append_to_array.cjs',
-            'decision.array_length' => 'node/workflows/tasks/decision/array_length.cjs',
-            'data.validate_inputs' => 'node/workflows/tasks/data/validate_inputs.cjs',
-            'data.read_account_data' => 'node/workflows/tasks/data/read_account_data.cjs',
-            'data.resolve_person' => 'node/workflows/tasks/data/resolve_person.cjs',
-            'data.read_login_data' => 'node/workflows/tasks/data/read_login_data.cjs',
-            'data.save_workflow_data' => 'node/workflows/tasks/data/save_workflow_data.cjs',
-            'data.persist_mail_account' => 'node/workflows/tasks/data/persist_mail_account.cjs',
-            'data.persist_webmail_session' => 'node/workflows/tasks/data/persist_webmail_session.cjs',
-            'data.persist_browser_session' => 'node/workflows/tasks/data/persist_browser_session.cjs',
-            'data.delete_browser_session' => 'node/workflows/tasks/data/delete_browser_session.cjs',
-            'data.workflow_return' => 'node/workflows/tasks/data/workflow_return.cjs',
-            default => null,
-        };
+        return $this->taskCatalog ??= app(WorkflowTaskCatalog::class);
+    }
 
-        if ($script === null) {
-            return $task;
+    protected function runtimeFingerprint(): WorkflowRuntimeFingerprint
+    {
+        return $this->runtimeFingerprint ??= app(WorkflowRuntimeFingerprint::class);
+    }
+
+    protected function isEmbeddedWorkflowTask(array $task): bool
+    {
+        $taskKey = trim((string) ($task['task_key'] ?? ''));
+        $workflowId = (int) ($task['workflow_id'] ?? 0);
+
+        // Alte Imports koennen noch workflow.include.<alte-id> enthalten. Der
+        // explizite Runner plus eine gueltige workflow_id ist die belastbare
+        // Referenz; expandRuntimeTasks kanonisiert den synthetischen Key.
+        if ((string) ($task['runner'] ?? '') === 'workflow' && $workflowId > 0) {
+            return true;
         }
 
-        $task['runner'] = 'node';
-        $task['node_script'] = $script;
-
-        if ((string) ($task['task_key'] ?? '') === 'loop.end'
-            || ((string) ($task['task_key'] ?? '') === 'loop.for_each_element' && ! $legacyDomLoop)) {
-            $task['kind'] = 'data';
-            unset($task['browser_window'], $task['browser_window_name']);
+        if ($taskKey === '') {
+            return false;
         }
 
-        return $task;
+        if (! preg_match('/^workflow\.include\.(\d+)$/', $taskKey, $matches)) {
+            return false;
+        }
+
+        $workflowId = $workflowId > 0 ? $workflowId : (int) $matches[1];
+
+        return $workflowId > 0 && $workflowId === (int) $matches[1];
     }
 
     protected function runDirectory(string $runId): string
@@ -1258,6 +1317,41 @@ class WorkflowTaskRunner
         $override = filter_var($workflowSettings['live_preview'], FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE);
 
         return $override ?? $globalEnabled;
+    }
+
+    /**
+     * Kurzlebiger, relativ signierter Laravel-Callback fuer lokale Runner.
+     *
+     * Die Signatur basiert auf APP_KEY (HMAC). Relatives Signieren vermeidet
+     * Fehlpruefungen hinter HTTPS-Reverse-Proxies. Der Node-Prozess erhaelt eine
+     * absolute URL, waehrend die Middleware Host und Schema bewusst ignoriert.
+     * Ohne valide HTTP(S)-APP_URL bleibt der bestehende Monitor der einzige Weg.
+     *
+     * @return array{url: string, timeoutMs: int}|null
+     */
+    protected function completionCallbackConfig(WorkflowStepRun $stepRun, string $externalRunId): ?array
+    {
+        $baseUrl = rtrim(trim((string) config('app.url')), '/');
+        $scheme = strtolower((string) parse_url($baseUrl, PHP_URL_SCHEME));
+
+        if (! filter_var($baseUrl, FILTER_VALIDATE_URL) || ! in_array($scheme, ['http', 'https'], true)) {
+            return null;
+        }
+
+        $relativeUrl = URL::temporarySignedRoute(
+            'workflow-runtime.completed',
+            now()->addHours(2),
+            [
+                'workflowStepRun' => (int) $stepRun->id,
+                'externalRunId' => $externalRunId,
+            ],
+            false,
+        );
+
+        return [
+            'url' => $baseUrl.'/'.ltrim($relativeUrl, '/'),
+            'timeoutMs' => 3000,
+        ];
     }
 
     protected function publicRuntimeContext(array $runtimeContext): array

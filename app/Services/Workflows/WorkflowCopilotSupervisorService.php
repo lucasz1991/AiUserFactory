@@ -61,7 +61,7 @@ class WorkflowCopilotSupervisorService
     protected function superviseWithLease(int $sessionId): void
     {
         $session = WorkflowCopilotSession::query()
-            ->with(['workflow.steps', 'activeRun.stepRuns.workflowStep'])
+            ->with(['workflow.steps', 'activeRun'])
             ->find($sessionId);
 
         if (! $session || in_array($session->status, WorkflowCopilotSession::TERMINAL_STATUSES, true)) {
@@ -191,15 +191,6 @@ class WorkflowCopilotSupervisorService
             return;
         }
 
-        $this->sessions->appendEvent(
-            $session,
-            'run.failed',
-            'Der Reparaturlauf wurde technisch beendet; der Copilot startet eine neue Analyse.',
-            ['workflow_run_id' => $run->id, 'status' => $run->status, 'error' => $run->error_message],
-            'repairing',
-            'error',
-            true,
-        );
         $this->handleTechnicalRunFailure($session, $run);
     }
 
@@ -404,17 +395,35 @@ class WorkflowCopilotSupervisorService
         $budget = is_array($session->budget_json) ? $session->budget_json : [];
 
         $signature = $this->technicalRunFailureSignature($run);
-        $previousSignature = trim((string) ($state['last_technical_failure_signature'] ?? ''));
-        $repeats = $signature !== '' && $signature === $previousSignature
-            ? max(0, (int) ($state['technical_failure_repeats'] ?? 0)) + 1
-            : 0;
-        $repairIterations = max(0, (int) ($usage['repair_iterations'] ?? 0)) + 1;
+        $alreadyCounted = (int) ($state['last_failed_run_id'] ?? 0) === (int) $run->id;
 
-        $usage['repair_iterations'] = $repairIterations;
-        $state['last_technical_failure_signature'] = $signature;
-        $state['technical_failure_repeats'] = $repeats;
-        $state['last_failed_run_id'] = (int) $run->id;
-        $session->forceFill(['usage_json' => $usage, 'state_json' => $state, 'last_activity_at' => now()])->save();
+        $this->appendTechnicalRunEventOnce(
+            $session,
+            $run,
+            'run.failed',
+            'Der Reparaturlauf wurde technisch beendet; der Copilot startet eine neue Analyse.',
+        );
+
+        if (! $alreadyCounted) {
+            $previousSignature = trim((string) ($state['last_technical_failure_signature'] ?? ''));
+            $repeats = $signature !== '' && $signature === $previousSignature
+                ? max(0, (int) ($state['technical_failure_repeats'] ?? 0)) + 1
+                : 0;
+            $repairIterations = max(0, (int) ($usage['repair_iterations'] ?? 0)) + 1;
+
+            $usage['repair_iterations'] = $repairIterations;
+            $state['last_technical_failure_signature'] = $signature;
+            $state['technical_failure_repeats'] = $repeats;
+            $state['last_failed_run_id'] = (int) $run->id;
+            $session->forceFill(['usage_json' => $usage, 'state_json' => $state, 'last_activity_at' => now()])->save();
+        } else {
+            // Der vorherige Neustart kann nach dem Speichern des Fehlerzustands
+            // abgebrochen sein. Beim Queue-Retry wird derselbe Lauf deshalb
+            // erneut aufgebaut, ohne Budget und Wiederholungszaehler nochmals
+            // fuer exakt denselben WorkflowRun zu belasten.
+            $repeats = max(0, (int) ($state['technical_failure_repeats'] ?? 0));
+            $repairIterations = max(0, (int) ($usage['repair_iterations'] ?? 0));
+        }
 
         $maxSameState = max(1, (int) ($budget['max_same_state_repeats'] ?? 2));
         $maxRepairIterations = max(1, (int) ($budget['max_repair_iterations'] ?? 15));
@@ -423,8 +432,9 @@ class WorkflowCopilotSupervisorService
 
         if ($sameFailureExhausted || $iterationBudgetReached || $this->timeBudgetExceeded($session)) {
             $target = $this->unresolvedRouteTargetFromError((string) $run->error_message);
-            $this->sessions->appendEvent(
+            $this->appendTechnicalRunEventOnce(
                 $session,
+                $run,
                 'run.unrepairable',
                 $sameFailureExhausted
                     ? 'Der Lauf scheitert technisch wiederholt an derselben Stelle und kann autonom nicht behoben werden.'
@@ -437,9 +447,6 @@ class WorkflowCopilotSupervisorService
                     'repair_iterations' => $repairIterations,
                     'unresolved_route_target' => $target,
                 ],
-                'repairing',
-                'error',
-                true,
             );
 
             $this->exhaustBudget($session->fresh() ?? $session);
@@ -447,14 +454,55 @@ class WorkflowCopilotSupervisorService
             return;
         }
 
-        $this->sessions->transition(
-            $session,
-            WorkflowCopilotSession::STATUS_REPAIRING,
-            'repairing',
-            ['last_failed_run_id' => (int) $run->id],
-            'Der fehlgeschlagene Lauf wird ab dem letzten reproduzierbaren Zustand neu aufgebaut.',
-        );
+        if ($session->status !== WorkflowCopilotSession::STATUS_REPAIRING) {
+            $this->sessions->transition(
+                $session,
+                WorkflowCopilotSession::STATUS_REPAIRING,
+                'repairing',
+                ['last_failed_run_id' => (int) $run->id],
+                'Der fehlgeschlagene Lauf wird ab dem letzten reproduzierbaren Zustand neu aufgebaut.',
+            );
+        }
         $this->startRepairRun($session->fresh() ?? $session);
+    }
+
+    /**
+     * Queue-Retries duerfen Diagnoseereignisse fuer denselben technischen
+     * Fehllauf nicht duplizieren. Der Laufbezug im Payload ist der stabile
+     * Idempotenzschluessel; unterschiedliche fehlgeschlagene Neustarts bleiben
+     * weiterhin getrennte Ereignisse.
+     *
+     * @param  array<string, mixed>  $payload
+     */
+    protected function appendTechnicalRunEventOnce(
+        WorkflowCopilotSession $session,
+        WorkflowRun $run,
+        string $eventType,
+        string $message,
+        array $payload = [],
+    ): void {
+        $alreadyReported = $session->events()
+            ->where('event_type', $eventType)
+            ->where('payload_json->workflow_run_id', (int) $run->id)
+            ->exists();
+
+        if ($alreadyReported) {
+            return;
+        }
+
+        $this->sessions->appendEvent(
+            $session,
+            $eventType,
+            $message,
+            array_replace([
+                'workflow_run_id' => (int) $run->id,
+                'status' => $run->status,
+                'error' => $run->error_message,
+            ], $payload),
+            'repairing',
+            'error',
+            true,
+        );
     }
 
     protected function technicalRunFailureSignature(WorkflowRun $run): string

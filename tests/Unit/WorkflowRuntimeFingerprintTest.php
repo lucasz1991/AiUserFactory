@@ -41,9 +41,10 @@ class WorkflowRuntimeFingerprintTest extends TestCase
     {
         $files = app(WorkflowRuntimeFingerprint::class)->files();
 
-        $this->assertArrayHasKey('run_step.cjs', $files);
-        $this->assertArrayHasKey('tasks/browser/click.cjs', $files);
-        $this->assertArrayHasKey('lib/selector.cjs', $files);
+        $this->assertArrayHasKey('node/workflows/run_step.cjs', $files);
+        $this->assertArrayHasKey('node/workflows/tasks/browser/click.cjs', $files);
+        $this->assertArrayHasKey('node/workflows/lib/selector.cjs', $files);
+        $this->assertArrayHasKey('resources/node/register/lib/browser-launcher.cjs', $files);
 
         foreach (array_keys($files) as $relativePath) {
             $this->assertStringEndsWith('.cjs', $relativePath);
@@ -135,7 +136,8 @@ class WorkflowRuntimeFingerprintTest extends TestCase
         $summary = app(WorkflowRuntimeFingerprint::class)->summary();
 
         $this->assertSame('sha256', $summary['algorithm']);
-        $this->assertSame('node/workflows', $summary['directory']);
+        $this->assertSame(WorkflowRuntimeFingerprint::RUNTIME_DIRECTORIES, $summary['directories']);
+        $this->assertStringContainsString('resources/node/register/lib', $summary['directory']);
         $this->assertSame(app(WorkflowRuntimeFingerprint::class)->hash(), $summary['hash']);
         $this->assertGreaterThan(0, $summary['fileCount']);
     }
@@ -171,9 +173,9 @@ class WorkflowRuntimeFingerprintTest extends TestCase
         {
             public function __construct(protected string $directory) {}
 
-            protected function runtimeDirectory(): string
+            protected function runtimeDirectories(): array
             {
-                return $this->directory;
+                return ['' => $this->directory];
             }
         };
     }

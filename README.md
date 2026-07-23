@@ -191,6 +191,12 @@ Statuswerte: `geplant`, `in_arbeit`, `verifiziert`, `blockiert`.
 
 | 2026-07-23 | Claude | verifiziert | **Feature R1 umgesetzt** (Spur H, danach wieder `frei`; Codex' Spuren A–D unberuehrt). Fachlicher Ausloeser: Nach dem Loeschen einer Task-Karte brach der Teststart mit `Die Ziel-Task \`buttonlink-klicken\` existiert in der Zielliste nicht.` ab. Jetzt oeffnet sich stattdessen ein Bestaetigungsdialog. Neue Datei `app/Services/Workflows/WorkflowRouteTargetAutoRepairService.php` mit `analyze()` (findet, aendert nichts — spiegelt `WorkflowDefinitionValidator::validateRoute()` exakt, damit Befund und Diagnose nicht auseinanderlaufen) und `repair()` (idempotent, persistiert je Liste, ruft `unsetRelation('steps')` damit eine direkt folgende Validierung den neuen Stand sieht). Standardroute ist **nicht erfunden**, sondern aus dem Ausfuehrungsvertrag abgeleitet: Erfolgsrouten fallen auf die naechste Karte derselben Liste zurueck, sonst `step: next`, sonst `type: end` — exakt das, was die Runtime ohne Route ohnehin tut; Fehlerrouten (`on_error`, `status_routes` mit `error`/`failed`/`timeout`/`cancelled`/`aborted`) enden explizit mit `type: fail`, weil der Vertrag eine fehlende Route als echten Fehler kennt und stilles Weiterlaufen gefaehrlicher waere. In `WorkflowStudio.php`: `validateWorkflowDefinition()` mit `intent`-Parameter, neues `guardMissingRouteTargets()`, die Aktionen `applyRouteRepairAndStart()` und `closeRouteRepairModal()`, Event `workflow.route_targets_defaulted` (Level `warning`). Modal in `workflow-studio.blade.php` zeigt je Befund Liste, Karte, Routenfeld, altes Ziel (durchgestrichen) und neues Ziel — die Reparatur laeuft nie still. Bleiben nach der Reparatur andere Fehler bestehen, werden sie aufgelistet und der Start-Button ist deaktiviert. | `DB_CONNECTION=sqlite DB_DATABASE=:memory: php artisan test tests/Unit/WorkflowRouteTargetAutoRepairServiceTest.php` -> 11 Tests, 32 Assertions, gruen (u. a. Nachweis, dass nach `repair()` die Diagnose `route_task_missing` verschwindet, dass die Reparatur idempotent ist und unbeteiligte Karten unveraendert bleiben). `... php artisan test tests/Feature/WorkflowStudioRouteRepairPromptTest.php` -> 6 Tests, 19 Assertions, gruen. Regression: `... php artisan test tests/Feature/WorkflowStudioTest.php` -> 26 Tests, 194 Assertions, unveraendert gruen. Kein `node/workflows`-Code geaendert, daher kein ClientController-Sync noetig (Regel 7). | Risiko/Abgrenzung: (1) Der **Copilot-Startpfad** (`WorkflowCopilotLaunchService`, `WorkflowCopilotPlanningService`) validiert weiterhin hart und ohne Dialog — ein autonomer Lauf hat keine Oberflaeche zum Bestaetigen. Ob der Copilot selbstaendig auf Standardrouten zurueckfallen darf, ist eine Produktentscheidung und bewusst offen gelassen. (2) Die Reparatur hebt die Workflow-Revision **nicht** an, analog zum bestehenden `WorkflowRetryRouteAutoRepairService`; bei einem pausierten Lauf greift danach der normale Rebase-Pfad. (3) `applyRouteRepairAndStart()` startet den Test in derselben Interaktion — schlaegt der Start danach aus einem anderen Grund fehl, erscheint dieser Fehler wie gewohnt im Studio-Banner, die Reparatur bleibt aber gespeichert. Naechster Schritt: offen fuer Codex — **P2c** (Preload in `run_step.cjs`, Spur A frei) und **P3** (Push statt Poll, Spur D frei); **P2a** braucht weiterhin Spur B und die zwei dokumentierten Sonderfaelle. |
 
+| 2026-07-23 | Codex | verifiziert | **Runtime-Plan fortgesetzt und Ist-Ablauf dokumentiert.** P2a/P2c besitzen jetzt einen einzigen kataloggebundenen Runtime-Vertrag und Fail-Fast-Preload. P3a meldet lokale Terminalzustaende sofort per signiertem Callback, reserviert die externe UUID vor dem Spawn und serialisiert Callback/Poll. P6 prueft Bundle und Einzeltask gegen Resource- und content-addressed Staging-Runtime inklusive Browser-Launcher. Supervisor-Retries sind idempotent, Studio-Polls laden keine ungenutzten Vollhistorien, unbelegte historische Preflight-Operationen werden deterministisch verworfen und R3 speichert nur wirklich beobachtete Taskzustaende. Der Loop-Audit reparierte importierte Include-Keys, eingebettete Pair-Keys, grosse Count-/Array-Loops mit getrenntem Ist-Budget sowie atomare Start–Body–Ende-Verschiebung. Alle beanspruchten Spuren A/B/E/F/L/M/N/O/P/Q/R sind wieder frei. | Breite Verifikation: `php artisan test --filter=Workflow` mit SQLite in-memory: **313 Tests/2799 Assertions**; `node --test tests/Node/*.test.cjs`: **50/50**; ClientController `cargo test --lib`: **16/16**; Blade-Cache, Pint fuer alle 34 geaenderten PHP-Dateien, `cargo fmt --check` und beide Diff-Pruefungen gruen. Source und synchronisierte Client-Runtime: **63 Dateien**, kanonischer SHA-256 `016aa91a7913727b180b9b5fcd362a234370167a83e0b5202217a897f5b0ea25`. | Kein ungefragter echter Browser-/OpenRouter-/externer Client-Lauf. P3b, P4, P5 und der gemeinsame P6-Compiler bleiben bewusst als naechste Architekturpakete offen. Der P3a-Query-Token kann bis zur geplanten Header-Umstellung in Access-Logs erscheinen; alte Payloads ohne Hash bleiben nur fuer das rollierende Update kompatibel. |
+
+| 2026-07-23 | Claude | verifiziert | **Feature R2 umgesetzt** (Spur I, danach wieder `frei`). R1 heilt den Schaden erst beim Teststart; R2 meldet ihn dort, wo er entsteht. Vorher geprueft: es gibt **keinen zweiten Startpfad** (`assertValid`/`startInteractiveRun` kommen ausschliesslich in `WorkflowStudio.php` vor), R1 ist also vollstaendig — und es gibt genau **einen Loesch-Engpass**, `WorkflowTaskOrderingService::removeTask()`, ueber den sowohl `WorkflowManager::removeTaskCard()` als auch `WorkflowStudioTaskEditor::removeTaskCard()` laufen. `removeTask()` gibt jetzt die tatsaechlich entfernten Keys zurueck (vorher `void`), inklusive der gekoppelten Loop-Partnerkarte — die Warnung darf nicht nur auf dem angeklickten Key beruhen. `WorkflowRouteTargetAutoRepairService` liefert zusaetzlich die Rohfelder `target_step`/`target_card` (additiv). `WorkflowManager::danglingRouteWarning()` zaehlt die betroffenen Verzweigungen, nennt bis zu drei ausloesende Karten und meldet per `session()->flash('warning')`; neuer amber `warning`-Kanal im Manager-Blade. Weil der Studio-Editor keine Flash-Meldung rendert, traegt die neue Eigenschaft `lastRemovalRouteWarning` denselben Text, den `WorkflowStudioTaskEditor` an seine Notice anhaengt. Singular/Plural ueber `trans_choice`. **Bewusst nicht getan:** die Routen beim Loeschen still umzuschreiben — das waere genau der stille Strukturverlust, den R1 vermeiden soll; R2 warnt nur, entschieden wird weiterhin im R1-Dialog. | `DB_CONNECTION=sqlite DB_DATABASE=:memory: php artisan test tests/Feature/WorkflowTaskRemovalRouteWarningTest.php` -> 7 Tests, 12 Assertions, gruen (inkl. Loop-Partner, Singular/Plural, und Nachweis, dass keine Route umgeschrieben wird). Regression: `... php artisan test --filter=Workflow` -> 284 Tests gruen, 2563 Assertions, **1 vorbestehender Fehler** (siehe naechste Spalte). Ausserdem `tests/Unit/WorkflowRouteTargetAutoRepairServiceTest.php`, `tests/Feature/WorkflowStudioRouteRepairPromptTest.php`, `tests/Feature/WorkflowStudioTest.php`, `tests/Unit/WorkflowTaskFormMarkupTest.php` zusammen -> 45 Tests, 257 Assertions, gruen. | **Vorbestehender Fehler, nicht von R2:** `tests/Feature/WorkflowCopilotPreflightServiceTest.php:202` (`unproven offline plan cannot turn an explicit fail route into a continue route`) schlaegt fehl, weil `history_preflight.offline_plan.rejected_operations.0.reason_code` `null` ist. Per `git stash` gegen den committeten Stand `45667a3` verifiziert — der Fehler besteht ohne die offenen Aenderungen von Claude und Codex. Bereich gehoert nicht zu Claudes Spuren, siehe Abschnitt „Befund fuer Codex: ein Test ist am aktuellen Stand rot". Weiteres Risiko: Livewire-Komponententests koennen Flash-Meldungen nicht lesen, deshalb ist der `warning`-Kanal nur strukturell (Blade-Markup) statt funktional geprueft; ein HTTP-Test wuerde das schliessen. Naechster Schritt: offen fuer Codex — **P2c** (Spur A frei), **P3** (Spur D frei), **P2a** (braucht Spur B plus die zwei dokumentierten Sonderfaelle). |
+
+| 2026-07-23 | Claude | verifiziert | **Feature R3 umgesetzt** (Spuren D-Teil und J, danach wieder `frei`). Fachlicher Ausloeser: In der Vorschau war nicht erkennbar, welche Tasks gelaufen sind und woran gerade gearbeitet wird; bei einem Ruecksprung verschwanden die Markierungen der kompletten Liste und Linien fielen weg. **Zwei getrennte Ursachen, beide belegt:** (1) Markierungen kamen ausschliesslich aus `WorkflowStepRun.result_json.tasks`, es gibt aber nur **eine** Step-Run-Zeile je Lauf und Liste (`updateOrCreate`) — beim Ruecksprung ueberschreibt der neue Lauf sie mit den Tasks ab dem Sprungziel, alles Frueheres fiel auf den Template-Zustand zurueck. (2) `minimap.blade.php:271` zeichnete nur die letzten **16** Routenereignisse (`take(-16)`), `:252` begrenzte die Knoten-Abzeichen auf **8**, und `recordRoute()` kappte `route_history` auf **50**. **Loesung:** neue akkumulierende `context_json.task_history` (eingefroren bei `completeStepRun()`/`failStepRun()`, fortlaufende `seq`, Limit 600); `route_history` auf 300 angehoben; Vorschau und Minimap mischen Historie unter den aktuellen Snapshot (Snapshot hat Vorrang); jede Markierung traegt `passes` und `freshness` (45–100). Darstellung: aktiver Task breiter und geringelt, gelaufene verblassen mit dem Alter, nie gelaufene mit gestricheltem Rahmen ohne Fuellung (klar unterscheidbar von uebersprungenem Grau), Tooltip mit Status und Durchlaufzahl; Linienlimits entfernt, Deckkraft und Strichstaerke aus dem Alter (juengste 1.0, aelteste 0.35), Hover-Fokus daempft nur noch (Untergrenze 0.28) statt auszublenden. | `DB_CONNECTION=sqlite DB_DATABASE=:memory: php artisan test tests/Feature/WorkflowRunPreviewPathHistoryTest.php` -> 6 Tests, 24 Assertions, gruen (Kern: „a backward jump no longer erases the markings of the list" prueft genau den gemeldeten Fall). `... php artisan test tests/Unit/WorkflowRouteMarkupTest.php` -> 4 Tests gruen, um `test_preview_route_opacity_encodes_age_and_never_reaches_zero` erweitert. Regression: `... php artisan test --filter=Workflow` -> 298 Tests gruen, 2728 Assertions; die 2 verbleibenden Fehler gehoeren nicht zu R3 (siehe naechste Spalte). | **Bewusste Grenze:** Die Historie entsteht beim **Abschluss** einer Liste. Ein Ruecksprung mitten in einer noch laufenden Liste zeigt fuer deren bereits erledigte Tasks weiterhin nur den aktuellen Snapshot — bei jedem Monitor-Tick zu schreiben haette den Schreibaufwand vervielfacht. Haken fuer spaeter: `recordTaskHistory()` zusaetzlich im Monitor-Pfad aufrufen (Spur D, zusammen mit P3). **Zwei Fremdfehler, nicht von R3:** (a) `ClientControllerReliableWorkflowTest > unassigned client run …` wirft seit dem P2a-Refactor `UnexpectedValueException` in `WorkflowTaskCatalog.php:1925` fuer eine Karte ohne `task_key` — eigener Abschnitt „Befund fuer Codex: P2a bricht eine Karte ohne task_key". (b) `WorkflowCopilotPreflightServiceTest:202` ist unveraendert vorbestehend. Der Markup-Test `WorkflowRouteMarkupTest` pinnte die alte, altersblinde Deckkraft `related ? 1 : 0.5`; da der Vertrag bewusst geaendert wurde, ist die Assertion durch eine ersetzt, die die neue Zusage prueft (Alter steuert Deckkraft, nichts wird unsichtbar). Naechster Schritt: offen fuer Codex — **P2c**, **P3**. |
+
 Neue Eintraege immer unten anhaengen. Ein Eintrag gilt erst als `verifiziert`,
 wenn die ausgefuehrten Testkommandos und verbleibende Risiken genannt sind.
 
@@ -213,9 +219,18 @@ php artisan test tests/Feature/WorkflowCopilotLogExportServiceTest.php
 node --test tests/Node/workflow_dom_snapshot_source.test.cjs
 php artisan test tests/Unit/WorkflowTaskScriptRegistryTest.php
 php artisan test tests/Unit/WorkflowRuntimeFingerprintTest.php
+php artisan test tests/Feature/WorkflowRuntimeCallbackTest.php
+node --test tests/Node/workflow_task_preload.test.cjs tests/Node/workflow_completion_callback.test.cjs
 php artisan test tests/Feature/ClientControllerReliableWorkflowTest.php
 php artisan test tests/Unit/WorkflowRouteTargetAutoRepairServiceTest.php
 php artisan test tests/Feature/WorkflowStudioRouteRepairPromptTest.php
+php artisan test tests/Feature/WorkflowTaskRemovalRouteWarningTest.php
+php artisan test tests/Feature/WorkflowRunPreviewPathHistoryTest.php
+php artisan test tests/Unit/WorkflowRouteMarkupTest.php
+php artisan test tests/Feature/WorkflowTransferServiceTest.php tests/Feature/WorkflowCompositionTest.php
+php artisan test tests/Unit/WorkflowTaskOrderingServiceTest.php
+node --test tests/Node/workflow_loop_routes.test.cjs
+cd ../ClientController/src-tauri && cargo test --lib
 ```
 
 Falls die lokale Standard-Datenbank auf eine nicht vorhandene MySQL-Datenbank
@@ -235,14 +250,227 @@ zeigt, die Tests mit `DB_CONNECTION=sqlite` und `DB_DATABASE=:memory:` starten.
   OpenRouter-Kostenmeldung muessen nach Deployment in einem neuen Lauf von
   Workflow 15 bestaetigt werden.
 
+## Aktueller produktiver Workflow-Ablauf (Stand 2026-07-23)
+
+Dieser Abschnitt beschreibt den **tatsaechlich implementierten Ist-Ablauf**.
+Der anschliessende Umsetzungsauftrag ist die Roadmap. Beides darf nicht
+verwechselt werden: R1 bis R3, P1 und P2 sind umgesetzt; P3a beschleunigt den
+terminalen lokalen Abschluss. Der P6-Fingerabdruck wird inzwischen vom
+ClientController fuer Voll-Bundles **und** einzelne Client-Tasks gegen Resource-
+und tatsaechlich ausgefuehrte Staging-Runtime geprueft. P4, P5 und die
+Compiler-/Cleanup-Reste von P6 sind weiterhin Architekturarbeit.
+
+### Die beteiligten Rollen
+
+| Rolle | Was sie wirklich macht | Was sie nicht macht |
+| --- | --- | --- |
+| Linux/Plesk `supervisorctl` | Haelt die Laravel-Queue-Worker als Betriebssystemprozesse am Leben. | Entscheidet keine Workflow-Route und repariert keinen Task. |
+| `RunWorkflowJob` / `WorkflowExecutionService` | Persistente Workflow-Zustandsmaschine: Run anlegen, Liste und Task-Cursor bestimmen, Runner starten, Resultat uebernehmen, Route waehlen und naechsten Job einplanen. | Fuehrt Browseraktionen nicht selbst aus. |
+| `run_step.cjs` | Fuehrt den aktuellen Runtime-Ausschnitt aus. Laedt seit P2c alle benoetigten Module vor Task 1, haelt Browserkontext und schreibt Status/Resultat. | Entscheidet nicht ueber listenuebergreifende Workflow-Routen oder Copilot-Reparaturen. |
+| `MonitorWorkflowStepRunJob` | Liest den privaten Node-Status und uebergibt ein fertiges Ergebnis an `WorkflowExecutionService`; prueft ausserdem Timeout und Heartbeat. Alle Monitor-Einstiege sind pro Step serialisiert. | Ist nicht der Copilot-Supervisor. |
+| `WorkflowCopilotSupervisorService` | Fachliche Copilot-Zustandsmaschine: Checkpoint beobachten, Evidenz sammeln, bei Bedarf Vision aufrufen, fortsetzen, reparieren, proben und am Ende unveraendert verifizieren. | Ist weder Linux-Supervisor noch dauerhafter Node-Prozess. |
+| Scheduler-Reconciliation | Sucht verwaiste Copilot-Sitzungen und dispatcht fehlende Run-, Monitor- oder Supervisor-Jobs erneut. | Setzt keine fachlich gescheiterte Sitzung endlos neu auf. |
+| ClientController | Fuehrt portable Workflows auf einem verbundenen Client aus und meldet Fortschritt/Ergebnis an Laravel zurueck. | Darf keine autonome Copilot-Reparatursitzung ausfuehren. |
+
+### Normaler Test im Workflow Manager / System-Runner
+
+```mermaid
+flowchart LR
+    A["Workflow Manager: Test starten"] --> B["WorkflowExecutionService::start"]
+    B --> C["RunWorkflowJob"]
+    C --> D["naechste Liste und konkreten Task-Cursor bestimmen"]
+    D --> E["WorkflowTaskRunner erstellt private Runtime"]
+    E --> F["run_step.cjs laedt alle Task-Module vor"]
+    F --> G["Tasks der aktuellen Liste ausfuehren"]
+    G --> H["signierter Abschluss-Callback P3a: 202 sofort"]
+    G -. "Rueckfall: Statusdatei 1 s / 3 s" .-> I["MonitorWorkflowStepRunJob"]
+    H --> M["Monitor nach der HTTP-Antwort"]
+    M --> J["monitorStepRun liest das echte Resultat"]
+    I --> J
+    J --> K{"Route / Ende?"}
+    K -->|naechste Task oder Liste| C
+    K -->|Ende oder Fehler| L["Run abschliessen"]
+```
+
+Der Manager setzt intern `interactive_debug=true`, damit Vorschau, Pause und
+Studio-Steuerung verfuegbar sind. Das bedeutet **nicht**, dass nach jeder Karte
+ein neuer Prozess gestartet oder automatisch pausiert wird. Nur
+`studio_single_task` und `copilot_supervised` segmentieren auf genau eine Karte.
+Ein normaler Test laeuft innerhalb der Liste bis Ende, echter Fehler, manuelle
+Pause oder listenuebergreifende Route weiter.
+
+Vor der normalen Listensuche wird ein vorhandener `next_task_key` ausgewertet.
+Dadurch startet ein fortgesetzter Lauf an der konkret berechneten Karte und
+nicht wieder blind an Task 1. R3 friert beim Listenabschluss nur die wirklich
+vom Runner beobachteten Karten in `context_json.task_history` ein;
+nachtraeglich ergaenzte Template-Karten gelten nicht faelschlich als gelaufen.
+Rueckspruenge loeschen damit die sichtbaren Markierungen des bisherigen Wegs
+nicht mehr. Snapshot-Karten ohne Status ueberschreiben den historischen Status
+nicht; die Frische wird relativ zum behaltenen 600er-Historienfenster berechnet.
+
+P3a beschleunigt den Uebergang nach einem lokalen Node-Lauf: Die externe Run-ID
+wird vor dem Spawn reserviert. Nach dem atomaren Schreiben von `result.json` und
+terminalem `status.json` ruft Node eine auf zwei Stunden begrenzte, relativ
+HMAC-signierte Laravel-URL auf. Der Controller liest keine Ergebnisdaten aus dem
+Request, antwortet sofort mit `202` und wertet die privaten Dateien erst nach der
+HTTP-Antwort aus. So wartet Node nicht auf seinen eigenen spaeteren Shutdown.
+Callback und Poll teilen sich einen 150-s-Lock je Step; ein konkurrierender Weg
+plant genau einen kurzen Retry statt Routing oder Folgejob doppelt auszufuehren.
+Ist `APP_URL` ungueltig, der Webserver nicht erreichbar oder der Callback
+gestoert, bleibt das adaptive 1-s-/3-s-Polling als sicherer Rueckfall aktiv.
+
+### Interaktives Workflow Studio
+
+Das Studio verwendet dieselbe Execution Engine und legt eine Bedienebene darum:
+
+1. **Bis Ende** laeuft automatisch weiter; `interactive_debug` allein ist kein
+   Einzelschrittmodus.
+2. **Eine Task** setzt `studio_single_task=true`, startet an der ausgewaehlten
+   Karte und pausiert danach wieder.
+3. **Pause** greift an einer sicheren Task-Grenze, nicht mitten in Tastatureingabe
+   oder Navigation.
+4. **Fortsetzen** uebernimmt Variablen, Browser-WebSocket, Fenster-IDs und den
+   konkreten Task-Cursor. Nach einer Workflow-Aenderung greift der Rebase-Pfad.
+5. **Probe** fuehrt eine temporaere Karte aus; erst das explizite Uebernehmen
+   erzeugt eine Workflow-Revision.
+6. Studio-Checkpoints sind Benutzer-Snapshots fuer Pause/Restore/Branch. Sie sind
+   nicht dasselbe wie die automatischen Copilot-Pruefpunkte.
+
+R1 bietet beim Start eine bestaetigte Reparatur fuer geloeschte Routenziele an.
+R2 warnt bereits direkt beim Loeschen einer Karte, schreibt die betroffenen
+Routen aber bewusst nicht still um.
+
+### Loop- und Suchtreffer-Semantik
+
+Der aktuelle Loop-Vertrag trennt Steuerung und Facharbeit klar:
+
+1. **Loop-Start** (`loop.for_each_element`) ist im neuen Modus ein reiner
+   Kontrollmarker. Er bekommt eine feste `iteration_count`, ein Workflow-Array
+   oder eine optionale Bedingung und oeffnet selbst weder Browserseite noch
+   Suchtrefferliste. Alte Bestandskarten mit DOM-Selector verwenden weiterhin
+   ausdruecklich die katalogisierte Legacy-Variante.
+2. **Loop-Body** sind alle Karten zwischen Start und dem gekoppelten Ende. Beim
+   Verschieben eines Markers wird deshalb der komplette Block Start–Body–Ende
+   zusammengehalten, auch zwischen Listen.
+3. **Loop-Ende** (`loop.end`) besitzt keine fachliche Sucheinstellung. Solange
+   der Cursor aktiv ist, springt es zum gekoppelten Start zurueck; danach laeuft
+   die naechste Karte. Beim Einbetten werden beide Pair-Keys gemeinsam
+    praefigiert. Grosse gueltige Count-/Array-Loops erhalten ein getrenntes,
+    aus der tatsaechlich gemeldeten Iterationszahl abgeleitetes Routenbudget.
+    Das allgemeine Fail-fast-Limit bleibt klein und wird nur bei einem wirklich
+    begonnenen Loop-Durchlauf neu geoeffnet; fehlerhafte Selbst-Routen laufen
+    dadurch auch nach einer Array-Loop nicht hunderttausendfach weiter.
+4. **Suchmaschinentreffer lesen** (`browser.read_searchengine_result`) ist ein
+   eigener Batch-Task. Er findet List-Container und List-Items, filtert optionale
+   Werbeelemente per Selector, Klasse oder Text, liest nur die gewuenschten
+   optionalen Felder, dedupliziert und schreibt das Ergebnisarray. Loop-Marker
+   suchen oder lesen dabei nichts.
+
+Bei Workflow-Importen werden `workflow_id` und der kanonische
+`workflow.include.<id>`-Key gemeinsam remappt. Legacy-Karten ohne Include-Key und
+Exporte mit veraltetem Include-Key bleiben dadurch ausfuehrbar, ohne unbekannte
+Node-Tasks allgemein zu erlauben.
+
+### Autonomer Workflow Copilot
+
+```mermaid
+flowchart TD
+    A["Launch: Ziel, Kriterien, Inputs, System-Runner-Lock"] --> B{"Workflow leer?"}
+    B -->|ja| C["AI-Blueprint speichern"]
+    B -->|nein| D["bestehende Definition pruefen"]
+    C --> E["naechste geplante Karte materialisieren"]
+    D --> F["Copilot-Reparaturlauf starten"]
+    E --> F
+    F --> G["genau eine Karte ausfuehren"]
+    G --> H["Runtime-Checkpoint auf waiting halten"]
+    H --> I["Observation: DOM, Screenshot, Variablen, Seitensignatur"]
+    I --> J{"Vision / Reparatur noetig?"}
+    J -->|nein| K["Checkpoint fortsetzen"]
+    J -->|ja| L["deterministische oder AI-Reparatur / Probe / Consent"]
+    L --> M{"sicher und erfolgreich?"}
+    M -->|ja| K
+    M -->|nein| N["pausieren oder als unreparierbar beenden"]
+    K --> O{"Plan vollstaendig?"}
+    O -->|nein| E
+    O -->|ja| P["frischer unveraenderlicher Kontrolllauf"]
+    P --> Q{"Technik + Business + Kriterien + Vision bestanden?"}
+    Q -->|ja| R["Revision verifizieren und Lock loesen"]
+    Q -->|nein| L
+```
+
+Bei einem leeren Workflow wird zuerst ein kataloggebundener Blueprint
+gespeichert. Danach wird jeweils nur die naechste Karte materialisiert, getestet
+und verifiziert; die endgueltigen Routen werden erst nach dem vollstaendigen Plan
+angewendet. Der Copilot laeuft ausschliesslich auf `execution_target=system`.
+
+`checkpoint.review_pause` ist normalerweise ein **automatischer sicherer
+Supervisor-Pruefpunkt**, keine zwingende Benutzerpause. Observation laeuft an
+jedem Checkpoint. Das teurere Vision-Modell laeuft nur bei Fehlern, Probes,
+Blockaden, unbekannten Seiten oder in der Endverifikation. Eine erfolgreiche
+technische Karte reicht nicht aus, wenn das fachliche Ergebnis leer ist oder
+`workflow_return` fehlt.
+
+Technische Fehllaeufe werden pro `WorkflowRun` nur einmal auf Reparaturbudget und
+Wiederholungszaehler angerechnet. Scheitert lediglich der anschliessende
+Queue-Neustart, darf dessen Retry den Neustart wiederholen, ohne denselben Fehler
+und dasselbe `run.failed`-Event doppelt zu zaehlen.
+
+### ClientController: zwei verschiedene Wege
+
+| Weg | Ablauf | Prozessrealitaet |
+| --- | --- | --- |
+| Interaktiver Manager-/Studio-Test | Laravel sendet pro Runtime-Ausschnitt einen `workflow_task`; Ergebnis-Callback plus Monitor-Rueckfall. | Weiterhin ein Node-Start pro Liste bzw. pro explizitem Einzeltask. |
+| Nichtinteraktiver portabler Workflow | Laravel kompiliert ein Full-Bundle und sendet **einen Netzwerkjob** `workflow_run`; Routing und Variablen laufen auf dem Client, Fortschritt/Ergebnis kommen per API zurueck. | Der heutige Rust-Client startet intern weiterhin `run_step.cjs` pro Bundle-Liste; „ein Netzwerkjob“ bedeutet noch nicht „ein Node-Prozess“. |
+
+Ein neues Bundle und jeder neue einzelne `workflow_task` tragen `runtimeHash`
+und `runtimeHashAlgorithm`. Der kanonische SHA-256 umfasst alle produktiven CJS
+unter `node/workflows` sowie den direkt geladenen Bereich
+`resources/node/register/lib`; Testdateien bleiben ausgeschlossen. Der
+ClientController prueft erst seine eingebettete Resource-Runtime und danach die
+atomar unter ihrem Content-Hash gestagte, **tatsaechlich ausgefuehrte** Runtime.
+Eine Abweichung bricht vor dem ersten Task mit `workflow_runtime_mismatch` ab;
+entfernte alte Skripte koennen nicht im neuen Staging-Stand liegen bleiben.
+Payloads alter Server ohne Hash bleiben vorlaeufig fuer ein rollierendes Update
+kompatibel.
+
+### Warum es trotz P3a noch langsame Copilot-Laeufe geben kann
+
+Der groesste verbleibende Zeitblock ist die Prozessgrenze. Im normalen lokalen
+Lauf startet heute ein Node-Runner je besuchter Liste; der erste Browser-Owner
+ist **kein zusaetzlicher Prozess**, sondern derselbe erste Runner, der fuer die
+Browser-Wiederverwendung geparkt bleibt. Der Copilot startet derzeit einen
+Runner je Karte. Dazu kommen Queue-Wechsel fuer Checkpoint, Observation,
+Supervisor und gegebenenfalls Vision/Reparatur.
+
+P4 soll deshalb die Copilot-Karten innerhalb einer Liste ohne Node-Neustart an
+Checkpoints anhalten und fortsetzen. P5 baut darauf einen Session-Runner pro
+gesamtem Workflow-Lauf auf. Wegen des heutigen detached Spawnings (unter Linux
+ohne persistentes stdin) soll der Rueckkanal nicht als ungesichertes stdin-
+Protokoll entstehen, sondern als atomare Command-Inbox mit Sequenz/Ack oder als
+authentifizierter Loopback-Kanal. PHP/DB bleiben dabei die dauerhafte Wahrheit;
+der Session-Runner wird zunaechst per Feature-Flag mit Prozess-pro-Liste-
+Rueckfall ausgerollt.
+
+### Implementierungsstatus der Runtime-Roadmap
+
+| Paket | Ist-Stand | Offen |
+| --- | --- | --- |
+| P1 Observability-Gating | Im vereinbarten Scope umgesetzt. DOM nur debug/copilot und privat; Status/Logs/Preview/Prune/Capture-Flags begrenzt. | Zuschauer-`control.json` und einmalige Altbestandsloeschung bleiben bewusste Produktentscheidungen. |
+| P2 Registry und Fail-Fast | P2a, P2b und P2c umgesetzt: ein Katalogvertrag inklusive Runtime-Varianten, dedupliziertes und pfadbegrenztes Preload mit Sammelfehler vor Task 1. | Kein Architekturrest. Alte Node-Karten ohne `task_key` werden nur ueber ein eindeutig katalogisiertes `node_script` abgeleitet; Legacy-Embedded-Karten bleiben separat kompatibel. |
+| P3 Push statt Poll | P3a: terminaler lokaler Abschluss-Callback mit sofortiger 202-Antwort, reservierter UUID, Fast-Spawn-Schutz und per-Step-Serialisierung ist verifiziert; ClientController hatte bereits Push. | Fortschrittsereignisse/Sequenz-Ack und Monitor nur noch als reiner 120-s-Watchdog (P3b); signierten Query-Token nach der Rolloutphase auf kurzlebigen Headervertrag umstellen. |
+| P4 Copilot-Checkpoints im Prozess | Nicht umgesetzt. | Bidirektionaler Checkpoint-/Resume-Kanal; danach ein Prozess pro Liste statt pro Karte. |
+| P5 Session-Runner | Nicht umgesetzt. | Ein langlebiger Node-Prozess pro Workflow-Lauf, Crash-Resume, Canary und Rueckfallpfad. |
+| P6 Compiler und Cleanup | Fingerabdruck ueber Runner **und** Browser-Launcher, Bundle-/Einzeltask-Metadaten, Client-Pruefung und content-addressed Staging umgesetzt. | Ein gemeinsamer transportneutraler Compiler; Hash nach der Rolloutphase verpflichtend machen; danach alte Daten-/Fallbackpfade kontrolliert entfernen. |
+
 ## Umsetzungsauftrag: Workflow-Runtime-Optimierung
 
-Stand: 2026-07-23 · Analyse: Claude · Umsetzung: **Codex (P1)** · Status: `P1 verifiziert`; P2–P6 frei
+Stand: 2026-07-23 · Analyse: Claude + Codex-Review · Umsetzung: Claude/Codex · Status: `P1/P2/P3a verifiziert`, `P6-Vertrag verifiziert`; P3b/P4/P5 und P6-Compiler/Cleanup offen
 
-Vollstaendige Analyse mit allen Belegen:
-**`docs/workflow-runtime-analyse-und-optimierung.md`**. Dieser Abschnitt ist der
-ausfuehrbare Auftrag. Vor Beginn das Analysedokument einmal ganz lesen — die
-Begruendungen werden hier nicht wiederholt.
+Historische Ausgangsanalyse mit allen damaligen Belegen:
+**`docs/workflow-runtime-analyse-und-optimierung.md`**. Messwerte und Zeilennummern
+darin sind die Baseline und koennen durch die bereits umgesetzten Pakete veraltet
+sein. Der Ist-Ablauf oben und die Statusangaben in diesem Abschnitt sind fuer den
+aktuellen Arbeitsstand massgeblich.
 
 ### Koordination Claude ↔ Codex: Spurenmodell
 
@@ -274,13 +502,22 @@ und nicht paketbasiert** — Dateien sind die tatsaechliche Konfliktgrenze.
 | Spur | Exklusive Dateien | Enthaelt | Status | Agent |
 | --- | --- | --- | --- | --- |
 | **H — Routen-Selbstheilung (Teststart)** | `app/Services/Workflows/WorkflowRouteTargetAutoRepairService.php` (neu), `app/Livewire/Admin/Network/WorkflowStudio.php`, `resources/views/livewire/admin/network/workflow-studio.blade.php` | Feature R1 (siehe unten) | `frei` — R1 vollstaendig erledigt | Claude (erledigt) |
-| **A — Node-Runtime** | `node/workflows/run_step.cjs`, `node/workflows/tasks/lib/preview.cjs` | G1, G3 | `frei` — P1 verifiziert | — |
-| **B — PHP-Runner & Einstellungen** | `app/Services/Workflows/WorkflowTaskRunner.php`, `app/Livewire/Admin/Network/WorkflowsIndex.php` | G2a, G6 | `frei` — P1 verifiziert | — |
+| **I — Warnung beim Loeschen** | `app/Services/Workflows/WorkflowTaskOrderingService.php`, `app/Livewire/Admin/Network/WorkflowManager.php`, `app/Livewire/Admin/Network/WorkflowStudioTaskEditor.php`, `resources/views/livewire/admin/network/workflow-manager.blade.php`; dazu erneut `WorkflowRouteTargetAutoRepairService.php` | Feature R2 (siehe unten) | `frei` — R2 vollstaendig erledigt | Claude (erledigt) |
+| **A — Node-Runtime** | `node/workflows/run_step.cjs`, `node/workflows/tasks/lib/preview.cjs` | G1, G3, P2c, P3a | `frei` — P2c/P3a und Loop-Budget verifiziert | Codex (erledigt) |
+| **B — PHP-Runner & Einstellungen** | `app/Services/Workflows/WorkflowTaskRunner.php`, `app/Livewire/Admin/Network/WorkflowsIndex.php` | G2a, G6, P2a, P3a | `frei` — P2a/P3a verifiziert | Codex (erledigt) |
 | **C — Housekeeping** | `app/Console/Commands/PruneWorkflowProcessArtifacts.php`, `app/Console/Kernel.php` | G5 | `frei` — P1 verifiziert | — |
-| **D — Ausfuehrung & Monitor** | `app/Services/Workflows/WorkflowExecutionService.php` | G4, spaeter P3 | `frei` — P1 verifiziert | — |
-| **E — Katalog & Bundle** | `app/Services/Workflows/WorkflowTaskCatalog.php`, `app/Services/Workflows/ClientWorkflowBundleCompiler.php` | P6 (`runtimeHash` im Bundle) | `frei` — erledigt; nur `ClientWorkflowBundleCompiler.php` geaendert, `WorkflowTaskCatalog.php` bleibt unberuehrt | Claude (erledigt) |
-| **F — Neue Tests** | ausschliesslich **neu angelegte** Testdateien mit eindeutigem Namen | P2b, P6-Tests | `frei` — erledigt | Claude (erledigt) |
-| **G — Runtime-Fingerprint** | `app/Services/Workflows/WorkflowRuntimeFingerprint.php`, `app/Console/Commands/ShowWorkflowRuntimeHash.php` | P6 (Regel-7-Pruefung) | `frei` — erledigt; `Kernel.php` wurde **nicht** angefasst (Commands werden per `$this->load()` automatisch registriert) | Claude (erledigt) |
+| **D — Ausfuehrung & Monitor** | `app/Services/Workflows/WorkflowExecutionService.php` | G4, P3; R3-Persistenz | `frei` — R3-Haertung sowie P3a-Lock, UUID-Reservierung und Fast-Callback-Race verifiziert | Claude/Codex (erledigt) |
+| **J — Vorschau-Darstellung** | `app/Livewire/Admin/Network/WorkflowRunPreview.php`, `resources/views/livewire/admin/network/workflow-run-preview.blade.php`, `resources/views/components/workflows/minimap.blade.php`, `tests/Unit/WorkflowRouteMarkupTest.php` | Feature R3 (siehe unten) | `frei` — R3 vollstaendig erledigt | Claude (erledigt) |
+| **E — Katalog & Bundle** | `app/Services/Workflows/WorkflowTaskCatalog.php`, `app/Services/Workflows/ClientWorkflowBundleCompiler.php` | P2a, P6 (`runtimeHash` im Bundle) | `frei` — P2a-Sonderfaelle und P6-Metadaten verifiziert | Claude/Codex (erledigt) |
+| **F — Neue Tests** | ausschliesslich **neu angelegte** Testdateien mit eindeutigem Namen | P2b, P2c, P6-Tests, Optimierungsregressionen | `frei` — P2b/P2c/P3a/P6/Loop-Regressionen gruen | Claude/Codex (erledigt) |
+| **G — Runtime-Fingerprint** | `app/Services/Workflows/WorkflowRuntimeFingerprint.php`, `app/Console/Commands/ShowWorkflowRuntimeHash.php` | P6 (Regel-7-Pruefung) | `frei` — beide produktiven Runtime-Wurzeln, 63 Dateien, Client-Gleichheit verifiziert | Claude/Codex (erledigt) |
+| **L — Copilot-Supervisor-Haertung** | `app/Services/Workflows/WorkflowCopilotSupervisorService.php` und neue Regressionstests | Idempotente technische Fehllaeufe, gezielte Relationsloads | `frei` — verifiziert | Codex (erledigt) |
+| **M — Studio-Poll-Querylast** | `app/Livewire/Admin/Network/WorkflowStudio.php` und neue Regressionstests | Keine ungenutzten Voll-Loads von Revisionen/Ereignissen beim Poll | `frei` — verifiziert | Codex (erledigt) |
+| **N — Client-Runtime-Vertrag** | `../ClientController/src-tauri/src/lib.rs` (inklusive dortiger Rust-Tests) | P6: Bundle- und Einzeltask-`runtimeHash` vor Ausfuehrung gegen Resource und Staging pruefen | `frei` — 16 Rust-Tests und Hash-Gleichheit verifiziert | Codex (erledigt) |
+| **O — Lokaler Runtime-Callback** | `routes/api.php`, Callback-Controller, `WorkflowExecutionService.php`, P3a-Anteile in A/B und neue Tests | HMAC-signiertes sofortiges Abschlusssignal; bestehender Monitor bleibt Rueckfall/Watchdog | `frei` — Callback, Lock und beide Spawn-Races verifiziert | Codex (erledigt) |
+| **P — Historischer Preflight** | `app/Services/Workflows/WorkflowCopilotPreflightService.php` und zugehoeriger bestehender Test | Nicht belegte historische Routenmutation als `historical_operation_not_proven` ablehnen und protokollieren | `frei` — verifiziert | Codex (erledigt) |
+| **Q — Embedded- und Loop-Runtime** | `app/Services/Workflows/WorkflowTransferService.php`, P2a-Anteile in `WorkflowTaskRunner.php`, P2c/P3a-Anteile in `run_step.cjs` und zugehoerige Tests | Importierte Include-IDs kanonisieren, eingebettete Loop-Pair-Keys remappen, grosse gueltige Loops mit getrenntem Ist-Budget ausfuehren | `frei` — verifiziert | Codex (erledigt) |
+| **R — Loop-Block-Verschiebung** | `app/Services/Workflows/WorkflowTaskOrderingService.php` und zugehoerige Tests | Start, Body und Ende als zusammenhaengenden Block verschieben; keine leeren Loops durch Drag & Drop | `frei` — verifiziert | Codex (erledigt) |
 
 Bestehende Testdateien gehoeren zur Spur der Datei, die sie testen — wer G1
 umsetzt, passt auch deren Tests an. Spur F umfasst nur **neue** Dateien.
@@ -365,7 +602,172 @@ jemand bestaetigen koennte; dort ist der harte Abbruch richtig. Wer das aendern
 will, muesste entscheiden, ob der Copilot selbstaendig auf Standardrouten
 zurueckfallen darf — das ist eine Produktentscheidung, keine Implementierungsfrage.
 
-### Befund fuer Codex: P2a ist keine reine Loeschung
+### Feature R2 — Warnung schon beim Loeschen einer Karte
+
+**Anlass:** R1 heilt den Schaden erst beim Teststart. Zwischen dem Loeschen einer
+Karte und dem naechsten Test koennen Stunden liegen — bis dahin weiss niemand,
+dass Verzweigungen ins Leere zeigen. R2 zieht die Information an den Ort, an dem
+sie entsteht.
+
+**Geprueft und bewusst so entschieden:**
+
+* Es gibt **keinen zweiten Startpfad**. `grep` ueber `app/Livewire` und
+  `app/Http/Controllers` findet `assertValid`/`startInteractiveRun`
+  ausschliesslich in `WorkflowStudio.php`. R1 deckt damit alle Teststarts ab; es
+  muss nichts nachgezogen werden.
+* Es gibt genau **einen Loesch-Engpass**: `WorkflowTaskOrderingService::removeTask()`.
+  Sowohl `WorkflowManager::removeTaskCard()` als auch
+  `WorkflowStudioTaskEditor::removeTaskCard()` (ruft `parent::`) laufen darueber.
+* Die Routen werden beim Loeschen **nicht** still umgeschrieben. Das waere
+  genau der stille Strukturverlust, den R1 vermeiden soll. R2 **warnt** nur; die
+  Entscheidung faellt weiterhin bewusst im R1-Dialog.
+* `removeTask()` entfernt bei Loop-Karten auch die gekoppelte Partnerkarte.
+  Die Warnung muss deshalb auf **allen** tatsaechlich entfernten Keys beruhen,
+  nicht nur auf dem angeklickten.
+
+**Schritte** (Zwischenstaende werden hier nachgetragen):
+
+1. ✅ **Erledigt.** `WorkflowRouteTargetAutoRepairService`: Befunde um die
+   Rohfelder `target_step`/`target_card` erweitert (rein additiv, `current_target`
+   bleibt als lesbares Label erhalten).
+2. ✅ **Erledigt.** `removeTask()` liefert die Liste der tatsaechlich entfernten
+   Keys zurueck (vorher `void`; Rueckgabe ist fuer bestehende Aufrufer
+   unschaedlich) — inklusive der gekoppelten Loop-Partnerkarte.
+3. ✅ **Erledigt.** `WorkflowManager::removeTaskCard()` ermittelt ueber
+   `danglingRouteWarning()`, wie viele Verzweigungen jetzt ins Leere zeigen,
+   nennt die ausloesenden Karten und meldet das per `session()->flash('warning')`;
+   neuer `warning`-Kanal (amber) im Manager-Blade. Die neue Eigenschaft
+   `lastRemovalRouteWarning` traegt denselben Text, weil der Studio-Editor keine
+   Session-Flash-Meldung rendert — `WorkflowStudioTaskEditor::removeTaskCard()`
+   haengt ihn an seine eigene Notice an. Singular/Plural ueber `trans_choice`.
+
+**Testhinweis:** Livewire-Komponententests koennen Flash-Meldungen nicht
+zuverlaessig lesen (`session('warning')` ist nach `call()` bereits gealtert).
+Der Inhalt wird deshalb funktional ueber `lastRemovalRouteWarning` geprueft, der
+Flash-Kanal strukturell ueber das Blade-Markup. Wer das spaeter anders loesen
+will, braucht einen HTTP-Test statt eines Komponententests.
+
+### Feature R3 — Laufweg in der Vorschau bleibt sichtbar
+
+**Auftrag (Fachseite, 2026-07-23):** In der Workflow-Vorschau erkennt man nicht,
+welche Tasks schon gelaufen sind und woran gerade gearbeitet wird. Springt der
+Lauf zurueck, verschwinden die Markierungen der kompletten Liste und Linien
+fallen weg — der zurueckgelegte Weg ist dann nicht mehr nachvollziehbar. Alle
+Markierungen und Linien sollen sichtbar bleiben; aeltere verblassen, juengere
+bleiben kraeftig.
+
+**Zwei getrennte Ursachen, beide belegt:**
+
+1. **Markierungen verschwinden.** `WorkflowRunPreview::compactWorkflowMap()`
+   (`:562-582`) und `minimap.blade.php` (`:22-35`) leiten den Task-Status
+   ausschliesslich aus `WorkflowStepRun.result_json.tasks` ab. Pro Lauf und Liste
+   existiert aber nur **eine** `workflow_step_runs`-Zeile
+   (`updateOrCreate(['workflow_run_id','workflow_step_id'])`). Beim Ruecksprung
+   startet ein neuer Node-Lauf, der nur die Tasks **ab dem Sprungziel** enthaelt;
+   `result_json` wird damit ueberschrieben und alle frueheren Task-Ergebnisse
+   dieser Liste sind weg. Sie fallen auf `pending` zurueck — die Liste sieht aus,
+   als waere sie nie gelaufen.
+2. **Linien verschwinden.** `minimap.blade.php:271`
+   (`$routeEventsForJs = $routeEvents->take(-16)`) zeichnet nur die **letzten 16**
+   Routenereignisse; `:252` (`slice(-8)`) begrenzt zusaetzlich die Knoten-Badges
+   auf 8. Bei Rueckspruengen draengen neue Ereignisse die aelteren heraus.
+   Zusaetzlich kappt `WorkflowExecutionService::recordRoute()` (`:3693`) die
+   `route_history` auf 50 Eintraege. Die Deckkraft haengt heute nur am Hover-Fokus
+   (`:386`), nicht am Alter.
+
+**Loesungsansatz:**
+
+* Neue, akkumulierende `context_json.task_history` im Lauf: bei jedem
+  **Abschluss** einer Liste (`completeStepRun()`/`failStepRun()`) werden deren
+  Task-Ergebnisse mit laufender Sequenznummer eingefroren. Ein spaeteres
+  Ueberschreiben von `result_json` kann sie dann nicht mehr loeschen. Bewusst nur
+  bei Abschluss: der laufende Zustand steht ohnehin im aktuellen Snapshot.
+* Vorschau und Minimap mischen `task_history` unter die aktuellen Ergebnisse und
+  bekommen je Markierung eine Sequenz, aus der die Oberflaeche das Verblassen
+  ableitet.
+* Linienlimits anheben und die Deckkraft an das Alter koppeln statt an den
+  Hover-Fokus allein.
+
+**Schritte** (Zwischenstaende werden hier nachgetragen):
+
+1. ✅ **Erledigt.** `WorkflowExecutionService::recordTaskHistory()` friert die
+   Task-Ergebnisse einer Liste bei `completeStepRun()` und `failStepRun()` in
+   `context_json.task_history` ein — mit fortlaufender `seq` ueber den ganzen
+   Lauf, damit sich das Alter einer Markierung bestimmen laesst. Obergrenze
+   `TASK_HISTORY_LIMIT = 600`. `route_history` von 50 auf **300** angehoben.
+2. ✅ **Erledigt.** `WorkflowRunPreview::taskHistoryByStep()` und
+   `markerFreshness()` mischen die Historie unter den aktuellen Snapshot: der
+   Snapshot hat Vorrang, die Historie fuellt die beim Ruecksprung
+   herausgeschnittenen Tasks nach. Jede Markierung traegt jetzt `passes`
+   (Anzahl Durchlaeufe) und `freshness` (45–100). `minimap.blade.php` macht
+   dasselbe fuer `$taskResultsByStep` und ergaenzt Listen, die nur noch in der
+   Historie stehen.
+3. ✅ **Erledigt.** Kompaktansicht: aktiver Task ist breiter und geringelt (auch
+   ohne Farbunterscheidung auffindbar), gelaufene Tasks verblassen ueber
+   `freshness`, nie gelaufene haben einen **gestrichelten** Rahmen ohne Fuellung
+   und sind damit klar vom uebersprungenen Grau unterscheidbar; der Tooltip nennt
+   Status und Anzahl der Durchlaeufe. Linien: `take(-16)` und `slice(-8)`
+   entfernt, Deckkraft aus dem Alter (juengste 1.0, aelteste 0.35), Strichstaerke
+   ebenfalls altersabhaengig; der Hover-Fokus daempft nur noch (Untergrenze 0.28)
+   statt Linien auszublenden.
+
+**Grenze der Loesung:** Die Historie entsteht beim **Abschluss** einer Liste. Ein
+Ruecksprung mitten in einer noch laufenden Liste zeigt fuer die bereits erledigten
+Tasks dieses Durchlaufs weiterhin nur das, was im aktuellen Snapshot steht. Das
+ist bewusst so: bei jedem Monitor-Tick zu schreiben haette den Schreibaufwand
+vervielfacht. Wenn das in der Praxis stoert, ist der Haken
+`recordTaskHistory()` — er muesste dann zusaetzlich im Monitor-Pfad (Spur D, P3)
+aufgerufen werden.
+
+### Geloester Befund: P2a und alte Karten ohne `task_key`
+
+`tests/Feature/ClientControllerReliableWorkflowTest > unassigned client run uses
+a free node instead of a busy node` schlaegt seit dem P2a-Refactor fehl:
+
+```
+UnexpectedValueException: Die Workflow-Task "(ohne task_key)" ist nicht im
+Task-Katalog registriert.
+  app/Services/Workflows/WorkflowTaskCatalog.php:1925
+  app/Services/Workflows/WorkflowTaskRunner.php:553
+```
+
+`resolveRuntimeTask()` wirft jetzt hart, wenn eine Task-Karte keinen `task_key`
+traegt. Die Fixture dieses Tests legt genau so eine Karte an. Zu entscheiden ist,
+ob solche Karten kuenftig unzulaessig sind (dann Fixture **und** Validator
+anpassen, damit der Fehler beim Speichern statt beim Start auffaellt) oder ob
+`resolveRuntimeTask()` sie unveraendert durchreichen soll. Bereich gehoert zu
+Spur B/E — bitte von Codex entscheiden.
+
+**Loesung 2026-07-23:** Alte Node-Karten ohne `task_key` werden nur dann ueber
+ihr `node_script` migriert, wenn genau ein Katalogeintrag dazu passt. Unbekannte
+oder mehrdeutige Skripte bleiben Fail-Fast-Fehler; Embedded-Workflow-Karten
+werden separat erkannt. Der genannte ClientController-Test und der breite
+Workflow-Lauf sind wieder gruen.
+
+### Geloester Befund: historische Preflight-Operation ohne Beleg
+
+`tests/Feature/WorkflowCopilotPreflightServiceTest.php:202` schlaegt fehl:
+
+```
+unproven offline plan cannot turn an explicit fail route into a continue route
+Failed asserting that null is identical to 'historical_operation_not_proven'.
+```
+
+`data_get($session->state_json, 'history_preflight.offline_plan.rejected_operations.0.reason_code')`
+ist `null` — es wird also gar keine abgelehnte Operation protokolliert, obwohl
+der Test genau das erwartet. Verifiziert **ohne** die offenen Aenderungen von
+Claude und Codex (per `git stash` gegen den committeten Stand `45667a3`), der
+Fehler liegt also nicht an laufender Arbeit. Bereich `WorkflowCopilotPreflightService`
+gehoert nicht zu Claudes Spuren — bitte von Codex pruefen. Alle uebrigen 284
+Tests des Filters `--filter=Workflow` sind gruen.
+
+**Loesung 2026-07-23:** Der Offline-Preflight lehnt die nicht belegbare Mutation
+jetzt deterministisch mit `historical_operation_not_proven` ab und persistiert
+den Grund unter `rejected_operations`. Der genannte Test sowie der breite Lauf
+mit 313 Workflow-Tests sind gruen; fuer diesen Fall wird kein AI-Aufruf mehr
+gestartet.
+
+### Geloester Befund: P2a war keine reine Loeschung
 
 Bei der Vorbereitung von Spur E (P2a, `normalizeRuntimeTask()` entfernen) hat
 sich gezeigt, dass die zweite Registry **nicht vollstaendig redundant** ist.
@@ -392,6 +794,12 @@ Belegt am 2026-07-23 gegen `WorkflowTaskCatalog::all()` (47 Eintraege, alle mit
 
 Spur F sichert diese drei Punkte per Test ab, bevor jemand P2a umsetzt.
 
+**Loesung 2026-07-23:** `WorkflowTaskCatalog::resolveRuntimeTask()` ist jetzt der
+einzige ausfuehrbare Registryvertrag. Er besitzt eine deklarierte Runtime-Variante
+fuer den Legacy-DOM-Loop und den versteckten Kompatibilitaetseintrag
+`data.save_workflow_data`; `normalizeRuntimeTask()` wurde entfernt. Registry- und
+Preload-Tests sichern Default- und Variantenskripte gemeinsam ab.
+
 ### Abgeschlossener Bereichsanspruch (Regel 9)
 
 Fuer **P1** wurden die folgenden Bereiche beansprucht und nach der Verifikation
@@ -403,23 +811,24 @@ Observability-/Status-Payload), `app/Services/Workflows/WorkflowTaskRunner.php`
 Runner-Log-Bereinigung), `app/Livewire/Admin/Network/WorkflowsIndex.php`,
 `app/Livewire/Admin/Network/WorkflowManager.php` (nur Settings-Persistenz) und
 `app/Console/Commands/PruneWorkflowProcessArtifacts.php`.
-Weiterhin nicht beansprucht und damit parallel frei: **P2–P6**,
-`WorkflowTaskCatalog.php`-Registry, `ClientWorkflowBundleCompiler.php`,
-Copilot-Planung/-Reparatur/-Prompting, Studio-UI und Chatbot.
+Dieser Absatz dokumentiert die damalige Freigabe direkt nach P1. Der heutige
+Stand steht in der Spurentafel und im Implementierungsstatus der Runtime-
+Roadmap; P2, P3a und der P6-Hashvertrag sind inzwischen bearbeitet.
 
 ### Ausgangslage in Zahlen
 
 | Groesse | Wert | Quelle |
 | --- | --- | --- |
-| Node-Prozesse je Lauf, Copilot aus | 1 pro Liste + 1 geparkter Browser-Owner | `WorkflowTaskRunner::runtimeTasks()` |
-| Node-Prozesse je Lauf, Copilot an | **1 pro Task-Karte** + 1 | `WorkflowTaskRunner.php:479`, `:501` |
-| Beispiel `google-suche-ergebnisse` (6 Listen / 14 Karten) | 7 bzw. **15** Prozesse | ausgezaehlt |
-| `require('puppeteer-extra')` + Stealth | 384 ms je Prozess | gemessen |
-| alle Task-Libs zusammen | 2 ms | gemessen |
-| Monitor-Poll | 3 s (erste 60 s), danach 10 s | `WorkflowExecutionService.php:50`, `:56` |
+| Node-Prozesse je Lauf, Copilot aus | 1 pro tatsaechlich besuchter Liste; der erste geparkte Browser-Owner ist darin bereits enthalten | `WorkflowTaskRunner::runtimeTasks()` / Browser-Lifecycle |
+| Node-Prozesse je Lauf, Copilot an | weiterhin **1 pro ausgefuehrter Task-Karte/Segment** | `WorkflowTaskRunner::shouldSegmentTasks()` |
+| Aktuelles Beispiel `google-suche-ergebnisse` (6 Listen / 11 Karten) | routenabhaengig bis ca. 6 bzw. **11** Starts | aktueller Workflow-Stand 2026-07-23 |
+| `require('puppeteer-extra')` + Stealth | 384 ms je Prozess | historische Baseline-Messung |
+| alle Task-Libs zusammen | 2 ms | historische Baseline-Messung; P2c dient Fail-Fast, nicht Bundling |
+| Terminaler lokaler Abschluss | sofortiger 202-Callback; Rueckfall 1 s in den ersten 60 s, danach 3 s | P3a / `scheduleMonitor()` |
 
 **Merksatz fuer die Umsetzung:** Die Task-Skripte sind nicht das Problem (2 ms).
-Teuer sind die Prozessgrenzen und vor allem die Poll-Wartezeit zwischen ihnen.
+Teuer bleiben die Prozessgrenzen; P3a entfernt im Erfolgsfall die reine
+Poll-Wartezeit am terminalen Uebergang.
 Ein Zusammenbuendeln der `.cjs`-Dateien zu einer Datei ist ausdruecklich **kein**
 Ziel und bringt nichts.
 
@@ -562,47 +971,50 @@ belegt, dass bei `dev_mode = false` und ohne Copilot-Sitzung alle
 
 ### Paket P2 — Registry, Preload, Fail-Fast
 
-* **P2a** `WorkflowTaskRunner::normalizeRuntimeTask()` (`WorkflowTaskRunner.php:1089-1122`)
-  entfernen. Die dort gepflegte `match`-Liste (~18 Keys) ist eine **zweite**
-  Registry neben `WorkflowTaskCatalog` (47 `node_script`-Eintraege). `node_script`
-  und `runner` kuenftig ausschliesslich aus dem Katalog.
-* **P2b** Neuer Test: fuer jeden Katalogeintrag existiert die `node_script`-Datei
-  und exportiert `run`. Heute faellt das erst zur Laufzeit auf
-  (`run_step.cjs:2779`).
-* **P2c** Preload: in `run_step.cjs` vor der Task-Schleife (`run_step.cjs:2697`)
-  alle in `runtime.tasks` referenzierten `node_script` einmal `require`-en, Fehler
-  sofort als Startfehler melden. Das ist die Fachidee „alle benoetigten
-  Task-Skripte vorher sammeln" auf Modulebene — der Laufzeitgewinn ist gering
-  (2 ms), der Gewinn liegt im Fail-Fast.
+**Umgesetzt.** `WorkflowTaskCatalog::resolveRuntimeTask()` ist der einzige
+ausfuehrbare Registryvertrag. Er enthaelt die Legacy-DOM-Variante des Loop-Starts,
+den versteckten Backcompat-Task `data.save_workflow_data` und die eng begrenzte
+Ableitung alter Karten ohne `task_key`. Embedded-Workflows werden separat
+normalisiert. Der Registrytest prueft Default- **und** Variantenskripte auf
+Datei, `run()` und passenden Modul-Key. `run_step.cjs` laedt alle Node-Module vor
+Task 1, dedupliziert reale Pfade, blockiert Pfade/Symlinks ausserhalb der Runtime
+und meldet alle Lade-/Exportfehler gesammelt, bevor ein frueher Task Seiteneffekte
+ausloesen kann. Der Laufzeitgewinn bleibt bewusst gering; der Nutzen ist
+deterministisches Fail-Fast.
 
 ### Paket P3 — Push statt Poll (groesster Zeitgewinn)
 
-`run_step.cjs` meldet Fortschritt und Ergebnis ueber einen HMAC-signierten
-internen HTTP-Callback; `MonitorWorkflowStepRunJob` bleibt ausschliesslich
-Watchdog (Schwelle `WATCHDOG_STALL_SECONDS = 120`,
-`WorkflowExecutionService.php:47`). Vorbild ist der ClientController-Pfad, der
-laut README-Kopf bereits ohne Queue-Worker fuer Live-Fortschritt und Routing
-auskommt. Ziel: die 3–10 s Leerlauf je Schritt entfallen.
+**P3a umgesetzt:** `run_step.cjs` meldet den terminalen Status ueber einen
+HMAC-signierten internen HTTP-Callback. Laravel antwortet zuerst mit `202` und
+wertet danach die private Status-/Resultatdatei aus; der Request-Body ist keine
+Ergebnisquelle. Fast-Spawn und paralleler Poll sind serialisiert. Das adaptive
+1-s-/3-s-Polling bleibt Rueckfall. **P3b offen:** Fortschrittsereignisse mit
+Sequenz/Ack; danach `MonitorWorkflowStepRunJob` im Normalfall nur noch als
+120-s-Watchdog (`WATCHDOG_STALL_SECONDS`).
 
 ### Paket P4 — Copilot-Checkpoints ohne Prozessgrenze
 
 `$singleTask` (`WorkflowTaskRunner.php:459`, `:479`, `:501`) entfaellt als
 Steuerung. Stattdessen haelt der Runner nach jedem Task an einem Checkpoint an,
 meldet Screenshot und DOM per Callback (P3) und wartet auf `resume`/`repair`.
-Semantik identisch, aber ein Prozess statt einer pro Karte. Die
-Checkpoint-Persistenz existiert bereits (`WorkflowStudioCheckpointService`).
+Semantik identisch, aber ein Prozess statt einer pro Karte. Runtime-Zustand liegt
+bereits in `context_json.copilot_checkpoint`; reproduzierbare Copilot-
+Wiederaufnahmepunkte werden als `WorkflowRunCheckpoint` persistiert. Die
+benutzerseitigen `WorkflowStudioCheckpointService`-Snapshots sind davon getrennt.
 **Invariante:** `WorkflowCopilotExecutionInvariantTest` muss unveraendert gruen
 bleiben.
 
 ### Paket P5 — Session-Runner
 
 Ein langlebiger Node-Prozess **pro Workflow-Lauf** statt pro Liste. Haelt Browser,
-Puppeteer, geladene Task-Module und Kontext im Speicher; Steuerung ueber
-Kommandokanal (stdin-JSONL oder Named Pipe/Unix-Socket) mit
+Puppeteer, geladene Task-Module und Kontext im Speicher; Steuerung ueber eine
+atomare Command-Inbox mit Sequenz/Ack oder einen authentifizierten lokalen Kanal mit
 `run_task`, `pause`, `resume`, `rewind`, `inject_task`, `stop`. Der heutige
 Keep-Alive-Parkmodus (`run_step.cjs:2259`, `setInterval` alle 3 s, Idle-Limit
 15 min) wird zum Kommando-Empfaenger ausgebaut — er ist bereits ein halber Daemon,
-er nimmt nur keine Arbeit an. Idle-Limit und
+er nimmt nur keine Arbeit an. Das heutige detached Spawning besitzt kein
+persistentes stdin und wird deshalb nicht auf ein stdin-Protokoll gebaut.
+Idle-Limit und
 `ManagedProcessInventory`/`ManagedProcessSupervisor` bleiben als Schutz.
 
 ### Paket P6 — Ein Compiler, Aufraeumen
@@ -610,24 +1022,22 @@ er nimmt nur keine Arbeit an. Idle-Limit und
 * `ClientWorkflowBundleCompiler` wird der einzige Compiler; `start()` und
   `remoteRuntime()` (`WorkflowTaskRunner.php:23`, `:73` — heute doppelt gepflegt)
   werden reine Transport-Adapter.
-* ~~Bundle um `runtimeHash` (SHA-256 ueber `node/workflows`) erweitern, damit
-  Regel 7 (ClientController-Sync) maschinell pruefbar wird.~~ **Erledigt am
-  2026-07-23 (Claude).** `WorkflowRuntimeFingerprint` berechnet den kanonischen
-  Hash (nur `.cjs` ohne `*.test.cjs`, Pfade sortiert, Zeilenenden auf LF
-  normalisiert und BOM entfernt — sonst haetten Windows- und Linux-Checkout
-  unterschiedliche Hashes). Das Bundle traegt `runtimeHash` und
-  `runtimeHashAlgorithm` rein additiv, `schemaVersion` bleibt `1`.
+* ~~Bundle um `runtimeHash` erweitern und im Client pruefen.~~ **Erledigt und
+  gehaertet am 2026-07-23.** `WorkflowRuntimeFingerprint` berechnet den
+  kanonischen Hash ueber produktive `.cjs` unter `node/workflows` **und**
+  `resources/node/register/lib` (`*.test.cjs` ausgeschlossen, Pfade sortiert,
+  Zeilenenden auf LF normalisiert, BOM entfernt). Bundle und einzelne
+  `workflow_task`-Runtime tragen Hash und Algorithmus. Der Client prueft Resource-
+  und content-addressed Staging-Runtime vor der Ausfuehrung.
   Pruefbefehl fuer Deploy/CI, Exit-Code 1 bei Abweichung:
 
   ```bash
   php artisan workflow:runtime-hash --expect=<hash-des-clients>
   ```
 
-  Offen bleibt die Gegenseite: der ClientController muss den mitgelieferten
-  `runtimeHash` mit seiner eigenen Kopie vergleichen und bei Abweichung den Lauf
-  ablehnen oder einen Sync anfordern. `WorkflowRuntimeFingerprint::compare()`
-  liefert dafuer bereits die Drift-Auswertung (`missingRemote`, `missingLocal`,
-  `changed`).
+  `WorkflowRuntimeFingerprint::compare()` liefert weiterhin die Drift-Auswertung
+  (`missingRemote`, `missingLocal`, `changed`). Offen bleibt, den Hash nach der
+  rollierenden Updatephase fuer neue Schema-Versionen verpflichtend zu machen.
 * Toten Parallelpfad entfernen: `ResolvePersonDataTask`, `ReadLoginDataTask`,
   `ReadAccountDataTask` werden nirgends instanziiert; `runDataTask()`
   (`run_step.cjs:1657-1772`) wird nach P6 ueberfluessig. `PersistMailAccountTask`
@@ -642,8 +1052,8 @@ er nimmt nur keine Arbeit an. Idle-Limit und
 | **P1** (G1, G5 zuerst) | klein | jeder Lauf; behebt Datenschutzrisiko | keine |
 | **P2** | klein | Fail-Fast, eine Registry | keine |
 | **P3** | mittel | groesster Zeitgewinn | keine |
-| **P4** | mittel | Copilot 15 -> 1 Prozess | P3 |
-| **P5** | gross | Normalbetrieb 7 -> 1 Prozess | P3, P4 |
+| **P4** | mittel | Copilot im aktuellen 11-Karten-Beispiel: bis zu 11 -> bis zu 6 Prozesse (einer je Liste) | P3 |
+| **P5** | gross | Normalbetrieb im aktuellen 6-Listen-Beispiel: bis zu 6 -> 1 Prozess | P3, P4 |
 | **P6** | mittel | Wartbarkeit, kein `portable=false`-Fallback mehr | P5 |
 
 Ein Paket gilt als fertig, wenn:
@@ -720,17 +1130,23 @@ einem teilweise fehlgeschlagenen DDL-Lauf erneut ausfuehrbar. Auf Plesk:
 /opt/plesk/php/8.3/bin/php artisan migrate --force
 ```
 
-Gezielte Verifikation dieses Stands: PHP 74 Tests/610 Assertions, Node 25
-Tests, Rust-Route-Test, PHP-Syntax, Blade-Cache und `git diff --check`.
+Aktuelle breite Verifikation dieses Stands: PHP **313 Tests/2799 Assertions**,
+Node **50 Tests**, Rust **16 Tests**, Pint fuer alle geaenderten PHP-Dateien,
+`cargo fmt --check`, Blade-Cache und `git diff --check`. Die synchronisierte
+Client-Runtime stimmt mit **63 Dateien** und SHA-256
+`016aa91a7913727b180b9b5fcd362a234370167a83e0b5202217a897f5b0ea25`
+exakt mit dem Serverstand ueberein.
 Eine angemeldete visuelle Browser-Endabnahme bleibt nach dem Deployment offen.
 
 ### Optimierter Test- und Copilot-Lauf
 
-Interaktive `workflow-task`-Laeufe werden ueber ihren Status-Heartbeat und die
-tatsaechliche Runner-PID ueberwacht. Junge Laeufe werden alle drei Sekunden,
-aeltere Laeufe alle zehn Sekunden kontrolliert. Ist der Heartbeat aelter als
-120 Sekunden und der Prozess nachweislich beendet, schliesst der Watchdog den
-Step mit `run.watchdog_stalled` ab. Ein weiterhin laufender Prozess wird nur mit
+Interaktive `workflow-task`-Laeufe melden ihren terminalen Stand zuerst ueber den
+signierten P3a-Callback. Die private Resultatdatei bleibt die Wahrheit; Callback
+und Monitor werden durch denselben per-Step-Lock serialisiert. Falls der Push
+nicht ankommt, kontrolliert der Rueckfall junge Laeufe jede Sekunde und Laeufe ab
+60 Sekunden alle drei Sekunden. Ist der Heartbeat aelter als 120 Sekunden und
+der Prozess nachweislich beendet, schliesst der Watchdog den Step mit
+`run.watchdog_stalled` ab. Ein weiterhin laufender Prozess wird nur mit
 `run.heartbeat_stale` diagnostiziert und nicht blind beendet.
 
 Bei Selector-Timeouts darf der Copilot Ersatz-Selector nur aus der aktuellen

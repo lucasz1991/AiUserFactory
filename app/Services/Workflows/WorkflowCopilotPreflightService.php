@@ -66,11 +66,19 @@ class WorkflowCopilotPreflightService
             ->filter(fn (mixed $operation): bool => is_array($operation))
             ->values()
             ->all();
-        $needsOfflinePlan = $offlineSafeOperations !== []
-            && ((int) ($report['unresolved_error_pattern_count'] ?? 0) > count($candidates)
-                || collect($report['static_diagnostics'] ?? [])
-                    ->contains(fn (mixed $diagnostic): bool => is_array($diagnostic)
-                        && ($diagnostic['severity'] ?? null) === 'error'));
+        $hasUncoveredOfflineRepairNeed = (int) ($report['unresolved_error_pattern_count'] ?? 0) > count($candidates)
+            || collect($report['static_diagnostics'] ?? [])
+                ->contains(fn (mixed $diagnostic): bool => is_array($diagnostic)
+                    && ($diagnostic['severity'] ?? null) === 'error');
+        $needsOfflinePlan = $offlineSafeOperations !== [] && $hasUncoveredOfflineRepairNeed;
+        $skippedOfflinePlanRejections = $allowRepairs
+            && $hasUncoveredOfflineRepairNeed
+            && $offlineSafeOperations === []
+                ? [[
+                    'reason_code' => 'historical_operation_not_proven',
+                    'message' => 'Der Offline-Strukturplan wurde verworfen, weil keine exakt historisch belegte Operation freigegeben ist.',
+                ]]
+                : [];
         $offlinePlan = $allowRepairs && $needsOfflinePlan
             ? $this->repairs->planHistoricalPreflight($session, $report)
             : [
@@ -80,7 +88,7 @@ class WorkflowCopilotPreflightService
                     : ($offlineSafeOperations === []
                         ? 'Keine offline historisch belegte Strukturmutation vorhanden; kein KI-Reparaturaufruf ausgefuehrt.'
                         : 'Die Historie erfordert keine zusaetzliche Strukturplanung.'),
-                'rejected_operations' => [],
+                'rejected_operations' => $skippedOfflinePlanRejections,
             ];
         $operations = is_array($offlinePlan['operations'] ?? null) ? $offlinePlan['operations'] : [];
         $report['offline_plan'] = [

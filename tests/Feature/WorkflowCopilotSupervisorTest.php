@@ -20,6 +20,7 @@ use App\Services\Workflows\WorkflowExecutionService;
 use App\Services\Workflows\WorkflowRevisionService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Crypt;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 use Mockery;
 use Tests\TestCase;
@@ -917,6 +918,92 @@ class WorkflowCopilotSupervisorTest extends TestCase
         $this->assertSame(0, data_get($session->state_json, 'technical_failure_repeats'));
         $this->assertSame($error, data_get($session->state_json, 'last_technical_failure_signature'));
         $this->assertSame($newRun->id, (int) $session->active_workflow_run_id);
+    }
+
+    public function test_queue_retry_counts_the_same_technical_run_once_but_retries_its_failed_restart(): void
+    {
+        [$workflow, $step] = $this->workflowWithBrokenSelector();
+        $sessions = app(WorkflowCopilotSessionService::class);
+        $session = $sessions->start($workflow);
+        $run = $this->failedRun(
+            $session,
+            $step,
+            'Die Ziel-Task fuer den Ruecksprung wurde nicht gefunden: if-eingabevariable-pruefen',
+        );
+        $session = $sessions->attachRun($session, $run);
+        $session->forceFill(['status' => WorkflowCopilotSession::STATUS_RUNNING])->save();
+
+        $failedRestart = Mockery::mock(WorkflowExecutionService::class);
+        $failedRestart->shouldReceive('start')
+            ->once()
+            ->andThrow(new \RuntimeException('Queue-Verbindung beim Neustart unterbrochen.'));
+        $this->app->instance(WorkflowExecutionService::class, $failedRestart);
+
+        try {
+            app(WorkflowCopilotSupervisorService::class)->supervise($session->id);
+            $this->fail('Der simulierte erste Neustart haette fehlschlagen muessen.');
+        } catch (\RuntimeException $exception) {
+            $this->assertSame('Queue-Verbindung beim Neustart unterbrochen.', $exception->getMessage());
+        }
+
+        $session->refresh();
+        $this->assertSame($run->id, (int) $session->active_workflow_run_id);
+        $this->assertSame(1, data_get($session->usage_json, 'repair_iterations'));
+        $this->assertSame(0, data_get($session->state_json, 'technical_failure_repeats'));
+        $this->assertSame(1, $session->events()->where('event_type', 'run.failed')->count());
+
+        $replacementRun = WorkflowRun::query()->create([
+            'run_uuid' => (string) str()->uuid(),
+            'workflow_id' => $workflow->id,
+            'workflow_revision' => 0,
+            'status' => 'queued',
+            'context_json' => ['execution_target' => 'system'],
+            'result_json' => [],
+        ]);
+        $successfulRetry = Mockery::mock(WorkflowExecutionService::class);
+        $successfulRetry->shouldReceive('start')->once()->andReturn($replacementRun);
+        $this->app->instance(WorkflowExecutionService::class, $successfulRetry);
+
+        app(WorkflowCopilotSupervisorService::class)->supervise($session->id);
+
+        $session->refresh();
+        $this->assertSame($replacementRun->id, (int) $session->active_workflow_run_id);
+        $this->assertSame(1, data_get($session->usage_json, 'repair_iterations'));
+        $this->assertSame(0, data_get($session->state_json, 'technical_failure_repeats'));
+        $this->assertSame(1, $session->events()->where('event_type', 'run.failed')->count());
+    }
+
+    public function test_queued_supervision_does_not_eager_load_step_runs_that_are_not_used(): void
+    {
+        Queue::fake();
+        [$workflow] = $this->workflowWithBrokenSelector();
+        $sessions = app(WorkflowCopilotSessionService::class);
+        $session = $sessions->start($workflow);
+        $run = WorkflowRun::query()->create([
+            'run_uuid' => (string) str()->uuid(),
+            'workflow_id' => $workflow->id,
+            'workflow_copilot_session_id' => $session->id,
+            'workflow_revision' => 0,
+            'status' => 'queued',
+            'context_json' => [
+                'workflow_copilot_session_id' => $session->id,
+                'copilot_supervised' => true,
+                'execution_target' => 'system',
+            ],
+            'result_json' => [],
+        ]);
+        $sessions->attachRun($session, $run);
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        app(WorkflowCopilotSupervisorService::class)->supervise($session->id);
+        $queries = collect(DB::getQueryLog())->pluck('query');
+        DB::disableQueryLog();
+
+        $this->assertFalse(
+            $queries->contains(fn (string $query): bool => str_contains(strtolower($query), 'workflow_step_runs')),
+            'Der Supervisor hat WorkflowStepRuns geladen, obwohl der queued-Pfad sie nicht verwendet.',
+        );
     }
 
     public function test_repeated_checkpoint_failure_stops_route_churn_without_calling_the_repair_planner_again(): void

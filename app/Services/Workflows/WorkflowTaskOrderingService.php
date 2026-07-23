@@ -40,7 +40,7 @@ class WorkflowTaskOrderingService
 
         $targetPosition = max(0, $targetPosition);
 
-        $movingTasks = $this->pairedTasks($sourceStep, $movingTask);
+        $movingTasks = $this->movingTaskBlock($sourceStep, $movingTask);
 
         if ((int) $sourceStep->id === (int) $targetStep->id) {
             $allTasks = collect($this->tasks($targetStep))->values();
@@ -54,11 +54,9 @@ class WorkflowTaskOrderingService
                 ->filter(fn (int $index): bool => in_array((string) ($allTasks->get($index)['key'] ?? ''), $movingKeys, true))
                 ->values();
 
-            foreach ($originalPositions as $originalPosition) {
-                if ($targetPosition > $originalPosition) {
-                    $targetPosition--;
-                }
-            }
+            $targetPosition -= $originalPositions
+                ->filter(fn (int $originalPosition): bool => $originalPosition < $targetPosition)
+                ->count();
 
             $tasks = $allTasks
                 ->reject(fn (array $task): bool => in_array((string) ($task['key'] ?? ''), $movingKeys, true))
@@ -114,20 +112,39 @@ class WorkflowTaskOrderingService
         $this->saveTasks($step, $tasks->values()->toArray());
     }
 
-    public function removeTask(WorkflowStep $step, string $taskKey): void
+    /**
+     * Entfernt eine Karte und – bei Loop-Karten – ihre gekoppelte Partnerkarte.
+     *
+     * @return list<string> die tatsaechlich entfernten Karten-Keys. Aufrufer
+     *                      koennen damit melden, welche Verzweigungen jetzt ins
+     *                      Leere zeigen (Feature R2).
+     */
+    public function removeTask(WorkflowStep $step, string $taskKey): array
     {
         $tasksBeforeRemoval = collect($this->tasks($step));
         $task = $tasksBeforeRemoval
             ->first(fn (array $task): bool => (string) ($task['key'] ?? '') === $taskKey);
         $pairId = is_array($task) ? trim((string) ($task['loop_pair_id'] ?? $task['loopPairId'] ?? '')) : '';
 
-        $tasks = collect($this->tasks($step))
-            ->reject(fn (array $task): bool => (string) ($task['key'] ?? '') === $taskKey
-                || ($pairId !== '' && trim((string) ($task['loop_pair_id'] ?? $task['loopPairId'] ?? '')) === $pairId))
+        $shouldRemove = fn (array $task): bool => (string) ($task['key'] ?? '') === $taskKey
+            || ($pairId !== '' && trim((string) ($task['loop_pair_id'] ?? $task['loopPairId'] ?? '')) === $pairId);
+
+        $removedKeys = $tasksBeforeRemoval
+            ->filter($shouldRemove)
+            ->pluck('key')
+            ->filter()
+            ->map(fn (mixed $key): string => (string) $key)
+            ->values()
+            ->all();
+
+        $tasks = $tasksBeforeRemoval
+            ->reject($shouldRemove)
             ->values()
             ->toArray();
 
         $this->saveTasks($step, $tasks);
+
+        return $removedKeys;
     }
 
     public function sortSteps(Workflow $workflow, int $stepId, int $targetPosition): bool
@@ -167,31 +184,62 @@ class WorkflowTaskOrderingService
         $step->forceFill(['config_json' => $config])->save();
     }
 
-    protected function pairedTasks(WorkflowStep $step, array $task): array
+    /**
+     * Ein Loop-Marker repraesentiert beim Drag & Drop den vollstaendigen,
+     * zusammenhaengenden Start..Body..End-Block. Normale Body-Karten bleiben
+     * weiterhin einzeln verschiebbar.
+     */
+    protected function movingTaskBlock(WorkflowStep $step, array $task): array
     {
+        $tasks = array_values($this->tasks($step));
+        $taskKey = trim((string) ($task['key'] ?? ''));
+        $taskType = trim((string) ($task['task_key'] ?? ''));
         $pairId = trim((string) ($task['loop_pair_id'] ?? $task['loopPairId'] ?? ''));
+        $segment = trim((string) ($task['loop_pair_segment'] ?? $task['loopPairSegment'] ?? ''));
+        $isStartMarker = $segment === 'start' || $taskType === 'loop.for_each_element';
+        $isEndMarker = $segment === 'end' || $taskType === 'loop.end';
 
-        if ($pairId === '') {
+        if ($taskKey === '' || (! $isStartMarker && ! $isEndMarker)) {
             return [$task];
         }
 
-        $paired = collect($this->tasks($step))
-            ->filter(fn (array $candidate): bool => trim((string) ($candidate['loop_pair_id'] ?? $candidate['loopPairId'] ?? '')) === $pairId)
-            ->values()
-            ->all();
+        $startKey = $isStartMarker
+            ? $taskKey
+            : trim((string) ($task['loop_start_key'] ?? $task['loopStartKey'] ?? ''));
+        $endKey = $isEndMarker
+            ? $taskKey
+            : trim((string) ($task['loop_end_key'] ?? $task['loopEndKey'] ?? ''));
+        $startIndex = null;
+        $endIndex = null;
 
-        if ($paired === []) {
+        foreach ($tasks as $index => $candidate) {
+            $candidateKey = trim((string) ($candidate['key'] ?? ''));
+            $candidatePairId = trim((string) ($candidate['loop_pair_id'] ?? $candidate['loopPairId'] ?? ''));
+            $candidateSegment = trim((string) ($candidate['loop_pair_segment'] ?? $candidate['loopPairSegment'] ?? ''));
+            $candidateType = trim((string) ($candidate['task_key'] ?? ''));
+            $samePair = $pairId !== '' && $candidatePairId === $pairId;
+
+            if (
+                $startIndex === null
+                && (($startKey !== '' && $candidateKey === $startKey)
+                    || ($samePair && ($candidateSegment === 'start' || $candidateType === 'loop.for_each_element')))
+            ) {
+                $startIndex = $index;
+            }
+
+            if (
+                (($endKey !== '' && $candidateKey === $endKey)
+                    || ($samePair && ($candidateSegment === 'end' || $candidateType === 'loop.end')))
+            ) {
+                $endIndex = $index;
+            }
+        }
+
+        if ($startIndex === null || $endIndex === null || $startIndex > $endIndex) {
             return [$task];
         }
 
-        return collect($paired)
-            ->sortBy(fn (array $candidate): int => match ((string) ($candidate['loop_pair_segment'] ?? $candidate['loopPairSegment'] ?? '')) {
-                'start' => 0,
-                'end' => 2,
-                default => 1,
-            })
-            ->values()
-            ->all();
+        return array_slice($tasks, $startIndex, ($endIndex - $startIndex) + 1);
     }
 
     protected function normalizeTaskOrder(array $tasks): array

@@ -9,6 +9,7 @@ use App\Models\WorkflowRun;
 use App\Models\WorkflowStep;
 use App\Models\WorkflowStepRun;
 use App\Services\Mail\MailAccountRegistrationRunner;
+use App\Services\Workflows\WorkflowRuntimeFingerprint;
 use App\Services\Workflows\WorkflowTaskRunner;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\File;
@@ -41,6 +42,9 @@ class WorkflowRuntimeObservabilityConfigTest extends TestCase
             $runner = new WorkflowTaskRunnerObservabilityStub($mailSettings);
 
             $remote = $runner->remoteRuntime($run, $step, $stepRun);
+
+            $this->assertSame(app(WorkflowRuntimeFingerprint::class)->hash(), $remote['runtimeHash']);
+            $this->assertSame('sha256', $remote['runtimeHashAlgorithm']);
             $local = $runner->start($run, $step, $stepRun);
 
             try {

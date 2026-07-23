@@ -19,21 +19,67 @@
     $selectedStepId = (int) $selectedStepId;
     $selectedTaskKey = trim((string) $selectedTaskKey);
     $stepRunByStep = $stepRuns->groupBy('workflow_step_id')->map(fn ($runs) => $runs->last());
+    // Feature R3: Beim Ruecksprung ueberschreibt der neue Lauf `result_json` der
+    // Liste mit den Tasks ab dem Sprungziel. Die eingefrorene Historie liefert
+    // den letzten bekannten Zustand der herausgefallenen Tasks nach, damit der
+    // zurueckgelegte Weg sichtbar bleibt.
+    $taskHistoryByStep = collect(data_get($workflowRun?->context_json, 'task_history', []))
+        ->filter(fn ($entry) => is_array($entry) && trim((string) data_get($entry, 'task_key', '')) !== '')
+        ->groupBy(fn ($entry) => (int) data_get($entry, 'workflow_step_id', 0))
+        ->map(function ($entries) {
+            $byKey = collect();
+
+            foreach ($entries->sortBy(fn ($entry) => (int) data_get($entry, 'seq', 0)) as $entry) {
+                $byKey->put((string) $entry['task_key'], [
+                    'key' => (string) $entry['task_key'],
+                    'status' => trim((string) data_get($entry, 'status', '')) ?: 'completed',
+                    'title' => (string) data_get($entry, 'title', ''),
+                    'seq' => (int) data_get($entry, 'seq', 0),
+                ]);
+            }
+
+            return $byKey;
+        });
     $taskResultsByStep = $stepRuns
         ->groupBy('workflow_step_id')
-        ->map(function ($runs) {
-            $results = collect();
+        ->map(function ($runs, $stepId) use ($taskHistoryByStep) {
+            // Historie zuerst, aktueller Snapshot ueberschreibt sie.
+            $results = collect($taskHistoryByStep->get((int) $stepId, collect()))->all();
+            $results = collect($results);
 
             foreach ($runs as $run) {
                 foreach ((array) data_get($run?->result_json, 'tasks', []) as $taskResult) {
                     if (is_array($taskResult) && trim((string) data_get($taskResult, 'key', '')) !== '') {
-                        $results->put((string) data_get($taskResult, 'key'), $taskResult);
+                        $taskKey = (string) data_get($taskResult, 'key');
+                        $knownResult = $results->get($taskKey);
+
+                        // withTaskStatuses() ergaenzt den Snapshot um noch nicht
+                        // gelaufene Template-Karten ohne Status. Deren Felder
+                        // duerfen den letzten historischen Status nicht loeschen.
+                        if (is_array($knownResult)
+                            && trim((string) data_get($taskResult, 'status', '')) === ''
+                            && trim((string) data_get($knownResult, 'status', '')) !== '') {
+                            $taskResult['status'] = data_get($knownResult, 'status');
+                        }
+
+                        $results->put(
+                            $taskKey,
+                            is_array($knownResult) ? array_replace($knownResult, $taskResult) : $taskResult,
+                        );
                     }
                 }
             }
 
             return $results;
         });
+
+    // Listen, die nur in der Historie vorkommen (aktueller Step-Run hat sie
+    // ueberschrieben), duerfen nicht verloren gehen.
+    foreach ($taskHistoryByStep as $historyStepId => $historyTasks) {
+        if (! $taskResultsByStep->has($historyStepId)) {
+            $taskResultsByStep->put($historyStepId, collect($historyTasks));
+        }
+    }
     $stepById = $steps->keyBy('id');
     $stepByAction = $steps->keyBy(fn ($step) => (string) $step->action_key);
     $actionKeyForTask = static function (string $taskKey) use ($steps): string {
@@ -249,7 +295,11 @@
     }
     $routeBadgesByNode = [];
 
-    foreach ($routeEvents->slice(max(0, $routeEvents->count() - 8))->values() as $routeEvent) {
+    // Feature R3: Alle Knoten des Laufwegs behalten ihr Quelle-/Ziel-Abzeichen —
+    // frueher nur die letzten acht, wodurch nach Rousspruengen der Weganfang
+    // unmarkiert blieb. Spaetere Ereignisse ueberschreiben frueheren Ton, damit
+    // der juengste Zustand eines Knotens gewinnt.
+    foreach ($routeEvents->values() as $routeEvent) {
         $isPending = (bool) ($routeEvent['pending'] ?? false);
         $tone = (string) ($routeEvent['lineTone'] ?? 'default');
 
@@ -268,7 +318,22 @@
         }
     }
 
-    $routeEventsForJs = $routeEvents->take(-16)->values()->all();
+    // Feature R3: Frueher wurden nur die letzten 16 Ereignisse gezeichnet —
+    // dadurch verschwanden bei Rousspruengen genau die Linien, die den bisher
+    // zurueckgelegten Weg zeigen. Jetzt bleiben alle erhalten; das Alter steuert
+    // ausschliesslich die Deckkraft, nie die Sichtbarkeit.
+    $routeEventCount = max(1, $routeEvents->count());
+    $routeEventsForJs = $routeEvents
+        ->values()
+        ->map(function (array $routeEvent, int $eventIndex) use ($routeEventCount): array {
+            // Juengste Linie 1.0, aelteste 0.35 — deutlich blasser, aber sichtbar.
+            $routeEvent['ageOpacity'] = round(0.35 + (0.65 * (($eventIndex + 1) / $routeEventCount)), 3);
+            $routeEvent['ageIndex'] = $eventIndex + 1;
+            $routeEvent['ageTotal'] = $routeEventCount;
+
+            return $routeEvent;
+        })
+        ->all();
     $mapId = 'workflow-minimap-'.($workflowRun?->id ?? 'preview');
     $activeStep = $stepById->get((int) $activeStepId);
     $activeStepAction = trim((string) ($activeStep?->action_key ?? ''));
@@ -383,8 +448,18 @@
                         const marker = this.markerIds[line.tone] || this.markerIds.default;
                         const dash = line.tone === 'failed' || line.direction === 'back' ? ' stroke-dasharray=&quot;6 5&quot;' : '';
                         const related = !hasRelatedLine || line.sourceNode === focusNode || line.targetNode === focusNode;
-                        const opacity = hasRelatedLine ? (related ? 1 : 0.5) : 0.92;
-                        const strokeWidth = related && hasRelatedLine ? (line.pending ? 4.4 : 3.6) : (line.pending ? 3.5 : 2.5);
+                        // Feature R3: Das Alter bestimmt die Grunddeckkraft — juengere
+                        // Linien kraeftiger, aeltere blasser, aber nie unsichtbar.
+                        // Der Hover-Fokus daempft zusaetzlich, blendet aber ebenfalls
+                        // nichts aus. Die aktuell anstehende Linie bleibt immer voll.
+                        const ageOpacity = line.pending ? 1 : Math.max(0.35, Math.min(1, Number(line.ageOpacity ?? 0.92)));
+                        const opacity = hasRelatedLine
+                            ? (related ? Math.max(0.75, ageOpacity) : Math.max(0.28, ageOpacity * 0.5))
+                            : ageOpacity;
+                        const ageWidth = 1.6 + (1.4 * ageOpacity);
+                        const strokeWidth = related && hasRelatedLine
+                            ? (line.pending ? 4.4 : Math.max(2.6, ageWidth + 0.8))
+                            : (line.pending ? 3.5 : ageWidth);
                         const filter = related && hasRelatedLine ? ' style=&quot;filter:drop-shadow(0 0 2px rgba(15,23,42,.24))&quot;' : '';
                         const path = String(line.path || '').replace(/&/g, '&amp;').replace(/&quot;/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
@@ -480,6 +555,10 @@
                             pending: !!routeEvent.pending,
                             sourceNode,
                             targetNode,
+                            // Feature R3: Alter der Linie fuer das Verblassen.
+                            ageOpacity: routeEvent.ageOpacity,
+                            ageIndex: routeEvent.ageIndex,
+                            ageTotal: routeEvent.ageTotal,
                         });
                         let points = [];
 
@@ -669,6 +748,7 @@
 
                                     <div
                                          data-minimap-node="{{ $taskNode }}"
+                                         data-workflow-task-status="{{ $taskStatus }}"
                                          data-workflow-minimap-active-target="{{ $isTaskActive ? 'true' : 'false' }}"
                                          data-workflow-minimap-selected-task="{{ $isTaskSelected ? 'true' : 'false' }}"
                                         x-on:mouseenter="setHoveredRouteNode(@js($taskNode))"
