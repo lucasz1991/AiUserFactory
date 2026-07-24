@@ -153,7 +153,7 @@
                         @endif
                     </div>
                 </section>
-            @endif
+            @else
 
             <section class="w-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm {{ $diagramOnly ? 'flex h-full min-h-0 flex-col' : '' }}">
                 <div class="flex min-w-0 items-center justify-between gap-4 border-b border-slate-100 px-4 py-3">
@@ -455,18 +455,10 @@
                                             @endif
                                         </div>
 
-                                        @if($panel['image'])
-                                            <a href="{{ $panel['image'] }}" target="_blank" rel="noopener" class="relative block bg-slate-100">
-                                                <img src="{{ $panel['image'] }}" alt="{{ $panel['title'] }} Screenshot" class="aspect-video w-full object-contain">
-                                                <span class="absolute right-2 top-2 max-w-[70%] truncate rounded border border-slate-200 bg-white/90 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-700 shadow-sm">
-                                                    {{ $panel['windowKey'] ?? $panel['title'] }}
-                                                </span>
-                                            </a>
-                                        @else
-                                            <div class="flex aspect-video items-center justify-center bg-slate-50 px-4 text-center text-sm font-semibold text-slate-500">
-                                                Noch kein Screenshot verfuegbar.
-                                            </div>
-                                        @endif
+                                        @include('livewire.admin.network.workflow-studio.dom-inspector', [
+                                            'panel' => $panel,
+                                            'interactive' => $selectableTasks,
+                                        ])
                                     </article>
                                 @endforeach
                             </div>
@@ -857,6 +849,7 @@
                     @endif
                 </div>
             </section>
+            @endif
             @endif
         </div>
     @endif

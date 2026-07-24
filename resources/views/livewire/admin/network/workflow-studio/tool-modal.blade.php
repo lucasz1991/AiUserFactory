@@ -44,11 +44,17 @@
                                 </div>
                                 @if(! $autonomousMode)<button type="button" wire:click="openSelectorProbe(@js($window['name']))" class="shrink-0 rounded-lg border border-cyan-200 bg-cyan-50 px-3 py-1.5 text-[10px] font-bold text-cyan-800 hover:bg-cyan-100">Selector prüfen</button>@endif
                             </div>
-                            @if(filled($window['screenshot_url'] ?? null))
-                                <a href="{{ $window['screenshot_url'] }}" target="_blank" rel="noopener" class="block bg-slate-100"><img src="{{ $window['screenshot_url'] }}" alt="Browserfenster {{ $window['name'] }}" class="aspect-video w-full object-contain"></a>
-                            @else
-                                <div class="flex aspect-video items-center justify-center bg-slate-100 px-6 text-center text-xs font-semibold text-slate-500">Noch kein Screenshot für dieses Fenster verfügbar.</div>
-                            @endif
+                            @include('livewire.admin.network.workflow-studio.dom-inspector', [
+                                'panel' => [
+                                    'title' => $window['name'],
+                                    'windowKey' => $window['name'],
+                                    'image' => $window['screenshot_url'] ?? null,
+                                    'domTree' => $window['dom_tree'] ?? null,
+                                    'cursor' => $window['cursor'] ?? null,
+                                    'targetId' => $window['target_id'] ?? null,
+                                ],
+                                'interactive' => ! $autonomousMode,
+                            ])
                             @if(filled($window['dom_url'] ?? null))
                                 <div class="border-t border-slate-100 px-4 py-2"><a href="{{ $window['dom_url'] }}" target="_blank" rel="noopener" class="text-[10px] font-bold text-cyan-700 hover:text-cyan-900">Bereinigten DOM-Snapshot öffnen</a></div>
                             @endif

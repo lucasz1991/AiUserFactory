@@ -195,8 +195,42 @@ class WorkflowRunPreview extends Component
     {
         $stepRuns = collect($workflowRun->stepRuns ?? []);
         $workflowDurationMs = $this->runDurationMs($workflowRun);
-        $screenshotPanels = $this->screenshotPanels($stepRuns);
         $latestStatusResult = $this->latestStatusResult($stepRuns);
+        $resultOnly = app(WorkflowObservabilityPolicy::class)->resultOnly($workflowRun);
+        $workflowReturn = $this->workflowReturnSummary(
+            $latestStatusResult,
+            is_array($workflowRun->result_json) ? $workflowRun->result_json : [],
+            is_array($workflowRun->context_json) ? $workflowRun->context_json : [],
+        );
+
+        if ($resultOnly) {
+            return [
+                'resultOnly' => true,
+                'polling' => in_array((string) $workflowRun->status, ['queued', 'running', 'waiting', 'stop_requested', 'unreachable'], true),
+                'workflowDurationMs' => $workflowDurationMs,
+                'workflowDurationLabel' => $this->formatDuration($workflowDurationMs),
+                'compactWorkflowMap' => collect(),
+                'screenshotPanels' => collect(),
+                'browserPanelBasis' => 100,
+                'browserPanelMinWidth' => '100%',
+                'latestStatusResult' => $latestStatusResult,
+                'stepDebugPanels' => collect(),
+                'timelineEvents' => collect(),
+                'workflowReturn' => $workflowReturn,
+                'workflowVariables' => [],
+                'debugArtifactGroups' => collect(),
+                'embeddedCards' => collect(),
+                'runJsonPayload' => [
+                    'workflowRunId' => $workflowRun->id,
+                    'workflowRunUuid' => $workflowRun->run_uuid,
+                    'status' => $workflowRun->status,
+                    'durationMs' => $workflowDurationMs,
+                    'workflowReturn' => $workflowReturn['has'] ? $workflowReturn : null,
+                ],
+            ];
+        }
+
+        $screenshotPanels = $this->screenshotPanels($stepRuns);
         $stepDebugPanels = $this->stepDebugPanels($stepRuns);
         $timelineEvents = collect(data_get($latestStatusResult, 'events', []))
             ->filter(fn (mixed $event): bool => is_array($event))
@@ -209,11 +243,6 @@ class WorkflowRunPreview extends Component
                 ->values();
         }
 
-        $workflowReturn = $this->workflowReturnSummary(
-            $latestStatusResult,
-            is_array($workflowRun->result_json) ? $workflowRun->result_json : [],
-            is_array($workflowRun->context_json) ? $workflowRun->context_json : [],
-        );
         $workflowVariables = $this->collectWorkflowVariables(
             is_array($workflowRun->context_json) ? $workflowRun->context_json : [],
             is_array($workflowRun->result_json) ? $workflowRun->result_json : [],
@@ -225,12 +254,8 @@ class WorkflowRunPreview extends Component
         $compactWorkflowMap = $this->compactWorkflowMap($workflowRun, $stepDebugPanels);
         $browserCount = $screenshotPanels->count();
 
-        // Feature R6: Im echten Ablauf zeigt die Vorschau nur die Ausgabe —
-        // keine Screenshots, keinen Inspektor, keinen Cursor.
-        $resultOnly = app(WorkflowObservabilityPolicy::class)->resultOnly($workflowRun);
-
         return [
-            'resultOnly' => $resultOnly,
+            'resultOnly' => false,
             'polling' => in_array((string) $workflowRun->status, ['queued', 'running', 'waiting', 'stop_requested', 'unreachable'], true),
             'workflowDurationMs' => $workflowDurationMs,
             'workflowDurationLabel' => $this->formatDuration($workflowDurationMs),
@@ -321,8 +346,10 @@ class WorkflowRunPreview extends Component
                     }
 
                     $image = data_get($window, 'screenshotUrl') ?: $this->publicUrl(data_get($window, 'livePreviewRelativePath'));
+                    $domTree = is_array(data_get($window, 'domTree')) ? data_get($window, 'domTree') : null;
+                    $cursor = is_array(data_get($window, 'cursor')) ? data_get($window, 'cursor') : null;
 
-                    if (! $image && ! data_get($window, 'error')) {
+                    if (! $image && ! $domTree && ! $cursor && ! data_get($window, 'error')) {
                         continue;
                     }
 
@@ -332,8 +359,8 @@ class WorkflowRunPreview extends Component
                         'image' => $image,
                         'window' => $this->windowStatus($window, $result),
                         'dom' => data_get($window, 'debugDomUrl') ?: $this->publicUrl(data_get($window, 'debugDomRelativePath')),
-                        'domTree' => is_array(data_get($window, 'domTree')) ? data_get($window, 'domTree') : null,
-                        'cursor' => is_array(data_get($window, 'cursor')) ? data_get($window, 'cursor') : null,
+                        'domTree' => $domTree,
+                        'cursor' => $cursor,
                         'step' => $stepRun->workflowStep?->name ?? 'Schritt',
                         'capturedAt' => data_get($window, 'capturedAt', data_get($window, 'liveScreenshotAt')),
                         'targetId' => data_get($window, 'targetId'),

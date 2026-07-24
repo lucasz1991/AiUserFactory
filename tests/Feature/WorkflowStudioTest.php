@@ -252,6 +252,7 @@ class WorkflowStudioTest extends TestCase
             ->assertSee('Workflow-Vorschau und Live-Ausführung', false)
             ->assertSee('Bis Ende starten')
             ->assertSee('Eine Task')
+            ->assertSee('Echter Ablauf')
             ->assertSeeHtml('wire:click="stopRun"')
             ->assertDontSeeHtml('wire:click="terminateRun"')
             ->assertSee('Browserfenster')
@@ -283,6 +284,34 @@ class WorkflowStudioTest extends TestCase
             ->set('probeAction', 'probe.keypress')
             ->assertSet('probeValue', 'Enter')
             ->assertSeeHtml('<option value="Tab">Tab</option>');
+
+        Livewire::test(WorkflowStudio::class, ['workflow' => $workflow])
+            ->call('useDomNodeSelector', 'main', '#submit')
+            ->assertSet('probeBrowserWindow', 'main')
+            ->assertSet('probeSelector', '#submit')
+            ->assertSet('probeAction', 'selector.search')
+            ->assertSet('showSelectorProbeModal', true);
+    }
+
+    public function test_real_playback_from_studio_is_result_only_and_queues_without_observability(): void
+    {
+        Queue::fake();
+        [$workflow] = $this->workflow();
+        $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
+        $this->actingAs($admin);
+
+        $component = Livewire::test(WorkflowStudio::class, ['workflow' => $workflow])
+            ->call('runRealPlayback')
+            ->assertHasNoErrors()
+            ->assertSet('activeRunId', fn (mixed $value): bool => is_int($value) && $value > 0)
+            ->assertDontSee('Live-Sitzung');
+
+        $runId = $component->get('activeRunId');
+        $run = WorkflowRun::query()->findOrFail($runId);
+
+        $this->assertTrue(data_get($run->context_json, 'real_playback'));
+        $this->assertTrue(data_get($run->context_json, 'interactive_debug'));
+        Queue::assertPushed(RunWorkflowJob::class);
     }
 
     public function test_studio_refresh_only_queries_the_bounded_event_window_and_not_full_revision_history(): void

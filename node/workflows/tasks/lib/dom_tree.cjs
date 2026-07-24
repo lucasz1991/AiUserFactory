@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const DEFAULT_MAX_DEPTH = 32;
 const DEFAULT_MAX_NODES = 2500;
@@ -33,11 +34,14 @@ function normalizeRect(rect = {}, offset = {}) {
     return Number.isFinite(parsed) ? Math.round(parsed * 100) / 100 : 0;
   };
 
+  const scaleX = Number(offset.scaleX) > 0 ? Number(offset.scaleX) : 1;
+  const scaleY = Number(offset.scaleY) > 0 ? Number(offset.scaleY) : 1;
+
   return {
-    x: number(rect.x) + number(offset.x),
-    y: number(rect.y) + number(offset.y),
-    width: Math.max(0, number(rect.width)),
-    height: Math.max(0, number(rect.height)),
+    x: number(number(offset.x) + (number(rect.x) * scaleX)),
+    y: number(number(offset.y) + (number(rect.y) * scaleY)),
+    width: Math.max(0, number(number(rect.width) * scaleX)),
+    height: Math.max(0, number(number(rect.height) * scaleY)),
   };
 }
 
@@ -51,13 +55,28 @@ function materializeFrameNodes(records, options = {}, limit = records.length) {
   const offset = {
     x: Number(options.offsetX || 0),
     y: Number(options.offsetY || 0),
+    scaleX: Number(options.scaleX || 1),
+    scaleY: Number(options.scaleY || 1),
   };
   const accepted = records.slice(0, Math.max(0, limit));
   const indexToRef = new Map();
 
   accepted.forEach((record, position) => {
-    const stablePath = normalizeText(record.path, 240) || String(record.index ?? position);
-    indexToRef.set(record.index ?? position, `${windowKey}:${frameRef}:${stablePath}`);
+    const structuralPath = normalizeText(record.path, 240) || String(record.index ?? position);
+    const selector = normalizeText(record.selector, 500);
+    const selectorIsStable = /^(?:#[^\s>+~]+|[a-z0-9_-]+\[(?:data-testid|data-test|data-cy|data-qa|name|aria-label|title)=)/i.test(selector);
+    const identity = selectorIsStable && record.inShadowDom !== true
+      ? `selector:${selector}`
+      : [
+        `path:${structuralPath}`,
+        `tag:${normalizeText(record.tag, 40)}`,
+        `id:${normalizeText(record.id, 120)}`,
+        `selector:${selector}`,
+        `role:${normalizeText(record.role, 80)}`,
+      ].join('|');
+    const fingerprint = crypto.createHash('sha1').update(identity).digest('hex').slice(0, 20);
+
+    indexToRef.set(record.index ?? position, `${windowKey}:${frameRef}:${fingerprint}`);
   });
 
   return accepted.map((record, position) => {
@@ -133,29 +152,74 @@ function buildFrameTree(records = [], options = {}) {
   };
 }
 
-async function frameOffset(frame) {
+async function frameGeometry(frame, viewport = null) {
   if (!frame || typeof frame.parentFrame !== 'function' || !frame.parentFrame()) {
-    return { x: 0, y: 0 };
+    return { x: 0, y: 0, scaleX: 1, scaleY: 1 };
   }
 
   if (typeof frame.frameElement !== 'function') {
-    return { x: 0, y: 0 };
+    return { x: 0, y: 0, scaleX: 1, scaleY: 1 };
   }
 
   const handle = await frame.frameElement().catch(() => null);
 
   if (!handle) {
-    return { x: 0, y: 0 };
+    return { x: 0, y: 0, scaleX: 1, scaleY: 1 };
   }
 
   try {
     const box = typeof handle.boundingBox === 'function'
       ? await handle.boundingBox().catch(() => null)
       : null;
+    const metrics = typeof handle.evaluate === 'function'
+      ? await handle.evaluate((element) => {
+        const style = window.getComputedStyle(element);
+        const number = (value) => Number.parseFloat(value || '0') || 0;
 
-    return box
-      ? { x: Number(box.x || 0), y: Number(box.y || 0) }
-      : { x: 0, y: 0 };
+        return {
+          offsetWidth: element.offsetWidth || 0,
+          offsetHeight: element.offsetHeight || 0,
+          clientLeft: element.clientLeft || 0,
+          clientTop: element.clientTop || 0,
+          clientWidth: element.clientWidth || 0,
+          clientHeight: element.clientHeight || 0,
+          paddingLeft: number(style.paddingLeft),
+          paddingRight: number(style.paddingRight),
+          paddingTop: number(style.paddingTop),
+          paddingBottom: number(style.paddingBottom),
+        };
+      }).catch(() => null)
+      : null;
+
+    if (!box) {
+      return { x: 0, y: 0, scaleX: 1, scaleY: 1 };
+    }
+
+    const outerScaleX = metrics?.offsetWidth > 0 ? Number(box.width || 0) / metrics.offsetWidth : 1;
+    const outerScaleY = metrics?.offsetHeight > 0 ? Number(box.height || 0) / metrics.offsetHeight : 1;
+    const contentWidth = Math.max(
+      0,
+      Number(metrics?.clientWidth || box.width || 0)
+        - Number(metrics?.paddingLeft || 0)
+        - Number(metrics?.paddingRight || 0),
+    ) * outerScaleX;
+    const contentHeight = Math.max(
+      0,
+      Number(metrics?.clientHeight || box.height || 0)
+        - Number(metrics?.paddingTop || 0)
+        - Number(metrics?.paddingBottom || 0),
+    ) * outerScaleY;
+    const viewportWidth = Number(viewport?.width || 0);
+    const viewportHeight = Number(viewport?.height || 0);
+
+    return {
+      x: Number(box.x || 0)
+        + ((Number(metrics?.clientLeft || 0) + Number(metrics?.paddingLeft || 0)) * outerScaleX),
+      y: Number(box.y || 0)
+        + ((Number(metrics?.clientTop || 0) + Number(metrics?.paddingTop || 0)) * outerScaleY),
+      scaleX: viewportWidth > 0 && contentWidth > 0 ? contentWidth / viewportWidth : outerScaleX,
+      scaleY: viewportHeight > 0 && contentHeight > 0 ? contentHeight / viewportHeight : outerScaleY,
+    };
   } finally {
     await handle.dispose?.().catch(() => {});
   }
@@ -192,6 +256,7 @@ async function frameRecords(frame, options = {}) {
     };
     const uniqueSelector = (element) => {
       const tag = String(element.tagName || '').toLowerCase();
+      const queryRoot = element.getRootNode?.() || document;
 
       if (!tag) {
         return '';
@@ -201,7 +266,7 @@ async function frameRecords(frame, options = {}) {
         const idSelector = `#${cssIdentifier(element.id)}`;
 
         try {
-          if (document.querySelectorAll(idSelector).length === 1) {
+          if (queryRoot.querySelectorAll(idSelector).length === 1) {
             return idSelector;
           }
         } catch {
@@ -219,7 +284,7 @@ async function frameRecords(frame, options = {}) {
         const candidate = `${tag}[${attribute}="${cssString(value)}"]`;
 
         try {
-          if (document.querySelectorAll(candidate).length === 1) {
+          if (queryRoot.querySelectorAll(candidate).length === 1) {
             return candidate;
           }
         } catch {
@@ -253,7 +318,7 @@ async function frameRecords(frame, options = {}) {
 
         const root = current.getRootNode?.();
         if (root && root.host && !current.parentElement) {
-          current = root.host;
+          break;
         } else {
           current = parent;
         }
@@ -265,7 +330,11 @@ async function frameRecords(frame, options = {}) {
       const tag = String(element.tagName || '').toLowerCase();
       const type = String(element.getAttribute('type') || '').toLowerCase();
 
-      if (tag === 'input' && ['password', 'hidden'].includes(type)) {
+      if (
+        ['script', 'style', 'template', 'noscript', 'input', 'textarea', 'select'].includes(tag)
+        || element.isContentEditable
+        || (tag === 'input' && ['password', 'hidden'].includes(type))
+      ) {
         return '';
       }
 
@@ -408,7 +477,18 @@ async function captureDomTree(page, options = {}) {
   const maxBytes = boundedInteger(options.maxBytes, DEFAULT_MAX_BYTES, 4096, DEFAULT_MAX_BYTES);
   const frames = framesForPage(page);
   const windowKey = normalizeText(options.windowKey, 120) || 'main';
-  const frameReferences = new Map(frames.map((frame, index) => [frame, `frame-${index + 1}`]));
+  const mainFrame = typeof page?.mainFrame === 'function'
+    ? page.mainFrame()
+    : frames[0];
+  const frameReferences = new Map(frames.map((frame, index) => {
+    if (frame === mainFrame) {
+      return [frame, 'main'];
+    }
+
+    const runtimeFrameId = normalizeText(frame?._id, 120);
+
+    return [frame, runtimeFrameId ? `frame-${runtimeFrameId}` : `frame-${index + 1}`];
+  }));
   const capturedFrames = [];
   let remainingNodes = maxNodes;
   let remainingBytes = maxBytes;
@@ -417,7 +497,6 @@ async function captureDomTree(page, options = {}) {
     const frame = frames[index];
     const frameRef = frameReferences.get(frame) || `frame-${index + 1}`;
     const parent = typeof frame.parentFrame === 'function' ? frame.parentFrame() : null;
-    const offset = await frameOffset(frame);
     const framesRemaining = Math.max(1, frames.length - index);
     const frameByteBudget = Math.max(4096, Math.floor(remainingBytes / framesRemaining));
 
@@ -426,11 +505,14 @@ async function captureDomTree(page, options = {}) {
         maxNodes: remainingNodes,
         maxDepth,
       });
+      const geometry = await frameGeometry(frame, snapshot.viewport);
       const built = buildFrameTree(snapshot.records, {
         frameRef,
         windowKey,
-        offsetX: offset.x,
-        offsetY: offset.y,
+        offsetX: geometry.x,
+        offsetY: geometry.y,
+        scaleX: geometry.scaleX,
+        scaleY: geometry.scaleY,
         maxNodes: remainingNodes,
         maxDepth,
         maxBytes: frameByteBudget,
@@ -441,8 +523,10 @@ async function captureDomTree(page, options = {}) {
         parentFrameRef: parent ? (frameReferences.get(parent) || null) : null,
         name: typeof frame.name === 'function' ? normalizeText(frame.name(), 120) : '',
         url: typeof frame.url === 'function' ? normalizeText(frame.url(), 2000) : '',
-        offsetX: offset.x,
-        offsetY: offset.y,
+        offsetX: geometry.x,
+        offsetY: geometry.y,
+        scaleX: geometry.scaleX,
+        scaleY: geometry.scaleY,
         viewport: snapshot.viewport || null,
         nodes: built.nodes,
         nodeCount: built.nodeCount,
@@ -461,8 +545,10 @@ async function captureDomTree(page, options = {}) {
         parentFrameRef: parent ? (frameReferences.get(parent) || null) : null,
         name: typeof frame.name === 'function' ? normalizeText(frame.name(), 120) : '',
         url: typeof frame.url === 'function' ? normalizeText(frame.url(), 2000) : '',
-        offsetX: offset.x,
-        offsetY: offset.y,
+        offsetX: 0,
+        offsetY: 0,
+        scaleX: 1,
+        scaleY: 1,
         viewport: null,
         nodes: [],
         nodeCount: 0,
@@ -487,23 +573,91 @@ async function captureDomTree(page, options = {}) {
     },
   };
 
-  payload.byteSize = jsonBytes(payload);
+  const finalByteSize = () => {
+    let previous = -1;
+
+    while (payload.byteSize !== previous) {
+      previous = payload.byteSize;
+      payload.byteSize = jsonBytes(payload);
+    }
+
+    return payload.byteSize;
+  };
+
+  while (finalByteSize() > maxBytes) {
+    const frameWithNodes = [...payload.frames].reverse().find((frame) => frame.nodes.length > 0);
+
+    if (frameWithNodes) {
+      const excess = Math.max(1, payload.byteSize - maxBytes);
+      const averageNodeBytes = Math.max(1, Math.floor(payload.byteSize / Math.max(1, payload.nodeCount)));
+      const removeCount = Math.max(1, Math.ceil(excess / averageNodeBytes));
+      frameWithNodes.nodes.splice(Math.max(0, frameWithNodes.nodes.length - removeCount), removeCount);
+      frameWithNodes.nodeCount = frameWithNodes.nodes.length;
+      frameWithNodes.truncated.bytes = true;
+      payload.truncated.bytes = true;
+      payload.nodeCount = payload.frames.reduce((total, frame) => total + Number(frame.nodeCount || 0), 0);
+      continue;
+    }
+
+    if (payload.frames.length > 1) {
+      payload.frames.pop();
+      payload.truncated.bytes = true;
+      continue;
+    }
+
+    const firstFrame = payload.frames[0];
+    if (firstFrame && (firstFrame.url || firstFrame.name || firstFrame.error)) {
+      firstFrame.url = '';
+      firstFrame.name = '';
+      delete firstFrame.error;
+      payload.targetId = '';
+      payload.truncated.bytes = true;
+      continue;
+    }
+
+    break;
+  }
+  finalByteSize();
 
   return payload;
 }
 
 function writeJsonAtomic(filePath, payload) {
   const directory = path.dirname(filePath);
-  const temporaryPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  const temporaryPath = `${filePath}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
 
   fs.mkdirSync(directory, { recursive: true });
 
   try {
     fs.writeFileSync(temporaryPath, JSON.stringify(payload));
-    fs.renameSync(temporaryPath, filePath);
+    let lastError = null;
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        fs.renameSync(temporaryPath, filePath);
+        lastError = null;
+        break;
+      } catch (error) {
+        lastError = error;
+
+        if (!['EACCES', 'EBUSY', 'EPERM'].includes(error?.code) || attempt === 4) {
+          throw error;
+        }
+
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10 * (attempt + 1));
+      }
+    }
+
+    if (lastError) {
+      throw lastError;
+    }
   } finally {
     if (fs.existsSync(temporaryPath)) {
-      fs.rmSync(temporaryPath, { force: true });
+      try {
+        fs.rmSync(temporaryPath, { force: true });
+      } catch {
+        // Best effort only; never hide the original write/rename error.
+      }
     }
   }
 }

@@ -49,7 +49,7 @@ let browserDriver = '';
 let page = null;
 const browserWindowsByName = new Map();
 let previewTimer = null;
-let lastBrowserWindows = initialBrowserWindowsFromWorkflow();
+let lastBrowserWindows = observableBrowserWindows(initialBrowserWindowsFromWorkflow());
 let requestedBrowserEngine = null;
 let activeBrowserEngine = null;
 let browserFallbackReason = null;
@@ -350,7 +350,7 @@ function statusPayload(state, stage, message, extra = {}) {
 
       return task;
     }),
-    browserWindows: lastBrowserWindows,
+    browserWindows: observableBrowserWindows(lastBrowserWindows),
     ...publicExtra,
   };
 
@@ -1481,14 +1481,137 @@ function runtimeObservabilityFlag(key, fallback) {
 function effectiveCapturesScreenshots() {
   const level = effectiveObservabilityLevel();
 
-  return runtimeObservabilityFlag(
+  return observabilityRank(level) >= observabilityRank('preview') && runtimeObservabilityFlag(
     'capturesScreenshots',
-    observabilityRank(level) >= observabilityRank('preview'),
+    true,
   );
 }
 
 function effectiveLivePreviewEnabled() {
   return effectiveCapturesScreenshots() && runtime.livePreviewEnabled !== false;
+}
+
+function effectiveCapturesDom() {
+  const level = effectiveObservabilityLevel();
+
+  return observabilityRank(level) >= observabilityRank('debug') && runtimeObservabilityFlag(
+    'capturesDom',
+    true,
+  );
+}
+
+function effectiveShowsCursor() {
+  const level = effectiveObservabilityLevel();
+
+  return observabilityRank(level) >= observabilityRank('preview') && runtimeObservabilityFlag(
+    'showsCursor',
+    true,
+  );
+}
+
+function observableBrowserWindows(windows = []) {
+  if (!Array.isArray(windows)) {
+    return [];
+  }
+
+  const observable = observabilityRank(effectiveObservabilityLevel()) >= observabilityRank('preview');
+  const capturesScreenshots = effectiveCapturesScreenshots();
+  const capturesDom = effectiveCapturesDom();
+  const showsCursor = effectiveShowsCursor();
+  const identityKeys = new Set([
+    'key',
+    'name',
+    'label',
+    'title',
+    'url',
+    'currentUrl',
+    'targetId',
+    'target_id',
+    'browserWindow',
+    'browser_window',
+    'connected',
+  ]);
+  const absolutePathKeys = new Set([
+    'livePreviewPath',
+    'liveScreenshotPath',
+    'debugDomPath',
+    'domTreePath',
+  ]);
+  const screenshotKeys = new Set([
+    'screenshotUrl',
+    'livePreviewRelativePath',
+    'liveScreenshotAt',
+    'capturedAt',
+  ]);
+  const domKeys = new Set([
+    'debugDomAvailable',
+    'debugDomError',
+    'debugDomRelativePath',
+    'debugDomUrl',
+    'domTree',
+    'domTreeAvailable',
+    'domTreeCapturedAt',
+  ]);
+
+  return windows
+    .filter((window) => window && typeof window === 'object')
+    .map((window) => Object.fromEntries(
+      Object.entries(window).filter(([key, value]) => {
+        if (absolutePathKeys.has(key)) {
+          return false;
+        }
+
+        if (key === 'page' || key.startsWith('__')) {
+          return false;
+        }
+
+        if (/(?:Path|_path)$/i.test(key)) {
+          if (!['livePreviewRelativePath', 'debugDomRelativePath'].includes(key)) {
+            return false;
+          }
+
+          const rawPath = String(value || '');
+          const relativePath = rawPath.replace(/\\/g, '/');
+          const pathSegments = relativePath.split('/');
+          if (
+            rawPath === ''
+            || path.isAbsolute(rawPath)
+            || relativePath.startsWith('/')
+            || pathSegments.includes('..')
+          ) {
+            return false;
+          }
+        }
+
+        if (!observable) {
+          return identityKeys.has(key);
+        }
+
+        if (!capturesScreenshots && screenshotKeys.has(key)) {
+          return false;
+        }
+
+        if (!capturesDom && domKeys.has(key)) {
+          return false;
+        }
+
+        if (!showsCursor && key === 'cursor') {
+          return false;
+        }
+
+        return true;
+      }),
+    ));
+}
+
+function historicalBrowserWindows(windows = []) {
+  return observableBrowserWindows(windows).map((window) => {
+    const historical = { ...window };
+
+    delete historical.domTree;
+
+    return historical;
+  });
 }
 
 function debugObservabilityEnabled() {
@@ -1524,15 +1647,15 @@ function phaseCaptureEnabled(phase, type) {
   }
 
   if (normalizedType === 'dom') {
-    return normalizedPhase === 'before'
+    return effectiveCapturesDom() && (normalizedPhase === 'before'
       ? config.captureDomBeforeStep !== false
-      : config.captureDomAfterStep !== false;
+      : config.captureDomAfterStep !== false);
   }
 
   if (normalizedType === 'screenshot') {
-    return normalizedPhase === 'before'
+    return effectiveCapturesScreenshots() && (normalizedPhase === 'before'
       ? config.captureScreenshotBeforeStep !== false
-      : config.captureScreenshotAfterStep !== false;
+      : config.captureScreenshotAfterStep !== false);
   }
 
   return false;
@@ -2465,7 +2588,7 @@ function startPreviewLoop(context) {
       const preview = await captureTaskPreview(context, {}, false);
 
       if (Array.isArray(preview.browserWindows)) {
-        lastBrowserWindows = preview.browserWindows;
+        lastBrowserWindows = observableBrowserWindows(preview.browserWindows);
         writeStatus('running', 'browser-preview', 'Browser-Screenshot aktualisiert.');
       }
     } catch (error) {
@@ -2726,7 +2849,7 @@ async function handleShutdownSignal(signal) {
     statusMessage: 'Workflow-Task-Lauf wurde gestoppt.',
     signal,
     tasks: taskResults,
-    browserWindows: lastBrowserWindows,
+    browserWindows: observableBrowserWindows(lastBrowserWindows),
     browserWsEndpoint: browserWsEndpoint(),
     browserIdentity: browserIdentityPayload(),
     events,
@@ -2772,7 +2895,7 @@ function handleFatalError(source, error) {
     statusMessage: `Runner-Absturz (${source}): ${messageText}`,
     error: (error && error.stack) || messageText,
     tasks: taskResults,
-    browserWindows: lastBrowserWindows,
+    browserWindows: observableBrowserWindows(lastBrowserWindows),
     browserWsEndpoint: browserWsEndpoint(),
     browserIdentity: browserIdentityPayload(),
     events,
@@ -3101,17 +3224,11 @@ async function run() {
   const observabilityLevel = effectiveObservabilityLevel();
   const debugEnabled = debugObservabilityEnabled();
   const capturesScreenshots = effectiveCapturesScreenshots();
-  const capturesDom = runtimeObservabilityFlag(
-    'capturesDom',
-    observabilityRank(observabilityLevel) >= observabilityRank('debug'),
-  );
-  const showsCursor = runtimeObservabilityFlag(
-    'showsCursor',
-    observabilityRank(observabilityLevel) >= observabilityRank('preview'),
-  );
-  const resultOnly = runtimeObservabilityFlag(
+  const capturesDom = effectiveCapturesDom();
+  const showsCursor = effectiveShowsCursor();
+  const resultOnly = observabilityLevel === 'off' || runtimeObservabilityFlag(
     'resultOnly',
-    observabilityLevel === 'off',
+    false,
   );
   const livePreviewEnabled = effectiveLivePreviewEnabled();
   const contextDevDebug = {
@@ -3156,8 +3273,8 @@ async function run() {
     workflowTaskRunDirectory: runDirectory,
     timeoutMs: runtime.observationTimeoutMs || 90000,
     pages: [],
-    browserWindows: lastBrowserWindows,
-    windows: lastBrowserWindows,
+    browserWindows: observableBrowserWindows(lastBrowserWindows),
+    windows: observableBrowserWindows(lastBrowserWindows),
     activeBrowserWindow: 'main',
   };
 
@@ -3245,7 +3362,7 @@ async function run() {
           embeddedWorkflowCompleted: true,
           embeddedWorkflowReturnExplicit: workflowResult.explicit,
           embeddedWorkflowBrowserWindow: task.embedded_workflow_browser_window || null,
-          browserWindows: lastBrowserWindows,
+          browserWindows: observableBrowserWindows(lastBrowserWindows),
           browserWsEndpoint: browserWsEndpoint(),
           browserIdentity: browserIdentityPayload(),
         };
@@ -3332,7 +3449,7 @@ async function run() {
             ...(Array.isArray(lastBrowserWindows) ? lastBrowserWindows : []),
             ...initialBrowserWindowsFromWorkflow(),
           ];
-          result.browserWindows = Array.from(new Map(knownBrowserWindows
+          result.browserWindows = observableBrowserWindows(Array.from(new Map(knownBrowserWindows
             .filter((windowEntry) => {
               const key = normalizeBrowserWindowName(windowEntry?.key || windowEntry?.name || '');
 
@@ -3341,8 +3458,8 @@ async function run() {
             .map((windowEntry) => [
               normalizeBrowserWindowName(windowEntry?.key || windowEntry?.name || 'main'),
               windowEntry,
-            ])).values());
-          lastBrowserWindows = result.browserWindows;
+            ])).values()));
+          lastBrowserWindows = observableBrowserWindows(result.browserWindows);
 
           result.closedBrowserWindow = targetBrowserWindow;
 
@@ -3366,6 +3483,10 @@ async function run() {
         if (result && result.page) {
           registerBrowserWindow(context, result.page, targetBrowserWindow, targetBrowserWindow === 'main' ? 'Main' : taskLabel);
         }
+      }
+
+      if (Array.isArray(result?.browserWindows)) {
+        result.browserWindows = observableBrowserWindows(result.browserWindows);
       }
 
       result = cleanForJson(result || {});
@@ -3467,6 +3588,7 @@ async function run() {
     }
 
     if (Array.isArray(result.browserWindows)) {
+      result.browserWindows = observableBrowserWindows(result.browserWindows);
       lastBrowserWindows = result.browserWindows;
     }
 
@@ -3475,9 +3597,15 @@ async function run() {
     const ok = result.ok !== false && !['failed', 'timeout'].includes(String(result.status || ''));
     const status = ok ? String(result.status || 'success') : String(result.status || 'failed');
     const current = taskResults.find((candidate) => candidate.key === task.key);
+    const historicalResult = Array.isArray(result.browserWindows)
+      ? {
+        ...result,
+        browserWindows: historicalBrowserWindows(result.browserWindows),
+      }
+      : result;
     Object.assign(current, {
       ...cleanForJson(task),
-      ...result,
+      ...historicalResult,
       status,
       logicalOutcome: result.logicalOutcome || result.logical_outcome || (branchFailed ? 'condition_false' : (ok ? 'success' : 'technical_error')),
       logical_outcome: result.logical_outcome || result.logicalOutcome || (branchFailed ? 'condition_false' : (ok ? 'success' : 'technical_error')),
@@ -3605,7 +3733,7 @@ async function run() {
         : await captureTaskPreview(context, result, true).catch(() => ({}));
 
       if (Array.isArray(failurePreview.browserWindows)) {
-        lastBrowserWindows = failurePreview.browserWindows;
+        lastBrowserWindows = observableBrowserWindows(failurePreview.browserWindows);
         result = {
           ...result,
           browserWindows: failurePreview.browserWindows,
@@ -3768,7 +3896,7 @@ async function run() {
         workflow_variables: context.workflow_variables || null,
         workflowVariables: context.workflowVariables || null,
         tasks: taskResults,
-        browserWindows: lastBrowserWindows,
+        browserWindows: observableBrowserWindows(lastBrowserWindows),
         browserWsEndpoint: browserWsEndpoint(),
         browserIdentity: browserIdentityPayload(),
         runnerDiagnostics: {
@@ -3781,7 +3909,9 @@ async function run() {
         finishedAt: now(),
       };
 
-      failedResult.debugArtifacts = debugArtifacts;
+      if (debugObservabilityEnabled()) {
+        failedResult.debugArtifacts = debugArtifacts;
+      }
 
       flushDebugArtifactManifest(true);
       writeJson(runtime.resultPath, failedResult);
@@ -3893,7 +4023,7 @@ async function run() {
   const finalPreview = await captureTaskPreview(context, {}, true).catch(() => ({}));
 
   if (Array.isArray(finalPreview.browserWindows)) {
-    lastBrowserWindows = finalPreview.browserWindows;
+    lastBrowserWindows = observableBrowserWindows(finalPreview.browserWindows);
   }
 
   const result = {
@@ -3916,8 +4046,8 @@ async function run() {
       completedTaskKey: lastCompletedTaskKey,
       completed_task_key: lastCompletedTaskKey,
     } : {}),
-    debugArtifacts,
-    browserWindows: lastBrowserWindows,
+    ...(debugObservabilityEnabled() ? { debugArtifacts } : {}),
+    browserWindows: observableBrowserWindows(lastBrowserWindows),
     browserWsEndpoint: browserWsEndpoint(),
     browserIdentity: browserIdentityPayload(),
     runnerDiagnostics: {
@@ -3976,8 +4106,8 @@ run()
       statusMessage: error.message,
       error: error.stack || error.message,
       tasks: taskResults,
-      debugArtifacts,
-      browserWindows: lastBrowserWindows,
+      ...(debugObservabilityEnabled() ? { debugArtifacts } : {}),
+    browserWindows: observableBrowserWindows(lastBrowserWindows),
       browserWsEndpoint: browserWsEndpoint(),
       browserIdentity: browserIdentityPayload(),
       runnerDiagnostics: {

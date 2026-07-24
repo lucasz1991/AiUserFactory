@@ -22,7 +22,34 @@ class FakeFrame {
     return 'main';
   }
 
-  async evaluate() {
+  async evaluate(_callback, options = null) {
+    if (options && Object.prototype.hasOwnProperty.call(options, 'nodeLimit')) {
+      return {
+        records: [{
+          index: 0,
+          parentIndex: null,
+          depth: 0,
+          path: '0',
+          tag: 'html',
+          id: '',
+          classes: [],
+          text: '',
+          selector: 'html',
+          role: '',
+          type: '',
+          name: '',
+          ariaLabel: '',
+          rect: { x: 0, y: 0, width: 1366, height: 900 },
+          visible: true,
+          enabled: true,
+          inShadowDom: false,
+        }],
+        depthTruncated: false,
+        nodeLimitReached: false,
+        viewport: { width: 1366, height: 900, deviceScaleFactor: 1 },
+      };
+    }
+
     return {
       url: this.frameUrl,
       title: 'Private form',
@@ -82,20 +109,27 @@ function previewContext(root, devDebug) {
     runDirectory: privateDirectory,
     workflowTaskRunDirectory: privateDirectory,
     devDebug,
+    observability: {
+      level: devDebug.observability,
+      capturesScreenshots: devDebug.observability !== 'off',
+      capturesDom: devDebug.observability === 'debug',
+      showsCursor: devDebug.observability !== 'off',
+      resultOnly: devDebug.observability === 'off',
+    },
   };
 }
 
-test('live preview never writes a DOM dump below the public screenshot directory when debug is off', async () => {
+test('off observability writes neither screenshot nor DOM even when legacy preview flags are enabled', async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workflow-preview-off-'));
   const context = previewContext(directory, { enabled: false, observability: 'off' });
 
   try {
     const result = await captureTaskPreview(context, {}, true);
 
-    assert.equal(fs.existsSync(path.join(directory, 'public', 'live.png')), true);
+    assert.equal(fs.existsSync(path.join(directory, 'public', 'live.png')), false);
     assert.equal(fs.existsSync(path.join(directory, 'public', 'live-dom.json')), false);
     assert.equal(fs.existsSync(path.join(directory, 'private', 'live-dom.json')), false);
-    assert.equal(result.browserWindows[0].debugDomPath, undefined);
+    assert.equal(result.browserWindows, undefined);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
@@ -108,12 +142,17 @@ test('debug live preview writes its DOM dump only to the private run directory',
   try {
     const result = await captureTaskPreview(context, {}, true);
     const privateDomPath = path.join(directory, 'private', 'live-dom.json');
+    const privateTreePath = path.join(directory, 'private', 'live-dom-tree.json');
 
     assert.equal(fs.existsSync(path.join(directory, 'public', 'live.png')), true);
     assert.equal(fs.existsSync(path.join(directory, 'public', 'live-dom.json')), false);
     assert.equal(fs.existsSync(privateDomPath), true);
-    assert.equal(result.browserWindows[0].debugDomPath, privateDomPath);
+    assert.equal(fs.existsSync(privateTreePath), true);
+    assert.equal(result.browserWindows[0].debugDomPath, undefined);
     assert.equal(result.browserWindows[0].debugDomRelativePath, undefined);
+    assert.equal(result.browserWindows[0].debugDomAvailable, true);
+    assert.equal(result.browserWindows[0].domTreeAvailable, true);
+    assert.equal(result.browserWindows[0].domTree.nodeCount, 1);
 
     const snapshot = JSON.parse(fs.readFileSync(privateDomPath, 'utf8'));
     assert.equal(snapshot.frames[0].fields[0].value, 'person@example.test');
@@ -177,6 +216,7 @@ module.exports = {
       statusPath,
       runDirectory: directory,
       livePreviewEnabled: options.livePreviewEnabled === true,
+      ...(options.observability ? { observability: options.observability } : {}),
       statusWriteIntervalMs: 60000,
       devDebug,
       workflow: { workflow_variables: {} },
@@ -294,4 +334,26 @@ test('preview observability keeps status debug fields disabled', () => {
   assert.equal(Object.hasOwn(status, 'events'), false);
   assert.equal(Object.hasOwn(status, 'debugArtifacts'), false);
   assert.equal(Object.hasOwn(status, 'debug_artifacts'), false);
+});
+
+test('explicit off stays fail closed even when every legacy and capability flag asks for capture', () => {
+  const { status, result } = executeRuntime(
+    { enabled: true, observability: 'debug', captureDom: true },
+    {
+      livePreviewEnabled: true,
+      observability: {
+        level: 'off',
+        capturesScreenshots: true,
+        capturesDom: true,
+        showsCursor: true,
+        resultOnly: false,
+      },
+    },
+  );
+
+  assert.equal(status.observabilityLevel, 'off');
+  assert.equal(status.livePreviewEnabled, false);
+  assert.equal(result.tasks[0].observedContext.devDebugEnabled, false);
+  assert.equal(result.tasks[0].observedContext.previewCaptureDom, false);
+  assert.equal(Object.hasOwn(result, 'debugArtifacts'), false);
 });

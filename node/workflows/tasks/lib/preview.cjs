@@ -39,6 +39,11 @@ function intervalMs(context = {}) {
 function enabled(context = {}) {
   const preview = context.preview || context.livePreview || {};
   const observability = context.observability || {};
+  const level = observabilityLevel(context);
+
+  if (level === 'off') {
+    return false;
+  }
 
   if (
     typeof observability === 'object'
@@ -50,7 +55,7 @@ function enabled(context = {}) {
       && context.previewEnabled !== false;
   }
 
-  return observabilityLevel(context) !== 'off'
+  return OBSERVABILITY_LEVELS[level] >= OBSERVABILITY_LEVELS.preview
     && preview.enabled !== false
     && context.livePreviewEnabled !== false
     && context.previewEnabled !== false;
@@ -119,6 +124,11 @@ function observabilityLevel(context = {}) {
 
 function debugDomEnabled(context = {}) {
   const observability = context.observability || {};
+  const level = observabilityLevel(context);
+
+  if (OBSERVABILITY_LEVELS[level] < OBSERVABILITY_LEVELS.debug) {
+    return false;
+  }
 
   if (
     typeof observability === 'object'
@@ -127,7 +137,7 @@ function debugDomEnabled(context = {}) {
     return observability.capturesDom === true;
   }
 
-  return OBSERVABILITY_LEVELS[observabilityLevel(context)] >= OBSERVABILITY_LEVELS.debug;
+  return true;
 }
 
 function pageKey(page, fallbackIndex = 0) {
@@ -383,6 +393,72 @@ async function frameDomSnapshot(frame) {
   }
 }
 
+function domTreeViewModel(domTree = {}) {
+  const frames = Array.isArray(domTree.frames) ? domTree.frames : [];
+
+  return {
+    version: Number(domTree.version || 1),
+    capturedAt: normalizeText(domTree.capturedAt),
+    windowKey: normalizeText(domTree.windowKey),
+    targetId: normalizeText(domTree.targetId),
+    viewport: domTree.viewport && typeof domTree.viewport === 'object'
+      ? {
+        width: Number(domTree.viewport.width || 0),
+        height: Number(domTree.viewport.height || 0),
+        deviceScaleFactor: Number(domTree.viewport.deviceScaleFactor || 1),
+      }
+      : null,
+    frames: frames.map((frame) => ({
+      frameRef: normalizeText(frame.frameRef),
+      parentFrameRef: normalizeText(frame.parentFrameRef) || null,
+      name: normalizeText(frame.name),
+      url: normalizeText(frame.url),
+      offsetX: Number(frame.offsetX || 0),
+      offsetY: Number(frame.offsetY || 0),
+      scaleX: Number(frame.scaleX || 1),
+      scaleY: Number(frame.scaleY || 1),
+      nodeCount: Number(frame.nodeCount || 0),
+      truncated: frame.truncated && typeof frame.truncated === 'object'
+        ? {
+          nodes: frame.truncated.nodes === true,
+          depth: frame.truncated.depth === true,
+          bytes: frame.truncated.bytes === true,
+        }
+        : null,
+      nodes: (Array.isArray(frame.nodes) ? frame.nodes : []).map((node) => ({
+        nodeRef: normalizeText(node.nodeRef),
+        parentRef: normalizeText(node.parentRef) || null,
+        depth: Number(node.depth || 0),
+        tag: normalizeText(node.tag),
+        id: normalizeText(node.id),
+        className: Array.isArray(node.classes) ? node.classes.map(normalizeText).filter(Boolean).join(' ') : '',
+        text: normalizeText(node.text),
+        selector: normalizeText(node.selector),
+        role: normalizeText(node.role),
+        type: normalizeText(node.type),
+        name: normalizeText(node.name),
+        ariaLabel: normalizeText(node.ariaLabel),
+        x: Number(node.rect?.x || 0),
+        y: Number(node.rect?.y || 0),
+        width: Number(node.rect?.width || 0),
+        height: Number(node.rect?.height || 0),
+        visible: node.visible === true,
+        enabled: node.enabled !== false,
+        inShadowDom: node.inShadowDom === true,
+      })),
+    })),
+    nodeCount: Number(domTree.nodeCount || 0),
+    truncated: domTree.truncated && typeof domTree.truncated === 'object'
+      ? {
+        nodes: domTree.truncated.nodes === true,
+        depth: domTree.truncated.depth === true,
+        bytes: domTree.truncated.bytes === true,
+      }
+      : null,
+    byteSize: Number(domTree.byteSize || 0),
+  };
+}
+
 async function captureDebugDom(windowConfig, context = {}, capture = {}) {
   const debugDomPath = debugDomPathFor(windowConfig, context);
   const domTreePath = domTreePathFor(windowConfig, context);
@@ -417,10 +493,11 @@ async function captureDebugDom(windowConfig, context = {}, capture = {}) {
   fs.mkdirSync(path.dirname(debugDomPath), { recursive: true });
   writeJsonAtomic(debugDomPath, payload);
   writeJsonAtomic(domTreePath, domTree);
+  const viewModel = domTreeViewModel(domTree);
 
   return {
     debugDomAvailable: true,
-    domTree,
+    domTree: viewModel,
     domTreeAvailable: true,
     domTreeCapturedAt: domTree.capturedAt,
   };

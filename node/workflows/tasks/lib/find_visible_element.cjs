@@ -6,6 +6,7 @@ const {
 } = require('../../lib/selector.cjs');
 const {
   clickHandle: clickHandleWithMouse,
+  moveCursorTo,
 } = require('./cursor.cjs');
 
 const buttonLikeSelector = 'button,a[data-component="button"],[role="button"],input[type="button"],input[type="submit"]';
@@ -227,7 +228,16 @@ async function releaseHeldHover(context = {}, page = null) {
   const targetPage = page || heldHover.page || context.page || null;
 
   if (targetPage && targetPage.mouse && typeof targetPage.mouse.move === 'function') {
-    await targetPage.mouse.move(1, 1, { steps: 1 }).catch(() => {});
+    await moveCursorTo(targetPage, {
+      x: 0,
+      y: 0,
+      width: 2,
+      height: 2,
+    }, {
+      action: 'release',
+      context,
+      steps: 1,
+    }).catch(() => {});
   }
 
   return true;

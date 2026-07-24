@@ -90,6 +90,16 @@ class WorkflowCopilotUiMarkupTest extends TestCase
         $this->assertStringContainsString('timerProgressBar: true', $studio);
         $this->assertStringContainsString("import Swal from 'sweetalert2'", $javascript);
         $this->assertStringContainsString("import 'sweetalert2/dist/sweetalert2.min.css'", $javascript);
+
+        $domInspector = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-studio/dom-inspector.blade.php');
+        $toolModal = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-studio/tool-modal.blade.php');
+        $this->assertStringContainsString('workflow-studio.dom-inspector', $runPreview);
+        $this->assertStringContainsString('workflow-studio.dom-inspector', $toolModal);
+        $this->assertStringContainsString('data-workflow-dom-inspector', $domInspector);
+        $this->assertStringContainsString('workflow-dom-node-selected', $domInspector);
+        $this->assertStringContainsString('workflow-dom-node-highlight', $domInspector);
+        $this->assertStringContainsString('overlayStyle(rect', $domInspector);
+        $this->assertStringContainsString('cursorStyle()', $domInspector);
     }
 
     public function test_studio_overlays_use_standard_z_scale_and_toolbar_offers_person_context(): void

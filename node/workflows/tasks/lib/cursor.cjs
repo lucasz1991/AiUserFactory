@@ -51,6 +51,11 @@ function observabilityLevel(context = {}) {
 
 function telemetryEnabled(context = {}) {
   const observability = context.observability || {};
+  const level = observabilityLevel(context);
+
+  if (LEVEL_RANK[level] < LEVEL_RANK.preview) {
+    return false;
+  }
 
   if (
     typeof observability === 'object'
@@ -59,7 +64,7 @@ function telemetryEnabled(context = {}) {
     return observability.showsCursor === true;
   }
 
-  return LEVEL_RANK[observabilityLevel(context)] >= LEVEL_RANK.preview;
+  return true;
 }
 
 function normalizeWindowName(context = {}, override = '') {
@@ -204,6 +209,22 @@ async function moveCursorTo(page, box, options = {}) {
 
   const context = options.context || {};
   const viewport = await viewportFor(page);
+  const normalizedBox = normalizeBox(box);
+  const centerX = normalizedBox.x + (normalizedBox.width / 2);
+  const centerY = normalizedBox.y + (normalizedBox.height / 2);
+
+  if (
+    centerX < 0
+    || centerY < 0
+    || centerX >= Number(viewport.width || 0)
+    || centerY >= Number(viewport.height || 0)
+  ) {
+    return {
+      handled: false,
+      cursor: null,
+    };
+  }
+
   const target = targetForBox(box, viewport);
   const from = pagePositions.get(page) || { x: 1, y: 1 };
   const steps = movementSteps(from, target, options.steps);
@@ -234,24 +255,36 @@ async function moveCursorTo(page, box, options = {}) {
 }
 
 async function clickAt(page, box, options = {}) {
-  const moved = await moveCursorTo(page, box, {
-    ...options,
-    action: options.action || 'click',
-  });
-
-  if (!moved.handled || !page?.mouse) {
-    return moved;
-  }
-
-  if (typeof page.mouse.down !== 'function' || typeof page.mouse.up !== 'function') {
+  if (
+    !page?.mouse
+    || typeof page.mouse.down !== 'function'
+    || typeof page.mouse.up !== 'function'
+  ) {
     return {
       handled: false,
       cursor: null,
     };
   }
 
-  await page.mouse.down({ button: 'left' });
-  await page.mouse.up({ button: 'left' });
+  const moved = await moveCursorTo(page, box, {
+    ...options,
+    action: options.action || 'click',
+  });
+
+  if (!moved.handled) {
+    return moved;
+  }
+
+  let mouseDown = false;
+
+  try {
+    await page.mouse.down({ button: 'left' });
+    mouseDown = true;
+  } finally {
+    if (mouseDown) {
+      await page.mouse.up({ button: 'left' });
+    }
+  }
 
   if (!moved.cursor) {
     return moved;
@@ -279,7 +312,7 @@ async function boxForHandle(handle) {
       element?.scrollIntoView?.({
         block: 'center',
         inline: 'center',
-        behavior: 'instant',
+        behavior: 'auto',
       });
     }).catch(() => {});
   }
@@ -313,6 +346,18 @@ async function clickHandle(page, handle, options = {}) {
     : { handled: false, cursor: null };
 }
 
+function setPagePosition(page, position = {}) {
+  if (!page || (typeof page !== 'object' && typeof page !== 'function')) {
+    return;
+  }
+
+  const normalized = normalizeBox(position);
+  pagePositions.set(page, {
+    x: normalized.x,
+    y: normalized.y,
+  });
+}
+
 module.exports = {
   clickAt,
   clickHandle,
@@ -320,6 +365,7 @@ module.exports = {
   moveCursorTo,
   moveCursorToHandle,
   observabilityLevel,
+  setPagePosition,
   targetForBox,
   telemetryEnabled,
 };

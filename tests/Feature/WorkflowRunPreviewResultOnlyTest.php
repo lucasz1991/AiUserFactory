@@ -35,6 +35,12 @@ class WorkflowRunPreviewResultOnlyTest extends TestCase
         $run = $this->makeRun(context: [], result: [
             'workflow_return' => ['treffer' => 3],
             'workflow_return_ok' => true,
+            'browserWindows' => [[
+                'key' => 'main',
+                'screenshotUrl' => 'https://example.test/forbidden-live.png',
+                'domTree' => ['frames' => [['nodes' => [['selector' => '#forbidden']]]]],
+                'cursor' => ['toX' => 10, 'toY' => 20],
+            ]],
         ]);
 
         Livewire::test(WorkflowRunPreview::class, ['workflowRunId' => $run->id])
@@ -42,7 +48,11 @@ class WorkflowRunPreviewResultOnlyTest extends TestCase
             ->assertViewHas('resultOnly', true)
             ->assertViewHas('workflowReturn', fn (array $return): bool => ($return['has'] ?? false) === true)
             ->assertSee('Echter Ablauf')
-            ->assertSee('Rückgabewert');
+            ->assertSee('Rückgabewert')
+            ->assertDontSee('Workflow-Vorschau')
+            ->assertDontSee('Debug-Artefakte')
+            ->assertDontSeeHtml('data-workflow-dom-inspector')
+            ->assertDontSee('forbidden-live.png');
     }
 
     public function test_a_studio_test_run_is_not_result_only(): void
