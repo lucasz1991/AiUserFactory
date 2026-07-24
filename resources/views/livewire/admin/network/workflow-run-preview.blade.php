@@ -123,6 +123,38 @@
                 </div>
             @endif
 
+            @if($resultOnly ?? false)
+                <section class="overflow-hidden rounded-xl border border-slate-300 bg-slate-50 shadow-sm">
+                    <div class="flex items-center gap-2 border-b border-slate-200 bg-white px-4 py-2.5">
+                        <span class="inline-flex h-6 items-center rounded-full border border-slate-300 bg-slate-100 px-2 text-[10px] font-black uppercase tracking-wide text-slate-600">Echter Ablauf</span>
+                        <p class="text-xs text-slate-500">Keine Screenshots, kein DOM, kein Cursor. Es wird nur das Ergebnis angezeigt.</p>
+                    </div>
+                    <div class="p-4">
+                        @if(($workflowReturn['has'] ?? false))
+                            <div class="rounded-lg border {{ ($workflowReturn['ok'] ?? null) === false ? 'border-rose-200 bg-rose-50' : 'border-emerald-200 bg-emerald-50' }} px-4 py-3">
+                                <div class="flex items-center justify-between gap-3">
+                                    <p class="text-[10px] font-black uppercase tracking-wide {{ ($workflowReturn['ok'] ?? null) === false ? 'text-rose-700' : 'text-emerald-700' }}">Rückgabewert · {{ $workflowReturn['key'] }}</p>
+                                    <span class="rounded-full border px-2 py-0.5 text-[10px] font-bold {{ ($workflowReturn['ok'] ?? null) === false ? 'border-rose-300 text-rose-700' : 'border-emerald-300 text-emerald-700' }}">{{ $workflowReturn['okLabel'] }}</span>
+                                </div>
+                                <pre class="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words font-mono text-xs text-slate-900">{{ $workflowReturn['valueLabel'] }}</pre>
+                            </div>
+                        @elseif($polling)
+                            <div class="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-500">
+                                <span class="h-2 w-2 animate-pulse rounded-full bg-slate-400"></span>
+                                Der Workflow läuft. Sobald er ein Ergebnis zurückgibt, erscheint es hier.
+                            </div>
+                        @else
+                            <div class="rounded-lg border border-dashed border-slate-300 bg-white px-4 py-3 text-sm text-slate-500">
+                                Der Lauf hat keinen <code class="font-mono text-xs">workflow_return</code>-Wert gesetzt. Status: <span class="font-semibold text-slate-700">{{ $workflowRun->status }}</span>.
+                            </div>
+                        @endif
+                        @if($workflowRun->status === 'failed' && trim((string) $workflowRun->error_message) !== '')
+                            <div class="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-4 py-2.5 text-xs text-rose-800">{{ $workflowRun->error_message }}</div>
+                        @endif
+                    </div>
+                </section>
+            @endif
+
             <section class="w-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm {{ $diagramOnly ? 'flex h-full min-h-0 flex-col' : '' }}">
                 <div class="flex min-w-0 items-center justify-between gap-4 border-b border-slate-100 px-4 py-3">
                     <div class="min-w-0">
@@ -341,7 +373,7 @@
                 </section>
             @endif
 
-            @if($screenshotPanels->isNotEmpty())
+            @if($screenshotPanels->isNotEmpty() && ! ($resultOnly ?? false))
                 <section class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
                     <div class="flex min-h-20 w-full items-center justify-between gap-4 bg-white px-4 py-3">
                         <div class="min-w-0">

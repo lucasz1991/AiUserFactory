@@ -221,7 +221,9 @@ class WorkflowCopilotExecutionInvariantTest extends TestCase
         $run = (new WorkflowRun)->forceFill([
             'workflow_id' => $workflow->id,
             'run_uuid' => (string) str()->uuid(),
-            'context_json' => ['execution_target' => 'system'],
+            // Feature R6: Ein „Dev-Lauf" ist ein Studio-Testlauf; ohne diese
+            // Markierung waere es ein Echtlauf, der per Policy nichts erfasst.
+            'context_json' => ['execution_target' => 'system', 'interactive_debug' => true],
         ]);
         $run->setRelation('workflow', $workflow->fresh());
 
@@ -232,7 +234,7 @@ class WorkflowCopilotExecutionInvariantTest extends TestCase
         $this->assertTrue($continuous['captureDomAfterStep']);
         $this->assertTrue($continuous['captureScreenshotAfterStep']);
 
-        $run->context_json = ['execution_target' => 'system', 'studio_single_task' => true];
+        $run->context_json = ['execution_target' => 'system', 'studio_single_task' => true, 'interactive_debug' => true];
         $single = $method->invoke($runner, $run, $step, $stepRun, true);
         $this->assertFalse($single['captureDomBeforeStep']);
         $this->assertFalse($single['captureScreenshotBeforeStep']);

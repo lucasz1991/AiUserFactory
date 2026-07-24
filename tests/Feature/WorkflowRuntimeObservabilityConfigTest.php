@@ -121,6 +121,39 @@ class WorkflowRuntimeObservabilityConfigTest extends TestCase
         $this->assertCaptureFlags($copilot, true);
     }
 
+    /**
+     * Feature R6: Ein echter Ablauf (keine Studio-/Copilot-Sitzung) sammelt
+     * nichts — auch dann nicht, wenn der Workflow `dev_mode` und alle
+     * dev_capture_*-Schalter gesetzt hat. Das ist die zentrale neue Zusage und
+     * loest die fruehere Regel ab, nach der `dev_mode` allein die Erfassung
+     * einschaltete.
+     */
+    public function test_a_real_run_collects_nothing_even_with_dev_mode(): void
+    {
+        [$workflow, $step, $run, $stepRun] = $this->runtimeModels();
+        $mailSettings = Mockery::mock(MailAccountRegistrationRunner::class);
+        $runner = new WorkflowTaskRunnerObservabilityStub($mailSettings);
+
+        $workflow->forceFill(['settings_json' => [
+            'dev_mode' => true,
+            'dev_capture_dom_before_step' => true,
+            'dev_capture_dom_after_step' => true,
+            'dev_capture_screenshot_before_step' => true,
+            'dev_capture_screenshot_after_step' => true,
+            'dev_keep_artifacts' => true,
+        ]])->save();
+        // Echtlauf: interactive_debug ausdruecklich entfernen, keine Sitzung.
+        $run->forceFill(['context_json' => []])->save();
+        $run->setRelation('workflow', $workflow->fresh());
+
+        $real = $runner->debugConfig($run, $step, $stepRun);
+
+        $this->assertFalse($real['enabled']);
+        $this->assertSame('off', $real['level']);
+        $this->assertFalse($real['copilotObservation']);
+        $this->assertCaptureFlags($real, false);
+    }
+
     public function test_workflows_index_persists_development_capture_flags_and_preserves_preview_override(): void
     {
         foreach ([false, true] as $developmentEnabled) {
@@ -212,7 +245,10 @@ class WorkflowRuntimeObservabilityConfigTest extends TestCase
             'run_uuid' => (string) str()->uuid(),
             'workflow_id' => $workflow->id,
             'status' => 'running',
-            'context_json' => [],
+            // Feature R6: Diese Datei prueft das Beobachtungsverhalten beim
+            // Testen. Der Lauf ist darum als Studio-Testlauf markiert; ohne diese
+            // Markierung waere er ein Echtlauf und die Policy erzwaenge `off`.
+            'context_json' => ['interactive_debug' => true],
             'result_json' => [],
         ]);
         $stepRun = WorkflowStepRun::query()->create([

@@ -44,6 +44,7 @@ async function run(context = {}) {
         element: clicked.element,
         cachedElement: clicked.cachedElement === true,
         clickMode: clicked.clickMode || 'mouse',
+        ...(clicked.cursor ? { cursor: clicked.cursor } : {}),
         hoverPreservedDuringClick: clicked.hoverPreservedDuringClick === true,
         hoverReleased: clicked.hoverReleased === true,
       });

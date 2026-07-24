@@ -10,6 +10,7 @@ use App\Models\WorkflowStepRun;
 use App\Services\Mail\MailAccountRegistrationRunner;
 use App\Services\Mail\WebmailSessionRunner;
 use App\Services\Workflows\WorkflowDebugArtifactService;
+use App\Services\Workflows\WorkflowObservabilityPolicy;
 use App\Services\Workflows\WorkflowTaskRunner;
 use Illuminate\Contracts\View\View;
 use Illuminate\Support\Arr;
@@ -224,7 +225,12 @@ class WorkflowRunPreview extends Component
         $compactWorkflowMap = $this->compactWorkflowMap($workflowRun, $stepDebugPanels);
         $browserCount = $screenshotPanels->count();
 
+        // Feature R6: Im echten Ablauf zeigt die Vorschau nur die Ausgabe —
+        // keine Screenshots, keinen Inspektor, keinen Cursor.
+        $resultOnly = app(WorkflowObservabilityPolicy::class)->resultOnly($workflowRun);
+
         return [
+            'resultOnly' => $resultOnly,
             'polling' => in_array((string) $workflowRun->status, ['queued', 'running', 'waiting', 'stop_requested', 'unreachable'], true),
             'workflowDurationMs' => $workflowDurationMs,
             'workflowDurationLabel' => $this->formatDuration($workflowDurationMs),
@@ -254,6 +260,7 @@ class WorkflowRunPreview extends Component
     protected function emptyPreviewData(): array
     {
         return [
+            'resultOnly' => false,
             'polling' => false,
             'workflowDurationMs' => null,
             'workflowDurationLabel' => '-',
@@ -325,6 +332,8 @@ class WorkflowRunPreview extends Component
                         'image' => $image,
                         'window' => $this->windowStatus($window, $result),
                         'dom' => data_get($window, 'debugDomUrl') ?: $this->publicUrl(data_get($window, 'debugDomRelativePath')),
+                        'domTree' => is_array(data_get($window, 'domTree')) ? data_get($window, 'domTree') : null,
+                        'cursor' => is_array(data_get($window, 'cursor')) ? data_get($window, 'cursor') : null,
                         'step' => $stepRun->workflowStep?->name ?? 'Schritt',
                         'capturedAt' => data_get($window, 'capturedAt', data_get($window, 'liveScreenshotAt')),
                         'targetId' => data_get($window, 'targetId'),

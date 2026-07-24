@@ -8,6 +8,9 @@ const {
   framesForPage,
   rememberFoundElement,
 } = require('../lib/find_visible_element.cjs');
+const {
+  moveCursorToHandle,
+} = require('../lib/cursor.cjs');
 
 async function run(context = {}) {
   const page = context.page;
@@ -32,6 +35,7 @@ async function run(context = {}) {
   }
 
   let searchedFrames = framesForPage(page).length;
+  let foundPage = page;
   let found = await findFirstVisibleElement(page, candidates, timeout);
 
   searchedFrames = Math.max(searchedFrames, framesForPage(page).length);
@@ -43,6 +47,7 @@ async function run(context = {}) {
     if (refreshedPage && refreshedPage !== page && remainingTimeout > 0) {
       found = await findFirstVisibleElement(refreshedPage, candidates, remainingTimeout);
       searchedFrames = Math.max(searchedFrames, framesForPage(refreshedPage).length);
+      foundPage = refreshedPage;
     }
   }
 
@@ -64,10 +69,16 @@ async function run(context = {}) {
     };
   }
 
+  let cursor = null;
   let element = null;
 
   try {
     element = await elementSnapshot(found.handle, found.selector);
+    const moved = await moveCursorToHandle(foundPage, found.handle, {
+      action: 'condition',
+      context,
+    });
+    cursor = moved.cursor || null;
   } catch (error) {
     await found.handle.dispose?.().catch(() => {});
 
@@ -93,6 +104,7 @@ async function run(context = {}) {
     searchedFrames,
     searchedOpenShadowDom: true,
     element,
+    ...(cursor ? { cursor } : {}),
     conditionMatched: true,
     condition_matched: true,
     logicalOutcome: 'condition_true',

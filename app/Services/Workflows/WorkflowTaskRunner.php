@@ -21,13 +21,22 @@ class WorkflowTaskRunner
 
     protected ?WorkflowRuntimeFingerprint $runtimeFingerprint = null;
 
+    protected ?WorkflowObservabilityPolicy $observabilityPolicy = null;
+
     public function __construct(
         protected MailAccountRegistrationRunner $mailSettings,
         ?WorkflowTaskCatalog $taskCatalog = null,
         ?WorkflowRuntimeFingerprint $runtimeFingerprint = null,
+        ?WorkflowObservabilityPolicy $observabilityPolicy = null,
     ) {
         $this->taskCatalog = $taskCatalog;
         $this->runtimeFingerprint = $runtimeFingerprint;
+        $this->observabilityPolicy = $observabilityPolicy;
+    }
+
+    protected function observabilityPolicy(): WorkflowObservabilityPolicy
+    {
+        return $this->observabilityPolicy ??= app(WorkflowObservabilityPolicy::class);
     }
 
     public function remoteRuntime(WorkflowRun $run, WorkflowStep $step, WorkflowStepRun $stepRun, array $runtimeContext = []): array
@@ -79,6 +88,7 @@ class WorkflowTaskRunner
             'runtimeHashAlgorithm' => WorkflowRuntimeFingerprint::ALGORITHM,
             'executionTarget' => 'client_controller',
             'devDebug' => $this->devDebugRuntimeConfig($run, $step, $stepRun, false),
+            'observability' => $this->observabilityRuntime($run),
         ];
     }
 
@@ -166,6 +176,7 @@ class WorkflowTaskRunner
             'keepWorkflowBrowserMaxIdleMs' => $this->keepWorkflowBrowserMaxIdleMs($settings),
             'scriptName' => 'run_step.cjs',
             'devDebug' => $this->devDebugRuntimeConfig($run, $step, $stepRun),
+            'observability' => $this->observabilityRuntime($run),
         ];
 
         if ($completionCallback = $this->completionCallbackConfig($stepRun, $runId)) {
@@ -1260,16 +1271,16 @@ class WorkflowTaskRunner
     protected function devDebugRuntimeConfig(WorkflowRun $run, WorkflowStep $step, WorkflowStepRun $stepRun, bool $localArtifacts = true): array
     {
         $settings = is_array($run->workflow?->settings_json) ? $run->workflow->settings_json : [];
-        $copilotObservation = (int) $run->workflow_copilot_session_id > 0
-            || (int) data_get($run->context_json, 'workflow_copilot_session_id', 0) > 0;
-        $developmentEnabled = filter_var($settings['dev_mode'] ?? false, FILTER_VALIDATE_BOOL)
-            || filter_var($settings['development'] ?? false, FILTER_VALIDATE_BOOL);
-        $developmentCaptureEnabled = fn (string $key): bool => $developmentEnabled
+        $policy = $this->observabilityPolicy();
+        // Feature R6: Die Policy entscheidet aus dem konkreten Lauf, ob ueberhaupt
+        // beobachtet wird. Ein Echtlauf liefert weder DOM noch Artefakte, auch
+        // wenn der Workflow `dev_mode` traegt.
+        $capturesDom = $policy->capturesDom($run);
+        $keepsArtifacts = $policy->keepsArtifacts($run);
+        $copilotObservation = $policy->level($run) === WorkflowObservabilityPolicy::LEVEL_COPILOT;
+        $developmentCaptureEnabled = fn (string $key): bool => $capturesDom
             && filter_var($settings[$key] ?? false, FILTER_VALIDATE_BOOL);
-        $enabled = $localArtifacts && (
-            $copilotObservation
-            || $developmentEnabled
-        );
+        $enabled = $localArtifacts && ($capturesDom || $keepsArtifacts);
 
         if (! $localArtifacts) {
             return [
@@ -1284,12 +1295,16 @@ class WorkflowTaskRunner
         return [
             'enabled' => $enabled,
             'dev_mode' => $enabled,
+            'level' => $policy->level($run),
             'copilotObservation' => $copilotObservation,
+            // Copilot beobachtet immer voll — die dev_capture_*-Schalter gelten nur
+            // fuer den Development-Testlauf; ein Echtlauf erfasst gar nichts, weil
+            // $capturesDom/$keepsArtifacts dann false sind.
             'captureDomBeforeStep' => $copilotObservation || $developmentCaptureEnabled('dev_capture_dom_before_step'),
             'captureDomAfterStep' => $copilotObservation || $developmentCaptureEnabled('dev_capture_dom_after_step'),
             'captureScreenshotBeforeStep' => $copilotObservation || $developmentCaptureEnabled('dev_capture_screenshot_before_step'),
             'captureScreenshotAfterStep' => $copilotObservation || $developmentCaptureEnabled('dev_capture_screenshot_after_step'),
-            'keepArtifacts' => $copilotObservation || $developmentCaptureEnabled('dev_keep_artifacts'),
+            'keepArtifacts' => $copilotObservation || ($keepsArtifacts && filter_var($settings['dev_keep_artifacts'] ?? false, FILTER_VALIDATE_BOOL)),
             'status' => trim((string) ($settings['dev_status'] ?? '')),
             'storageDisk' => 'local',
             'storagePath' => $relativeDirectory,
@@ -1305,8 +1320,35 @@ class WorkflowTaskRunner
         ];
     }
 
+    /**
+     * Observability-Stufe fuer die Node-Runtime (Feature R6). R4/R5-Emitter
+     * (DOM-Baum, Cursor) pruefen `observability.level` und schreiben bei `off`
+     * nichts. `resultOnly` markiert den echten Ablauf, der nur die Ausgabe zeigt.
+     *
+     * @return array{level: string, resultOnly: bool, capturesScreenshots: bool, capturesDom: bool, showsCursor: bool}
+     */
+    protected function observabilityRuntime(WorkflowRun $run): array
+    {
+        $policy = $this->observabilityPolicy();
+
+        return [
+            'level' => $policy->level($run),
+            'resultOnly' => $policy->resultOnly($run),
+            'capturesScreenshots' => $policy->capturesScreenshots($run),
+            'capturesDom' => $policy->capturesDom($run),
+            'showsCursor' => $policy->showsCursor($run),
+        ];
+    }
+
     protected function livePreviewEnabled(WorkflowRun $run, array $processSettings): bool
     {
+        // Feature R6: Ein echter Ablauf sammelt keine Beobachtungsdaten — die
+        // Live-Vorschau (Screenshot-Loop) laeuft dort strukturell nicht, egal was
+        // global oder je Workflow eingestellt ist.
+        if (! $this->observabilityPolicy()->capturesScreenshots($run)) {
+            return false;
+        }
+
         $globalEnabled = filter_var($processSettings['live_preview_enabled'] ?? true, FILTER_VALIDATE_BOOL);
         $workflowSettings = is_array($run->workflow?->settings_json) ? $run->workflow->settings_json : [];
 

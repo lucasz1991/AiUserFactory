@@ -327,7 +327,7 @@ function statusPayload(state, stage, message, extra = {}) {
     isRunning: ['queued', 'starting', 'running'].includes(state),
     startedAt,
     at: now(),
-    livePreviewEnabled: runtime.livePreviewEnabled !== false,
+    livePreviewEnabled: effectiveLivePreviewEnabled(),
     livePreviewIntervalSeconds: Number(runtime.livePreviewIntervalSeconds || 3),
     livePreviewPollIntervalSeconds: Number(runtime.livePreviewPollIntervalSeconds || runtime.livePreviewIntervalSeconds || 3),
     scriptName: runtime.scriptName || 'run_step.cjs',
@@ -1421,8 +1421,19 @@ function effectiveObservabilityLevel() {
   const runtimeObservability = runtime.observability && typeof runtime.observability === 'object'
     ? runtime.observability
     : {};
+  const explicitLevel = normalizeObservabilityLevel(
+    typeof runtime.observability === 'string'
+      ? runtime.observability
+      : runtimeObservability.level,
+  );
+
+  // Feature R6: the run-specific PHP policy is authoritative. Explicit `off`
+  // must never be elevated by legacy workflow settings or preview defaults.
+  if (explicitLevel) {
+    return explicitLevel;
+  }
+
   const candidates = [
-    typeof runtime.observability === 'string' ? runtime.observability : runtimeObservability.level,
     runtime.observabilityLevel,
     runtime.observability_level,
     config.observability,
@@ -1453,6 +1464,31 @@ function effectiveObservabilityLevel() {
   }
 
   return effectiveLevel;
+}
+
+function runtimeObservabilityFlag(key, fallback) {
+  const observability = runtime.observability && typeof runtime.observability === 'object'
+    ? runtime.observability
+    : {};
+
+  if (Object.prototype.hasOwnProperty.call(observability, key)) {
+    return observability[key] === true;
+  }
+
+  return fallback;
+}
+
+function effectiveCapturesScreenshots() {
+  const level = effectiveObservabilityLevel();
+
+  return runtimeObservabilityFlag(
+    'capturesScreenshots',
+    observabilityRank(level) >= observabilityRank('preview'),
+  );
+}
+
+function effectiveLivePreviewEnabled() {
+  return effectiveCapturesScreenshots() && runtime.livePreviewEnabled !== false;
 }
 
 function debugObservabilityEnabled() {
@@ -2418,7 +2454,7 @@ function persistedWindowLabel(windowName = 'main') {
 }
 
 function startPreviewLoop(context) {
-  if (previewTimer || runtime.livePreviewEnabled === false) {
+  if (previewTimer || context.livePreviewEnabled !== true) {
     return;
   }
 
@@ -3064,13 +3100,27 @@ async function run() {
   const runDirectory = runtime.runDirectory || path.dirname(runtime.resultPath);
   const observabilityLevel = effectiveObservabilityLevel();
   const debugEnabled = debugObservabilityEnabled();
+  const capturesScreenshots = effectiveCapturesScreenshots();
+  const capturesDom = runtimeObservabilityFlag(
+    'capturesDom',
+    observabilityRank(observabilityLevel) >= observabilityRank('debug'),
+  );
+  const showsCursor = runtimeObservabilityFlag(
+    'showsCursor',
+    observabilityRank(observabilityLevel) >= observabilityRank('preview'),
+  );
+  const resultOnly = runtimeObservabilityFlag(
+    'resultOnly',
+    observabilityLevel === 'off',
+  );
+  const livePreviewEnabled = effectiveLivePreviewEnabled();
   const contextDevDebug = {
     ...devDebugConfig(),
     enabled: debugEnabled,
     dev_mode: debugEnabled,
     observability: observabilityLevel,
     level: observabilityLevel,
-    captureDom: debugEnabled,
+    captureDom: capturesDom,
   };
   const context = {
     ...workflowContext,
@@ -3078,12 +3128,12 @@ async function run() {
     workflow_variables: initialWorkflowVariables,
     workflowVariables: initialWorkflowVariables,
     preview: {
-      enabled: runtime.livePreviewEnabled !== false,
+      enabled: livePreviewEnabled,
       livePreviewPath: runtime.livePreviewPath,
       livePreviewRelativePath: runtime.livePreviewRelativePath,
       intervalMs: runtime.livePreviewIntervalMs || 3000,
       observability: observabilityLevel,
-      captureDom: debugEnabled,
+      captureDom: capturesDom,
       debugDomDirectory: runDirectory,
     },
     devDebug: contextDevDebug,
@@ -3091,9 +3141,13 @@ async function run() {
       level: observabilityLevel,
       debug: debugEnabled,
       copilot: observabilityLevel === 'copilot',
+      capturesScreenshots,
+      capturesDom,
+      showsCursor,
+      resultOnly,
     },
     observabilityLevel,
-    livePreviewEnabled: runtime.livePreviewEnabled !== false,
+    livePreviewEnabled,
     livePreviewIntervalMs: runtime.livePreviewIntervalMs || 3000,
     livePreviewIntervalSeconds: runtime.livePreviewIntervalSeconds || 3,
     livePreviewPath: runtime.livePreviewPath,

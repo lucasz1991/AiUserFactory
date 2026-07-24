@@ -144,6 +144,9 @@
                     <button type="button" wire:click="runSingleTask" @disabled($isActive || ! $selectedTask) class="inline-flex h-8 items-center gap-2 rounded-lg bg-cyan-700 px-3 text-[11px] font-bold text-white shadow-sm transition hover:bg-cyan-600 active:translate-y-px disabled:cursor-not-allowed disabled:opacity-35">
                         <span aria-hidden="true">▷|</span> Eine Task
                     </button>
+                    <button type="button" wire:click="runRealPlayback" @disabled($isActive || $isPaused) title="Wie im echten Ablauf: ohne Screenshots, DOM oder Cursor – am Ende nur das Ergebnis." class="inline-flex h-8 items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 text-[11px] font-bold text-slate-700 shadow-sm transition hover:bg-slate-100 active:translate-y-px disabled:cursor-not-allowed disabled:opacity-35">
+                        <span aria-hidden="true">⏵</span> Echter Ablauf
+                    </button>
                 </div>
 
                 <div class="flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-1">
@@ -180,8 +183,10 @@
         @error('studio')<span class="sr-only" role="alert">{{ $message }}</span>@enderror
     </header>
 
-    @include('livewire.admin.network.workflow-studio.browser-windows')
-    @include('livewire.admin.network.workflow-studio.tool-bar')
+    @unless($resultOnly)
+        @include('livewire.admin.network.workflow-studio.browser-windows')
+        @include('livewire.admin.network.workflow-studio.tool-bar')
+    @endunless
 
     {{-- isolate kapselt die Diagramm-/Overlay-z-Werte (Minimap z-10/z-20, Lade-Overlay z-50) in einen eigenen Stacking-Kontext, damit sie nie mit den Shell-Modalen konkurrieren --}}
     <main class="relative isolate min-h-0 flex-1 overflow-hidden bg-slate-100 p-3">
@@ -189,7 +194,7 @@
             @include('livewire.admin.network.workflow-studio.browser')
         </section>
 
-        <div wire:loading.delay.flex wire:target="startRun,pauseRun,resumeRun,runSingleTask,stopRun,restartRun,runProbe,commitProbeAsTask,saveSessionDefinition,startCopilot,setPermissionMode,chooseControlMode" class="pointer-events-none absolute inset-0 z-50 hidden items-center justify-center bg-white/55 backdrop-blur-[1px]">
+        <div wire:loading.delay.flex wire:target="startRun,runRealPlayback,pauseRun,resumeRun,runSingleTask,stopRun,restartRun,runProbe,commitProbeAsTask,saveSessionDefinition,startCopilot,setPermissionMode,chooseControlMode" class="pointer-events-none absolute inset-0 z-50 hidden items-center justify-center bg-white/55 backdrop-blur-[1px]">
             <span class="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-700 shadow-xl"><span class="h-3 w-3 animate-spin rounded-full border-2 border-slate-300 border-t-cyan-600"></span>Test wird aktualisiert …</span>
         </div>
     </main>

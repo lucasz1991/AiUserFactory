@@ -4,6 +4,9 @@ const {
   normalizeElementCandidates,
   parseExtendedSelector,
 } = require('../../lib/selector.cjs');
+const {
+  clickHandle: clickHandleWithMouse,
+} = require('./cursor.cjs');
 
 const buttonLikeSelector = 'button,a[data-component="button"],[role="button"],input[type="button"],input[type="submit"]';
 const clickableElementSelector = 'a,button,[role="button"],input[type="button"],input[type="submit"]';
@@ -1044,6 +1047,8 @@ async function clickFirstVisibleElement(page, values, timeout = 15000, options =
       cachedClickableHandle = await clickableHandleFor(cachedEntry.handle);
       const cachedSelector = cachedEntry.selector || candidateSelector(cachedCandidate);
       const snapshot = await elementSnapshot(cachedClickableHandle, cachedSelector).catch(() => ({ selector: cachedSelector }));
+      let cursor = null;
+
       if (preserveMousePosition) {
         const dispatched = await clickHandleWithoutMouseMove(cachedClickableHandle);
 
@@ -1051,7 +1056,16 @@ async function clickFirstVisibleElement(page, values, timeout = 15000, options =
           throw new Error('DOM-Klick ohne Mausbewegung konnte nicht ausgeloest werden.');
         }
       } else {
-        await cachedClickableHandle.click({ timeout: Math.max(1, Math.min(1000, normalizedTimeout)) });
+        const mouseClick = await clickHandleWithMouse(page, cachedClickableHandle, {
+          action: 'click',
+          context: options.context || {},
+        });
+
+        if (!mouseClick.handled) {
+          await cachedClickableHandle.click({ timeout: Math.max(1, Math.min(1000, normalizedTimeout)) });
+        }
+
+        cursor = mouseClick.cursor || null;
       }
 
       if (cachedClickableHandle !== cachedEntry.handle) {
@@ -1067,6 +1081,7 @@ async function clickFirstVisibleElement(page, values, timeout = 15000, options =
         cachedElement: true,
         candidate: cachedCandidate,
         clickMode: preserveMousePosition ? 'dom-dispatch' : 'mouse',
+        ...(cursor ? { cursor } : {}),
         element: snapshot,
         frame: cachedEntry.frame,
         hoverPreservedDuringClick: preserveMousePosition,
@@ -1103,6 +1118,8 @@ async function clickFirstVisibleElement(page, values, timeout = 15000, options =
 
     try {
       const snapshot = await elementSnapshot(clickableHandle, match.selector).catch(() => ({ selector: match.selector }));
+      let cursor = null;
+
       if (preserveMousePosition) {
         const dispatched = await clickHandleWithoutMouseMove(clickableHandle);
 
@@ -1110,7 +1127,16 @@ async function clickFirstVisibleElement(page, values, timeout = 15000, options =
           throw new Error('DOM-Klick ohne Mausbewegung konnte nicht ausgeloest werden.');
         }
       } else {
-        await clickableHandle.click({ timeout: Math.max(1, remainingTimeout(deadline)) });
+        const mouseClick = await clickHandleWithMouse(page, clickableHandle, {
+          action: 'click',
+          context: options.context || {},
+        });
+
+        if (!mouseClick.handled) {
+          await clickableHandle.click({ timeout: Math.max(1, remainingTimeout(deadline)) });
+        }
+
+        cursor = mouseClick.cursor || null;
       }
       const hoverReleased = preserveMousePosition
         ? await releaseHeldHover(options.context, page)
@@ -1119,6 +1145,7 @@ async function clickFirstVisibleElement(page, values, timeout = 15000, options =
       return {
         candidate: match.candidate,
         clickMode: preserveMousePosition ? 'dom-dispatch' : 'mouse',
+        ...(cursor ? { cursor } : {}),
         element: snapshot,
         frame: match.frame,
         hoverPreservedDuringClick: preserveMousePosition,

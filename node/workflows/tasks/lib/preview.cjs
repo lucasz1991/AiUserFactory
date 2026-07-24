@@ -2,6 +2,13 @@
 
 const fs = require('fs');
 const path = require('path');
+const {
+  captureDomTree,
+  writeJsonAtomic,
+} = require('./dom_tree.cjs');
+const {
+  cursorForWindow,
+} = require('./cursor.cjs');
 
 const pageKeys = new WeakMap();
 let nextPageKey = 1;
@@ -31,8 +38,20 @@ function intervalMs(context = {}) {
 
 function enabled(context = {}) {
   const preview = context.preview || context.livePreview || {};
+  const observability = context.observability || {};
 
-  return preview.enabled !== false
+  if (
+    typeof observability === 'object'
+    && Object.prototype.hasOwnProperty.call(observability, 'capturesScreenshots')
+  ) {
+    return observability.capturesScreenshots === true
+      && preview.enabled !== false
+      && context.livePreviewEnabled !== false
+      && context.previewEnabled !== false;
+  }
+
+  return observabilityLevel(context) !== 'off'
+    && preview.enabled !== false
     && context.livePreviewEnabled !== false
     && context.previewEnabled !== false;
 }
@@ -49,8 +68,17 @@ function observabilityLevel(context = {}) {
   const preview = context.preview || context.livePreview || {};
   const devDebug = context.devDebug || context.dev_debug || {};
   const observability = context.observability || {};
-  const candidates = [
+  const explicitLevel = normalizeObservabilityLevel(
     typeof observability === 'string' ? observability : observability.level,
+  );
+
+  // Feature R6: the PHP policy is authoritative. In particular, explicit
+  // `off` must not be elevated again by legacy dev/live-preview flags.
+  if (explicitLevel) {
+    return explicitLevel;
+  }
+
+  const candidates = [
     context.observabilityLevel,
     context.observability_level,
     preview.observability,
@@ -90,6 +118,15 @@ function observabilityLevel(context = {}) {
 }
 
 function debugDomEnabled(context = {}) {
+  const observability = context.observability || {};
+
+  if (
+    typeof observability === 'object'
+    && Object.prototype.hasOwnProperty.call(observability, 'capturesDom')
+  ) {
+    return observability.capturesDom === true;
+  }
+
   return OBSERVABILITY_LEVELS[observabilityLevel(context)] >= OBSERVABILITY_LEVELS.debug;
 }
 
@@ -178,6 +215,16 @@ function debugDomPathFor(windowConfig = {}, context = {}) {
   const base = livePreviewFilename.slice(0, -ext.length) || 'live';
 
   return path.join(privateRunDirectory, `${base}-dom.json`);
+}
+
+function domTreePathFor(windowConfig = {}, context = {}) {
+  const debugDomPath = debugDomPathFor(windowConfig, context);
+
+  if (!debugDomPath) {
+    return '';
+  }
+
+  return debugDomPath.replace(/-dom\.json$/i, '-dom-tree.json');
 }
 
 function windowPath(context, index, windowConfig = {}) {
@@ -338,18 +385,25 @@ async function frameDomSnapshot(frame) {
 
 async function captureDebugDom(windowConfig, context = {}, capture = {}) {
   const debugDomPath = debugDomPathFor(windowConfig, context);
+  const domTreePath = domTreePathFor(windowConfig, context);
 
-  if (!debugDomPath || !windowConfig.page || typeof windowConfig.page.frames !== 'function') {
+  if (!debugDomPath || !domTreePath || !windowConfig.page || typeof windowConfig.page.frames !== 'function') {
     return {};
   }
 
-  const frames = await Promise.all(
-    windowConfig.page.frames().map(async (frame, index) => ({
-      index,
-      name: typeof frame.name === 'function' ? String(frame.name() || '') : '',
-      ...(await frameDomSnapshot(frame)),
-    })),
-  );
+  const [frames, domTree] = await Promise.all([
+    Promise.all(
+      windowConfig.page.frames().map(async (frame, index) => ({
+        index,
+        name: typeof frame.name === 'function' ? String(frame.name() || '') : '',
+        ...(await frameDomSnapshot(frame)),
+      })),
+    ),
+    captureDomTree(windowConfig.page, {
+      windowKey: windowConfig.key,
+      targetId: capture.targetId || '',
+    }),
+  ]);
   const payload = {
     capturedAt: new Date().toISOString(),
     key: windowConfig.key,
@@ -361,10 +415,14 @@ async function captureDebugDom(windowConfig, context = {}, capture = {}) {
   };
 
   fs.mkdirSync(path.dirname(debugDomPath), { recursive: true });
-  fs.writeFileSync(debugDomPath, JSON.stringify(payload, null, 2));
+  writeJsonAtomic(debugDomPath, payload);
+  writeJsonAtomic(domTreePath, domTree);
 
   return {
-    debugDomPath,
+    debugDomAvailable: true,
+    domTree,
+    domTreeAvailable: true,
+    domTreeCapturedAt: domTree.capturedAt,
   };
 }
 
@@ -407,11 +465,11 @@ async function captureWindow(windowConfig, context = {}, force = false) {
     url,
     title,
     targetId,
-    liveScreenshotPath: windowConfig.livePreviewPath,
     livePreviewRelativePath: windowConfig.livePreviewRelativePath || null,
     ...debugDom,
     capturedAt: new Date(now).toISOString(),
   });
+  const cursor = cursorForWindow(context, windowConfig.key);
 
   return {
     key: windowConfig.key,
@@ -419,10 +477,9 @@ async function captureWindow(windowConfig, context = {}, force = false) {
     url,
     title,
     targetId,
-    liveScreenshotPath: windowConfig.livePreviewPath,
-    livePreviewPath: windowConfig.livePreviewPath,
     livePreviewRelativePath: windowConfig.livePreviewRelativePath || null,
     ...debugDom,
+    ...(cursor ? { cursor } : {}),
     capturedAt: new Date(now).toISOString(),
   };
 }
@@ -445,11 +502,14 @@ async function captureTaskPreview(context = {}, result = {}, force = true) {
         url: windowConfig.url || null,
         title: windowConfig.title || '',
         targetId: windowConfig.targetId || '',
-        liveScreenshotPath: windowConfig.liveScreenshotPath || windowConfig.livePreviewPath || null,
-        livePreviewPath: windowConfig.livePreviewPath || null,
         livePreviewRelativePath: windowConfig.livePreviewRelativePath || null,
-        debugDomPath: windowConfig.debugDomPath || null,
         debugDomRelativePath: windowConfig.debugDomRelativePath || null,
+        debugDomAvailable: windowConfig.debugDomAvailable === true,
+        domTreeAvailable: windowConfig.domTreeAvailable === true,
+        ...(windowConfig.domTree ? { domTree: windowConfig.domTree } : {}),
+        ...(cursorForWindow(context, windowConfig.key)
+          ? { cursor: cursorForWindow(context, windowConfig.key) }
+          : {}),
         capturedAt: windowConfig.capturedAt || null,
         stale: true,
         error: error.message,

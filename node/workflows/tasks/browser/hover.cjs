@@ -7,6 +7,9 @@ const {
   findFirstVisibleElement,
   rememberFoundElement,
 } = require('../lib/find_visible_element.cjs');
+const {
+  moveCursorToHandle,
+} = require('../lib/cursor.cjs');
 
 function optionBoolean(input = {}, keys = [], fallback = false) {
   for (const key of keys) {
@@ -69,11 +72,21 @@ async function run(context = {}) {
       });
     }
 
+    let cursor = null;
     let element = null;
 
     try {
       element = await elementSnapshot(found.handle, found.selector);
-      await found.handle.hover();
+      const moved = await moveCursorToHandle(page, found.handle, {
+        action: 'hover',
+        context,
+      });
+
+      if (!moved.handled) {
+        await found.handle.hover();
+      }
+
+      cursor = moved.cursor || null;
     } catch (error) {
       await found.handle.dispose?.().catch(() => {});
 
@@ -112,6 +125,7 @@ async function run(context = {}) {
       hoverHeld: true,
       releaseAfterClick,
       cachedElement: cached === true,
+      ...(cursor ? { cursor } : {}),
     });
   } catch (error) {
     return captureTaskPreview(context, {

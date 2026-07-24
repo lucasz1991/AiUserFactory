@@ -197,6 +197,10 @@ Statuswerte: `geplant`, `in_arbeit`, `verifiziert`, `blockiert`.
 
 | 2026-07-23 | Claude | verifiziert | **Feature R3 umgesetzt** (Spuren D-Teil und J, danach wieder `frei`). Fachlicher Ausloeser: In der Vorschau war nicht erkennbar, welche Tasks gelaufen sind und woran gerade gearbeitet wird; bei einem Ruecksprung verschwanden die Markierungen der kompletten Liste und Linien fielen weg. **Zwei getrennte Ursachen, beide belegt:** (1) Markierungen kamen ausschliesslich aus `WorkflowStepRun.result_json.tasks`, es gibt aber nur **eine** Step-Run-Zeile je Lauf und Liste (`updateOrCreate`) — beim Ruecksprung ueberschreibt der neue Lauf sie mit den Tasks ab dem Sprungziel, alles Frueheres fiel auf den Template-Zustand zurueck. (2) `minimap.blade.php:271` zeichnete nur die letzten **16** Routenereignisse (`take(-16)`), `:252` begrenzte die Knoten-Abzeichen auf **8**, und `recordRoute()` kappte `route_history` auf **50**. **Loesung:** neue akkumulierende `context_json.task_history` (eingefroren bei `completeStepRun()`/`failStepRun()`, fortlaufende `seq`, Limit 600); `route_history` auf 300 angehoben; Vorschau und Minimap mischen Historie unter den aktuellen Snapshot (Snapshot hat Vorrang); jede Markierung traegt `passes` und `freshness` (45–100). Darstellung: aktiver Task breiter und geringelt, gelaufene verblassen mit dem Alter, nie gelaufene mit gestricheltem Rahmen ohne Fuellung (klar unterscheidbar von uebersprungenem Grau), Tooltip mit Status und Durchlaufzahl; Linienlimits entfernt, Deckkraft und Strichstaerke aus dem Alter (juengste 1.0, aelteste 0.35), Hover-Fokus daempft nur noch (Untergrenze 0.28) statt auszublenden. | `DB_CONNECTION=sqlite DB_DATABASE=:memory: php artisan test tests/Feature/WorkflowRunPreviewPathHistoryTest.php` -> 6 Tests, 24 Assertions, gruen (Kern: „a backward jump no longer erases the markings of the list" prueft genau den gemeldeten Fall). `... php artisan test tests/Unit/WorkflowRouteMarkupTest.php` -> 4 Tests gruen, um `test_preview_route_opacity_encodes_age_and_never_reaches_zero` erweitert. Regression: `... php artisan test --filter=Workflow` -> 298 Tests gruen, 2728 Assertions; die 2 verbleibenden Fehler gehoeren nicht zu R3 (siehe naechste Spalte). | **Bewusste Grenze:** Die Historie entsteht beim **Abschluss** einer Liste. Ein Ruecksprung mitten in einer noch laufenden Liste zeigt fuer deren bereits erledigte Tasks weiterhin nur den aktuellen Snapshot — bei jedem Monitor-Tick zu schreiben haette den Schreibaufwand vervielfacht. Haken fuer spaeter: `recordTaskHistory()` zusaetzlich im Monitor-Pfad aufrufen (Spur D, zusammen mit P3). **Zwei Fremdfehler, nicht von R3:** (a) `ClientControllerReliableWorkflowTest > unassigned client run …` wirft seit dem P2a-Refactor `UnexpectedValueException` in `WorkflowTaskCatalog.php:1925` fuer eine Karte ohne `task_key` — eigener Abschnitt „Befund fuer Codex: P2a bricht eine Karte ohne task_key". (b) `WorkflowCopilotPreflightServiceTest:202` ist unveraendert vorbestehend. Der Markup-Test `WorkflowRouteMarkupTest` pinnte die alte, altersblinde Deckkraft `related ? 1 : 0.5`; da der Vertrag bewusst geaendert wurde, ist die Assertion durch eine ersetzt, die die neue Zusage prueft (Alter steuert Deckkraft, nichts wird unsichtbar). Naechster Schritt: offen fuer Codex — **P2c**, **P3**. |
 
+| 2026-07-24 | Claude | verifiziert | **Feature R6 PHP-Kern umgesetzt** (Spur U, danach `frei`; UI-Knopf und Node-Gate offen). Fachlicher Anlass: DOM-Baum, Screenshots, Cursor und Debug-Artefakte (R4/R5) sowie die ganze Datensammlung sollen **nur beim Erstellen/Testen** eines Workflows anfallen — im echten Ablauf zaehlt nur `workflow_return`. Zusaetzlich ein **Echt-Ablauf aus dem Studio**. Ursache der bisherigen Luecke: Das P1-Gating haengt am Workflow-Setting `dev_mode`, nicht am konkreten Lauf; ein `dev_mode`-Workflow sammelte darum auch bei echten Triggern. Neue Datei `WorkflowObservabilityPolicy` als einzige Quelle der Wahrheit: leitet aus dem `WorkflowRun` die Stufe `off`/`preview`/`debug`/`copilot` ab (Test-/Erstellungslauf = Copilot- oder Studio-Sitzung oder `interactive_debug`; sonst Echtlauf = `off`; `real_playback=true` erzwingt `off` auch aus dem Studio und schlaegt sogar eine Copilot-Sitzung). `WorkflowTaskRunner::devDebugRuntimeConfig()`/`livePreviewEnabled()` delegieren; beide Runtime-Builder tragen jetzt einen `observability`-Block fuer den Node. Studio-Aktion `runRealPlayback()` (setzt `real_playback`). **Vertragsaenderung an P1:** `dev_mode` allein schaltet die Erfassung nicht mehr ein, nur noch in Test-/Copilot-Laeufen — Copilot bleibt unveraendert voll beobachtet. | `DB_CONNECTION=sqlite DB_DATABASE=:memory: php artisan test tests/Unit/WorkflowObservabilityPolicyTest.php` -> 9 Tests, 28 Assertions, gruen. `... tests/Feature/WorkflowTaskRunnerObservabilityTest.php` -> 4 Tests, 18 Assertions, gruen. Regression `... php artisan test --filter=Workflow` -> **327 Tests gruen**, 2853 Assertions (zuvor rote P1-Tests an den neuen Vertrag angepasst: `WorkflowRuntimeObservabilityConfigTest` markiert Capture-Laeufe als `interactive_debug` und bekam `test_a_real_run_collects_nothing_even_with_dev_mode`; `WorkflowCopilotExecutionInvariantTest` zwei Kontexte als Testlauf markiert). Kein `node/workflows`-Code geaendert, daher kein ClientController-Sync noetig (Regel 7). | Risiko/Abgrenzung: (1) Der Node **respektiert `observability.level` noch nicht** — bis Spur A/S umgesetzt ist, entscheidet weiterhin `livePreviewEnabled`/`devDebug` (die jetzt korrekt aus der Policy kommen), aber die kuenftigen R4/R5-Emitter muessen den Level selbst pruefen (Regel-7-Sync noetig). (2) Der Studio-**Knopf** „Echter Ablauf" fehlt noch (Spur T); die Action `runRealPlayback()` ist da und getestet, nur nicht verdrahtet. (3) Der `off`-Lauf ist bewusst datenarm, nicht datenlos: Status, Fehler und `workflow_return` bleiben fuer die Diagnose erhalten. Naechster Schritt: Spur T (Knopf + `resultOnly`-Ansicht) und Spur A/S (Node-Gate), danach R4/R5 obendrauf. |
+
+| 2026-07-24 | Claude | verifiziert | **Feature R6 vollstaendig abgeschlossen** (Spur T obendrauf, danach `frei`). Nach dem PHP-Kern jetzt die Bedienung: Studio-Knopf **„Echter Ablauf"** in der Steuerleiste ruft `runRealPlayback()`; `WorkflowRunPreview` liefert `resultOnly` aus der Policy; bei `resultOnly` blendet die Vorschau die Screenshot-Sektion aus und zeigt oben ein Ergebnis-Panel mit dem `workflow_return`-Wert (OK/Fehler-Zustand, Fehlermeldung). Der leichte Fortschritts-Graph (aus `route_history`/`task_history`) bleibt, weil er kein schweres Beobachtungsartefakt ist. Zusaetzlich verifiziert, dass der **Node** den Echtlauf bei den heutigen Datenarten bereits respektiert: `preview.cjs::enabled()` prueft `livePreviewEnabled`, das die Policy fuer `off` auf false setzt — damit entfallen Screenshot-Loop und DOM-Dump ohne weitere Node-Aenderung. | `DB_CONNECTION=sqlite DB_DATABASE=:memory: php artisan test tests/Feature/WorkflowRunPreviewResultOnlyTest.php` -> 3 Tests, 7 Assertions, gruen (inkl. `dev_mode`-Workflow im Echtlauf bleibt `resultOnly`). Regression `... php artisan test --filter=Workflow` -> **330 Tests gruen**, 2860 Assertions. Blade kompiliert (`Blade::compileString`), PHP-Lint sauber. Kein `node/workflows`-Code geaendert, daher kein ClientController-Sync noetig (Regel 7). | Restumfang: Nur die **kuenftigen** R4/R5-Node-Emitter (DOM-Baum, Cursor) muessen `runtime.observability.level`/`capturesDom`/`showsCursor` selbst pruefen — das entsteht erst mit R4/R5 und braucht dann Regel-7-Sync. R6 selbst ist fertig und benutzbar: ein Workflow laesst sich jetzt per Knopf unter Produktionsbedingungen testen (nur Ergebnis, keine Sammlung), und ein echter Trigger-Lauf sammelt strukturell nichts mehr. Naechster grosser Block bleibt R4 (DOM-Inspektor) + R5 (Cursor) laut Plan. |
+
 Neue Eintraege immer unten anhaengen. Ein Eintrag gilt erst als `verifiziert`,
 wenn die ausgefuehrten Testkommandos und verbleibende Risiken genannt sind.
 
@@ -227,6 +231,9 @@ php artisan test tests/Feature/WorkflowStudioRouteRepairPromptTest.php
 php artisan test tests/Feature/WorkflowTaskRemovalRouteWarningTest.php
 php artisan test tests/Feature/WorkflowRunPreviewPathHistoryTest.php
 php artisan test tests/Unit/WorkflowRouteMarkupTest.php
+php artisan test tests/Unit/WorkflowObservabilityPolicyTest.php
+php artisan test tests/Feature/WorkflowTaskRunnerObservabilityTest.php
+php artisan test tests/Feature/WorkflowRunPreviewResultOnlyTest.php
 php artisan test tests/Feature/WorkflowTransferServiceTest.php tests/Feature/WorkflowCompositionTest.php
 php artisan test tests/Unit/WorkflowTaskOrderingServiceTest.php
 node --test tests/Node/workflow_loop_routes.test.cjs
@@ -518,6 +525,9 @@ und nicht paketbasiert** — Dateien sind die tatsaechliche Konfliktgrenze.
 | **P — Historischer Preflight** | `app/Services/Workflows/WorkflowCopilotPreflightService.php` und zugehoeriger bestehender Test | Nicht belegte historische Routenmutation als `historical_operation_not_proven` ablehnen und protokollieren | `frei` — verifiziert | Codex (erledigt) |
 | **Q — Embedded- und Loop-Runtime** | `app/Services/Workflows/WorkflowTransferService.php`, P2a-Anteile in `WorkflowTaskRunner.php`, P2c/P3a-Anteile in `run_step.cjs` und zugehoerige Tests | Importierte Include-IDs kanonisieren, eingebettete Loop-Pair-Keys remappen, grosse gueltige Loops mit getrenntem Ist-Budget ausfuehren | `frei` — verifiziert | Codex (erledigt) |
 | **R — Loop-Block-Verschiebung** | `app/Services/Workflows/WorkflowTaskOrderingService.php` und zugehoerige Tests | Start, Body und Ende als zusammenhaengenden Block verschieben; keine leeren Loops durch Drag & Drop | `frei` — verifiziert | Codex (erledigt) |
+| **S — Node-DOM-/Cursor-Emission** | `node/workflows/run_step.cjs`, `node/workflows/tasks/lib/preview.cjs`, neue `node/workflows/tasks/lib/dom_tree.cjs` und `node/workflows/tasks/lib/cursor.cjs`, `node/workflows/tasks/lib/find_visible_element.cjs`, die vier Katalogpfade `browser/click.cjs`, `browser/hover.cjs`, `input/submit.cjs`, `decision/element_exists.cjs` sowie eindeutig neue Node-Tests | Features R4 + R5 (Node-Seite) | `in_arbeit` seit 2026-07-24 — R4 vor R5; **Regel-7-Sync + `runtimeHash`-Bump zwingend** | Codex |
+| **T — Vorschau: Inspektor & Cursor** | `app/Livewire/Admin/Network/WorkflowRunPreview.php`, `resources/views/livewire/admin/network/workflow-run-preview.blade.php`, neue `resources/views/livewire/admin/network/workflow-studio/dom-inspector.blade.php`, `app/Livewire/Admin/Network/WorkflowStudio.php`, `resources/views/livewire/admin/network/workflow-studio.blade.php` und eindeutig neue UI-Tests | Features R4 + R5 sowie R6-Result-only-UI | `in_arbeit` seit 2026-07-24 — gemeinsamer Node/PHP/UI-Vertrag | Codex |
+| **U — Observability-Policy & Echt-Ablauf** | `app/Services/Workflows/WorkflowObservabilityPolicy.php` (neu); `app/Services/Workflows/WorkflowTaskRunner.php`; `app/Livewire/Admin/Network/WorkflowStudio.php`; `app/Livewire/Admin/Network/WorkflowRunPreview.php`; `resources/views/livewire/admin/network/workflow-studio.blade.php`; `resources/views/livewire/admin/network/workflow-run-preview.blade.php` | Feature R6 (siehe unten) | `frei` — R6 vollstaendig erledigt (nur kuenftige R4/R5-Node-Emitter muessen den Level noch selbst pruefen) | Claude (erledigt) |
 
 Bestehende Testdateien gehoeren zur Spur der Datei, die sie testen — wer G1
 umsetzt, passt auch deren Tests an. Spur F umfasst nur **neue** Dateien.
@@ -718,6 +728,256 @@ ist bewusst so: bei jedem Monitor-Tick zu schreiben haette den Schreibaufwand
 vervielfacht. Wenn das in der Praxis stoert, ist der Haken
 `recordTaskHistory()` — er muesste dann zusaetzlich im Monitor-Pfad (Spur D, P3)
 aufgerufen werden.
+
+### Uebergabe an Codex (2026-07-24, Claude stoppt hier)
+
+Claude pausiert. Alle Claude-Spuren sind geschlossen und verifiziert: **H** (R1),
+**I** (R2), **J** + D-Anteil (R3), **U** (R6). Kein offener Claude-Befund. Der
+gesamte weitere Umsetzungsauftrag liegt bei Codex.
+
+**Achtung Kollision — R6 ist bereits fertig, nicht neu bauen.** Spur T (Codex,
+`in_arbeit`) listet u. a. `WorkflowRunPreview.php`, `WorkflowStudio.php` und
+`workflow-studio.blade.php` und nennt „R6-Result-only-UI". Diese R6-Teile sind
+**bereits umgesetzt und getestet** (Eintraege oben, 330 Workflow-Tests gruen):
+
+* `WorkflowObservabilityPolicy` ist die Quelle der Wahrheit fuer die Stufe.
+* `runRealPlayback()` + Studio-Knopf „Echter Ablauf" sind vorhanden.
+* `WorkflowRunPreview` liefert `resultOnly`; die Vorschau blendet bei `resultOnly`
+  Screenshots aus und zeigt das `workflow_return`-Panel.
+
+Codex baut R4/R5 **auf diesem Stand auf** und darf `resultOnly`,
+`runRealPlayback()`, den „Echter Ablauf"-Knopf und das Ergebnis-Panel **nicht**
+zurueckbauen. Neuer Inspektor/Cursor gehoert zusaetzlich hinter
+`observability.capturesDom` / `observability.showsCursor` bzw. `level >= preview`
+(der Node-Vertrag liegt in der Runtime bereits an).
+
+**Offen fuer Codex:** R4 (DOM-Inspektor) und R5 (Cursor) laut Plan unten,
+Spuren S (Node, Regel-7-Sync + `runtimeHash`-Bump) und T (UI). Reihenfolge R4 vor
+R5. Vor Node-Aenderungen `php artisan workflow:runtime-hash` als Referenz nehmen,
+danach ClientController synchronisieren und den Hash auf beiden Seiten
+vergleichen.
+
+### Feature R4 (Plan) — DOM-Inspektor je Browserfenster statt blinder Selektor-Probe
+
+**Auftrag (Fachseite, 2026-07-24):** Statt der reinen Selektor-Pruef-Funktion soll
+jedes Browserfenster eine Art Entwickler-Konsole bekommen, in der die HTML-Struktur
+als Baum aufgelistet ist. Waehlt man dort ein DOM-Element, soll es im Browserfenster
+markiert dargestellt werden.
+
+**Was heute schon existiert (nicht neu bauen):**
+
+* `run_step.cjs` → `devDomSnapshot()` erzeugt bereits pro Fenster eine reiche
+  Interaktionskarte: sichtbare Elemente mit stabilem Selektor, Rolle, Text,
+  `boundingClientRect`, `visible`/`enabled` und eine `classifyUiState`-Heuristik.
+* `preview.cjs` → `captureDebugDom()` schreibt bereits das komplette
+  `outerHTML` je Frame (heute nach R3/G1 ins **private** Lauf-Verzeichnis, nur ab
+  Observability-Stufe `debug`).
+* `browser.highlight` (`tasks/browser/highlight.cjs`) markiert ein Element
+  bereits per Selektor mit einem Outline im echten DOM — sichtbar im naechsten
+  Screenshot.
+* Die Selektor-Probe (`WorkflowStudio::runProbe`, `selector.search`/`highlight`)
+  und das Selektor-Modal existieren als Bedienpfad.
+
+**Kernentscheidung — Overlay statt Live-DOM.** Die Livevorschau ist ein
+**statisches PNG** (`live.png`), das im Poll-Takt aktualisiert wird, kein
+eingebetteter Live-Browser. Ein echter DevTools-Inspektor auf dem fremden DOM ist
+darum nicht moeglich. Der Inspektor rendert stattdessen den vom Node gelieferten
+**DOM-Baum** und legt die Markierung als absolut positioniertes Overlay
+**ueber das Screenshot-Bild** — anhand der `boundingClientRect` aus dem Snapshot,
+skaliert auf die Bildgroesse. Das ist sofort sichtbar, ohne Round-Trip und ohne den
+Ziel-DOM zu veraendern (wichtig gegen Bot-Erkennung). Optional zusaetzlich die
+bestehende `browser.highlight`-Task ausloesen, damit die Markierung auch im
+echten Screenshot der naechsten Runde erscheint.
+
+**Schritte (Plan):**
+
+1. **Node (Spur S):** `devDomSnapshot()` um eine hierarchische Baumstruktur
+   erweitern — neue `dom_tree.cjs`, die aus dem bestehenden Snapshot einen Baum
+   mit stabilem `nodeRef` je Knoten, `boundingClientRect`, Tag/Id/Klassen/Text und
+   dem schon berechneten stabilen Selektor baut. Tiefe und Knotenzahl **kappen**
+   (z. B. 2.500 Knoten / Tiefe 32), Ergebnis neben den Screenshot ins private
+   Verzeichnis (`live-dom-tree.json`), nur ab Observability-Stufe `debug`/`copilot`
+   oder bei geoeffnetem Vorschau-Modal. Regel-7-Sync + `runtimeHash`-Bump.
+2. **UI (Spur T):** neues `dom-inspector.blade.php` — kollabierbarer Baum je
+   Browserfenster im Vorschaupanel; Klick auf einen Knoten zeichnet das Overlay
+   ueber das Screenshot (Alpine, `boundingClientRect` × Skalierungsfaktor). Ein
+   „Im Browser markieren"-Knopf loest zusaetzlich `browser.highlight` mit dem
+   Knoten-Selektor aus. Der bestehende Selektor-Probe-Knopf wird „Aus Baum
+   waehlen": ausgewaehlter Knoten fuellt `probeSelector` (kein blindes Tippen mehr).
+3. **Tests (Spur F):** Baumaufbau/Kappung als Node-Test; UI-Marker-Skalierung und
+   Selektor-Uebernahme als Feature-Test.
+
+### Feature R5 (Plan) — Sichtbarer Mauszeiger je Fenster + echte Maus-Eingabe
+
+**Auftrag:** Pro Browserfenster ein Mauszeiger, der sich bei Klick-/IF-Tasks passend
+auf das Element bewegt; der Klick soll browsertechnisch ueber die Maus als
+Eingabegeraet bestaetigt werden.
+
+**Was heute schon existiert (wichtig):**
+
+* Der Standard-Klickpfad nutzt **bereits** die echte Maus: Puppeteers
+  `handle.click()` bewegt ueber CDP `Input.dispatchMouseEvent` den Zeiger auf die
+  Elementmitte und klickt real. „Maus als Eingabegeraet" ist im Default also schon
+  erfuellt.
+* Es gibt zusaetzlich einen **DOM-Dispatch-Modus** (`clickHandleWithoutMouseMove`,
+  `preserveMousePosition`), der die Maus umgeht und synthetische DOM-Events
+  feuert — fuer Hover-Ketten.
+* `page.mouse.move/down/up` ist verfuegbar.
+
+**Zwei Luecken bleiben:**
+
+1. **Kein sichtbarer Zeiger.** `page.screenshot()` erfasst den OS-Cursor nicht — und
+   in Produktion laeuft Chromium **headless** auf Linux, es gibt gar keinen
+   OS-Cursor. Der sichtbare Zeiger muss also entweder in den Ziel-DOM injiziert
+   (schlecht: veraendert die Seite, kann Bot-Erkennung triggern) **oder** als
+   UI-Overlay ueber dem Screenshot animiert werden. **Empfehlung: UI-Overlay.**
+2. **Kein weicher Weg.** `handle.click()` springt direkt. Fuer die sichtbare
+   Bewegung braucht es `page.mouse.move(x, y, {steps})` mit Zwischenschritten.
+
+**Kernentscheidung — echte Maus + UI-Overlay-Zeiger.** Der Node bewegt vor jeder
+interaktiven Task (`browser.click`, `browser.hover`, `input.submit`,
+`decision.element_exists` mit Klick) die **echte** Maus in Schritten auf die
+Elementmitte (`boundingBox`-Zentrum) und klickt per `mouse.down()/up()` — echte
+Eingabe, menschenaehnlicher als der Direktklick. Er meldet Start-/Zielkoordinaten
+und Zeitstempel im Task-Ergebnis. Die UI animiert daraus einen Zeiger **ueber dem
+Screenshot** (CSS-Transition), einen pro Fenster. So sieht man die Bewegung, der
+Klick ist real, und der Ziel-DOM bleibt unberuehrt.
+
+**Schritte (Plan):**
+
+1. **Node (Spur S):** neue `cursor.cjs` — `moveCursorTo(page, box, {steps})` +
+   `clickAt(page, box)`. Klickpfad in `find_visible_element.cjs` so umstellen, dass
+   der Default ueber Move+Down+Up laeuft statt `handle.click()`; der
+   DOM-Dispatch-Modus bleibt als Rueckfall. Jede interaktive Task liefert
+   `cursor: { fromX, fromY, toX, toY, startedAt, arrivedAt, window }` im Ergebnis.
+   Regel-7-Sync + `runtimeHash`-Bump.
+2. **UI (Spur T):** Zeiger-Overlay je Fenster im Vorschaupanel, das aus den
+   gemeldeten Koordinaten (× Skalierungsfaktor) mit weicher Transition zum Ziel
+   faehrt und beim Klick kurz pulsiert. Reine Anzeige, kein Eingriff in die Seite.
+3. **Tests (Spur F):** `cursor.cjs`-Geometrie (Zielmitte, Schrittzahl) als
+   Node-Test; Koordinaten-Skalierung des Overlays als Feature-Test.
+
+**Reihenfolge:** R4 zuerst (liefert `boundingClientRect`/Baum, den R5 fuers Ziel
+ohnehin braucht), dann R5. Beide teilen Spur S (Node) und T (UI); ein Agent nimmt
+S+T zusammen, damit der Node-Vertrag und die UI konsistent bleiben — **nicht**
+parallel auf denselben Dateien.
+
+**Risiken / bewusste Grenzen:**
+
+* **Regel 7:** Jede Aenderung unter `node/workflows` erzwingt den
+  ClientController-Sync und einen `runtimeHash`-Bump (per
+  `php artisan workflow:runtime-hash` pruefbar). Ohne Sync lehnt der Client den
+  Lauf ab.
+* **Datenvolumen/Performance:** Ein voller DOM-Baum je Tick ist teuer — Kappung
+  von Tiefe/Knotenzahl und Bindung an die Observability-Stufe sind Pflicht, sonst
+  faellt R4 in dasselbe Muster wie der alte ungated DOM-Dump (G1).
+* **Poll-Latenz:** Marker und Zeiger laufen ueber Client-Overlays aus
+  Snapshot-Koordinaten, damit sie **sofort** reagieren; das echte Highlight bzw.
+  der echte Klick sind die Grundwahrheit und erscheinen im naechsten Frame.
+* **Bot-Erkennung:** Weder Zeiger noch Marker werden in den Ziel-DOM injiziert —
+  beide leben ausschliesslich in unserer UI. Die echte, schrittweise
+  Mausbewegung ist eher unauffaelliger als der bisherige Direktklick.
+* **Skalierung:** Das Overlay muss den Faktor zwischen `boundingClientRect`
+  (Viewport 1366×900, in `run_step.cjs` gesetzt) und der gerenderten Bildgroesse
+  je Fenster berechnen; bei geaenderter Viewport-Groesse mitfuehren.
+
+**Grundprinzip (Fachseite, 2026-07-24) — gilt fuer R4, R5 und alle Debug-Daten:**
+DOM-Baum, Screenshots, Cursor-Overlay, Debug-Artefakte und ueberhaupt die ganze
+Datensammlung zu einem Lauf entstehen **ausschliesslich beim Erstellen und Testen**
+eines Workflows — damit man ihn beobachten, verstehen und (auch der Copilot)
+optimieren kann. Im **echten Ablauf** darf nichts davon anfallen; dort zaehlt nur
+das, was der Workflow fachlich erarbeitet, also der `workflow_return`-Wert. R4/R5
+duerfen ihre Daten deshalb nur emittieren, wenn die Observability-Stufe (siehe
+Feature R6) `>= preview` ist. Das ist keine Kann-Bestimmung, sondern die
+Existenzberechtigung der Trennung.
+
+### Feature R6 (Plan + Umsetzung) — Echt-Ablauf-Modus und eine Observability-Policy
+
+**Auftrag (Fachseite, 2026-07-24):** Die Datensammlung (DOM, Screenshots, Cursor,
+Artefakte) soll nur beim Erstellen/Testen laufen, nicht im echten Ablauf. Es soll
+zusaetzlich einen **echten Test-/Produktionsablauf** geben, bei dem nichts davon
+passiert und am Ende nur die Ausgabe (`workflow_return`) angezeigt wird.
+
+**Ist-Zustand und die Luecke:** Das Gating aus P1 existiert
+(`WorkflowTaskRunner::devDebugRuntimeConfig()`, `::livePreviewEnabled()`,
+`copilotObservation`), haengt aber am **Workflow-Setting** `dev_mode` und an einer
+globalen `live_preview_enabled`-Einstellung — **nicht** daran, ob *dieser Lauf* ein
+Test- oder ein Echtlauf ist. Ein Workflow mit `dev_mode=true` sammelt daher auch
+bei einem echten Trigger-/Zeitplan-Lauf schwere Daten, und der Screenshot-Loop
+laeuft in jedem Lauf. Genau das soll nicht sein.
+
+**Saubere Ableitung des Lauf-Zwecks** (am Code geprueft): Ein Lauf ist
+**Test/Erstellung**, wenn er eine Copilot-Sitzung, eine Studio-Sitzung oder
+`context.interactive_debug=true` traegt (gesetzt in `WorkflowStudio.php:1307`).
+Fehlt all das, ist es ein **Echtlauf** (Trigger/Zeitplan/`start()` ohne Sitzung).
+Zusaetzlich kann die Studio-Aktion „Echter Ablauf" per neuem Kontextflag
+`context.real_playback=true` einen Echtlauf **aus dem Studio heraus** erzwingen.
+
+**Observability-Stufen (eine Quelle der Wahrheit).** Neuer Service
+`WorkflowObservabilityPolicy`, der aus dem `WorkflowRun` die effektive Stufe
+ableitet und alle heute verstreuten Flags ersetzt:
+
+| Stufe | Wann | Screenshots | DOM/Baum | Cursor-Overlay | Artefakte | Ergebnis-Anzeige |
+| --- | --- | --- | --- | --- | --- | --- |
+| `copilot` | aktive Copilot-Sitzung | ja | ja | ja | ja | voll |
+| `debug` | Studio-Lauf **und** `dev_mode` | ja | ja | ja | ja | voll |
+| `preview` | Studio-Lauf ohne `dev_mode` | ja | nein | ja | nein | voll |
+| `off` | Echtlauf **oder** `real_playback` | **nein** | **nein** | **nein** | **nein** | **nur `workflow_return`** |
+
+`off` gewinnt immer, wenn es ein Echtlauf ist — `dev_mode` hebt ausschliesslich
+**Test**laeufe von `preview` auf `debug`. Damit kann ein Produktionslauf strukturell
+keine schweren Daten mehr erzeugen.
+
+**Schritte:**
+
+1. ✅ **Erledigt 2026-07-24 (Spur U).** `WorkflowObservabilityPolicy` (neu) mit
+   `level(WorkflowRun)` und den Boole-Fragen `capturesScreenshots()`,
+   `capturesDom()`, `keepsArtifacts()`, `showsCursor()`, `resultOnly()` sowie
+   `atLeast($run, 'preview')`. `WorkflowTaskRunner::devDebugRuntimeConfig()` und
+   `::livePreviewEnabled()` delegieren jetzt an die Policy; beide Runtime-Builder
+   (`start()` und `remoteRuntime()`) tragen einen `observability`-Block
+   (`level`, `resultOnly`, `capturesScreenshots`, `capturesDom`, `showsCursor`),
+   damit der Node R4/R5-Daten nur ab `preview` emittiert. Studio-Aktion
+   `runRealPlayback()` startet mit `real_playback=true` (setzt `interactive_debug`
+   weiterhin, damit der Lauf im Studio sichtbar bleibt — die Policy erzwingt `off`
+   trotzdem). Tests: `WorkflowObservabilityPolicyTest` (9) und
+   `WorkflowTaskRunnerObservabilityTest` (4), alle gruen.
+   **Vertragsaenderung an P1:** Frueher schaltete `dev_mode` allein die Erfassung
+   ein — jetzt nur noch in Test-/Copilot-Laeufen. Die P1-Tests
+   `WorkflowRuntimeObservabilityConfigTest` und
+   `WorkflowCopilotExecutionInvariantTest` wurden entsprechend angepasst (Laeufe,
+   die Capture-Verhalten pruefen, sind jetzt als `interactive_debug` markiert) und
+   um die neue Zusage `test_a_real_run_collects_nothing_even_with_dev_mode`
+   ergaenzt. Copilot bleibt unveraendert voll beobachtet.
+2. ✅ **Erledigt 2026-07-24 (Spur T).** Studio-Knopf „Echter Ablauf" in der
+   Steuerleiste ruft `runRealPlayback()`. `WorkflowRunPreview` liefert
+   `resultOnly` aus der Policy; bei `resultOnly` blendet das Vorschaupanel die
+   Screenshot-Sektion aus und zeigt oben ein Ergebnis-Panel mit dem
+   `workflow_return`-Wert (inkl. OK/Fehler-Zustand und Fehlermeldung). Der
+   leichte Fortschritts-Graph bleibt, weil er aus `route_history`/`task_history`
+   kommt und kein schweres Beobachtungsartefakt ist. Test:
+   `WorkflowRunPreviewResultOnlyTest` (3), gruen — inkl. der Zusage, dass ein
+   `dev_mode`-Workflow im Echtlauf trotzdem `resultOnly` ist.
+3. **Bereits erfuellt fuer die heutigen Datenarten (Spur A/S).** Der Node
+   respektiert den Echtlauf schon: `preview.cjs::enabled()` prueft
+   `context.livePreviewEnabled`, und die Policy setzt `livePreviewEnabled=false`
+   fuer `off`. Damit entfallen Screenshot-Loop **und** DOM-Dump
+   (`captureDebugDom` laeuft nur innerhalb von `captureWindow`, das bei
+   `!enabled()` frueh abbricht); die Phasen-Artefakte haengen an `devDebug`, das
+   ebenfalls aus der Policy kommt. **Offen bleibt nur** der Handoff fuer die
+   **kuenftigen** R4/R5-Emitter: die muessen zusaetzlich
+   `runtime.observability.level` bzw. `capturesDom`/`showsCursor` pruefen, bevor
+   sie Baum-/Cursor-Daten schreiben. Regel-7-Sync + `runtimeHash` erst noetig,
+   wenn dieser Node-Code entsteht.
+
+**Warum das die Existenzberechtigung von R4/R5 sichert:** R4 (DOM-Inspektor) und
+R5 (Cursor) haengen ausdruecklich an `level >= preview`. Ohne R6 waere „nur beim
+Testen" eine Zusage ohne Durchsetzung; mit R6 ist sie eine strukturelle Grenze.
+
+**Abgrenzung:** Der `off`-Lauf ist bewusst datenarm, nicht datenlos — Status,
+Fehlermeldung und `workflow_return` bleiben erhalten, damit ein fehlgeschlagener
+Produktionslauf noch diagnostizierbar ist. Nur die *schweren, beobachtenden*
+Artefakte entfallen.
 
 ### Geloester Befund: P2a und alte Karten ohne `task_key`
 

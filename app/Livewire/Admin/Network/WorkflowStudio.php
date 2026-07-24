@@ -17,6 +17,7 @@ use App\Services\Workflows\WorkflowCopilotLaunchService;
 use App\Services\Workflows\WorkflowCopilotSessionService;
 use App\Services\Workflows\WorkflowDefinitionValidator;
 use App\Services\Workflows\WorkflowExecutionService;
+use App\Services\Workflows\WorkflowObservabilityPolicy;
 use App\Services\Workflows\WorkflowRetryRouteAutoRepairService;
 use App\Services\Workflows\WorkflowRouteTargetAutoRepairService;
 use App\Services\Workflows\WorkflowStudioAuthorizationService;
@@ -255,6 +256,27 @@ class WorkflowStudio extends Component
         });
     }
 
+    /**
+     * Feature R6: Startet den Workflow wie im echten Ablauf — ohne Screenshots,
+     * DOM-Erfassung, Cursor-Overlay oder Debug-Artefakte. Die Vorschau zeigt nur
+     * die Ausgabe (`workflow_return`). Dient dazu, einen Workflow vor dem
+     * Ausrollen unter Produktionsbedingungen zu pruefen.
+     */
+    public function runRealPlayback(): void
+    {
+        $this->perform('run.real_playback_started', function (): array {
+            app(WorkflowStudioControlService::class)->assertUserControl($this->session());
+            $run = $this->startInteractiveRun(realPlayback: true);
+            app(WorkflowStudioControlService::class)->lock($this->session(), 'interactive', auth()->user());
+
+            return $this->result(
+                (string) $run->status,
+                'Echter Ablauf gestartet: keine Beobachtungsdaten, es wird nur das Ergebnis angezeigt.',
+                $run,
+            );
+        });
+    }
+
     public function pauseRun(): void
     {
         $this->perform('run.pause_requested', function (): array {
@@ -349,8 +371,10 @@ class WorkflowStudio extends Component
         $this->perform('run.restarted', function (): array {
             $session = $this->session();
             app(WorkflowStudioControlService::class)->assertUserControl($session);
+            $realPlayback = false;
 
             if ($run = $this->activeRun()) {
+                $realPlayback = data_get($run->context_json, 'real_playback') === true;
                 app(WorkflowExecutionService::class)->terminate(
                     $run,
                     'Workflow-Lauf und zugehoerige Node-Prozesse wurden fuer den Neustart beendet.',
@@ -364,7 +388,7 @@ class WorkflowStudio extends Component
                 'finished_at' => null,
             ])->save();
 
-            $newRun = $this->startInteractiveRun();
+            $newRun = $this->startInteractiveRun(realPlayback: $realPlayback);
             app(WorkflowStudioControlService::class)->lock($this->session(), 'interactive', auth()->user());
 
             return $this->result((string) $newRun->status, 'Workflow-Test wurde neu gestartet.', $newRun);
@@ -873,6 +897,30 @@ class WorkflowStudio extends Component
         $this->showSelectorProbeModal = true;
     }
 
+    #[On('workflow-dom-node-selected')]
+    public function useDomNodeSelector(string $browserWindow, string $selector): void
+    {
+        app(WorkflowStudioControlService::class)->assertUserControl($this->session());
+
+        $selector = trim($selector);
+        if ($selector === '') {
+            throw new DomainException('Der ausgewaehlte DOM-Knoten besitzt keinen verwendbaren Selektor.');
+        }
+
+        $this->probeBrowserWindow = trim($browserWindow) ?: 'main';
+        $this->probeSelector = $selector;
+        $this->probeAction = 'selector.search';
+        $this->showSelectorProbeModal = true;
+    }
+
+    #[On('workflow-dom-node-highlight')]
+    public function highlightDomNode(string $browserWindow, string $selector): void
+    {
+        $this->useDomNodeSelector($browserWindow, $selector);
+        $this->probeAction = 'selector.highlight';
+        $this->runProbe();
+    }
+
     public function updatedProbeAction(string $action): void
     {
         if ($action === 'probe.keypress' && ! in_array($this->probeValue, ['Enter', 'Tab'], true)) {
@@ -964,6 +1012,9 @@ class WorkflowStudio extends Component
             'copilotSession' => $copilotSession,
             'copilotLatestEvent' => $copilotSession?->events()->latest('sequence')->first(),
             'run' => $run,
+            'resultOnly' => $run
+                ? app(WorkflowObservabilityPolicy::class)->resultOnly($run)
+                : false,
             'browserWindows' => $this->browserWindowCards($workflow, $run),
             'steps' => $workflow->steps,
             'events' => $session->events()->latest('sequence')->limit(40)->get()->reverse()->values(),
@@ -1140,9 +1191,11 @@ class WorkflowStudio extends Component
                     'active' => $name === $activeWindow,
                     'runtime' => true,
                     'task_count' => 0,
-                    'screenshot_url' => null,
-                    'dom_url' => null,
-                ]];
+                'screenshot_url' => null,
+                'dom_url' => null,
+                'dom_tree' => null,
+                'cursor' => null,
+            ]];
             });
 
         foreach ($workflow->steps as $step) {
@@ -1164,6 +1217,8 @@ class WorkflowStudio extends Component
                     'task_count' => 0,
                     'screenshot_url' => null,
                     'dom_url' => null,
+                    'dom_tree' => null,
+                    'cursor' => null,
                 ]);
                 $card['task_count']++;
                 $cards->put($name, $card);
@@ -1182,6 +1237,8 @@ class WorkflowStudio extends Component
                 'task_count' => 0,
                 'screenshot_url' => null,
                 'dom_url' => null,
+                'dom_tree' => null,
+                'cursor' => null,
             ]);
             $cards->put($name, array_replace($card, array_filter($snapshot, fn (mixed $value): bool => filled($value))));
         }
@@ -1198,6 +1255,8 @@ class WorkflowStudio extends Component
                 'task_count' => 0,
                 'screenshot_url' => null,
                 'dom_url' => null,
+                'dom_tree' => null,
+                'cursor' => null,
             ]);
         }
 
@@ -1227,6 +1286,8 @@ class WorkflowStudio extends Component
                     'runtime' => true,
                     'screenshot_url' => $this->runtimePreviewUrl($window['screenshotUrl'] ?? null, $window['livePreviewRelativePath'] ?? null),
                     'dom_url' => $this->runtimePreviewUrl($window['debugDomUrl'] ?? null, $window['debugDomRelativePath'] ?? null),
+                    'dom_tree' => is_array($window['domTree'] ?? null) ? $window['domTree'] : null,
+                    'cursor' => is_array($window['cursor'] ?? null) ? $window['cursor'] : null,
                 ];
             }
 
@@ -1239,6 +1300,8 @@ class WorkflowStudio extends Component
                     'runtime' => true,
                     'screenshot_url' => trim((string) data_get($result, 'screenshotUrl')),
                     'dom_url' => trim((string) data_get($result, 'debugDomUrl')),
+                    'dom_tree' => null,
+                    'cursor' => null,
                 ];
             }
         }
@@ -1253,6 +1316,8 @@ class WorkflowStudio extends Component
                 'runtime' => true,
                 'screenshot_url' => null,
                 'dom_url' => null,
+                'dom_tree' => null,
+                'cursor' => null,
             ];
             if ($artifact->status === 'success' && $artifact->artifact_type === 'screenshot' && blank($snapshots[$name]['screenshot_url'] ?? null)) {
                 $snapshots[$name]['screenshot_url'] = route('workflow-run-artifacts.show', ['run' => $run, 'artifact' => $artifact]);
@@ -1289,6 +1354,7 @@ class WorkflowStudio extends Component
         bool $singleTask = false,
         ?int $workflowStepId = null,
         ?string $taskKey = null,
+        bool $realPlayback = false,
     ): WorkflowRun {
         $session = $this->session()->load('activeRun');
         $active = $session->activeRun;
@@ -1304,7 +1370,11 @@ class WorkflowStudio extends Component
         $session->forceFill(['person_id' => $this->personId !== '' ? (int) $this->personId : null])->save();
         $context = [
             'workflow_studio_session_id' => $session->getKey(),
+            // Bleibt gesetzt, damit der Lauf im Studio schrittweise beobachtbar
+            // bleibt. Die Observability-Policy (R6) entscheidet ueber
+            // `real_playback` unabhaengig davon, dass hier keine Daten anfallen.
             'interactive_debug' => true,
+            'real_playback' => $realPlayback,
             'workflow_inputs' => $inputs,
             'workflow_variables' => $inputs,
             'person_id' => $this->personId !== '' ? (int) $this->personId : null,
