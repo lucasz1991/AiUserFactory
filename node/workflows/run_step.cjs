@@ -818,6 +818,35 @@ function resolveString(value, context = {}) {
   return resolved;
 }
 
+// Erkennt Werte, die einen Person-/Kontextpfad meinen (z. B. `person.email`,
+// `account.username`, `verificationMailbox.email`) oder einen der bekannten
+// Laufzeit-Schluessel (`new_mail_address`, `verification_code`, …). Nur solche
+// Werte werden auch bei der Wertquelle "Fester Wert" aufgeloest; alles andere
+// bleibt woertlich. Bewusst NICHT enthalten: `workflow`/`workflowVariables`, damit
+// ein fester Wert nicht ueber einen zufaellig gleichnamigen Variablennamen
+// aufgeloest wird (Suchtexte bleiben Suchtexte).
+function isContextPathValue(value) {
+  const normalized = String(value ?? '').trim();
+
+  if (normalized === '' || normalized.includes('://') || /\s/.test(normalized)) {
+    return false;
+  }
+
+  if (/^(person|account|email_account|verificationMailbox|verification_mailbox|veri_account|veri-account)\.[a-z0-9_.-]+$/i.test(normalized)) {
+    return true;
+  }
+
+  return [
+    'new_password',
+    'generated_password',
+    'generated-password',
+    'new_mail_username',
+    'new_mail_address',
+    'verification_code',
+    'verificationCode',
+  ].includes(normalized);
+}
+
 function configuredInputValue(task, context, rawValue) {
   const configuredSource = String(task.value_source || task.valueSource || '').trim().toLowerCase();
 
@@ -832,6 +861,24 @@ function configuredInputValue(task, context, rawValue) {
   }
 
   if (configuredSource === 'fixed') {
+    // Ein fester Wert bleibt grundsaetzlich woertlich. Ausnahme: ein
+    // Person-/Kontextpfad wie `person.email`, `person.password`, `account.email`
+    // oder das Haupt-Verifikationskonto wird aufgeloest — so wie es vor der
+    // Einfuehrung expliziter Wertquellen war. Reine Suchtexte und auch reine
+    // Workflow-Variablennamen (z. B. `google_search_url`) bleiben unangetastet,
+    // weil isContextPathValue() nur an den bekannten Kontext-Wurzeln greift.
+    if (isContextPathValue(rawValue)) {
+      const resolved = resolveString(rawValue, context);
+
+      return {
+        value: resolved,
+        source: 'fixed',
+        workflowVariable: '',
+        status: resolved === rawValue ? 'fixed' : 'fixed_context_resolved',
+        fallbackUsed: false,
+      };
+    }
+
     return {
       value: rawValue,
       source: 'fixed',
@@ -3128,11 +3175,41 @@ function compactModuleLoadError(error) {
  * duerfen nur Module unterhalb von node/workflows adressieren. Reale Pfade
  * werden ebenfalls geprueft, damit ein Symlink die Grenze nicht umgehen kann.
  */
+// Zusaetzlich erlaubte Skript-Wurzeln – ausschliesslich aus explizitem Opt-in in
+// der Runtime (`additionalTaskScriptRoots`). Produktionslaeufe setzen das nie,
+// daher bleibt die Sicherheitsgrenze dort strikt auf node/workflows. Tests nutzen
+// es, um ihre Fixtures unter tests/Fixtures/Workflows vorzuladen.
+function additionalScriptRoots() {
+  const configured = runtime.additionalTaskScriptRoots
+    ?? runtime.additional_task_script_roots
+    ?? [];
+  const list = Array.isArray(configured) ? configured : [configured];
+
+  return list
+    .map((entry) => String(entry ?? '').trim())
+    .filter(Boolean)
+    .map((entry) => path.resolve(basePath, entry));
+}
+
 function preloadNodeTaskModules(runtimeTasks = []) {
   const modulesByTask = new Map();
   const loadResultsByPath = new Map();
   const preloadErrors = [];
   const canonicalScriptsRoot = canonicalPath(workflowScriptsRoot);
+  const extraRoots = additionalScriptRoots();
+  const extraCanonicalRoots = extraRoots
+    .map((root) => {
+      try {
+        return canonicalPath(root);
+      } catch {
+        return '';
+      }
+    })
+    .filter(Boolean);
+  const withinAllowedRoot = (candidatePath) => pathIsWithin(workflowScriptsRoot, candidatePath)
+    || extraRoots.some((root) => pathIsWithin(root, candidatePath));
+  const withinAllowedCanonicalRoot = (candidatePath) => pathIsWithin(canonicalScriptsRoot, candidatePath)
+    || extraCanonicalRoots.some((root) => pathIsWithin(root, candidatePath));
 
   runtimeTasks.forEach((task, taskIndex) => {
     if (!task || task.runner !== 'node') {
@@ -3154,7 +3231,7 @@ function preloadNodeTaskModules(runtimeTasks = []) {
 
     const requestedScriptPath = path.resolve(basePath, configuredScript);
 
-    if (!pathIsWithin(workflowScriptsRoot, requestedScriptPath)) {
+    if (!withinAllowedRoot(requestedScriptPath)) {
       preloadErrors.push(`${errorPrefix}: Konfigurationsfehler: Pfad liegt ausserhalb von node/workflows.`);
 
       return;
@@ -3170,7 +3247,7 @@ function preloadNodeTaskModules(runtimeTasks = []) {
       return;
     }
 
-    if (!pathIsWithin(canonicalScriptsRoot, canonicalScriptPath)) {
+    if (!withinAllowedCanonicalRoot(canonicalScriptPath)) {
       preloadErrors.push(`${errorPrefix}: Konfigurationsfehler: Reales Pfadziel liegt ausserhalb von node/workflows.`);
 
       return;

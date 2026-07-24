@@ -102,6 +102,9 @@ function executeTasks(tasks, workflow = {}) {
     runDirectory: directory,
     livePreviewEnabled: false,
     keepWorkflowBrowserAlive: false,
+    // Test-Fixtures liegen ausserhalb von node/workflows – explizit als
+    // zusaetzliche, vertrauenswuerdige Skript-Wurzel freigeben (Produktion nie).
+    additionalTaskScriptRoots: ['tests/Fixtures/Workflows'],
     workflow,
     tasks,
   };
@@ -203,10 +206,55 @@ test('explicit task value sources resolve variables, fallbacks and fixed values 
   assert.equal(fallbackResult.tasks[0].capturedInput.valueFallbackUsed, true);
   assert.equal(missingResult.tasks[0].capturedInput.value, '');
   assert.equal(missingResult.tasks[0].capturedInput.valueResolutionStatus, 'missing_workflow_variable');
+  // Ein fester Wert, der zufaellig wie ein Variablenname aussieht, bleibt
+  // woertlich – er wird NICHT ueber die gleichnamige Workflow-Variable aufgeloest.
   assert.equal(fixedResult.tasks[0].capturedInput.value, 'google_search_url');
   assert.equal(fixedResult.tasks[0].capturedInput.valueSource, 'fixed');
   assert.equal(legacyDeclaredMissingResult.tasks[0].capturedInput.value, '');
   assert.equal(legacyDeclaredMissingResult.tasks[0].capturedInput.valueSource, 'legacy_auto');
+});
+
+test('a fixed value resolves person/context paths but leaves plain text literal', () => {
+  const personWorkflow = {
+    person: {
+      email: 'bezug@example.test',
+      emailAccount: { email: 'bezug@example.test', password: 'bezug-secret' },
+    },
+  };
+
+  const personEmail = executeTasks([captureInputTask('fixed-person-email', {
+    value_source: 'fixed',
+    value: 'person.email',
+  })], personWorkflow);
+  const personPassword = executeTasks([captureInputTask('fixed-person-password', {
+    value_source: 'fixed',
+    value: 'person.password',
+  })], personWorkflow);
+  const plainText = executeTasks([captureInputTask('fixed-plain', {
+    value_source: 'fixed',
+    value: 'Claude AI',
+  })], personWorkflow);
+
+  // person.email / person.password werden aus der Bezugsperson aufgeloest.
+  assert.equal(personEmail.tasks[0].capturedInput.value, 'bezug@example.test');
+  assert.equal(personEmail.tasks[0].capturedInput.valueSource, 'fixed');
+  assert.equal(personPassword.tasks[0].capturedInput.value, 'bezug-secret');
+  // Ein normaler Suchtext bleibt unveraendert.
+  assert.equal(plainText.tasks[0].capturedInput.value, 'Claude AI');
+});
+
+test('a fixed person.email falls back to the main verification account without a reference person', () => {
+  const verificationWorkflow = {
+    // Keine Bezugsperson, aber ein Haupt-Verifikationskonto.
+    verificationMailbox: { email: 'haupt-verifizierung@example.test' },
+  };
+
+  const result = executeTasks([captureInputTask('fixed-veri-email', {
+    value_source: 'fixed',
+    value: 'person.email',
+  })], verificationWorkflow);
+
+  assert.equal(result.tasks[0].capturedInput.value, 'haupt-verifizierung@example.test');
 });
 
 test('embedded workflow boundary preserves browser windows for parent workflow', () => {

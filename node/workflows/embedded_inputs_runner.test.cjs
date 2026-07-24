@@ -94,6 +94,9 @@ module.exports = { key: 'test.echo_input', run };
     statusPath,
     runDirectory: directory,
     livePreviewEnabled: false,
+    // Die Echo-Fixture liegt im Temp-Lauf-Verzeichnis; als zusaetzliche
+    // Skript-Wurzel freigeben, damit der Preloader sie laden darf.
+    additionalTaskScriptRoots: [directory],
     workflow: {
       workflow_return: '654321',
       workflow_variables: {

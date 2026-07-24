@@ -17,6 +17,30 @@ function boolValue(value, fallback = true) {
   return !['0', 'false', 'nein', 'no', 'off'].includes(normalized);
 }
 
+function activeBrowserWindowUrl(context = {}) {
+  const windows = []
+    .concat(Array.isArray(context.browserWindows) ? context.browserWindows : [])
+    .concat(Array.isArray(context.windows) ? context.windows : []);
+  const activeName = normalizeText(context.activeBrowserWindow || context.browserWindow || '');
+  const httpUrl = (entry) => {
+    const url = normalizeText(entry && typeof entry === 'object' ? entry.url : '');
+
+    return /^https?:\/\//i.test(url) ? url : '';
+  };
+
+  if (activeName !== '') {
+    const match = windows.find((entry) => normalizeText(entry?.key || entry?.name || '') === activeName && httpUrl(entry) !== '');
+
+    if (match) {
+      return httpUrl(match);
+    }
+  }
+
+  const anyMatch = windows.find((entry) => httpUrl(entry) !== '');
+
+  return anyMatch ? httpUrl(anyMatch) : '';
+}
+
 function originFromUrl(value) {
   try {
     return new URL(String(value || '')).origin;
@@ -140,8 +164,16 @@ async function run(context = {}) {
   const page = context.page;
   const input = context.input || {};
   const currentUrl = page && typeof page.url === 'function' ? page.url() : '';
-  const targetUrl = normalizeText(input.url || input.value || currentUrl);
-  const targetDomain = normalizeDomain(input.target_domain || input.targetDomain || input.domain || targetUrl);
+  // about:blank & Co. sind keine echte Seite und liefern keine Domain.
+  const realCurrentUrl = /^https?:\/\//i.test(currentUrl) ? currentUrl : '';
+  // Domain zusaetzlich aus dem aktiven Workflow-Browserfenster ableiten, falls
+  // die Task ohne target_domain und auf einer leeren Seite (about:blank) laeuft
+  // – etwa im segmentierten Einzeltask-/Copilot-Test.
+  const windowUrl = activeBrowserWindowUrl(context);
+  const targetUrl = normalizeText(input.url || input.value || realCurrentUrl || windowUrl);
+  const targetDomain = normalizeDomain(
+    input.target_domain || input.targetDomain || input.domain || targetUrl,
+  );
   const sessionKey = sessionKeyFromDomain(input.session_key || input.sessionKey || targetDomain);
   const clearCookies = boolValue(input.clear_cookies || input.clearCookies, true);
   const clearStorageEnabled = boolValue(input.clear_storage || input.clearStorage, true);
@@ -151,12 +183,17 @@ async function run(context = {}) {
   }
 
   if (targetDomain === '') {
-    return {
-      ok: false,
-      status: 'failed',
-      statusMessage: 'Keine Domain fuer das Loeschen der Session gefunden.',
+    // Kein Ziel und keine geladene Seite: es gibt schlicht nichts zu loeschen.
+    // Das ist kein Fehler, sondern ein No-op – der Workflow laeuft normal weiter,
+    // statt an einer leeren Startseite abzubrechen.
+    return captureTaskPreview(context, {
+      ok: true,
+      status: 'skipped',
+      statusMessage: 'Keine geladene Seite und keine Ziel-Domain – es ist keine Session zum Loeschen vorhanden.',
       finalUrl: currentUrl,
-    };
+      deletedCookieCount: 0,
+      storageCleared: false,
+    });
   }
 
   const client = await createClient(page);
