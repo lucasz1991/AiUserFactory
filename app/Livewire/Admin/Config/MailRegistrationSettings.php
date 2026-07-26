@@ -291,6 +291,7 @@ class MailRegistrationSettings extends Component
                 'password_encrypted' => $this->nullableString($encryptedVerificationPassword),
                 'webmail_url' => $verificationMailboxWebmailUrl,
                 'webmail_session' => is_array($existingMailbox['webmail_session'] ?? null) ? $existingMailbox['webmail_session'] : null,
+                'browser_sessions' => is_array($existingMailbox['browser_sessions'] ?? null) ? $existingMailbox['browser_sessions'] : [],
             ],
             'providers' => [
                 [

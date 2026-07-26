@@ -995,6 +995,158 @@ function taskInput(task, context = {}) {
   return input;
 }
 
+function browserSessionAutomationConfig() {
+  const config = runtime.browserSessionAutomation || runtime.browser_session_automation || {};
+
+  return config && typeof config === 'object' && !Array.isArray(config) ? config : {};
+}
+
+function browserSessionPersistenceFields() {
+  const keys = [
+    'browserSessionFilePath',
+    'browserSessionPayloadHash',
+    'browserSessionSummary',
+    'domain',
+    'domains',
+    'cookieDomains',
+    'sessionKey',
+    'sessionLabel',
+    'cookieCount',
+    'finalUrl',
+    'scriptName',
+    'scriptVersion',
+    'automaticBrowserSession',
+    'browserSessionAutoLoaded',
+    'browser_session_auto_loaded',
+    'browserSessionDeleted',
+    'deletedBrowserSession',
+  ];
+  const fields = {};
+  const actionResult = [...taskResults].reverse().find((result) => (
+    String(result?.browserSessionFilePath || '').trim() !== ''
+    || result?.browserSessionDeleted === true
+    || result?.deletedBrowserSession === true
+  ));
+
+  for (const key of keys) {
+    if (
+      actionResult
+      && Object.prototype.hasOwnProperty.call(actionResult, key)
+      && actionResult[key] !== undefined
+      && actionResult[key] !== null
+    ) {
+      fields[key] = actionResult[key];
+    }
+  }
+
+  const loadResult = [...taskResults].reverse().find((result) => (
+    result?.browserSessionAutoLoaded === true
+    || result?.browser_session_auto_loaded === true
+  ));
+
+  if (loadResult) {
+    fields.browserSessionAutoLoaded = true;
+    fields.browser_session_auto_loaded = true;
+  }
+
+  return fields;
+}
+
+async function saveAutomaticBrowserSession(context = {}) {
+  const config = browserSessionAutomationConfig();
+
+  if (config.enabled === false || config.save_at_end === false || config.saveAtEnd === false) {
+    return null;
+  }
+
+  const existing = [...taskResults].reverse().find((result) => (
+    String(result?.task_key || '') === 'data.persist_browser_session'
+    && result?.ok !== false
+    && !['failed', 'timeout'].includes(String(result?.status || ''))
+  ));
+
+  if (existing) {
+    return existing;
+  }
+
+  const task = {
+    key: '__automatic-browser-session-save',
+    task_key: 'data.persist_browser_session',
+    title: 'Browser-Session automatisch speichern',
+    description: 'Interner Workflow-Abschluss: aktuellen Browserzustand verschluesselt sichern.',
+    kind: 'data',
+    runner: 'node',
+    node_script: 'node/workflows/tasks/data/persist_browser_session.cjs',
+    browser_window: config.browser_window || config.browserWindow || 'main',
+    browser_window_name: config.browser_window || config.browserWindow || 'main',
+    session_key: config.effective_session_key || config.effectiveSessionKey || '',
+    target_domain: config.target_domain || config.targetDomain || '',
+    session_label: config.session_label || config.sessionLabel || '',
+    automatic_browser_session: true,
+    internal: true,
+    timeout_seconds: 30,
+  };
+  const taskStartedAt = now();
+  const taskResult = {
+    ...cleanForJson(task),
+    status: 'running',
+    startedAt: taskStartedAt,
+  };
+  taskResults.push(taskResult);
+
+  try {
+    if (
+      !browser
+      && !page
+      && workflowBrowserRuntime().wsEndpoint === ''
+      && !workflowHasBrowserWindows()
+    ) {
+      Object.assign(taskResult, {
+        ok: true,
+        status: 'skipped',
+        statusMessage: 'Kein aktiver Workflow-Browser vorhanden; es wurde keine automatische Browser-Session gespeichert.',
+        automaticBrowserSession: true,
+        finishedAt: now(),
+      });
+
+      return taskResult;
+    }
+
+    const browserWindow = normalizeBrowserWindowName(task.browser_window_name);
+    const selectedPage = await ensurePage(
+      context,
+      browserWindow,
+      browserWindow === 'main' ? 'Main' : task.title,
+    );
+    context.page = browserWindowsByName.get(browserWindow)?.page || selectedPage || page;
+    context.activeBrowserWindow = browserWindow;
+    context.browserSessionAutomation = config;
+    context.browser_session_automation = config;
+    context.input = taskInput(task, context);
+    context.timeoutMs = Math.max(1000, Number(task.timeout_seconds) * 1000);
+    const taskModule = require('./tasks/data/persist_browser_session.cjs');
+    const result = await taskModule.run(context);
+    const ok = result?.ok !== false && !['failed', 'timeout'].includes(String(result?.status || ''));
+
+    Object.assign(taskResult, {
+      ...cleanForJson(result || {}),
+      status: ok ? String(result?.status || 'success') : String(result?.status || 'failed'),
+      finishedAt: now(),
+    });
+  } catch (error) {
+    Object.assign(taskResult, {
+      ok: true,
+      status: 'skipped',
+      statusMessage: `Automatisches Speichern der Browser-Session wurde uebersprungen: ${error.message}`,
+      automaticBrowserSession: true,
+      saveError: error.message,
+      finishedAt: now(),
+    });
+  }
+
+  return taskResult;
+}
+
 function normalizedTaskReference(value = '') {
   return String(value || '')
     .trim()
@@ -3319,6 +3471,12 @@ async function run() {
   const context = {
     ...workflowContext,
     workflow: workflowContext,
+    browserSessionAutomation: browserSessionAutomationConfig(),
+    browser_session_automation: browserSessionAutomationConfig(),
+    browserSessionAutoLoaded: workflowContext.browserSessionAutoLoaded === true
+      || workflowContext.browser_session_auto_loaded === true,
+    browser_session_auto_loaded: workflowContext.browserSessionAutoLoaded === true
+      || workflowContext.browser_session_auto_loaded === true,
     workflow_variables: initialWorkflowVariables,
     workflowVariables: initialWorkflowVariables,
     preview: {
@@ -3617,6 +3775,14 @@ async function run() {
           workflow_return: workflowReturn,
           workflow_return_ok: workflowReturnOk,
         };
+      }
+
+      if (
+        result.browserSessionAutoLoaded === true
+        || result.browser_session_auto_loaded === true
+      ) {
+        context.browserSessionAutoLoaded = true;
+        context.browser_session_auto_loaded = true;
       }
 
       const generatedPassword = result.generated_password
@@ -3956,6 +4122,8 @@ async function run() {
         break;
       }
 
+      await saveAutomaticBrowserSession(context);
+
       const failedResult = {
         ok: false,
         status,
@@ -3973,6 +4141,7 @@ async function run() {
         workflow_variables: context.workflow_variables || null,
         workflowVariables: context.workflowVariables || null,
         tasks: taskResults,
+        ...browserSessionPersistenceFields(),
         browserWindows: observableBrowserWindows(lastBrowserWindows),
         browserWsEndpoint: browserWsEndpoint(),
         browserIdentity: browserIdentityPayload(),
@@ -4097,6 +4266,8 @@ async function run() {
     taskIndex += 1;
   }
 
+  await saveAutomaticBrowserSession(context);
+
   const finalPreview = await captureTaskPreview(context, {}, true).catch(() => ({}));
 
   if (Array.isArray(finalPreview.browserWindows)) {
@@ -4119,6 +4290,7 @@ async function run() {
     workflow_variables: context.workflow_variables || null,
     workflowVariables: context.workflowVariables || null,
     tasks: taskResults,
+    ...browserSessionPersistenceFields(),
     ...(lastCompletedTaskKey ? {
       completedTaskKey: lastCompletedTaskKey,
       completed_task_key: lastCompletedTaskKey,

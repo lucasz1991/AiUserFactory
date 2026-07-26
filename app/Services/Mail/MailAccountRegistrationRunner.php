@@ -56,6 +56,7 @@ class MailAccountRegistrationRunner
                 'username' => '',
                 'password_encrypted' => null,
                 'webmail_url' => 'https://mail.proton.me',
+                'browser_sessions' => [],
             ],
             'providers' => [
                 [
@@ -729,6 +730,7 @@ class MailAccountRegistrationRunner
             'password_encrypted' => $this->nullableString($mailbox['password_encrypted'] ?? null),
             'webmail_url' => trim((string) ($mailbox['webmail_url'] ?? '')) ?: $this->defaultWebmailUrl($this->normalizeWebmailProvider($mailbox['provider'] ?? 'proton')),
             'webmail_session' => is_array($mailbox['webmail_session'] ?? null) ? $mailbox['webmail_session'] : null,
+            'browser_sessions' => is_array($mailbox['browser_sessions'] ?? null) ? $mailbox['browser_sessions'] : [],
         ];
     }
 

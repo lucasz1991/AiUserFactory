@@ -3,6 +3,7 @@
 namespace App\Services\Workflows\Tasks;
 
 use App\Models\Person;
+use App\Services\Mail\MailAccountRegistrationRunner;
 
 class PersistBrowserSessionTask
 {
@@ -18,13 +19,107 @@ class PersistBrowserSessionTask
             ];
         }
 
+        $metadata = is_array($person->metadata) ? $person->metadata : [];
+        $sessions = is_array($metadata['browser_sessions'] ?? null) ? $metadata['browser_sessions'] : [];
+        [$sessionKey, $session] = $this->sessionRecord($result, $encryptedPayload);
+        $sessions[$sessionKey] = $session;
+
+        $metadata['browser_sessions'] = $sessions;
+        $person->forceFill(['metadata' => $metadata])->save();
+
+        return [
+            'ok' => true,
+            'status' => 'success',
+            'statusMessage' => 'Browser-Session wurde gespeichert.',
+            'sessionKey' => $sessionKey,
+            'domain' => $session['domain'],
+            'session' => collect($session)->except(['payload_encrypted'])->all(),
+        ];
+    }
+
+    public function handleVerificationMailbox(array $result): array
+    {
+        $encryptedPayload = trim((string) ($result['encryptedBrowserSessionPayload'] ?? $result['encryptedSessionPayload'] ?? ''));
+
+        if ($encryptedPayload === '') {
+            return [
+                'ok' => false,
+                'status' => 'failed',
+                'statusMessage' => 'Keine verschluesselte Browser-Session im Ergebnis gefunden.',
+            ];
+        }
+
+        $runner = app(MailAccountRegistrationRunner::class);
+        $settings = $runner->settings();
+        $mailbox = is_array($settings['verification_mailbox'] ?? null) ? $settings['verification_mailbox'] : [];
+        $sessions = is_array($mailbox['browser_sessions'] ?? null) ? $mailbox['browser_sessions'] : [];
+        [$sessionKey, $session] = $this->sessionRecord($result, $encryptedPayload);
+        $sessions[$sessionKey] = $session;
+        $mailbox['browser_sessions'] = $sessions;
+        $settings['verification_mailbox'] = $mailbox;
+        $runner->saveSettings($settings);
+
+        return [
+            'ok' => true,
+            'status' => 'success',
+            'statusMessage' => 'Browser-Session des Haupt-Verifikationskontos wurde gespeichert.',
+            'sessionKey' => $sessionKey,
+            'domain' => $session['domain'],
+            'session' => collect($session)->except(['payload_encrypted'])->all(),
+        ];
+    }
+
+    public function delete(Person $person, array $result): array
+    {
+        $metadata = is_array($person->metadata) ? $person->metadata : [];
+        $sessions = is_array($metadata['browser_sessions'] ?? null) ? $metadata['browser_sessions'] : [];
+        [$sessions, $deletedKeys, $domain, $sessionKey] = $this->deleteFromSessions($sessions, $result);
+
+        $metadata['browser_sessions'] = $sessions;
+        $person->forceFill(['metadata' => $metadata])->save();
+
+        return [
+            'ok' => true,
+            'status' => 'success',
+            'statusMessage' => count($deletedKeys) > 0
+                ? 'Gespeicherte Browser-Session wurde geloescht.'
+                : 'Keine gespeicherte Browser-Session fuer diese Domain gefunden.',
+            'deletedSessionKeys' => $deletedKeys,
+            'domain' => $domain,
+            'sessionKey' => $sessionKey,
+        ];
+    }
+
+    public function deleteVerificationMailbox(array $result): array
+    {
+        $runner = app(MailAccountRegistrationRunner::class);
+        $settings = $runner->settings();
+        $mailbox = is_array($settings['verification_mailbox'] ?? null) ? $settings['verification_mailbox'] : [];
+        $sessions = is_array($mailbox['browser_sessions'] ?? null) ? $mailbox['browser_sessions'] : [];
+        [$sessions, $deletedKeys, $domain, $sessionKey] = $this->deleteFromSessions($sessions, $result);
+        $mailbox['browser_sessions'] = $sessions;
+        $settings['verification_mailbox'] = $mailbox;
+        $runner->saveSettings($settings);
+
+        return [
+            'ok' => true,
+            'status' => 'success',
+            'statusMessage' => count($deletedKeys) > 0
+                ? 'Gespeicherte Browser-Session des Haupt-Verifikationskontos wurde geloescht.'
+                : 'Keine gespeicherte Browser-Session fuer das Haupt-Verifikationskonto gefunden.',
+            'deletedSessionKeys' => $deletedKeys,
+            'domain' => $domain,
+            'sessionKey' => $sessionKey,
+        ];
+    }
+
+    protected function sessionRecord(array $result, string $encryptedPayload): array
+    {
         $summary = $this->summary($result);
         $domain = $this->normalizeDomain($summary['domain'] ?? $result['domain'] ?? $result['sessionDomain'] ?? '');
         $sessionKey = $this->sessionKey($result['sessionKey'] ?? $summary['sessionKey'] ?? $domain);
-        $metadata = is_array($person->metadata) ? $person->metadata : [];
-        $sessions = is_array($metadata['browser_sessions'] ?? null) ? $metadata['browser_sessions'] : [];
 
-        $sessions[$sessionKey] = [
+        return [$sessionKey, [
             'payload_encrypted' => $encryptedPayload,
             'payload_hash' => (string) ($result['browserSessionPayloadHash'] ?? $result['sessionPayloadHash'] ?? ''),
             'session_key' => $sessionKey,
@@ -39,25 +134,11 @@ class PersistBrowserSessionTask
             'script_name' => (string) ($result['scriptName'] ?? 'persist_browser_session.cjs'),
             'script_version' => (int) ($result['scriptVersion'] ?? 1),
             'updated_at' => now()->toIso8601String(),
-        ];
-
-        $metadata['browser_sessions'] = $sessions;
-        $person->forceFill(['metadata' => $metadata])->save();
-
-        return [
-            'ok' => true,
-            'status' => 'success',
-            'statusMessage' => 'Browser-Session wurde gespeichert.',
-            'sessionKey' => $sessionKey,
-            'domain' => $domain,
-            'session' => collect($sessions[$sessionKey])->except(['payload_encrypted'])->all(),
-        ];
+        ]];
     }
 
-    public function delete(Person $person, array $result): array
+    protected function deleteFromSessions(array $sessions, array $result): array
     {
-        $metadata = is_array($person->metadata) ? $person->metadata : [];
-        $sessions = is_array($metadata['browser_sessions'] ?? null) ? $metadata['browser_sessions'] : [];
         $domain = $this->normalizeDomain($result['sessionDomain'] ?? $result['domain'] ?? '');
         $sessionKey = $this->sessionKey($result['sessionKey'] ?? $domain);
         $deletedKeys = [];
@@ -80,19 +161,7 @@ class PersistBrowserSessionTask
             $deletedKeys[] = (string) $key;
         }
 
-        $metadata['browser_sessions'] = $sessions;
-        $person->forceFill(['metadata' => $metadata])->save();
-
-        return [
-            'ok' => true,
-            'status' => 'success',
-            'statusMessage' => count($deletedKeys) > 0
-                ? 'Gespeicherte Browser-Session wurde geloescht.'
-                : 'Keine gespeicherte Browser-Session fuer diese Domain gefunden.',
-            'deletedSessionKeys' => $deletedKeys,
-            'domain' => $domain,
-            'sessionKey' => $sessionKey,
-        ];
+        return [$sessions, $deletedKeys, $domain, $sessionKey];
     }
 
     protected function summary(array $result): array

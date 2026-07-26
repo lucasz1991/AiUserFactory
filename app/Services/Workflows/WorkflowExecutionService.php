@@ -85,6 +85,9 @@ class WorkflowExecutionService
             throw new \InvalidArgumentException('Der Workflow muss vor dem Start gespeichert sein.');
         }
 
+        app(WorkflowBrowserSessionService::class)->migrateLegacyTasks($workflow);
+        $workflow->refresh();
+
         $copilotSessionId = max(0, (int) ($context['workflow_copilot_session_id'] ?? $context['workflowCopilotSessionId'] ?? 0));
         $studioSessionId = max(0, (int) ($context['workflow_studio_session_id'] ?? $context['workflowStudioSessionId'] ?? 0));
         if ($studioSessionId <= 0 && $copilotSessionId > 0 && Schema::hasTable('workflow_studio_sessions')) {
@@ -4299,22 +4302,30 @@ class WorkflowExecutionService
         $person = $this->personForRun($run);
         $encryptedPayload = trim((string) ($result['encryptedBrowserSessionPayload'] ?? ''));
 
-        if (! $person || $encryptedPayload === '') {
+        if ($encryptedPayload === '') {
             return;
         }
 
-        app(PersistBrowserSessionTask::class)->handle($person, $result);
+        if ($person) {
+            app(PersistBrowserSessionTask::class)->handle($person, $result);
+
+            return;
+        }
+
+        app(PersistBrowserSessionTask::class)->handleVerificationMailbox($result);
     }
 
     protected function applyBrowserSessionDeletionResult(WorkflowRun $run, array $result): void
     {
         $person = $this->personForRun($run);
 
-        if (! $person) {
+        if ($person) {
+            app(PersistBrowserSessionTask::class)->delete($person, $result);
+
             return;
         }
 
-        app(PersistBrowserSessionTask::class)->delete($person, $result);
+        app(PersistBrowserSessionTask::class)->deleteVerificationMailbox($result);
     }
 
     protected function finalizeWorkflowWebmailSessionResult(array $result): array
@@ -4529,7 +4540,9 @@ class WorkflowExecutionService
         $webmailSessionPayload = $this->decryptedWebmailSessionPayload($emailAccount);
         $browserSessions = $person
             ? $this->decryptedBrowserSessionPayloads(is_array($person->metadata) ? $person->metadata : [])
-            : [];
+            : (is_array($verificationMailbox['browser_sessions'] ?? null)
+                ? $verificationMailbox['browser_sessions']
+                : []);
         $accountPayload = [
             'provider' => $accountProvider,
             'email' => $accountEmail,
@@ -4674,6 +4687,14 @@ class WorkflowExecutionService
             'veri-account' => $verificationMailbox,
             'browserSessions' => $browserSessions,
             'browser_sessions' => $browserSessions,
+            'browserSessionAutomation' => app(WorkflowBrowserSessionService::class)->runtimeConfig(
+                $run->workflow,
+                $person?->id,
+            ),
+            'browser_session_automation' => app(WorkflowBrowserSessionService::class)->runtimeConfig(
+                $run->workflow,
+                $person?->id,
+            ),
             'person' => $personPayload,
         ];
     }
@@ -4707,6 +4728,16 @@ class WorkflowExecutionService
             'hasWebmailSession' => is_array($webmailSessionPayload),
             'webmailSession' => $webmailSessionPayload,
             'webmail_session' => $webmailSessionPayload,
+            'browserSessions' => $this->decryptedBrowserSessionPayloads([
+                'browser_sessions' => is_array($mailbox['browser_sessions'] ?? null)
+                    ? $mailbox['browser_sessions']
+                    : [],
+            ]),
+            'browser_sessions' => $this->decryptedBrowserSessionPayloads([
+                'browser_sessions' => is_array($mailbox['browser_sessions'] ?? null)
+                    ? $mailbox['browser_sessions']
+                    : [],
+            ]),
         ];
     }
 
@@ -4764,6 +4795,14 @@ class WorkflowExecutionService
     {
         $closedWindow = trim((string) ($result['closedBrowserWindow'] ?? ''));
         $closedBrowser = (bool) ($result['closedBrowser'] ?? false);
+        $autoLoaded = $result['browserSessionAutoLoaded']
+            ?? $result['browser_session_auto_loaded']
+            ?? null;
+
+        if ($autoLoaded !== null) {
+            $context['browser_session_auto_loaded'] = (bool) $autoLoaded;
+            $context['browserSessionAutoLoaded'] = (bool) $autoLoaded;
+        }
 
         if ($closedWindow !== '' && is_array($context['browser_windows'] ?? null)) {
             unset($context['browser_windows'][$closedWindow]);

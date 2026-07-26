@@ -789,6 +789,14 @@
                     active-model="workflowActive"
                     lock-model="workflowLocked"
                     development-model="workflowDevelopment"
+                    browser-session-enabled-model="workflowBrowserSessionEnabled"
+                    browser-session-load-model="workflowBrowserSessionLoadAtStart"
+                    browser-session-save-model="workflowBrowserSessionSaveAtEnd"
+                    browser-session-key-model="workflowBrowserSessionKey"
+                    browser-session-fallback-url-model="workflowBrowserSessionFallbackUrl"
+                    browser-session-target-domain-model="workflowBrowserSessionTargetDomain"
+                    browser-session-window-model="workflowBrowserSessionWindow"
+                    browser-session-label-model="workflowBrowserSessionLabel"
                     lock-help="Gesperrte Workflows bleiben fuer Admins bearbeitbar. Der Sperrstatus wird weiterhin als Warnung angezeigt."
                 />
             </x-slot>

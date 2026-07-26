@@ -48,6 +48,38 @@ class WorkflowBrowserProfileTest extends TestCase
         );
     }
 
+    public function test_automatic_session_load_is_prepended_only_when_enabled_and_not_loaded_yet(): void
+    {
+        $tasks = [[
+            'key' => 'open',
+            'task_key' => 'browser.open_url',
+            'kind' => 'browser',
+        ]];
+        $automation = [
+            'enabled' => true,
+            'load_at_start' => true,
+            'effective_session_key' => 'shared-mail',
+            'fallback_url' => 'https://mail.example.test',
+            'browser_window' => 'webmail',
+        ];
+
+        $decorated = $this->automaticSessionTasks($tasks, $automation, []);
+
+        $this->assertSame('__automatic-browser-session-load', $decorated[0]['key']);
+        $this->assertSame('shared-mail', $decorated[0]['session_key']);
+        $this->assertSame('webmail', $decorated[0]['browser_window']);
+        $this->assertSame('open', $decorated[1]['key']);
+
+        $this->assertSame(
+            $tasks,
+            $this->automaticSessionTasks($tasks, [...$automation, 'load_at_start' => false], []),
+        );
+        $this->assertSame(
+            $tasks,
+            $this->automaticSessionTasks($tasks, $automation, ['browser_session_auto_loaded' => true]),
+        );
+    }
+
     protected function workflowRun(string $uuid, bool $persistent = true): WorkflowRun
     {
         $workflow = new Workflow([
@@ -82,5 +114,18 @@ class WorkflowBrowserProfileTest extends TestCase
         $runner = $reflection->newInstanceWithoutConstructor();
 
         return $reflection->getMethod('workflowBrowserProfileKey')->invoke($runner, $run, $step, $context);
+    }
+
+    protected function automaticSessionTasks(array $tasks, array $automation, array $context): array
+    {
+        $reflection = new ReflectionClass(WorkflowTaskRunner::class);
+        $runner = $reflection->newInstanceWithoutConstructor();
+
+        return $reflection->getMethod('withAutomaticBrowserSessionLoad')->invoke(
+            $runner,
+            $tasks,
+            $automation,
+            $context,
+        );
     }
 }

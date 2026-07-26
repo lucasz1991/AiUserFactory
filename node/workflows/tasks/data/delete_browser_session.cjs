@@ -57,6 +57,42 @@ function sessionKeyFromDomain(domain) {
   return normalizeDomain(domain).replace(/[^a-z0-9.-]+/g, '-').replace(/^-+|-+$/g, '') || 'browser-session';
 }
 
+function normalizeSessionKey(value) {
+  return normalizeText(value).toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+function storedSession(context = {}, requestedKey = '') {
+  const sources = [
+    context.browserSessions,
+    context.browser_sessions,
+    context.workflow?.browserSessions,
+    context.workflow?.browser_sessions,
+    context.person?.browserSessions,
+    context.person?.browser_sessions,
+    context.person?.metadata?.browser_sessions,
+  ];
+
+  for (const source of sources) {
+    if (!source || typeof source !== 'object' || Array.isArray(source)) {
+      continue;
+    }
+
+    for (const [key, session] of Object.entries(source)) {
+      if (!session || typeof session !== 'object' || Array.isArray(session)) {
+        continue;
+      }
+
+      const currentKey = normalizeSessionKey(session.sessionKey || session.session_key || key);
+
+      if (requestedKey !== '' && currentKey === requestedKey) {
+        return session;
+      }
+    }
+  }
+
+  return null;
+}
+
 async function createClient(page) {
   if (!page || typeof page.target !== 'function') {
     return null;
@@ -163,6 +199,7 @@ async function clearStorage(page, client, targetUrl, targetDomain, clearStorageE
 async function run(context = {}) {
   const page = context.page;
   const input = context.input || {};
+  const automation = context.browserSessionAutomation || context.browser_session_automation || {};
   const currentUrl = page && typeof page.url === 'function' ? page.url() : '';
   // about:blank & Co. sind keine echte Seite und liefern keine Domain.
   const realCurrentUrl = /^https?:\/\//i.test(currentUrl) ? currentUrl : '';
@@ -170,11 +207,27 @@ async function run(context = {}) {
   // die Task ohne target_domain und auf einer leeren Seite (about:blank) laeuft
   // – etwa im segmentierten Einzeltask-/Copilot-Test.
   const windowUrl = activeBrowserWindowUrl(context);
-  const targetUrl = normalizeText(input.url || input.value || realCurrentUrl || windowUrl);
-  const targetDomain = normalizeDomain(
-    input.target_domain || input.targetDomain || input.domain || targetUrl,
+  const configuredSessionKey = normalizeSessionKey(
+    input.session_key
+    || input.sessionKey
+    || automation.effective_session_key
+    || automation.effectiveSessionKey
+    || '',
   );
-  const sessionKey = sessionKeyFromDomain(input.session_key || input.sessionKey || targetDomain);
+  const session = storedSession(context, configuredSessionKey);
+  const sessionUrl = normalizeText(session?.finalUrl || session?.final_url || '');
+  const sessionDomain = normalizeText(session?.domain || '');
+  const targetUrl = normalizeText(input.url || input.value || realCurrentUrl || windowUrl || sessionUrl);
+  const targetDomain = normalizeDomain(
+    input.target_domain
+    || input.targetDomain
+    || input.domain
+    || automation.target_domain
+    || automation.targetDomain
+    || targetUrl
+    || sessionDomain,
+  );
+  const sessionKey = configuredSessionKey || (targetDomain !== '' ? sessionKeyFromDomain(targetDomain) : '');
   const clearCookies = boolValue(input.clear_cookies || input.clearCookies, true);
   const clearStorageEnabled = boolValue(input.clear_storage || input.clearStorage, true);
 
@@ -182,7 +235,7 @@ async function run(context = {}) {
     return { ok: false, status: 'failed', statusMessage: 'Kein Page-Handle zum Loeschen der Browser-Session vorhanden.' };
   }
 
-  if (targetDomain === '') {
+  if (targetDomain === '' && sessionKey === '') {
     // Kein Ziel und keine geladene Seite: es gibt schlicht nichts zu loeschen.
     // Das ist kein Fehler, sondern ein No-op – der Workflow laeuft normal weiter,
     // statt an einer leeren Startseite abzubrechen.
@@ -194,6 +247,24 @@ async function run(context = {}) {
       deletedCookieCount: 0,
       storageCleared: false,
     });
+  }
+
+  if (targetDomain === '') {
+    return captureTaskPreview(context, {
+      ok: true,
+      status: 'success',
+      statusMessage: `Gespeicherte Browser-Session ${sessionKey} wurde zum Loeschen markiert.`,
+      browserSessionDeleted: true,
+      deletedBrowserSession: true,
+      sessionKey,
+      finalUrl: currentUrl,
+      deletedCookieCount: 0,
+      storageCleared: false,
+      clearCookies,
+      clearStorage: clearStorageEnabled,
+      scriptName: 'delete_browser_session.cjs',
+      scriptVersion: 1,
+    }, true);
   }
 
   const client = await createClient(page);

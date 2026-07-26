@@ -14,9 +14,17 @@ function sessionKeyFromDomain(domain) {
 async function run(context = {}) {
   const page = context.page;
   const input = context.input || {};
+  const automation = context.browserSessionAutomation || context.browser_session_automation || {};
+  const automatic = input.automatic_browser_session === true || input.automaticBrowserSession === true;
   const finalUrl = page && typeof page.url === 'function' ? page.url() : '';
   const targetDomain = normalizeDomain(input.target_domain || input.targetDomain || input.domain || input.value || finalUrl);
-  const sessionKey = sessionKeyFromDomain(input.session_key || input.sessionKey || targetDomain);
+  const sessionKey = sessionKeyFromDomain(
+    input.session_key
+    || input.sessionKey
+    || automation.effective_session_key
+    || automation.effectiveSessionKey
+    || targetDomain,
+  );
   const label = normalizeText(input.label || input.session_label || input.sessionLabel || sessionKey);
 
   if (!page || typeof page.url !== 'function') {
@@ -24,6 +32,17 @@ async function run(context = {}) {
   }
 
   if (!/^https?:\/\//i.test(finalUrl)) {
+    if (automatic) {
+      return {
+        ok: true,
+        status: 'skipped',
+        statusMessage: 'Keine gueltige Browserseite geoeffnet; es wurde keine automatische Browser-Session gespeichert.',
+        finalUrl,
+        sessionKey,
+        automaticBrowserSession: true,
+      };
+    }
+
     return {
       ok: false,
       status: 'failed',
@@ -51,6 +70,18 @@ async function run(context = {}) {
   );
 
   if (cookieCount === 0 && !hasStorage) {
+    if (automatic) {
+      return {
+        ok: true,
+        status: 'skipped',
+        statusMessage: 'Die geoeffnete Seite enthaelt keine Cookies oder Browser-Storage-Daten; es wurde keine leere Session gespeichert.',
+        finalUrl: session.finalUrl,
+        domain: session.domain,
+        sessionKey,
+        automaticBrowserSession: true,
+      };
+    }
+
     return {
       ok: false,
       status: 'failed',
@@ -89,6 +120,7 @@ async function run(context = {}) {
     finalUrl: session.finalUrl,
     scriptName: 'persist_browser_session.cjs',
     scriptVersion: 1,
+    automaticBrowserSession: automatic,
   };
 
   return captureTaskPreview(context, result, true);

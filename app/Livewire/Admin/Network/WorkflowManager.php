@@ -13,6 +13,7 @@ use App\Models\WorkflowRun;
 use App\Models\WorkflowStep;
 use App\Models\WorkflowStudioSession;
 use App\Services\Workflows\PersonaActionWorkflowCatalog;
+use App\Services\Workflows\WorkflowBrowserSessionService;
 use App\Services\Workflows\WorkflowCopilotLogExportService;
 use App\Services\Workflows\WorkflowCopilotSessionService;
 use App\Services\Workflows\WorkflowExecutionService;
@@ -46,6 +47,22 @@ class WorkflowManager extends Component
     public bool $workflowLocked = false;
 
     public bool $workflowDevelopment = false;
+
+    public bool $workflowBrowserSessionEnabled = true;
+
+    public bool $workflowBrowserSessionLoadAtStart = true;
+
+    public bool $workflowBrowserSessionSaveAtEnd = true;
+
+    public string $workflowBrowserSessionKey = '';
+
+    public string $workflowBrowserSessionFallbackUrl = '';
+
+    public string $workflowBrowserSessionTargetDomain = '';
+
+    public string $workflowBrowserSessionWindow = 'main';
+
+    public string $workflowBrowserSessionLabel = '';
 
     public string $newStepType = WorkflowStep::TYPE_PREPARATION;
 
@@ -258,6 +275,15 @@ class WorkflowManager extends Component
 
     public function mount(Workflow $workflow): void
     {
+        $migration = app(WorkflowBrowserSessionService::class)->migrateLegacyTasks($workflow);
+
+        if ($migration['changed']) {
+            session()->flash(
+                'success',
+                $migration['removed'].' bisherige Browser-Session-Task(s) wurden in die Workflow-Einstellungen übernommen.',
+            );
+        }
+
         $this->selectedWorkflowId = $workflow->id;
         $this->loadWorkflowForm();
         $this->loadCopilotDefaults();
@@ -352,6 +378,14 @@ class WorkflowManager extends Component
             'workflowActive' => ['boolean'],
             'workflowLocked' => ['boolean'],
             'workflowDevelopment' => ['boolean'],
+            'workflowBrowserSessionEnabled' => ['boolean'],
+            'workflowBrowserSessionLoadAtStart' => ['boolean'],
+            'workflowBrowserSessionSaveAtEnd' => ['boolean'],
+            'workflowBrowserSessionKey' => ['nullable', 'string', 'max:120', 'regex:/^[A-Za-z0-9._-]*$/'],
+            'workflowBrowserSessionFallbackUrl' => ['nullable', 'url:http,https', 'max:2000'],
+            'workflowBrowserSessionTargetDomain' => ['nullable', 'string', 'max:255'],
+            'workflowBrowserSessionWindow' => ['required', 'string', 'max:80'],
+            'workflowBrowserSessionLabel' => ['nullable', 'string', 'max:160'],
         ]);
         $settings = is_array($workflow->settings_json) ? $workflow->settings_json : [];
         $developmentEnabled = (bool) $validated['workflowDevelopment'];
@@ -361,6 +395,16 @@ class WorkflowManager extends Component
         $settings['dev_capture_screenshot_before_step'] = $developmentEnabled;
         $settings['dev_capture_screenshot_after_step'] = $developmentEnabled;
         $settings['dev_keep_artifacts'] = $developmentEnabled;
+        $settings[WorkflowBrowserSessionService::SETTINGS_KEY] = app(WorkflowBrowserSessionService::class)->normalize([
+            'enabled' => (bool) $validated['workflowBrowserSessionEnabled'],
+            'load_at_start' => (bool) $validated['workflowBrowserSessionLoadAtStart'],
+            'save_at_end' => (bool) $validated['workflowBrowserSessionSaveAtEnd'],
+            'session_key' => $validated['workflowBrowserSessionKey'] ?? '',
+            'fallback_url' => $validated['workflowBrowserSessionFallbackUrl'] ?? '',
+            'target_domain' => $validated['workflowBrowserSessionTargetDomain'] ?? '',
+            'browser_window' => $validated['workflowBrowserSessionWindow'],
+            'session_label' => $validated['workflowBrowserSessionLabel'] ?? '',
+        ]);
 
         $workflow->forceFill([
             'name' => trim($validated['workflowName']),
@@ -2305,6 +2349,15 @@ class WorkflowManager extends Component
         $this->workflowActive = (bool) ($workflow?->is_active ?? true);
         $this->workflowLocked = (bool) ($workflow?->is_locked ?? false);
         $this->workflowDevelopment = filter_var(data_get($workflow?->settings_json, 'dev_mode', false), FILTER_VALIDATE_BOOL);
+        $browserSession = app(WorkflowBrowserSessionService::class)->settings($workflow);
+        $this->workflowBrowserSessionEnabled = (bool) $browserSession['enabled'];
+        $this->workflowBrowserSessionLoadAtStart = (bool) $browserSession['load_at_start'];
+        $this->workflowBrowserSessionSaveAtEnd = (bool) $browserSession['save_at_end'];
+        $this->workflowBrowserSessionKey = (string) $browserSession['session_key'];
+        $this->workflowBrowserSessionFallbackUrl = (string) $browserSession['fallback_url'];
+        $this->workflowBrowserSessionTargetDomain = (string) $browserSession['target_domain'];
+        $this->workflowBrowserSessionWindow = (string) $browserSession['browser_window'];
+        $this->workflowBrowserSessionLabel = (string) $browserSession['session_label'];
     }
 
     protected function normalizeGroup(string $group): string

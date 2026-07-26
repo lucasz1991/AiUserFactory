@@ -57,6 +57,8 @@ class WorkflowTaskRunner
         if (is_array($transientTask) && $transientTask !== []) {
             $tasks = $this->expandRuntimeTasks([$transientTask], [(int) $step->workflow_id]);
         }
+        $browserSessionAutomation = $this->browserSessionAutomation($run, $runtimeContext);
+        $tasks = $this->withAutomaticBrowserSessionLoad($tasks, $browserSessionAutomation, $runtimeContext);
 
         return [
             'runId' => $runId,
@@ -89,6 +91,8 @@ class WorkflowTaskRunner
             'executionTarget' => 'client_controller',
             'devDebug' => $this->devDebugRuntimeConfig($run, $step, $stepRun, false),
             'observability' => $this->observabilityRuntime($run),
+            'browserSessionAutomation' => $browserSessionAutomation,
+            'browser_session_automation' => $browserSessionAutomation,
         ];
     }
 
@@ -134,6 +138,8 @@ class WorkflowTaskRunner
                 [(int) $step->workflow_id],
             );
         }
+        $browserSessionAutomation = $this->browserSessionAutomation($run, $runtimeContext);
+        $tasks = $this->withAutomaticBrowserSessionLoad($tasks, $browserSessionAutomation, $runtimeContext);
 
         $runtime = [
             'runId' => $runId,
@@ -177,6 +183,8 @@ class WorkflowTaskRunner
             'scriptName' => 'run_step.cjs',
             'devDebug' => $this->devDebugRuntimeConfig($run, $step, $stepRun),
             'observability' => $this->observabilityRuntime($run),
+            'browserSessionAutomation' => $browserSessionAutomation,
+            'browser_session_automation' => $browserSessionAutomation,
         ];
 
         if ($completionCallback = $this->completionCallbackConfig($stepRun, $runId)) {
@@ -548,6 +556,76 @@ class WorkflowTaskRunner
 
         return (bool) ($runtimeContext['studioSingleTask'] ?? $runtimeContext['studio_single_task'] ?? false)
             || (bool) ($runtimeContext['copilotSupervised'] ?? $runtimeContext['copilot_supervised'] ?? false);
+    }
+
+    protected function browserSessionAutomation(WorkflowRun $run, array $runtimeContext): array
+    {
+        $personId = max(0, (int) (
+            $runtimeContext['personId']
+            ?? $runtimeContext['person_id']
+            ?? data_get($runtimeContext, 'person.id')
+            ?? 0
+        )) ?: null;
+
+        return app(WorkflowBrowserSessionService::class)->runtimeConfig(
+            $run->workflow,
+            $personId,
+        );
+    }
+
+    protected function withAutomaticBrowserSessionLoad(
+        array $tasks,
+        array $automation,
+        array $runtimeContext,
+    ): array {
+        if (
+            $tasks === []
+            || ! (bool) ($automation['enabled'] ?? true)
+            || ! (bool) ($automation['load_at_start'] ?? true)
+            || (bool) (
+                $runtimeContext['browserSessionAutoLoaded']
+                ?? $runtimeContext['browser_session_auto_loaded']
+                ?? false
+            )
+        ) {
+            return $tasks;
+        }
+
+        $browserWindow = trim((string) ($automation['browser_window'] ?? 'main')) ?: 'main';
+        $sessionKey = trim((string) ($automation['effective_session_key'] ?? ''));
+        $storedSessions = is_array($runtimeContext['browser_sessions'] ?? null)
+            ? $runtimeContext['browser_sessions']
+            : (is_array($runtimeContext['browserSessions'] ?? null) ? $runtimeContext['browserSessions'] : []);
+        $hasStoredSession = $sessionKey !== '' && is_array($storedSessions[$sessionKey] ?? null);
+        $needsBrowser = collect($tasks)->contains(function (array $task): bool {
+            return in_array((string) ($task['kind'] ?? ''), ['browser', 'input', 'wait'], true)
+                || in_array((string) ($task['task_key'] ?? ''), [
+                    WorkflowBrowserSessionService::SAVE_TASK_KEY,
+                    WorkflowBrowserSessionService::DELETE_TASK_KEY,
+                ], true);
+        });
+
+        if (! $needsBrowser && ! $hasStoredSession && trim((string) ($automation['fallback_url'] ?? '')) === '') {
+            return $tasks;
+        }
+
+        return [[
+            'key' => '__automatic-browser-session-load',
+            'task_key' => WorkflowBrowserSessionService::LOAD_TASK_KEY,
+            'title' => 'Browser-Session automatisch laden',
+            'description' => 'Interner Workflow-Start: Browser-Session laden oder die konfigurierte Fallback-URL öffnen.',
+            'kind' => 'browser',
+            'runner' => 'node',
+            'node_script' => 'node/workflows/tasks/browser/open_browser_session.cjs',
+            'browser_window' => $browserWindow,
+            'browser_window_name' => $browserWindow,
+            'session_key' => $sessionKey,
+            'target_domain' => (string) ($automation['target_domain'] ?? ''),
+            'fallback_url' => (string) ($automation['fallback_url'] ?? ''),
+            'automatic_browser_session' => true,
+            'timeout_seconds' => 120,
+            'internal' => true,
+        ], ...$tasks];
     }
 
     protected function expandRuntimeTasks(

@@ -42,3 +42,25 @@ test('delete session still fails clearly without any page handle', async () => {
   assert.equal(result.ok, false);
   assert.equal(result.status, 'failed');
 });
+
+test('delete session uses the workflow default key and stored domain when no URL is open', async () => {
+  const result = await deleteSession.run({
+    page: fakePage('about:blank'),
+    browserSessionAutomation: {
+      effective_session_key: 'workflow-12-person-null',
+    },
+    browser_sessions: {
+      'workflow-12-person-null': {
+        session_key: 'workflow-12-person-null',
+        domain: 'mail.example.test',
+        final_url: 'https://mail.example.test/inbox',
+      },
+    },
+    input: {},
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.sessionKey, 'workflow-12-person-null');
+  assert.equal(result.domain, 'mail.example.test');
+  assert.equal(result.browserSessionDeleted, true);
+});

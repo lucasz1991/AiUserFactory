@@ -64,6 +64,61 @@ test('saved browser session restores cookies and opens the stored final URL', as
   assert.deepEqual(calls.at(-1), ['goto', 'https://shop.example/account']);
 });
 
+test('missing requested browser session opens only the configured fallback URL', async () => {
+  const calls = [];
+  const page = {
+    currentUrl: 'about:blank',
+    async goto(url) {
+      this.currentUrl = url;
+      calls.push(url);
+    },
+    url() {
+      return this.currentUrl;
+    },
+  };
+  const result = await openBrowserSessionTask.run({
+    page,
+    input: {
+      session_key: 'shared-webmail',
+      fallback_url: 'https://mail.example.test/login',
+      automatic_browser_session: true,
+    },
+    browser_sessions: {
+      unrelated: {
+        session_key: 'unrelated',
+        final_url: 'https://other.example.test/account',
+        cookies: [{ name: 'sid', value: 'wrong', domain: '.other.example.test', path: '/' }],
+      },
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.status, 'skipped');
+  assert.equal(result.sessionFound, false);
+  assert.equal(result.browserSessionAutoLoaded, true);
+  assert.deepEqual(calls, ['https://mail.example.test/login']);
+});
+
+test('automatic browser session load without session or fallback is a non-blocking no-op', async () => {
+  const page = {
+    url: () => 'about:blank',
+    async goto() {
+      throw new Error('goto must not run');
+    },
+  };
+  const result = await openBrowserSessionTask.run({
+    page,
+    input: {
+      session_key: 'workflow-12-person-null',
+      automatic_browser_session: true,
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.status, 'skipped');
+  assert.equal(result.browserSessionAutoLoaded, true);
+});
+
 test('webmail session prepares stored origin storage before opening snake-case final URL', async () => {
   const calls = [];
   const page = {

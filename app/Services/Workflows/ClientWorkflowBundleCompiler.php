@@ -10,6 +10,7 @@ class ClientWorkflowBundleCompiler
     public function __construct(
         protected WorkflowTaskRunner $workflowTasks,
         protected WorkflowRuntimeFingerprint $runtimeFingerprint,
+        protected WorkflowBrowserSessionService $browserSessions,
     ) {}
 
     public function compile(WorkflowRun $run): array
@@ -19,6 +20,11 @@ class ClientWorkflowBundleCompiler
             ->filter(fn (WorkflowStep $step): bool => $step->is_enabled)
             ->values();
         $context = is_array($run->context_json) ? $run->context_json : [];
+        $personId = max(0, (int) ($context['person_id'] ?? 0)) ?: null;
+        $context = array_replace(
+            $context,
+            $this->browserSessions->runtimeContext($run->workflow, $personId),
+        );
         $compiledSteps = [];
         $reasons = [];
 

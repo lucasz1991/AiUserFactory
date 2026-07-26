@@ -395,6 +395,30 @@ class ClientControllerApiController extends Controller
         $workflowService = app(WorkflowExecutionService::class);
 
         foreach ([
+            'remoteWebmailSessionPayload',
+            'remoteBrowserSessionPayload',
+            'browserSessionPayloadHash',
+            'browserSessionSummary',
+            'sessionKey',
+            'sessionLabel',
+            'domain',
+            'domains',
+            'cookieDomains',
+            'cookieCount',
+            'finalUrl',
+            'scriptName',
+            'scriptVersion',
+        ] as $sessionField) {
+            if (! array_key_exists($sessionField, $result)) {
+                $workflowValue = data_get($result, 'workflow.'.$sessionField);
+
+                if ($workflowValue !== null) {
+                    $result[$sessionField] = $workflowValue;
+                }
+            }
+        }
+
+        foreach ([
             'remoteWebmailSessionPayload' => 'encryptedSessionPayload',
             'remoteBrowserSessionPayload' => 'encryptedBrowserSessionPayload',
         ] as $plainKey => $encryptedKey) {

@@ -106,6 +106,8 @@ function selectSession(sessions = [], input = {}) {
     if (keyed) {
       return keyed;
     }
+
+    return null;
   }
 
   if (targetDomain !== '') {
@@ -123,33 +125,66 @@ async function run(context = {}) {
   const page = context.page;
   const input = context.input || {};
   const timeout = Number(input.timeoutMs || context.timeoutMs || 120000);
+  const automatic = input.automatic_browser_session === true || input.automaticBrowserSession === true;
+  const alreadyLoaded = context.browserSessionAutoLoaded === true || context.browser_session_auto_loaded === true;
 
   if (!page || typeof page.goto !== 'function') {
     return { ok: false, status: 'failed', statusMessage: 'Kein Page-Handle zum Laden der Browser-Session vorhanden.' };
   }
 
-  const sessions = browserSessionsFromContext(context);
-  const session = selectSession(sessions, input);
-
-  if (!session) {
+  if (automatic && alreadyLoaded) {
     return {
-      ok: false,
-      status: 'failed',
-      statusMessage: 'Keine gespeicherte Browser-Session gefunden.',
-      requestedSessionKey: input.session_key || input.sessionKey || '',
-      targetDomain: input.target_domain || input.targetDomain || input.domain || '',
+      ok: true,
+      status: 'skipped',
+      statusMessage: 'Die Browser-Session wurde in diesem Workflow-Lauf bereits geladen.',
+      browserSessionAutoLoaded: true,
+      browser_session_auto_loaded: true,
     };
   }
 
+  const sessions = browserSessionsFromContext(context);
+  const session = selectSession(sessions, input);
+  const fallbackUrl = text(input.fallback_url || input.fallbackUrl || input.url || '');
+
+  if (!session) {
+    if (/^https?:\/\//i.test(fallbackUrl)) {
+      await page.goto(fallbackUrl, {
+        waitUntil: input.waitUntil || 'domcontentloaded',
+        timeout,
+      });
+    }
+
+    const actualUrl = typeof page.url === 'function' ? page.url() : fallbackUrl;
+
+    return captureTaskPreview(context, {
+      ok: true,
+      status: 'skipped',
+      statusMessage: /^https?:\/\//i.test(fallbackUrl)
+        ? 'Keine gespeicherte Browser-Session gefunden; die Fallback-URL wurde geoeffnet.'
+        : 'Keine gespeicherte Browser-Session gefunden; der Workflow wird ohne Wiederherstellung fortgesetzt.',
+      requestedSessionKey: input.session_key || input.sessionKey || '',
+      targetDomain: input.target_domain || input.targetDomain || input.domain || '',
+      url: actualUrl,
+      finalUrl: fallbackUrl || actualUrl,
+      fallbackUrl,
+      sessionFound: false,
+      browserSessionAutoLoaded: automatic,
+      browser_session_auto_loaded: automatic,
+    }, true);
+  }
+
   const storedFinalUrl = sessionFinalUrl(session);
-  const targetUrl = text(input.url || input.target_url || input.targetUrl || storedFinalUrl);
+  const targetUrl = /^https?:\/\//i.test(storedFinalUrl) ? storedFinalUrl : fallbackUrl;
 
   if (!/^https?:\/\//i.test(targetUrl)) {
     return {
-      ok: false,
-      status: 'failed',
-      statusMessage: 'Die gespeicherte Browser-Session enthaelt keine gueltige letzte URL.',
+      ok: true,
+      status: 'skipped',
+      statusMessage: 'Die gespeicherte Browser-Session enthaelt keine gueltige letzte URL und es ist keine Fallback-URL konfiguriert.',
       sessionKey: session.sessionKey || session.session_key || '',
+      sessionFound: true,
+      browserSessionAutoLoaded: automatic,
+      browser_session_auto_loaded: automatic,
     };
   }
 
@@ -192,6 +227,10 @@ async function run(context = {}) {
     storageOriginCount: restored.storageOriginCount,
     storageOriginFailureCount: restored.storageOriginFailureCount,
     storageStrategy: restored.storageStrategy,
+    sessionFound: true,
+    fallbackUrl,
+    browserSessionAutoLoaded: automatic,
+    browser_session_auto_loaded: automatic,
   });
 }
 
