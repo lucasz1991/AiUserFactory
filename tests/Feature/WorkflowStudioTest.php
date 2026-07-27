@@ -250,7 +250,7 @@ class WorkflowStudioTest extends TestCase
 
         Livewire::test(WorkflowStudio::class, ['workflow' => $workflow])
             ->assertSee('Workflow-Vorschau und Live-Ausführung', false)
-            ->assertSee('Bis Ende starten')
+            ->assertSee('Bis Ende')
             ->assertSee('Eine Task')
             ->assertSee('Echter Ablauf')
             ->assertSeeHtml('wire:click="stopRun"')
@@ -373,7 +373,7 @@ class WorkflowStudioTest extends TestCase
         $this->actingAs($admin);
 
         Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
-            ->assertSee('Interaktiv testen')
+            ->assertSee('Eine Task nach der anderen')
             ->assertSee('Autonom optimieren')
             ->assertSee('Revisionen')
             ->call('openRevisionHistory')

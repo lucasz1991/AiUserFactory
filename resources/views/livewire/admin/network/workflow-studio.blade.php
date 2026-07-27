@@ -74,14 +74,6 @@
             'lost', 'unreachable' => 'Nicht erreichbar',
             default => 'Bereit',
         };
-        $statusTone = match ($runStatus) {
-            'running', 'queued', 'waiting' => 'border-emerald-200 bg-emerald-50 text-emerald-700',
-            'paused' => 'border-amber-200 bg-amber-50 text-amber-700',
-            'failed', 'timed_out', 'lost', 'unreachable' => 'border-rose-200 bg-rose-50 text-rose-700',
-            'cancelled', 'stop_requested' => 'border-slate-200 bg-slate-100 text-slate-700',
-            'completed' => 'border-cyan-200 bg-cyan-50 text-cyan-700',
-            default => 'border-slate-200 bg-white text-slate-700',
-        };
     @endphp
 
     <header class="ff-studio-header relative z-30 shrink-0 border-b">
@@ -108,7 +100,7 @@
                 <p class="mt-1 text-[10px] text-slate-500">Sitzung #{{ $session->id }} · Revision {{ $workflow->copilot_revision }} · {{ $permissionLabel }}</p>
             </div>
 
-            <div class="ff-segmented-control" aria-label="Testmodus">
+            <div class="ff-segmented-control" role="group" aria-label="Testmodus">
                 <button type="button" wire:click="chooseControlMode('interactive')" aria-pressed="{{ ! $autonomousMode ? 'true' : 'false' }}" @disabled($modeLocked) class="h-8 px-3 text-[11px] font-bold {{ ! $autonomousMode ? 'text-slate-950' : 'text-slate-500 hover:text-slate-800' }} disabled:cursor-not-allowed">
                     Eigenes Testen
                 </button>
@@ -139,7 +131,7 @@
                     </select>
                 </label>
 
-                <div class="ff-run-island shrink-0" aria-label="Test starten">
+                <div class="ff-run-island shrink-0" role="group" aria-label="Test starten">
                     <button type="button" wire:click="runSingleTask" @disabled($isActive || ! $selectedTask) class="ff-run-primary inline-flex h-8 items-center gap-2 px-3 text-[11px] font-bold disabled:cursor-not-allowed disabled:opacity-35">
                         <span aria-hidden="true">▷|</span> Eine Task
                     </button>
@@ -151,9 +143,16 @@
                     </button>
                 </div>
 
-                <div class="ff-segmented-control shrink-0">
+                <div class="ff-segmented-control shrink-0" role="group" aria-label="Task-Navigation">
                     <button type="button" wire:click="selectPreviousTask" aria-label="Vorherige Task auswählen" @disabled(! $hasPreviousTask) class="h-8 px-2.5 text-[11px] font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-30">←</button>
-                    <span class="min-w-12 text-center font-mono text-[10px] font-bold text-slate-400">{{ $selectedTaskNumber ?: '–' }}/{{ $taskCount }}</span>
+                    <span class="min-w-12 text-center font-mono text-[10px] font-bold text-slate-400" role="status" aria-live="polite" aria-atomic="true">
+                        @if($selectedTaskNumber)
+                            <span class="sr-only">Ausgewählte Task {{ $selectedTaskNumber }} von {{ $taskCount }}</span>
+                        @else
+                            <span class="sr-only">Keine Task ausgewählt. {{ $taskCount }} Tasks verfügbar.</span>
+                        @endif
+                        <span aria-hidden="true">{{ $selectedTaskNumber ?: '–' }}/{{ $taskCount }}</span>
+                    </span>
                     <button type="button" wire:click="selectNextTask" aria-label="Nächste Task auswählen" @disabled(! $hasNextTask) class="h-8 px-2.5 text-[11px] font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-30">→</button>
                 </div>
 

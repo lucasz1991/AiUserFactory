@@ -47,7 +47,7 @@
             </main>
         @endif
         @auth
-            @if(request()->routeIs('network.workflows', 'network.workflows.manage'))
+            @if(request()->routeIs('network.workflows', 'network.workflows.manage', 'network.workflows.studio'))
                 @livewire('tools.chatbot')
             @endif
         @endauth

@@ -2,6 +2,7 @@
     data-workflow-copilot-root
     x-data="{
         showChat: false,
+        isDesktopDocked: window.matchMedia('(min-width: 1140px)').matches,
         studioPinned: false,
         studioChatWasOpen: false,
         draft: @entangle('message'),
@@ -39,6 +40,8 @@
         ttsError: '',
         ttsQueue: [],
         ttsPlaying: false,
+        ttsPreparing: false,
+        ttsActiveIndex: null,
         ttsAbortController: null,
         ttsObjectUrls: [],
         ttsCurrentGeneration: 0,
@@ -51,6 +54,8 @@
         messageObserver: null,
         messageResizeObserver: null,
         messageScrollTimers: [],
+        messagesPinned: true,
+        hasUnreadMessages: false,
         workflowImprovements: [],
         improvementRefreshTimer: null,
         livewireComponent() {
@@ -118,7 +123,14 @@
                 localStorage.setItem('workflow-copilot-auto-read', enabled ? '1' : '0');
                 if (!enabled) this.stopSpeaking();
             });
-            this.$watch('speechRate', (rate) => localStorage.setItem('workflow-copilot-speech-rate', String(rate || 1)));
+            this.$watch('speechRate', (rate) => {
+                const normalized = this.clampSpeechRate(rate);
+                if (normalized !== rate) {
+                    this.speechRate = normalized;
+                    return;
+                }
+                localStorage.setItem('workflow-copilot-speech-rate', String(normalized));
+            });
             this.$watch('toolEvents', (events) => this.scheduleToolAlerts(events));
             this.$watch('voiceSupported', (supported) => {
                 if (!supported) this.clearVoiceCaptureState();
@@ -132,7 +144,7 @@
                 window.setTimeout(() => this.syncContext(), 0);
                 this.observeMessages();
                 this.observeAssistantStatusStream();
-                this.scrollMessages(false);
+                this.scrollMessages(false, true);
                 this.queueImprovementHighlights();
             });
         },
@@ -159,16 +171,24 @@
             return stored === null ? Boolean(fallback) : stored === '1';
         },
         readNumber(key, fallback) {
-            const stored = Number(localStorage.getItem(key));
-            return Number.isFinite(stored) && stored > 0 ? stored : Number(fallback || 1);
+            const stored = localStorage.getItem(key);
+            return this.clampSpeechRate(stored === null ? fallback : stored);
         },
-        setOpen(open) {
+        clampSpeechRate(value) {
+            const parsed = Number(value);
+            const normalized = Number.isFinite(parsed) ? parsed : 1;
+            return Math.min(2, Math.max(0.5, normalized));
+        },
+        setOpen(open, focusComposer = false) {
             this.showChat = Boolean(open);
             if (this.showChat) {
                 this.clearVoiceCaptureState();
                 this.syncContext();
-                this.scrollMessages(false);
+                this.scrollMessages(false, true);
                 this.queueImprovementHighlights();
+                if (focusComposer) {
+                    this.$nextTick(() => this.$refs.composer?.focus());
+                }
             } else {
                 this.closeChat();
             }
@@ -182,6 +202,7 @@
             this.showImportPanel = false;
             this.stopSpeaking();
             this.stopListening();
+            this.$nextTick(() => this.$refs.chatLauncher?.focus());
         },
         pinStudioCopilot() {
             if (!this.studioPinned) {
@@ -197,10 +218,11 @@
             this.syncDockLayout();
         },
         desktopDocked() {
-            return window.matchMedia('(min-width: 1280px)').matches;
+            return this.isDesktopDocked;
         },
         syncDockLayout() {
-            document.body.classList.toggle('workflow-copilot-docked', this.showChat && this.desktopDocked());
+            this.isDesktopDocked = window.matchMedia('(min-width: 1140px)').matches;
+            document.body.classList.toggle('workflow-copilot-docked', this.showChat && this.isDesktopDocked);
         },
         busy() {
             return this.submitting || this.isLoading || this.voiceUploading;
@@ -305,24 +327,64 @@
         async syncContext(extra = {}) {
             await this.callLivewire('updatePageContext', this.collectContext(extra));
         },
-        scrollMessages(smooth = true) {
+        messagesNearBottom(threshold = 96) {
+            const messages = this.$refs.messages;
+            if (!messages) return true;
+
+            return messages.scrollHeight - messages.scrollTop - messages.clientHeight <= threshold;
+        },
+        handleMessagesScroll() {
+            this.messagesPinned = this.messagesNearBottom();
+            if (this.messagesPinned) {
+                this.hasUnreadMessages = false;
+            }
+        },
+        jumpToLatest(smooth = true) {
+            this.messagesPinned = true;
+            this.hasUnreadMessages = false;
+            this.scrollMessages(smooth, true);
+        },
+        scrollBehavior(smooth = true) {
+            const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+            return smooth && !reduceMotion ? 'smooth' : 'auto';
+        },
+        scrollMessages(smooth = true, force = false) {
             this.messageScrollTimers.forEach((timer) => window.clearTimeout(timer));
             this.messageScrollTimers = [];
+
+            if (!force && !this.messagesPinned) {
+                return;
+            }
+
             this.$nextTick(() => {
                 const messages = this.$refs.messages;
                 if (!messages) return;
 
-                const pinToBottom = () => {
+                const pinToBottom = (forcePin = false) => {
                     const current = this.$refs.messages;
-                    if (current) current.scrollTop = current.scrollHeight;
+                    if (!current) return;
+                    if (!forcePin && !this.messagesPinned) {
+                        this.hasUnreadMessages = true;
+                        return;
+                    }
+
+                    current.scrollTo({
+                        top: current.scrollHeight,
+                        behavior: this.scrollBehavior(smooth),
+                    });
+                    this.messagesPinned = true;
+                    this.hasUnreadMessages = false;
                 };
 
-                pinToBottom();
+                pinToBottom(force);
                 window.requestAnimationFrame(() => {
-                    pinToBottom();
-                    window.requestAnimationFrame(pinToBottom);
+                    pinToBottom(false);
+                    window.requestAnimationFrame(() => pinToBottom(false));
                 });
-                this.messageScrollTimers = [40, 100, 250, 500, 1000].map((delay) => window.setTimeout(pinToBottom, delay));
+                this.messageScrollTimers = [40, 100, 250, 500, 1000].map((delay) =>
+                    window.setTimeout(() => pinToBottom(false), delay)
+                );
             });
         },
         observeMessages() {
@@ -331,7 +393,13 @@
 
             if (window.MutationObserver) {
                 this.messageObserver?.disconnect();
-                this.messageObserver = new MutationObserver(() => this.scrollMessages(false));
+                this.messageObserver = new MutationObserver(() => {
+                    if (!this.messagesPinned) {
+                        this.hasUnreadMessages = true;
+                        return;
+                    }
+                    this.scrollMessages(false);
+                });
                 this.messageObserver.observe(messages, {
                     childList: true,
                     subtree: true,
@@ -342,7 +410,12 @@
 
             if (window.ResizeObserver) {
                 this.messageResizeObserver?.disconnect();
-                this.messageResizeObserver = new ResizeObserver(() => this.scrollMessages(false));
+                this.messageResizeObserver = new ResizeObserver(() => {
+                    if (!this.messagesPinned) {
+                        return;
+                    }
+                    this.scrollMessages(false);
+                });
                 this.messageResizeObserver.observe(messages);
 
                 if (this.$refs.composer) {
@@ -368,7 +441,7 @@
             this.startAssistantActivity('Kontext wird geprueft und die Anfrage vorbereitet.');
             this.draft = '';
             this.resizeComposer();
-            this.scrollMessages();
+            this.scrollMessages(true, true);
 
             try {
                 await this.syncContext();
@@ -388,7 +461,7 @@
             this.pendingLabel = prompt;
             this.startAssistantActivity('Kontext wird geprueft und die Anfrage vorbereitet.');
             this.draft = '';
-            this.scrollMessages();
+            this.scrollMessages(true, true);
 
             try {
                 await this.syncContext();
@@ -424,7 +497,7 @@
             this.submitting = true;
             this.pendingLabel = option?.prompt || option?.label || 'Auswahl wird gesendet.';
             this.startAssistantActivity('Die ausgewaehlte Antwort wird verarbeitet.');
-            this.scrollMessages();
+            this.scrollMessages(true, true);
 
             try {
                 await this.syncContext();
@@ -534,6 +607,9 @@
 
             this.playNextTts();
         },
+        ttsActive() {
+            return this.ttsPreparing || this.ttsPlaying || this.speaking || this.ttsQueue.length > 0;
+        },
         async playNextTts() {
             if (this.ttsPlaying || !this.ttsQueue.length) return;
 
@@ -545,6 +621,8 @@
             }
 
             this.ttsPlaying = true;
+            this.ttsPreparing = true;
+            this.ttsActiveIndex = item.index;
             this.speaking = false;
             this.speakingIndex = null;
 
@@ -557,10 +635,12 @@
                 }
             } finally {
                 this.ttsPlaying = false;
+                this.ttsPreparing = false;
 
                 if (this.ttsQueue.length) {
                     this.playNextTts();
                 } else {
+                    this.ttsActiveIndex = null;
                     this.speaking = false;
                     this.speakingIndex = null;
                 }
@@ -581,7 +661,7 @@
                 signal: this.ttsAbortController.signal,
                 body: JSON.stringify({
                     text,
-                    speed: Number(this.speechRate || 1),
+                    speed: this.clampSpeechRate(this.speechRate),
                 }),
             };
         },
@@ -607,22 +687,33 @@
                     this.speaking = false;
                     this.speakingIndex = null;
                 };
+                const markPreparing = () => {
+                    markNotSpeaking();
+                    this.ttsPreparing = true;
+                };
 
                 audio.onplaying = () => {
+                    this.ttsPreparing = false;
                     this.speaking = true;
                     this.speakingIndex = index;
                 };
-                audio.onwaiting = markNotSpeaking;
-                audio.onpause = markNotSpeaking;
+                audio.onwaiting = markPreparing;
+                audio.onpause = () => {
+                    this.ttsPreparing = false;
+                    markNotSpeaking();
+                };
                 audio.onended = () => {
+                    this.ttsPreparing = false;
                     markNotSpeaking();
                     resolve();
                 };
                 audio.onerror = () => {
+                    this.ttsPreparing = false;
                     markNotSpeaking();
                     reject(new Error('Audio konnte nicht abgespielt werden.'));
                 };
                 audio.play().catch((error) => {
+                    this.ttsPreparing = false;
                     markNotSpeaking();
                     reject(error);
                 });
@@ -677,6 +768,8 @@
             this.ttsObjectUrls.forEach((url) => URL.revokeObjectURL(url));
             this.ttsObjectUrls = [];
             this.ttsPlaying = false;
+            this.ttsPreparing = false;
+            this.ttsActiveIndex = null;
             this.speaking = false;
             this.speakingIndex = null;
         },
@@ -1131,7 +1224,7 @@
             if (!improvement.highlightable) return;
 
             const target = this.improvementTarget(improvement);
-            target?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+            target?.scrollIntoView({ behavior: this.scrollBehavior(), block: 'center', inline: 'center' });
             this.closeChat();
             window.setTimeout(() => {
                 window.dispatchEvent(new CustomEvent('assistant-open-workflow-improvement', {
@@ -1184,7 +1277,7 @@
 
             document.querySelectorAll('.assistant-highlight').forEach((node) => node.classList.remove('assistant-highlight'));
             target.classList.add('assistant-highlight');
-            target.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+            target.scrollIntoView({ behavior: this.scrollBehavior(), block: 'center', inline: 'center' });
             window.setTimeout(() => target.classList.remove('assistant-highlight'), 5500);
         },
         refreshWorkflowPage() {
@@ -1255,7 +1348,7 @@
             outline-color: rgb(14 165 233);
             box-shadow: 0 0 0 7px rgba(14, 165, 233, .15), 0 18px 38px -22px rgba(3, 105, 161, .5);
         }
-        @media (min-width: 1280px) {
+        @media (min-width: 1140px) {
             body.workflow-copilot-docked [data-workflow-test-workbench],
             body.workflow-copilot-docked [data-workflow-studio-shell][data-workflow-studio-mode="standalone"] {
                 right: 30rem !important;
@@ -1286,14 +1379,16 @@
     @if($assistantEnabled)
         <button
             type="button"
+            x-ref="chatLauncher"
             x-show.important="!showChat"
             x-cloak
-            x-on:click.stop.prevent="setOpen(true)"
-            class="fixed bottom-5 right-5 z-[80] flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-slate-950 via-cyan-800 to-emerald-700 text-sm font-black text-white shadow-2xl shadow-cyan-950/25 ring-1 ring-white/30 transition hover:-translate-y-0.5 hover:shadow-cyan-700/30"
+            x-on:click.stop.prevent="setOpen(true, true)"
+            class="ff-copilot-launcher fixed bottom-5 right-5 z-[80] flex h-14 items-center text-sm font-black"
             aria-label="AI Workflow Copilot oeffnen"
             title="AI Workflow Copilot oeffnen"
         >
-            AI
+            <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/10">AI</span>
+            <span class="ff-copilot-launcher-label text-xs font-bold">Copilot öffnen</span>
             <span class="absolute -right-0.5 -top-0.5 h-3.5 w-3.5 rounded-full border-2 border-white bg-emerald-400"></span>
         </button>
 
@@ -1313,16 +1408,17 @@
                     x-transition:leave="transition ease-in duration-150"
                     x-transition:leave-start="translate-x-0 opacity-100"
                     x-transition:leave-end="translate-x-full opacity-0"
-                    class="fixed inset-y-0 right-0 z-[90] flex h-dvh w-[min(480px,calc(100vw-1rem))] flex-col overflow-hidden border-l border-white/80 bg-white shadow-[-24px_0_70px_-28px_rgba(15,23,42,.55)] ring-1 ring-slate-900/5 xl:w-[30rem]"
-                    x-bind:role="desktopDocked() ? 'complementary' : 'dialog'"
-                    x-bind:aria-modal="desktopDocked() ? null : 'true'"
-                    aria-label="AI Workflow Copilot"
+                    class="ff-copilot-panel fixed inset-y-0 right-0 z-[90] flex h-dvh w-[min(480px,calc(100vw-1rem))] flex-col overflow-hidden border-l bg-white ring-1 ring-slate-900/5 xl:w-[30rem]"
+                    x-bind:role="isDesktopDocked ? 'complementary' : 'dialog'"
+                    x-bind:aria-modal="isDesktopDocked ? null : 'true'"
+                    aria-labelledby="workflow-copilot-title"
+                    x-trap.inert.noscroll="showChat && !isDesktopDocked"
                     x-on:click.stop
                 >
-            <header class="relative shrink-0 overflow-visible border-b border-cyan-300/30 bg-gradient-to-r from-slate-950 via-cyan-900 to-emerald-800 px-4 py-3 text-white">
+            <header class="ff-copilot-header relative shrink-0 overflow-visible border-b px-4 py-3 text-white">
                 <div class="relative flex items-center justify-between gap-3">
                     <div class="min-w-0">
-                        <div class="truncate text-sm font-black">{{ $assistantName }}</div>
+                        <div id="workflow-copilot-title" class="truncate text-sm font-black">{{ $assistantName }}</div>
                         <div class="mt-0.5 truncate text-[11px] font-semibold uppercase tracking-[0.12em] text-cyan-100">Workflow-Seite aktiv</div>
                     </div>
 
@@ -1339,6 +1435,7 @@
                                     type="button"
                                     x-bind:aria-expanded="open"
                                     class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/25 bg-white/10 text-white transition hover:bg-white/20"
+                                    aria-label="Sprach-Einstellungen öffnen"
                                     title="Sprach-Einstellungen"
                                 >
                                     <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -1373,16 +1470,17 @@
                                         <button
                                             type="button"
                                             x-on:click="speak(speechOutputTestText())"
-                                            x-bind:disabled="!speechSupported"
+                                            x-bind:disabled="!speechSupported || ttsActive()"
                                             class="inline-flex flex-1 items-center justify-center rounded-lg border border-slate-300 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
                                         >
                                             Audio testen
                                         </button>
-                                        <template x-if="speaking">
+                                        <template x-if="ttsActive()">
                                             <button
                                                 type="button"
                                                 x-on:click="stopSpeaking()"
                                                 class="inline-flex items-center justify-center rounded-lg bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700"
+                                                aria-label="Audioausgabe stoppen"
                                             >
                                                 Stop
                                             </button>
@@ -1397,13 +1495,11 @@
                                             Wird gerade vorgelesen.
                                         </div>
                                     </template>
-
-                                    <div
-                                        x-show="ttsError"
-                                        x-cloak
-                                        class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs leading-5 text-rose-800"
-                                        x-text="ttsError"
-                                    ></div>
+                                    <template x-if="ttsPreparing && !speaking">
+                                        <div class="ff-audio-state px-3 py-2 text-xs font-bold">
+                                            Audio wird vorbereitet.
+                                        </div>
+                                    </template>
                                 </div>
                             </x-slot>
                         </x-ui.dropdown.anchor-dropdown>
@@ -1413,6 +1509,7 @@
                             wire:click="clearChat"
                             x-on:click="stopSpeaking(); stopListening(); selectedChatOptions = {}"
                             class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/25 bg-white/10 text-white transition hover:bg-white/20"
+                            aria-label="Chat leeren"
                             title="Chat leeren"
                         >
                             <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -1423,6 +1520,7 @@
                             type="button"
                             x-on:click.stop.prevent="closeChat()"
                             class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/25 bg-white/10 text-white transition hover:bg-white/20"
+                            aria-label="Copilot schließen"
                             title="Schliessen"
                         >
                             <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -1480,7 +1578,13 @@
 
                 <div
                     x-ref="messages"
-                    class="scroll-container min-h-0 flex-1 space-y-3 overflow-y-auto bg-slate-50 px-4 py-4"
+                    x-on:scroll.passive="handleMessagesScroll()"
+                    class="ff-copilot-messages scroll-container min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4"
+                    role="log"
+                    aria-label="Unterhaltung mit dem Workflow Copilot"
+                    aria-live="polite"
+                    aria-relevant="additions text"
+                    x-bind:aria-busy="busy() ? 'true' : 'false'"
                 >
                     @if($activeCopilotSessionId && $copilotStatus !== [])
                         @php
@@ -1501,7 +1605,7 @@
                         @endphp
                         <section
                             wire:key="workflow-copilot-session-status-{{ $activeCopilotSessionId }}"
-                            class="overflow-hidden rounded-2xl border bg-white shadow-lg {{ $copilotSucceeded ? 'border-emerald-200 shadow-emerald-100/60' : ($copilotNeedsAttention ? 'border-rose-200 shadow-rose-100/60' : 'border-cyan-200 shadow-cyan-100/50') }}"
+                            class="ff-run-preview-card overflow-hidden rounded-2xl border bg-white shadow-lg {{ $copilotSucceeded ? 'border-emerald-200 shadow-emerald-100/60' : ($copilotNeedsAttention ? 'border-rose-200 shadow-rose-100/60' : 'border-cyan-200 shadow-cyan-100/50') }}"
                             aria-live="polite"
                         >
                             <div class="px-4 py-3 text-white {{ $copilotSucceeded ? 'bg-gradient-to-r from-emerald-950 via-emerald-800 to-teal-700' : ($copilotNeedsAttention ? 'bg-gradient-to-r from-slate-950 via-rose-950 to-rose-800' : 'bg-gradient-to-r from-slate-950 via-cyan-900 to-emerald-800') }}">
@@ -1752,16 +1856,16 @@
                             $tone = $item['tone'] ?? 'neutral';
                             $isUser = $role === 'user';
                             $bubbleClass = $isUser
-                                ? 'ml-auto border-slate-300 bg-white text-slate-900'
+                                ? 'ff-chat-bubble--user ml-auto'
                                 : ($tone === 'error'
                                     ? 'mr-auto border-rose-200 bg-rose-50 text-rose-950'
                                     : ($tone === 'success'
                                         ? 'mr-auto border-emerald-200 bg-emerald-50 text-emerald-950'
-                                        : 'mr-auto border-cyan-200 bg-white text-slate-800'));
+                                        : 'ff-chat-bubble--assistant mr-auto text-slate-800'));
                         @endphp
-                        <div class="max-w-[92%] rounded-xl border px-4 py-3 text-sm leading-6 shadow-sm {{ $bubbleClass }}">
+                        <div class="ff-chat-bubble max-w-[92%] rounded-xl border px-4 py-3 text-sm leading-6 shadow-sm {{ $bubbleClass }}">
                             <div class="mb-1 flex items-center justify-between gap-3">
-                                <strong class="text-xs uppercase tracking-[.14em] {{ $isUser ? 'text-slate-500' : 'text-cyan-700' }}">
+                                <strong class="text-xs uppercase tracking-[.14em] {{ $isUser ? 'text-cyan-100' : 'text-cyan-700' }}">
                                     {{ $isUser ? 'Du' : $assistantName }}
                                 </strong>
                                 <div class="flex items-center gap-2">
@@ -1770,20 +1874,21 @@
                                             type="button"
                                             x-show="speechSupported"
                                             x-cloak
-                                            x-on:click="speaking && speakingIndex === {{ $index }} ? stopSpeaking() : speak(@js($item['content'] ?? ''), {{ $index }})"
+                                            x-on:click="ttsActive() && ttsActiveIndex === {{ $index }} ? stopSpeaking() : speak(@js($item['content'] ?? ''), {{ $index }})"
                                             class="inline-flex h-6 w-6 items-center justify-center rounded-md text-slate-400 transition hover:bg-slate-100 hover:text-cyan-700"
-                                            x-bind:title="speaking && speakingIndex === {{ $index }} ? 'Vorlesen stoppen' : 'Antwort vorlesen'"
+                                            x-bind:aria-label="ttsActive() && ttsActiveIndex === {{ $index }} ? 'Vorlesen stoppen' : 'Antwort vorlesen'"
+                                            x-bind:title="ttsActive() && ttsActiveIndex === {{ $index }} ? 'Vorlesen stoppen' : 'Antwort vorlesen'"
                                         >
-                                            <svg x-show="!(speaking && speakingIndex === {{ $index }})" class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                            <svg x-show="!(ttsActive() && ttsActiveIndex === {{ $index }})" class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                                                 <path d="M5 9v6h4l5 4V5L9 9H5Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
                                                 <path d="M17 9a4 4 0 0 1 0 6M19.5 6.5a7.5 7.5 0 0 1 0 11" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
                                             </svg>
-                                            <svg x-show="speaking && speakingIndex === {{ $index }}" class="h-3.5 w-3.5 text-rose-600" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                            <svg x-show="ttsActive() && ttsActiveIndex === {{ $index }}" class="h-3.5 w-3.5 text-rose-600" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                                                 <rect x="6" y="6" width="12" height="12" rx="2"/>
                                             </svg>
                                         </button>
                                     @endif
-                                    <span class="text-[11px] text-slate-400">{{ $item['time'] ?? '' }}</span>
+                                    <span class="text-[11px] {{ $isUser ? 'text-white/70' : 'text-slate-400' }}">{{ $item['time'] ?? '' }}</span>
                                 </div>
                             </div>
                             <div class="whitespace-pre-line break-words">{!! nl2br(e($item['content'] ?? '')) !!}</div>
@@ -1873,7 +1978,7 @@
                         </div>
                     @empty
                         <div class="space-y-3.5">
-                            <div class="relative overflow-hidden rounded-2xl border border-cyan-100 bg-white/90 p-4 shadow-sm backdrop-blur">
+                            <div class="ff-chat-intro relative overflow-hidden rounded-2xl border p-4 backdrop-blur">
                                 <div class="relative flex items-start gap-3">
                                     <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan-600 to-emerald-600 text-white shadow-lg shadow-cyan-200/60">
                                         <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -1888,33 +1993,33 @@
                                 </div>
                             </div>
 
-                            <div class="grid grid-cols-2 gap-2.5">
-                                <button type="button" x-on:click="quick('Analysiere bitte den letzten Workflow-Lauf und nenne Fehlerursache, betroffene Liste/Task und naechste Reparatur.')" class="group rounded-2xl border border-sky-200/80 bg-white/90 p-3.5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-sky-300 hover:bg-sky-50 hover:shadow-md">
-                                    <span class="flex h-9 w-9 items-center justify-center rounded-xl bg-sky-100 text-sky-700 transition group-hover:bg-sky-600 group-hover:text-white">
+                            <div class="ff-quick-grid">
+                                <button type="button" x-on:click="quick('Analysiere bitte den letzten Workflow-Lauf und nenne Fehlerursache, betroffene Liste/Task und naechste Reparatur.')" class="ff-quick-command group border p-3.5 text-left">
+                                    <span class="ff-quick-icon flex h-9 w-9 items-center justify-center rounded-xl transition">
                                         <svg class="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 17 9 12l3 3 7-8M15 7h4v4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
                                     </span>
                                     <span class="mt-3 block text-xs font-black text-slate-900">Letzten Run</span>
                                     <span class="mt-1 block text-[10px] leading-4 text-slate-500">Fehlerursache und nächste Reparatur finden.</span>
                                 </button>
 
-                                <button type="button" x-on:click="quick('Zeige mir verfuegbare Variablen und aktuelle Werte fuer diesen Workflow.')" class="group rounded-2xl border border-emerald-200/80 bg-white/90 p-3.5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-emerald-300 hover:bg-emerald-50 hover:shadow-md">
-                                    <span class="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700 transition group-hover:bg-emerald-600 group-hover:text-white">
+                                <button type="button" x-on:click="quick('Zeige mir verfuegbare Variablen und aktuelle Werte fuer diesen Workflow.')" class="ff-quick-command group border p-3.5 text-left">
+                                    <span class="ff-quick-icon flex h-9 w-9 items-center justify-center rounded-xl transition">
                                         <svg class="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
                                     </span>
                                     <span class="mt-3 block text-xs font-black text-slate-900">Variablen</span>
                                     <span class="mt-1 block text-[10px] leading-4 text-slate-500">Kontextwerte und Step-Rückgaben sehen.</span>
                                 </button>
 
-                                <button type="button" x-on:click="quick('Hilf mir, einen neuen Workflow zu planen. Frage zuerst nach Ziel, Webseiten, benoetigten Listen, Tasks und eingebetteten Workflows.')" class="group rounded-2xl border border-violet-200/80 bg-white/90 p-3.5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-violet-300 hover:bg-violet-50 hover:shadow-md">
-                                    <span class="flex h-9 w-9 items-center justify-center rounded-xl bg-violet-100 text-violet-700 transition group-hover:bg-violet-600 group-hover:text-white">
+                                <button type="button" x-on:click="quick('Hilf mir, einen neuen Workflow zu planen. Frage zuerst nach Ziel, Webseiten, benoetigten Listen, Tasks und eingebetteten Workflows.')" class="ff-quick-command group border p-3.5 text-left">
+                                    <span class="ff-quick-icon flex h-9 w-9 items-center justify-center rounded-xl transition">
                                         <svg class="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
                                     </span>
                                     <span class="mt-3 block text-xs font-black text-slate-900">Neu planen</span>
                                     <span class="mt-1 block text-[10px] leading-4 text-slate-500">Workflow, Listen und Tasks strukturieren.</span>
                                 </button>
 
-                                <button type="button" x-on:click="quick('Welche Assistant-Tools stehen dir fuer Workflow-Analyse, Imports, Testlauf, Navigation und Highlighting zur Verfuegung?')" class="group rounded-2xl border border-amber-200/80 bg-white/90 p-3.5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-amber-300 hover:bg-amber-50 hover:shadow-md">
-                                    <span class="flex h-9 w-9 items-center justify-center rounded-xl bg-amber-100 text-amber-700 transition group-hover:bg-amber-500 group-hover:text-white">
+                                <button type="button" x-on:click="quick('Welche Assistant-Tools stehen dir fuer Workflow-Analyse, Imports, Testlauf, Navigation und Highlighting zur Verfuegung?')" class="ff-quick-command group border p-3.5 text-left">
+                                    <span class="ff-quick-icon flex h-9 w-9 items-center justify-center rounded-xl transition">
                                         <svg class="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3 14.2 8.8 20 11l-5.8 2.2L12 19l-2.2-5.8L4 11l5.8-2.2L12 3Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
                                     </span>
                                     <span class="mt-3 block text-xs font-black text-slate-900">Tools</span>
@@ -1930,7 +2035,7 @@
                         x-transition:enter="transition ease-out duration-150"
                         x-transition:enter-start="translate-y-2 opacity-0"
                         x-transition:enter-end="translate-y-0 opacity-100"
-                        class="ml-auto max-w-[88%] rounded-2xl rounded-br-md bg-gradient-to-br from-slate-950 to-cyan-800 px-4 py-3 text-sm leading-6 text-white shadow-md shadow-cyan-200/60"
+                        class="ff-chat-bubble ff-chat-bubble--user ml-auto max-w-[88%] border px-4 py-3 text-sm leading-6"
                     >
                         <div class="mb-1 flex items-center justify-between gap-3">
                             <strong class="text-[10px] uppercase tracking-[.14em] text-cyan-100">Du</strong>
@@ -1948,7 +2053,7 @@
                         x-transition:enter="transition ease-out duration-200"
                         x-transition:enter-start="translate-y-2 opacity-0"
                         x-transition:enter-end="translate-y-0 opacity-100"
-                        class="max-w-[94%] overflow-hidden rounded-2xl border border-cyan-200/80 bg-white/95 px-4 py-3.5 text-sm text-slate-600 shadow-lg shadow-cyan-100/50 backdrop-blur"
+                        class="ff-chat-bubble ff-chat-bubble--assistant max-w-[94%] overflow-hidden border px-4 py-3.5 text-sm text-slate-600 backdrop-blur"
                         role="status"
                         aria-live="polite"
                     >
@@ -1978,6 +2083,21 @@
                         <p wire:stream="assistant-response-stream" class="mt-3 whitespace-pre-line border-t border-cyan-100 pt-3 text-sm leading-6 text-slate-700 [&:empty]:hidden"></p>
                     </div>
                 </div>
+
+                <button
+                    type="button"
+                    x-show="hasUnreadMessages"
+                    x-cloak
+                    x-transition.opacity
+                    x-on:click="jumpToLatest()"
+                    class="ff-jump-latest"
+                    aria-label="Zur neuesten Chat-Aktivität springen"
+                >
+                    <span>Neueste Aktivität</span>
+                    <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <path d="m7 10 5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                </button>
 
                 <template x-if="assistantActivityRunning() || copilotActivityRunning()">
                     <div
@@ -2041,16 +2161,38 @@
                     </div>
                 </template>
 
-                <footer class="shrink-0 border-t border-slate-200 bg-white p-3">
-                    <form x-on:submit.prevent="send()" class="overflow-hidden rounded-2xl border bg-white shadow-sm transition focus-within:border-cyan-400 focus-within:ring-4 focus-within:ring-cyan-100" :class="voiceSupported && (voiceCaptureActive || voiceUploading) ? 'border-rose-300 ring-4 ring-rose-100' : 'border-slate-300'">
+                <footer class="shrink-0 space-y-2 border-t border-slate-200 bg-white p-3">
+                    <template x-if="ttsPreparing && !speaking">
+                        <div class="ff-audio-state flex items-center justify-between gap-3 px-3 py-2 text-xs font-bold" role="status">
+                            <span class="inline-flex min-w-0 items-center gap-2">
+                                <span class="h-2 w-2 shrink-0 animate-pulse rounded-full bg-blue-600" aria-hidden="true"></span>
+                                Audio wird vorbereitet.
+                            </span>
+                            <button type="button" x-on:click="stopSpeaking()" class="shrink-0 underline underline-offset-2" aria-label="Vorbereitung der Audioausgabe abbrechen">
+                                Abbrechen
+                            </button>
+                        </div>
+                    </template>
+                    <div
+                        x-show="ttsError"
+                        x-cloak
+                        class="flex items-start justify-between gap-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs leading-5 text-rose-800"
+                        role="alert"
+                    >
+                        <span class="min-w-0 flex-1" x-text="ttsError"></span>
+                        <button type="button" x-on:click="ttsError = ''" class="shrink-0 font-bold" aria-label="Audiohinweis schließen">&times;</button>
+                    </div>
+                    <form x-on:submit.prevent="send()" class="ff-composer overflow-hidden border bg-white" :class="voiceSupported && (voiceCaptureActive || voiceUploading) ? 'border-rose-300 ring-4 ring-rose-100' : 'border-slate-300'">
                         <div
+                            id="workflow-copilot-import-panel"
                             x-show="showImportPanel"
                             x-cloak
                             x-collapse.duration.180ms
                             class="border-b border-slate-100 bg-slate-50/90 px-3 py-2"
                         >
                             <div class="flex items-center gap-2">
-                                <input type="file" wire:model="workflowImportFile" accept=".csv,.zip" class="block min-w-0 flex-1 text-xs text-slate-600 file:mr-2 file:rounded-lg file:border-0 file:bg-slate-900 file:px-2.5 file:py-1.5 file:text-xs file:font-semibold file:text-white hover:file:bg-cyan-700">
+                                <label for="workflow-copilot-import-file" class="sr-only">Workflow-Datei auswählen</label>
+                                <input id="workflow-copilot-import-file" type="file" wire:model="workflowImportFile" accept=".csv,.zip" class="block min-w-0 flex-1 text-xs text-slate-600 file:mr-2 file:rounded-lg file:border-0 file:bg-slate-900 file:px-2.5 file:py-1.5 file:text-xs file:font-semibold file:text-white hover:file:bg-cyan-700">
                                 <button type="button" wire:click="importWorkflowUpdate" wire:loading.attr="disabled" wire:target="workflowImportFile,importWorkflowUpdate" class="inline-flex h-8 shrink-0 items-center rounded-lg bg-slate-950 px-3 text-xs font-semibold text-white shadow-sm hover:bg-cyan-700 disabled:cursor-not-allowed disabled:opacity-50">
                                     Import
                                 </button>
@@ -2067,7 +2209,9 @@
                             </div>
                         </template>
 
+                        <label for="workflow-copilot-composer" class="sr-only">Nachricht an den Workflow Copilot</label>
                         <textarea
+                            id="workflow-copilot-composer"
                             x-ref="composer"
                             x-model="draft"
                             x-init="$nextTick(() => resizeComposer())"
@@ -2079,6 +2223,7 @@
                             x-on:keydown.enter.exact.prevent="send()"
                             x-on:keydown.enter.meta.prevent="send()"
                             x-on:keydown.enter.ctrl.prevent="send()"
+                            aria-describedby="workflow-copilot-composer-hint"
                         ></textarea>
 
                         <div class="flex items-center justify-between gap-3 px-2 pb-2">
@@ -2087,6 +2232,8 @@
                                     type="button"
                                     x-on:click="showImportPanel = !showImportPanel"
                                     x-bind:aria-expanded="showImportPanel"
+                                    aria-controls="workflow-copilot-import-panel"
+                                    aria-label="Workflow-Import ein- oder ausblenden"
                                     class="inline-flex h-8 w-8 items-center justify-center rounded-xl text-slate-400 transition hover:bg-slate-100 hover:text-cyan-700"
                                     :class="showImportPanel ? 'bg-cyan-50 text-cyan-700' : ''"
                                     title="Workflow-Import anhaengen"
@@ -2099,6 +2246,8 @@
                                     type="button"
                                     x-on:click="toggleVoice()"
                                     x-bind:disabled="busy() || !voiceSupported"
+                                    x-bind:aria-pressed="voiceCaptureActive ? 'true' : 'false'"
+                                    x-bind:aria-label="voiceSupported ? (voiceCaptureActive ? 'Spracheingabe beenden' : speechInputName() + ' starten') : 'Spracheingabe nicht verfügbar'"
                                     class="inline-flex h-8 w-8 items-center justify-center rounded-xl transition disabled:cursor-not-allowed disabled:opacity-30"
                                     :class="voiceSupported && (voiceCaptureActive || voiceUploading) ? 'bg-rose-100 text-rose-700' : (voiceSupported ? 'text-slate-400 hover:bg-slate-100 hover:text-cyan-700' : 'text-slate-300')"
                                     :title="voiceSupported ? speechInputName() : (usesRecordedSpeechInput() ? `${speechInputName()} ist nicht verfuegbar` : 'Spracheingabe wird von diesem Browser nicht unterstuetzt')"
@@ -2111,11 +2260,12 @@
                                         <path d="M12 14a3 3 0 0 0 3-3V8M9.4 5.4A3 3 0 0 1 15 7v4M5 11a7 7 0 0 0 11.7 5.2M12 18v3M8 21h8M3 3l18 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
                                     </svg>
                                 </button>
-                                <template x-if="speaking">
+                                <template x-if="ttsActive()">
                                     <button
                                         type="button"
                                         x-on:click="stopSpeaking()"
                                         class="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-rose-50 text-rose-700 transition hover:bg-rose-100"
+                                        aria-label="Vorlesen stoppen"
                                         title="Vorlesen stoppen"
                                     >
                                         <svg class="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -2125,7 +2275,9 @@
                                 </template>
                             </div>
 
-                            <span class="min-w-0 flex-1"></span>
+                            <span id="workflow-copilot-composer-hint" class="min-w-0 flex-1 truncate px-1 text-[10px] text-slate-600">
+                                Enter sendet · Shift+Enter fügt eine Zeile ein
+                            </span>
 
                             <button
                                 type="submit"

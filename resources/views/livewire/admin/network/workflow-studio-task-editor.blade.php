@@ -1,5 +1,6 @@
 <div
     class="h-full min-h-0 overflow-y-auto overscroll-contain xl:overflow-hidden"
+    data-studio-task-editor
     x-data="{
         focusedTask: '',
         hoveredRouteNode: '',
@@ -13,29 +14,32 @@
         setActiveRouteNode(node) {
             this.activeRouteNode = this.activeRouteNode === node ? '' : (node || '');
         },
+        scrollBehavior() {
+            return window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+        },
         armTaskInsert(stepId) {
             $wire.selectCatalogTarget(stepId);
-            this.$nextTick(() => document.querySelector('[data-studio-task-catalog]')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }));
+            this.$nextTick(() => document.querySelector('[data-studio-task-catalog]')?.scrollIntoView({ behavior: this.scrollBehavior(), block: 'nearest' }));
         },
     }"
 >
-    <div class="grid min-h-full overflow-visible rounded-2xl border border-slate-200 bg-white shadow-sm xl:h-full xl:min-h-0 xl:grid-cols-[310px_minmax(0,1fr)] xl:overflow-hidden">
-        <aside data-studio-task-catalog class="flex h-[520px] min-h-0 shrink-0 flex-col border-b border-slate-200 bg-slate-950 text-white sm:h-[600px] xl:h-auto xl:border-b-0 xl:border-r">
-            <div class="border-b border-white/10 px-4 py-4">
+    <div class="ff-canvas-shell grid min-h-full overflow-visible xl:h-full xl:min-h-0 xl:grid-cols-[300px_minmax(0,1fr)] xl:overflow-hidden">
+        <aside data-studio-task-catalog class="ff-task-drawer flex h-[520px] min-h-0 shrink-0 flex-col border-b bg-white text-slate-900 sm:h-[600px] xl:h-auto xl:border-b-0 xl:border-r">
+            <div class="border-b border-slate-200 px-4 py-4">
                 <div class="flex items-start justify-between gap-3">
                     <div>
-                        <p class="text-[10px] font-bold uppercase tracking-[0.18em] text-cyan-300">Bausteine</p>
-                        <h2 class="mt-1 text-base font-bold">Task-Katalog</h2>
+                        <p class="ff-kicker">Bausteine</p>
+                        <h2 class="mt-1 text-base font-bold tracking-tight text-slate-950">Task-Katalog</h2>
                     </div>
-                    <span class="rounded-full bg-white/10 px-2.5 py-1 text-[10px] font-bold text-slate-200">{{ $taskDefinitions->count() }}</span>
+                    <span class="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[10px] font-bold text-slate-600">{{ $taskDefinitions->count() }}</span>
                 </div>
-                <p class="mt-2 text-xs leading-5 text-slate-400">Task anklicken oder direkt in eine Liste ziehen. Danach öffnet sich das vollständige Formular.</p>
+                <p class="mt-2 text-xs leading-5 text-slate-500">Task anklicken oder direkt in eine Liste ziehen. Danach öffnet sich das vollständige Formular.</p>
             </div>
 
-            <div class="space-y-3 border-b border-white/10 p-4">
+            <div class="space-y-3 border-b border-slate-200 p-4">
                 <div>
-                    <label for="studio-catalog-target" class="text-[10px] font-bold uppercase tracking-wide text-slate-400">Zielliste</label>
-                    <select id="studio-catalog-target" wire:model.live="catalogTargetStepId" class="mt-1.5 w-full rounded-lg border-white/10 bg-slate-900 text-xs font-semibold text-white focus:border-cyan-400 focus:ring-cyan-400" @disabled(! $canEdit)>
+                    <label for="studio-catalog-target" class="text-[10px] font-bold uppercase tracking-wide text-slate-500">Zielliste</label>
+                    <select id="studio-catalog-target" wire:model.live="catalogTargetStepId" class="ff-search-field mt-1.5 w-full px-3 text-xs font-semibold" @disabled(! $canEdit)>
                         @forelse($steps as $step)
                             <option value="{{ $step->id }}">{{ $step->name }}</option>
                         @empty
@@ -44,17 +48,18 @@
                     </select>
                 </div>
                 <div class="relative">
-                    <svg class="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
-                    <input type="search" wire:model.live.debounce.250ms="taskSearch" class="w-full rounded-lg border-white/10 bg-slate-900 py-2 pl-9 pr-3 text-xs text-white placeholder:text-slate-500 focus:border-cyan-400 focus:ring-cyan-400" placeholder="Task suchen …">
+                    <svg class="pointer-events-none absolute left-3 top-3 h-4 w-4 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
+                    <input type="search" wire:model.live.debounce.250ms="taskSearch" class="ff-search-field w-full py-2 pl-9 pr-3 text-xs placeholder:text-slate-400" placeholder="Task suchen …" aria-label="Tasks im Katalog suchen">
                 </div>
             </div>
 
-            <nav class="flex shrink-0 gap-1 overflow-x-auto border-b border-white/10 px-3" aria-label="Task-Gruppen">
+            <nav class="flex shrink-0 gap-1 overflow-x-auto border-b border-slate-200 px-3" aria-label="Task-Gruppen">
                 @foreach($taskGroups as $taskGroup)
                     <button
                         type="button"
                         wire:click="$set('activeTaskGroup', @js($taskGroup))"
-                        class="whitespace-nowrap border-b-2 px-2 py-3 text-[11px] font-bold transition {{ $activeTaskGroup === $taskGroup ? 'border-cyan-400 text-cyan-300' : 'border-transparent text-slate-400 hover:text-white' }}"
+                        aria-pressed="{{ $activeTaskGroup === $taskGroup ? 'true' : 'false' }}"
+                        class="whitespace-nowrap border-b-2 px-2 py-3 text-[11px] font-bold transition {{ $activeTaskGroup === $taskGroup ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-950' }}"
                     >{{ $taskGroupLabels[$taskGroup] ?? $taskGroup }}</button>
                 @endforeach
             </nav>
@@ -67,39 +72,46 @@
                         draggable="{{ $canEdit ? 'true' : 'false' }}"
                         x-on:dragstart.stop="$event.dataTransfer.setData('application/x-workflow-task-catalog', @js($taskDefinition['key'])); $event.dataTransfer.setData('text/plain', @js($taskDefinition['key'])); $event.dataTransfer.effectAllowed = 'copy'"
                         @disabled(! $canEdit || $steps->isEmpty())
-                        class="group block w-full rounded-xl border border-white/10 bg-white/[0.06] p-3 text-left transition hover:border-cyan-400/60 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+                        class="ff-catalog-card group block w-full border bg-white p-3 text-left disabled:cursor-not-allowed disabled:opacity-40"
                     >
                         <span class="flex items-start justify-between gap-3">
                             <span class="min-w-0">
-                                <span class="block truncate text-xs font-bold text-white">{{ $taskDefinition['label'] }}</span>
-                                <span class="mt-1 block line-clamp-2 text-[10px] leading-4 text-slate-400">{{ $taskDefinition['description'] }}</span>
+                                <span class="block truncate text-xs font-bold text-slate-950">{{ $taskDefinition['label'] }}</span>
+                                <span class="mt-1 block line-clamp-2 text-[10px] leading-4 text-slate-500">{{ $taskDefinition['description'] }}</span>
                             </span>
-                            <span class="mt-0.5 rounded-md bg-cyan-400/10 px-1.5 py-0.5 font-mono text-[9px] text-cyan-300">+</span>
+                            <span class="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md border border-blue-200 bg-blue-50 font-mono text-[11px] font-bold text-blue-700">+</span>
                         </span>
                     </button>
                 @empty
-                    <div class="rounded-xl border border-dashed border-white/15 px-4 py-8 text-center text-xs text-slate-400">Keine passenden Tasks gefunden.</div>
+                    <div class="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center text-xs text-slate-500">Keine passenden Tasks gefunden.</div>
                 @endforelse
             </div>
         </aside>
 
         <section class="flex min-h-[560px] min-w-0 shrink-0 flex-col bg-slate-50 xl:min-h-0">
-            <div class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3">
+            <div class="ff-canvas-toolbar flex shrink-0 flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
                 <div>
                     <div class="flex items-center gap-2">
-                        <h2 class="text-sm font-bold text-slate-950">Workflow aufbauen</h2>
+                        <div>
+                            <p class="ff-kicker">Editor</p>
+                            <h2 class="mt-0.5 text-sm font-bold tracking-tight text-slate-950">Workflow aufbauen</h2>
+                        </div>
                         <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600">{{ $steps->count() }} Listen</span>
                         <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600">{{ $steps->sum(fn ($step) => count($step->task_cards)) }} Tasks</span>
                     </div>
                     <p class="mt-1 text-xs text-slate-500">Listen und Tasks verschieben, bearbeiten oder direkt aus dem Katalog einsetzen.</p>
                 </div>
-                <button type="button" wire:click="$set('showAddStepModal', true)" @disabled(! $canEdit) class="inline-flex h-9 items-center gap-2 rounded-lg bg-slate-900 px-3 text-xs font-bold text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40">
+                <button type="button" wire:click="$set('showAddStepModal', true)" @disabled(! $canEdit) class="ff-action-trigger ff-action-trigger--primary inline-flex h-10 items-center gap-2 px-3 text-xs font-bold disabled:cursor-not-allowed disabled:opacity-40">
                     <span class="text-base leading-none">+</span> Neue Liste
                 </button>
             </div>
 
-            <details class="shrink-0 border-b border-cyan-200 bg-cyan-50/70 px-4 py-3 text-xs text-slate-700">
-                <summary class="cursor-pointer font-bold text-cyan-950">So funktionieren Workflow, Listen, Tasks und Weiterleitungen</summary>
+            <details class="group shrink-0 border-b border-slate-200 bg-white/80 px-4 py-2.5 text-xs text-slate-600">
+                <summary class="flex cursor-pointer list-none items-center justify-between gap-3 font-bold text-slate-700 marker:hidden">
+                    <span>Kurzhilfe zu Workflow, Listen, Tasks und Weiterleitungen</span>
+                    <span class="text-[10px] font-semibold text-slate-600 group-open:hidden">Öffnen</span>
+                    <span class="hidden text-[10px] font-semibold text-slate-600 group-open:inline">Schließen</span>
+                </summary>
                 <div class="mt-3 grid gap-3 leading-5 md:grid-cols-2 xl:grid-cols-4">
                     <p><strong>Workflow:</strong> Der gesamte Prozess mit Ziel, Eingaben und Erfolgskriterien. Aktivierte Listen laufen grundsätzlich von links nach rechts.</p>
                     <p><strong>Liste:</strong> Eine fachliche Phase mit eigenen Erfolgs-, Fehler-, Partial- und Timeout-Wegen. Ihre Route greift erst, wenn keine Task-Route Vorrang hat.</p>
@@ -117,7 +129,7 @@
                 <div class="shrink-0 border-b border-rose-200 bg-rose-50 px-4 py-2.5 text-xs font-semibold text-rose-700">{{ $message }}</div>
             @enderror
 
-            <div class="relative min-h-0 flex-1 overflow-auto" style="background-image:linear-gradient(rgba(148,163,184,.13) 1px,transparent 1px),linear-gradient(90deg,rgba(148,163,184,.13) 1px,transparent 1px);background-size:24px 24px;">
+            <div class="ff-canvas-grid relative min-h-0 flex-1 overflow-auto">
                 <div
                     x-sort="$dispatch('reorderWorkflowSteps', { item: $item, position: $position })"
                     class="flex min-h-full min-w-max items-start gap-8 px-6 pb-10 pt-8"
@@ -126,7 +138,7 @@
                         <div
                             x-sort:item="{{ $step->id }}"
                             wire:key="studio-builder-step-{{ $step->id }}"
-                            class="rounded-2xl transition {{ (string) $step->id === $catalogTargetStepId ? 'ring-2 ring-cyan-500 ring-offset-4 ring-offset-slate-50' : '' }}"
+                            class="rounded-2xl transition {{ (string) $step->id === $catalogTargetStepId ? 'ring-2 ring-blue-500 ring-offset-4 ring-offset-slate-50' : '' }}"
                         >
                             <x-workflows.step-card :step="$step" :locked="! $canEdit">
                                 <x-slot name="actions">

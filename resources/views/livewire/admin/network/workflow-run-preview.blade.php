@@ -2,6 +2,7 @@
     class="{{ $diagramOnly ? 'h-full min-h-0' : 'space-y-4' }}"
     data-assistant-highlight="run_preview:{{ $workflowRun?->id ?? 'empty' }}"
     data-assistant-highlight-key="{{ $workflowRun?->id ?? 'empty' }}"
+    data-workflow-run-preview
     @if($polling) wire:poll.3s="refresh" @endif
 >
     @once
@@ -35,8 +36,9 @@
     @endonce
 
     @if(! $workflowRun)
-        <div class="rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
-            Dieser Workflow-Lauf wurde noch nicht geladen.
+        <div class="ff-loading-island flex items-center gap-3 border p-4 text-sm">
+            <span class="h-2 w-2 animate-pulse rounded-full bg-blue-400 motion-reduce:animate-none" aria-hidden="true"></span>
+            <span>Dieser Workflow-Lauf wurde noch nicht geladen.</span>
         </div>
     @else
         <div
@@ -46,6 +48,9 @@
                 logsOpen: 'timeline',
                 workflowScrollObserver: null,
                 workflowScrollTimer: null,
+                scrollBehavior() {
+                    return window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+                },
                 init() {
                     this.$watch('overviewOpen', (open) => {
                         if (open) {
@@ -108,7 +113,7 @@
                     }
 
                     target.scrollIntoView({
-                        behavior: 'smooth',
+                        behavior: this.scrollBehavior(),
                         block: 'center',
                         inline: 'center',
                     });
@@ -124,8 +129,8 @@
             @endif
 
             @if($resultOnly ?? false)
-                <section class="overflow-hidden rounded-xl border border-slate-300 bg-slate-50 shadow-sm">
-                    <div class="flex items-center gap-2 border-b border-slate-200 bg-white px-4 py-2.5">
+                <section class="ff-run-preview-card overflow-hidden border bg-slate-50">
+                    <div class="ff-run-preview-header flex flex-wrap items-center gap-2 border-b px-4 py-2.5">
                         <span class="inline-flex h-6 items-center rounded-full border border-slate-300 bg-slate-100 px-2 text-[10px] font-black uppercase tracking-wide text-slate-600">Echter Ablauf</span>
                         <p class="text-xs text-slate-500">Keine Screenshots, kein DOM, kein Cursor. Es wird nur das Ergebnis angezeigt.</p>
                     </div>
@@ -155,16 +160,30 @@
                 </section>
             @else
 
-            <section class="w-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm {{ $diagramOnly ? 'flex h-full min-h-0 flex-col' : '' }}">
-                <div class="flex min-w-0 items-center justify-between gap-4 border-b border-slate-100 px-4 py-3">
-                    <div class="min-w-0">
-                        <p class="text-[10px] font-semibold uppercase tracking-wide text-sky-600">Workflow-Vorschau</p>
-                        <h3 class="mt-1 truncate text-base font-semibold text-slate-950">
-                            {{ $workflowRun->workflow?->name ?? 'Workflow' }}
-                        </h3>
-                        <p class="mt-0.5 max-w-4xl truncate text-xs text-slate-500">
-                            Run #{{ $workflowRun->id }} · {{ $workflowDurationLabel }} · {{ data_get($latestStatusResult, 'statusMessage', data_get($latestStatusResult, 'message', $workflowRun->status)) ?: $workflowRun->status }}
-                        </p>
+            <section class="ff-run-preview-card w-full overflow-hidden border bg-white {{ $diagramOnly ? 'flex h-full min-h-0 flex-col' : '' }}">
+                <div class="ff-run-preview-header flex min-w-0 items-center justify-between gap-3 border-b px-3 py-2.5 sm:px-4">
+                    <div class="flex min-w-0 items-center gap-3">
+                        <span class="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-slate-600" aria-hidden="true">
+                            @if($polling)
+                                <span class="absolute right-0 top-0 h-2.5 w-2.5 -translate-y-0.5 translate-x-0.5 animate-pulse rounded-full border-2 border-white bg-emerald-500 motion-reduce:animate-none"></span>
+                            @endif
+                            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                                <path d="M5 6h6v5H5zM13 13h6v5h-6z"></path>
+                                <path d="M11 8.5h3a2 2 0 0 1 2 2V13M8 11v4a2 2 0 0 0 2 2h3"></path>
+                            </svg>
+                        </span>
+                        <div class="min-w-0">
+                            <p class="ff-kicker">Workflow-Vorschau</p>
+                            <div class="mt-0.5 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                                <h3 class="max-w-xl truncate text-sm font-bold tracking-tight text-slate-950 sm:text-base">
+                                    {{ $workflowRun->workflow?->name ?? 'Workflow' }}
+                                </h3>
+                                <span class="font-mono text-[10px] font-semibold text-slate-600">#{{ $workflowRun->id }}</span>
+                            </div>
+                            <p class="mt-0.5 max-w-4xl truncate text-[10px] text-slate-500 sm:text-xs">
+                                {{ $workflowDurationLabel }} · {{ data_get($latestStatusResult, 'statusMessage', data_get($latestStatusResult, 'message', $workflowRun->status)) ?: $workflowRun->status }}
+                            </p>
+                        </div>
                     </div>
                     <div class="flex shrink-0 items-center gap-2">
                         <x-workflows.status-badge :status="$workflowRun->status" />
@@ -173,7 +192,9 @@
                                 type="button"
                                 x-on:click="overviewOpen = !overviewOpen"
                                 x-bind:title="overviewOpen ? 'Minimieren' : 'Maximieren'"
-                                class="inline-flex h-9 w-9 items-center justify-center rounded-md border border-sky-200 bg-sky-50 text-sky-800 transition hover:bg-sky-100"
+                                x-bind:aria-expanded="overviewOpen"
+                                aria-label="Workflow-Karte umschalten"
+                                class="ff-action-trigger inline-flex h-[2.65rem] w-[2.65rem] items-center justify-center"
                             >
                                 <svg x-show="!overviewOpen" xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                                     <path d="M15 3h6v6"></path>
@@ -196,11 +217,11 @@
                 <div
                     x-show="!overviewOpen"
                     x-collapse.duration.180ms
-                    class="w-full bg-white text-slate-900"
+                    class="ff-canvas-grid w-full text-slate-900"
                     style=""
                 >
                     <div class="flex h-full w-full flex-col justify-center p-4 sm:p-5">
-                        <div class="min-h-0 w-full rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2">
+                        <div class="ff-canvas-shell min-h-0 w-full px-2.5 py-2">
                             @if($compactWorkflowMap->isNotEmpty())
                                 <div class="flex w-full min-w-0 items-center gap-1 overflow-x-auto pb-0.5" data-workflow-preview-scrollbar>
                                     @foreach($compactWorkflowMap as $miniStep)
@@ -272,7 +293,7 @@
                     </div>
                 </div>
 
-                <div x-cloak x-show="overviewOpen" x-collapse.duration.180ms class="{{ $diagramOnly ? 'min-h-0 flex-1 overflow-auto bg-slate-50' : 'bg-white' }}" @if($diagramOnly) style="background-image: linear-gradient(rgba(203,213,225,.20) 1px, transparent 1px), linear-gradient(90deg, rgba(203,213,225,.20) 1px, transparent 1px), linear-gradient(rgba(148,163,184,.18) 1px, transparent 1px), linear-gradient(90deg, rgba(148,163,184,.18) 1px, transparent 1px); background-size: 20px 20px, 20px 20px, 100px 100px, 100px 100px;" @endif>
+                <div x-cloak x-show="overviewOpen" x-collapse.duration.180ms class="ff-canvas-grid {{ $diagramOnly ? 'min-h-0 flex-1 overflow-auto' : '' }}" @if($diagramOnly) style="background-image: linear-gradient(rgba(203,213,225,.20) 1px, transparent 1px), linear-gradient(90deg, rgba(203,213,225,.20) 1px, transparent 1px), linear-gradient(rgba(148,163,184,.18) 1px, transparent 1px), linear-gradient(90deg, rgba(148,163,184,.18) 1px, transparent 1px); background-size: 20px 20px, 20px 20px, 100px 100px, 100px 100px;" @endif>
                     <div class="px-4 py-3 {{ $diagramOnly ? 'min-h-full' : '' }}" x-ref="maximizedWorkflowMap">
                         <x-workflows.minimap
                             :workflow-run="$workflowRun"
@@ -291,8 +312,8 @@
             @if($embeddedCards->isNotEmpty())
                 <section class="space-y-2">
                     @foreach($embeddedCards as $card)
-                        <article x-data="{ expanded: false }" class="overflow-hidden rounded-xl border border-sky-200 bg-white shadow-sm">
-                            <button type="button" x-on:click="expanded = !expanded" class="flex w-full items-center justify-between gap-3 px-4 py-3 text-left">
+                        <article x-data="{ expanded: false }" class="ff-run-preview-card overflow-hidden border bg-white">
+                            <button type="button" x-on:click="expanded = !expanded" x-bind:aria-expanded="expanded" class="ff-run-preview-header flex w-full items-center justify-between gap-3 border-b-0 px-4 py-3 text-left">
                                 <div class="min-w-0">
                                     <div class="flex flex-wrap items-center gap-2">
                                         <span class="rounded-full bg-sky-600 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">Embedded</span>
@@ -374,10 +395,10 @@
             @endif
 
             @if($screenshotPanels->isNotEmpty() && ! ($resultOnly ?? false))
-                <section class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-                    <div class="flex min-h-20 w-full items-center justify-between gap-4 bg-white px-4 py-3">
+                <section class="ff-run-preview-card overflow-hidden border bg-white">
+                    <div class="ff-run-preview-header flex min-h-20 w-full items-center justify-between gap-4 border-b-0 px-4 py-3">
                         <div class="min-w-0">
-                            <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Browserfenster</div>
+                            <div class="ff-kicker">Browserfenster</div>
                             <div class="mt-1 truncate text-sm font-semibold text-slate-900">
                                 {{ $screenshotPanels->count() }} offene {{ $screenshotPanels->count() === 1 ? 'Vorschau' : 'Vorschauen' }}
                             </div>
@@ -408,7 +429,9 @@
                                 type="button"
                                 x-on:click="browserOpen = !browserOpen"
                                 x-bind:title="browserOpen ? 'Minimieren' : 'Maximieren'"
-                                class="inline-flex h-9 w-9 items-center justify-center rounded-md border border-sky-200 bg-sky-50 text-sky-800 transition hover:bg-sky-100"
+                                x-bind:aria-expanded="browserOpen"
+                                aria-label="Browser-Vorschauen umschalten"
+                                class="ff-action-trigger inline-flex h-[2.65rem] w-[2.65rem] items-center justify-center"
                             >
                                 <svg x-show="!browserOpen" xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                                     <path d="M15 3h6v6"></path>
@@ -432,7 +455,7 @@
                             <div class="flex flex-nowrap gap-3 overflow-x-auto pb-1" data-workflow-preview-scrollbar>
                                 @foreach($screenshotPanels as $panel)
                                     <article
-                                        class="min-w-0 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm"
+                                        class="ff-browser-card min-w-0 shrink-0 overflow-hidden border bg-white"
                                         style="flex: 0 0 {{ $browserPanelBasis }}%; max-width: {{ $browserPanelBasis }}%; min-width: {{ $browserPanelMinWidth }};"
                                     >
                                         <div class="flex items-start justify-between gap-3 border-b border-slate-100 bg-white px-3 py-2">
@@ -467,16 +490,16 @@
                 </section>
             @endif
 
-            <section class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-                <div class="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+            <section class="ff-run-preview-card overflow-hidden border bg-white">
+                <div class="ff-run-preview-header flex flex-wrap items-center justify-between gap-3 border-b-0 px-4 py-3">
                     <div>
-                        <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Logs & Debug</div>
-                        <div class="mt-1 text-sm text-slate-600">Ablauf, Variablen und technische Diagnose</div>
+                        <div class="ff-kicker">Logs & Debug</div>
+                        <div class="mt-1 text-sm font-semibold text-slate-700">Ablauf, Variablen und technische Diagnose</div>
                     </div>
                     <a
                         href="{{ $jsonDownload($runJsonPayload) }}"
                         download="workflow-run-{{ $workflowRun->id }}.json"
-                        class="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                        class="ff-action-trigger inline-flex min-h-9 items-center px-3 text-xs font-semibold"
                     >
                         Run JSON
                     </a>
@@ -484,7 +507,7 @@
 
                 <div class="divide-y divide-slate-100 border-t border-slate-100">
                     <div>
-                        <button type="button" x-on:click="logsOpen = logsOpen === 'timeline' ? '' : 'timeline'" class="flex w-full items-center justify-between gap-3 px-4 py-3 text-left">
+                        <button type="button" x-on:click="logsOpen = logsOpen === 'timeline' ? '' : 'timeline'" x-bind:aria-expanded="logsOpen === 'timeline'" class="flex w-full items-center justify-between gap-3 px-4 py-3 text-left">
                             <span>
                                 <span class="block text-sm font-semibold text-slate-900">Ablauf</span>
                                 <span class="mt-0.5 block text-xs text-slate-500">{{ $timelineEvents->count() }} Ereignisse</span>
@@ -509,7 +532,7 @@
                     </div>
 
                     <div>
-                        <button type="button" x-on:click="logsOpen = logsOpen === 'steps' ? '' : 'steps'" class="flex w-full items-center justify-between gap-3 px-4 py-3 text-left">
+                        <button type="button" x-on:click="logsOpen = logsOpen === 'steps' ? '' : 'steps'" x-bind:aria-expanded="logsOpen === 'steps'" class="flex w-full items-center justify-between gap-3 px-4 py-3 text-left">
                             <span>
                                 <span class="block text-sm font-semibold text-slate-900">Schritte & Tasks</span>
                                 <span class="mt-0.5 block text-xs text-slate-500">{{ $stepDebugPanels->count() }} Debug-Panels</span>
@@ -736,7 +759,7 @@
                     </div>
 
                     <div>
-                        <button type="button" x-on:click="logsOpen = logsOpen === 'variables' ? '' : 'variables'" class="flex w-full items-center justify-between gap-3 px-4 py-3 text-left">
+                        <button type="button" x-on:click="logsOpen = logsOpen === 'variables' ? '' : 'variables'" x-bind:aria-expanded="logsOpen === 'variables'" class="flex w-full items-center justify-between gap-3 px-4 py-3 text-left">
                             <span>
                                 <span class="block text-sm font-semibold text-slate-900">Variablen</span>
                                 <span class="mt-0.5 block text-xs text-slate-500">{{ count($workflowVariables) }} Werte</span>
@@ -773,7 +796,7 @@
 
                     @if($debugArtifactGroups->isNotEmpty())
                         <div>
-                            <button type="button" x-on:click="logsOpen = logsOpen === 'artifacts' ? '' : 'artifacts'" class="flex w-full items-center justify-between gap-3 px-4 py-3 text-left">
+                            <button type="button" x-on:click="logsOpen = logsOpen === 'artifacts' ? '' : 'artifacts'" x-bind:aria-expanded="logsOpen === 'artifacts'" class="flex w-full items-center justify-between gap-3 px-4 py-3 text-left">
                                 <span>
                                     <span class="block text-sm font-semibold text-slate-900">Debug-Artefakte</span>
                                     <span class="mt-0.5 block text-xs text-slate-500">DOM-Snapshots und Screenshots aus dem Dev-Debug-Modus</span>

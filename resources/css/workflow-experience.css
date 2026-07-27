@@ -38,7 +38,13 @@
   isolation: isolate;
 }
 
-.workflow-experience :is(button, a, input, textarea, select, [tabindex]):focus-visible {
+:is(
+  .workflow-experience,
+  [data-workflow-manager-root],
+  [data-workflow-studio-shell],
+  [data-workflow-copilot-root],
+  [data-workflow-run-preview]
+) :is(button, a, input, textarea, select, [tabindex]):focus-visible {
   outline: 3px solid rgba(37, 99, 235, .26) !important;
   outline-offset: 2px !important;
   box-shadow: 0 0 0 1px var(--ff-accent) !important;

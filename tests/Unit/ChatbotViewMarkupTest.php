@@ -29,8 +29,13 @@ class ChatbotViewMarkupTest extends TestCase
         $this->assertStringContainsString('voiceProviderSupported()', $definition);
         $this->assertStringContainsString('toggleRecordedVoice()', $definition);
         $this->assertStringContainsString('observeMessages()', $definition);
-        $this->assertStringContainsString('new MutationObserver(() => this.scrollMessages(false))', $definition);
-        $this->assertStringContainsString('new ResizeObserver(() => this.scrollMessages(false))', $definition);
+        $this->assertStringContainsString('new MutationObserver(() => {', $definition);
+        $this->assertStringContainsString('new ResizeObserver(() => {', $definition);
+        $this->assertStringContainsString('messagesNearBottom(threshold = 96)', $definition);
+        $this->assertStringContainsString('jumpToLatest(smooth = true)', $definition);
+        $this->assertStringContainsString("scrollBehavior(smooth = true)", $definition);
+        $this->assertStringContainsString("window.matchMedia('(prefers-reduced-motion: reduce)')", $definition);
+        $this->assertStringContainsString('if (!force && !this.messagesPinned)', $definition);
         $this->assertStringContainsString('transcribeRecordedBlob(blob)', $definition);
         $this->assertStringContainsString("['whisper_local', 'vosk'].includes(this.speechInputProvider)", $definition);
         $this->assertStringContainsString('[40, 100, 250, 500, 1000].map((delay)', $definition);
@@ -43,6 +48,10 @@ class ChatbotViewMarkupTest extends TestCase
         $this->assertStringContainsString('openWorkflowImprovement(improvement = {})', $definition);
         $this->assertStringContainsString("new CustomEvent('assistant-open-workflow-improvement'", $definition);
         $this->assertStringNotContainsString("this.ttsPlaying = true;\n            this.speaking = true;", $definition);
+        $this->assertStringContainsString('this.ttsPreparing = true;', $definition);
+        $this->assertStringContainsString("isDesktopDocked: window.matchMedia('(min-width: 1140px)').matches", $definition);
+        $this->assertStringContainsString("this.isDesktopDocked = window.matchMedia('(min-width: 1140px)').matches", $definition);
+        $this->assertStringContainsString("window.matchMedia('(min-width: 1140px)')", $definition);
         $this->assertStringEndsWith('}', trim($definition));
 
         $activeSpeechLabels = (new DOMXPath($document))->query(
@@ -59,7 +68,9 @@ class ChatbotViewMarkupTest extends TestCase
         $this->assertStringContainsString("speechOutputProvider === 'piper_local'", $source);
         $this->assertStringContainsString('window.MediaRecorder', $source);
         $this->assertStringContainsString('speechRate: @js($assistantSpeechRate)', $source);
-        $this->assertStringContainsString('speed: Number(this.speechRate || 1)', $definition);
+        $this->assertStringContainsString('clampSpeechRate(value)', $definition);
+        $this->assertStringContainsString('speed: this.clampSpeechRate(this.speechRate)', $definition);
+        $this->assertStringContainsString('Math.min(2, Math.max(0.5, normalized))', $definition);
         $this->assertStringContainsString('assistant-improvement-error', $source);
         $this->assertStringContainsString('assistant-improvement-warning', $source);
         $this->assertStringContainsString('assistant-improvement-info', $source);
@@ -85,6 +96,14 @@ class ChatbotViewMarkupTest extends TestCase
         $this->assertStringContainsString('activityElapsed(value)', $definition);
         $this->assertStringContainsString('xl:hidden', $source);
         $this->assertStringContainsString('xl:w-[30rem]', $source);
+        $this->assertStringContainsString('@media (min-width: 1140px)', $source);
+        $this->assertStringContainsString('role="log"', $source);
+        $this->assertStringContainsString('ff-copilot-panel', $source);
+        $this->assertStringContainsString('ff-jump-latest', $source);
+        $this->assertStringContainsString('Audio wird vorbereitet.', $source);
+        $this->assertStringContainsString('x-trap.inert.noscroll="showChat && !isDesktopDocked"', $source);
+        $this->assertStringContainsString('x-on:click.stop.prevent="setOpen(true, true)"', $source);
+        $this->assertStringContainsString('class="workflow-copilot"', $source);
         $this->assertStringContainsString('data-workflow-copilot-completed-state', $source);
         $this->assertStringContainsString('data-workflow-copilot-vision-analysis', $source);
         $this->assertStringContainsString('Vorgeschlagene Workflow-Aktionen', $source);
@@ -93,5 +112,15 @@ class ChatbotViewMarkupTest extends TestCase
         $this->assertStringContainsString('data-copilot-activity-timer', $source);
         $this->assertStringContainsString('Keine Statusaenderung seit', $source);
         $this->assertStringContainsString('<template x-if="assistantActivityRunning() || copilotActivityRunning()">', $source);
+    }
+
+    public function test_chatbot_is_mounted_on_the_standalone_workflow_studio_route(): void
+    {
+        $layout = file_get_contents(dirname(__DIR__, 2).'/resources/views/layouts/master.blade.php');
+
+        $this->assertStringContainsString(
+            "request()->routeIs('network.workflows', 'network.workflows.manage', 'network.workflows.studio')",
+            $layout,
+        );
     }
 }

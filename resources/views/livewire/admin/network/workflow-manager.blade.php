@@ -1426,7 +1426,7 @@
                             @endif
                         </div>
                     @else
-                        <div class="grid gacontainer md:grid-cols-2">
+                        <div class="grid gap-4 md:grid-cols-2">
                             <div>
                                 <label for="workflow-new-step-type" class="block text-sm font-medium text-gray-700">Aufgabentyp</label>
                                 <select id="workflow-new-step-type" wire:model.live="newStepType" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
@@ -1470,7 +1470,7 @@
                         <label for="workflow-edit-step-description" class="block text-sm font-medium text-gray-700">Beschreibung</label>
                         <textarea id="workflow-edit-step-description" rows="3" wire:model.defer="editingStepDescription" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"></textarea>
                     </div>
-                    <div class="grid gacontainer md:grid-cols-2">
+                    <div class="grid gap-4 md:grid-cols-2">
                         <label class="flex items-center gap-3 rounded-md border border-gray-200 bg-gray-50 p-3 text-sm font-medium text-gray-700">
                             <input type="checkbox" wire:model.defer="editingStepEnabled" class="rounded border-gray-300 text-slate-900 shadow-sm focus:ring-slate-900">
                             Aktiv
@@ -1480,7 +1480,7 @@
                             <input id="workflow-edit-step-wait" type="number" min="0" max="3600" wire:model.defer="editingStepWaitAfterSeconds" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
                         </div>
                     </div>
-                    <div class="grid gacontainer md:grid-cols-2">
+                    <div class="grid gap-4 md:grid-cols-2">
                         @foreach([
                             'editingStepSuccessTarget' => 'Bei Erfolg',
                             'editingStepFailedTarget' => 'Bei Fehler',
@@ -1501,7 +1501,7 @@
                             </div>
                         @endforeach
                     </div>
-                    <div class="grid gacontainer md:grid-cols-2">
+                    <div class="grid gap-4 md:grid-cols-2">
                         <div>
                             <label for="workflow-edit-step-success-reason" class="block text-sm font-medium text-gray-700">Grund bei Erfolg</label>
                             <input id="workflow-edit-step-success-reason" type="text" wire:model.defer="editingStepSuccessReason" placeholder="z.B. Element gefunden / Login erfolgreich" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
@@ -1597,7 +1597,7 @@
         <x-ui.dialog-modal wire:model="showActionLibraryModal" maxWidth="5xl">
             <x-slot name="title">Aktionsbibliothek</x-slot>
             <x-slot name="content">
-                <div class="grid gacontainer md:grid-cols-2">
+                <div class="grid gap-4 md:grid-cols-2">
                     <div>
                         <label for="workflow-action-person" class="block text-sm font-medium text-gray-700">Person</label>
                         <select id="workflow-action-person" wire:model.live="actionPersonFilter" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">

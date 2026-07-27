@@ -25,7 +25,7 @@ class WorkflowCopilotUiMarkupTest extends TestCase
         $this->assertStringContainsString('Zum Checkpoint zurueckspulen', $view);
         $this->assertStringContainsString('wire:click="openCopilotChat"', $view);
         $this->assertStringContainsString('wire:click="restartCopilotOptimization"', $view);
-        $this->assertStringContainsString('Interaktiv testen', $view);
+        $this->assertStringContainsString('Eine Task nach der anderen', $view);
         $this->assertStringContainsString('wire:click="terminateCopilotOptimization"', $view);
         $this->assertStringContainsString('wire:click="terminatePreviewWorkflowRun"', $view);
         $this->assertStringContainsString('wire:click="downloadCopilotOptimizationLog"', $view);
