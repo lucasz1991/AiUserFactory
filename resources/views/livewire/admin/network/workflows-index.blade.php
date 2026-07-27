@@ -11,8 +11,8 @@
         <div class="ml-auto flex max-w-full flex-col items-end gap-2">
             <div class="flex flex-wrap justify-end gap-2">
                 <div class="relative" x-data="{ open: false }" x-on:keydown.escape.window="open = false">
-                    <button type="button" x-on:click="open = ! open" x-bind:aria-expanded="open" class="ff-action-trigger ff-action-trigger--primary inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold">
-                        <span class="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-white/10 text-lg leading-none" aria-hidden="true">+</span>
+                    <button type="button" x-on:click="open = ! open" x-bind:aria-expanded="open" class="group ff-action-trigger ff-action-trigger--primary inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold">
+                        <span class="inline-flex h-6 w-6 items-center justify-center rounded-full bg-white/10 text-lg leading-none transition-transform duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] group-hover:rotate-90" aria-hidden="true">+</span>
                         Verwalten
                         <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" /></svg>
                     </button>

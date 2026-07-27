@@ -2282,9 +2282,12 @@
                             <button
                                 type="submit"
                                 x-bind:disabled="busy() || !(draft || '').trim()"
-                                class="inline-flex h-9 shrink-0 items-center justify-center rounded-xl bg-slate-950 px-3.5 text-sm font-semibold text-white shadow-sm hover:bg-cyan-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                class="group inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-full bg-slate-950 py-1 pl-4 pr-1 text-sm font-semibold text-white shadow-sm transition-colors duration-300 hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
                             >
                                 Senden
+                                <span class="inline-flex h-7 w-7 items-center justify-center rounded-full bg-white/10 transition-transform duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] group-hover:-translate-y-px group-hover:translate-x-0.5 group-hover:scale-105" aria-hidden="true">
+                                    <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>
+                                </span>
                             </button>
                         </div>
                     </form>

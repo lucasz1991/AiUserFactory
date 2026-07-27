@@ -6,6 +6,7 @@ import mask from '@alpinejs/mask';
 import resize from '@alpinejs/resize';
 import intersect from '@alpinejs/intersect';
 import sort from '@alpinejs/sort';
+import './components/workflow-motion';
 
 window.Swal = Swal;
 

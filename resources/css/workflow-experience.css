@@ -4,7 +4,22 @@
  * shared run preview and Copilot. The compact action-island interactions are
  * intentionally framework-native so the Laravel UI does not gain a React
  * runtime solely for visual components.
+ *
+ * 2026-07-27 (Claude): High-End-Politur. Gleiche Klassen, gleiche Geometrie-
+ * und Interaktionsvertraege — angehobene visuelle Sprache: Plus Jakarta Sans,
+ * Double-Bezel-Flaechen (konzentrische Ringe statt zusaetzlichem DOM), tief
+ * schwarze Glas-Inseln mit Glow-Orbs, weiche Ambient-Schatten und eine
+ * federnde Bewegungssprache (cubic-bezier(.32,.72,0,1)). GSAP-Zusatzmotion
+ * lebt additiv in resources/js/components/workflow-motion.js.
  */
+
+@font-face {
+  font-family: 'Plus Jakarta Sans Variable';
+  src: url('@fonts/PlusJakartaSans-Variable.woff2') format('woff2');
+  font-weight: 200 800;
+  font-style: normal;
+  font-display: swap;
+}
 
 :is(
   .workflow-experience,
@@ -13,24 +28,46 @@
   [data-workflow-copilot-root],
   [data-workflow-run-preview]
 ) {
-  --ff-ink: #111827;
-  --ff-ink-soft: #1f2937;
-  --ff-canvas: #f4f6f8;
+  --ff-ink: #0b1220;
+  --ff-ink-deep: #070b14;
+  --ff-ink-soft: #1e293b;
+  --ff-canvas: #f2f4f7;
   --ff-surface: #ffffff;
-  --ff-surface-soft: #f8fafc;
-  --ff-line: #dce2ea;
-  --ff-line-strong: #c7d0dc;
+  --ff-surface-soft: #f7f9fc;
+  --ff-line: #dde3ec;
+  --ff-line-strong: #c6cfdc;
   --ff-muted: #64748b;
   --ff-accent: #2563eb;
-  --ff-accent-soft: #eff6ff;
-  --ff-accent-line: #bfdbfe;
+  --ff-accent-bright: #4f7df9;
+  --ff-accent-soft: #eef4ff;
+  --ff-accent-line: #c3d7fe;
   --ff-success: #15803d;
   --ff-warning: #b45309;
   --ff-danger: #be123c;
-  --ff-shadow-sm: 0 1px 2px rgba(15, 23, 42, .04), 0 8px 24px -20px rgba(15, 23, 42, .35);
-  --ff-shadow-md: 0 22px 60px -36px rgba(15, 23, 42, .48);
-  --ff-ease: cubic-bezier(.2, .8, .2, 1);
+  --ff-font: 'Plus Jakarta Sans Variable', 'Quicksand', 'Segoe UI', sans-serif;
+  --ff-ease: cubic-bezier(.32, .72, 0, 1);
+  --ff-ease-out: cubic-bezier(.16, 1, .3, 1);
+  /* Ultraweiche, mehrschichtige Ambient-Schatten (kein hartes Grau) */
+  --ff-shadow-sm:
+    0 1px 1px rgba(11, 18, 32, .03),
+    0 6px 18px -10px rgba(11, 18, 32, .10),
+    0 24px 48px -32px rgba(11, 18, 32, .16);
+  --ff-shadow-md:
+    0 1px 1px rgba(11, 18, 32, .04),
+    0 14px 34px -22px rgba(11, 18, 32, .22),
+    0 44px 90px -48px rgba(11, 18, 32, .30);
+  /* Glas-Inseln: Hairline oben + tiefer Glow */
+  --ff-island-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, .09),
+    inset 0 0 0 1px rgba(255, 255, 255, .05),
+    0 18px 44px -22px rgba(7, 11, 20, .85);
+  /* Double-Bezel: innere Hairline, Tray-Ring, aeussere Hairline */
+  --ff-bezel:
+    0 0 0 1px rgba(11, 18, 32, .05),
+    0 0 0 5px rgba(11, 18, 32, .022),
+    0 0 0 6px rgba(11, 18, 32, .045);
   color: var(--ff-ink);
+  font-family: var(--ff-font);
   font-feature-settings: "ss01" 1, "cv02" 1, "cv03" 1;
 }
 
@@ -50,101 +87,163 @@
   box-shadow: 0 0 0 1px var(--ff-accent) !important;
 }
 
+/* ------------------------------------------------------------------ */
+/* Kommandoflaechen (Hero-Karten) — Double-Bezel + Mesh-Glow           */
+/* ------------------------------------------------------------------ */
+
 .ff-command-surface {
   position: relative;
   overflow: hidden;
-  border: 1px solid rgba(199, 208, 220, .86) !important;
-  border-radius: 1.35rem !important;
+  border: 1px solid rgba(255, 255, 255, .75) !important;
+  border-radius: 1.6rem !important;
   background:
-    radial-gradient(circle at 93% 5%, rgba(37, 99, 235, .09), transparent 23rem),
-    linear-gradient(135deg, rgba(255, 255, 255, .98), rgba(248, 250, 252, .96)) !important;
-  box-shadow: var(--ff-shadow-md) !important;
+    radial-gradient(circle at 92% -8%, rgba(79, 125, 249, .13), transparent 26rem),
+    radial-gradient(circle at 4% 110%, rgba(45, 212, 191, .07), transparent 20rem),
+    linear-gradient(150deg, rgba(255, 255, 255, .99), rgba(246, 248, 252, .97)) !important;
+  box-shadow:
+    var(--ff-bezel),
+    inset 0 1px 0 rgba(255, 255, 255, .95),
+    var(--ff-shadow-md) !important;
 }
 
 .ff-command-surface::after {
   position: absolute;
   inset: 0;
   z-index: -1;
-  background-image: radial-gradient(rgba(15, 23, 42, .12) .55px, transparent .55px);
-  background-size: 6px 6px;
+  background-image: radial-gradient(rgba(11, 18, 32, .13) .5px, transparent .5px);
+  background-size: 5px 5px;
   content: "";
-  opacity: .13;
+  opacity: .11;
   pointer-events: none;
 }
 
+/* ------------------------------------------------------------------ */
+/* Typografie                                                          */
+/* ------------------------------------------------------------------ */
+
 .ff-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
+  border: 1px solid var(--ff-accent-line) !important;
+  border-radius: 999px !important;
+  background: var(--ff-accent-soft) !important;
+  padding: .28rem .7rem !important;
   color: var(--ff-accent) !important;
   font-size: .625rem !important;
   font-weight: 800 !important;
-  letter-spacing: .16em !important;
+  letter-spacing: .2em !important;
   text-transform: uppercase;
+}
+
+.ff-kicker::before {
+  width: .32rem;
+  height: .32rem;
+  border-radius: 999px;
+  background: currentColor;
+  content: "";
+  opacity: .75;
 }
 
 .ff-page-title {
   color: var(--ff-ink) !important;
-  font-size: clamp(1.5rem, 2.2vw, 2.25rem) !important;
-  font-weight: 740 !important;
-  letter-spacing: -.035em !important;
-  line-height: 1.05 !important;
+  font-family: var(--ff-font) !important;
+  font-size: clamp(1.65rem, 2.6vw, 2.55rem) !important;
+  font-weight: 780 !important;
+  letter-spacing: -.045em !important;
+  line-height: 1.02 !important;
   text-wrap: balance;
 }
 
 .ff-page-copy {
-  max-width: 65ch;
+  max-width: 62ch;
   color: var(--ff-muted) !important;
-  line-height: 1.55 !important;
+  font-weight: 500;
+  line-height: 1.6 !important;
   text-wrap: pretty;
 }
+
+/* ------------------------------------------------------------------ */
+/* Aktions-Trigger (Buttons)                                           */
+/* ------------------------------------------------------------------ */
 
 .ff-action-trigger {
   min-height: 2.65rem;
   border: 1px solid var(--ff-line-strong) !important;
-  border-radius: .85rem !important;
-  background: rgba(255, 255, 255, .9) !important;
+  border-radius: .95rem !important;
+  background: rgba(255, 255, 255, .92) !important;
   color: var(--ff-ink-soft) !important;
-  box-shadow: var(--ff-shadow-sm) !important;
-  transition: transform 180ms var(--ff-ease), border-color 180ms ease, background-color 180ms ease, box-shadow 180ms ease !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, .9),
+    var(--ff-shadow-sm) !important;
+  transition:
+    transform 320ms var(--ff-ease),
+    border-color 220ms var(--ff-ease),
+    background-color 220ms var(--ff-ease),
+    box-shadow 320ms var(--ff-ease) !important;
 }
 
 .ff-action-trigger:hover {
-  border-color: #94a3b8 !important;
+  border-color: #96a3b6 !important;
   background: #fff !important;
-  box-shadow: 0 12px 28px -22px rgba(15, 23, 42, .62) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 1),
+    0 14px 32px -22px rgba(11, 18, 32, .55) !important;
   transform: translateY(-1px);
 }
 
 .ff-action-trigger:active {
-  transform: translateY(1px) scale(.985);
+  transform: translateY(0) scale(.975);
 }
 
 .ff-action-trigger--primary {
-  border-color: var(--ff-ink) !important;
-  background: var(--ff-ink) !important;
+  border-color: rgba(255, 255, 255, .08) !important;
+  background:
+    radial-gradient(circle at 80% -40%, rgba(79, 125, 249, .5), transparent 4rem),
+    linear-gradient(180deg, #17233a, var(--ff-ink)) !important;
   color: #fff !important;
+  box-shadow: var(--ff-island-shadow) !important;
 }
 
 .ff-action-trigger--primary:hover {
-  border-color: var(--ff-accent) !important;
-  background: var(--ff-accent) !important;
+  border-color: rgba(255, 255, 255, .14) !important;
+  background:
+    radial-gradient(circle at 80% -40%, rgba(122, 158, 255, .55), transparent 4.5rem),
+    linear-gradient(180deg, #2e4ecc, var(--ff-accent)) !important;
 }
+
+/* ------------------------------------------------------------------ */
+/* Menues (Dropdowns)                                                  */
+/* ------------------------------------------------------------------ */
 
 .ff-menu {
   overflow: hidden;
-  border: 1px solid var(--ff-line) !important;
-  border-radius: 1rem !important;
-  background: rgba(255, 255, 255, .98) !important;
-  box-shadow: 0 26px 70px -34px rgba(15, 23, 42, .62) !important;
-  backdrop-filter: blur(16px);
+  border: 1px solid rgba(221, 227, 236, .9) !important;
+  border-radius: 1.1rem !important;
+  background: rgba(255, 255, 255, .92) !important;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, .6) inset,
+    0 30px 80px -36px rgba(11, 18, 32, .55) !important;
+  backdrop-filter: blur(20px) saturate(1.4);
+  transform-origin: top right;
+  animation: ff-menu-pop 260ms var(--ff-ease-out) both;
 }
 
 .ff-menu > :is(button, a) {
-  border-radius: .7rem !important;
-  transition: background-color 150ms ease, color 150ms ease, transform 150ms var(--ff-ease) !important;
+  border-radius: .75rem !important;
+  transition:
+    background-color 180ms var(--ff-ease),
+    color 180ms var(--ff-ease),
+    transform 240ms var(--ff-ease) !important;
 }
 
 .ff-menu > :is(button, a):hover {
-  transform: translateX(2px);
+  transform: translateX(3px);
 }
+
+/* ------------------------------------------------------------------ */
+/* Metrik-Leiste                                                       */
+/* ------------------------------------------------------------------ */
 
 .ff-metric-rail {
   display: grid;
@@ -167,86 +266,123 @@
   overflow: hidden;
   color: var(--ff-muted);
   font-size: .625rem;
-  font-weight: 650;
-  letter-spacing: .035em;
+  font-weight: 700;
+  letter-spacing: .08em;
   text-overflow: ellipsis;
+  text-transform: uppercase;
   white-space: nowrap;
 }
 
 .ff-metric dd {
   margin-top: .12rem;
   color: var(--ff-ink);
-  font-size: .875rem;
+  font-size: 1rem;
   font-variant-numeric: tabular-nums;
-  font-weight: 760;
+  font-weight: 800;
+  letter-spacing: -.02em;
 }
+
+/* ------------------------------------------------------------------ */
+/* Canvas & Studio                                                     */
+/* ------------------------------------------------------------------ */
 
 .ff-canvas-shell {
   overflow: hidden;
-  border: 1px solid var(--ff-line) !important;
-  border-radius: 1.2rem !important;
+  border: 1px solid rgba(255, 255, 255, .7) !important;
+  border-radius: 1.4rem !important;
   background: var(--ff-surface) !important;
-  box-shadow: var(--ff-shadow-sm) !important;
+  box-shadow:
+    var(--ff-bezel),
+    var(--ff-shadow-sm) !important;
 }
 
 .ff-canvas-grid {
   background-color: var(--ff-canvas) !important;
   background-image:
-    linear-gradient(rgba(148, 163, 184, .16) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(148, 163, 184, .16) 1px, transparent 1px),
-    linear-gradient(rgba(148, 163, 184, .09) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(148, 163, 184, .09) 1px, transparent 1px) !important;
-  background-size: 20px 20px, 20px 20px, 100px 100px, 100px 100px !important;
+    radial-gradient(circle at 70% 12%, rgba(79, 125, 249, .05), transparent 30rem),
+    linear-gradient(rgba(148, 163, 184, .15) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, .15) 1px, transparent 1px),
+    linear-gradient(rgba(148, 163, 184, .08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, .08) 1px, transparent 1px) !important;
+  background-size: 100% 100%, 20px 20px, 20px 20px, 100px 100px, 100px 100px !important;
 }
 
 .ff-canvas-toolbar {
-  border-color: var(--ff-line) !important;
-  background: rgba(255, 255, 255, .94) !important;
-  backdrop-filter: blur(14px);
+  border-color: rgba(221, 227, 236, .85) !important;
+  background: rgba(255, 255, 255, .88) !important;
+  backdrop-filter: blur(18px) saturate(1.3);
 }
 
 .ff-step-column {
-  border-color: var(--ff-line-strong) !important;
+  border-color: rgba(198, 207, 220, .85) !important;
   border-style: solid !important;
-  background: rgba(248, 250, 252, .82) !important;
-  box-shadow: 0 16px 38px -34px rgba(15, 23, 42, .7) !important;
-  transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms var(--ff-ease) !important;
+  border-radius: 1.15rem !important;
+  background: rgba(248, 250, 252, .78) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, .85),
+    0 18px 44px -36px rgba(11, 18, 32, .55) !important;
+  transition:
+    border-color 240ms var(--ff-ease),
+    box-shadow 380ms var(--ff-ease),
+    transform 380ms var(--ff-ease) !important;
 }
 
 .ff-step-column:hover,
 .ff-step-column:focus-within {
-  border-color: #a8b4c4 !important;
-  box-shadow: 0 22px 48px -34px rgba(15, 23, 42, .64) !important;
+  border-color: #9fb0c6 !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, .95),
+    0 26px 60px -38px rgba(11, 18, 32, .5) !important;
+  transform: translateY(-2px);
 }
 
 .ff-step-header {
-  border-color: var(--ff-ink) !important;
-  background: var(--ff-ink) !important;
-  box-shadow: 0 16px 26px -22px rgba(15, 23, 42, .85) !important;
+  border-color: rgba(255, 255, 255, .07) !important;
+  border-radius: .9rem !important;
+  background:
+    radial-gradient(circle at 88% -30%, rgba(79, 125, 249, .38), transparent 7rem),
+    linear-gradient(180deg, #131d31, var(--ff-ink-deep)) !important;
+  box-shadow: var(--ff-island-shadow) !important;
 }
 
 .ff-task-card {
   border-color: var(--ff-line) !important;
-  border-radius: .8rem !important;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, .04) !important;
-  transition: transform 170ms var(--ff-ease), border-color 170ms ease, box-shadow 170ms ease !important;
+  border-radius: .9rem !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, .85),
+    0 1px 2px rgba(11, 18, 32, .04) !important;
+  transition:
+    transform 340ms var(--ff-ease),
+    border-color 220ms var(--ff-ease),
+    box-shadow 340ms var(--ff-ease) !important;
 }
 
 .ff-task-card:hover {
-  border-color: #9facbc !important;
-  box-shadow: 0 15px 30px -25px rgba(15, 23, 42, .58) !important;
-  transform: translateY(-2px);
+  border-color: #9fb0c6 !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 1),
+    0 18px 38px -26px rgba(11, 18, 32, .5) !important;
+  transform: translateY(-2px) scale(1.004);
 }
+
+/* ------------------------------------------------------------------ */
+/* Task-Bibliothek                                                     */
+/* ------------------------------------------------------------------ */
 
 .ff-task-library-launcher {
   width: 3.15rem;
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, .18) !important;
+  border: 1px solid rgba(255, 255, 255, .16) !important;
   border-right: 0 !important;
-  border-radius: 1rem 0 0 1rem !important;
-  background: var(--ff-ink) !important;
-  box-shadow: 0 20px 46px -24px rgba(15, 23, 42, .76) !important;
-  transition: width 220ms var(--ff-ease), background-color 180ms ease, transform 180ms var(--ff-ease) !important;
+  border-radius: 1.05rem 0 0 1.05rem !important;
+  background:
+    radial-gradient(circle at 30% -40%, rgba(79, 125, 249, .35), transparent 5rem),
+    linear-gradient(180deg, #131d31, var(--ff-ink-deep)) !important;
+  box-shadow: var(--ff-island-shadow) !important;
+  transition:
+    width 340ms var(--ff-ease),
+    background-color 220ms var(--ff-ease),
+    transform 280ms var(--ff-ease) !important;
   white-space: nowrap;
 }
 
@@ -254,13 +390,16 @@
   width: 0;
   opacity: 0;
   transform: translateX(8px);
-  transition: width 220ms var(--ff-ease), opacity 160ms ease, transform 220ms var(--ff-ease);
+  transition:
+    width 340ms var(--ff-ease),
+    opacity 220ms var(--ff-ease),
+    transform 340ms var(--ff-ease);
 }
 
 .ff-task-library-launcher:hover,
 .ff-task-library-launcher:focus-visible {
   width: 11.75rem;
-  background: var(--ff-accent) !important;
+  background: linear-gradient(180deg, #2e4ecc, var(--ff-accent)) !important;
 }
 
 .ff-task-library-launcher:hover .ff-task-library-label,
@@ -271,44 +410,59 @@
 }
 
 .ff-task-drawer {
-  border-color: var(--ff-line) !important;
-  background: rgba(255, 255, 255, .985) !important;
-  box-shadow: -24px 0 70px -38px rgba(15, 23, 42, .62) !important;
-  backdrop-filter: blur(18px);
+  border-color: rgba(221, 227, 236, .9) !important;
+  background: rgba(255, 255, 255, .94) !important;
+  box-shadow:
+    -1px 0 0 rgba(255, 255, 255, .7) inset,
+    -30px 0 90px -42px rgba(11, 18, 32, .6) !important;
+  backdrop-filter: blur(22px) saturate(1.35);
 }
 
 .ff-search-field {
   min-height: 2.7rem;
   border: 1px solid var(--ff-line) !important;
-  border-radius: .85rem !important;
+  border-radius: .95rem !important;
   background: var(--ff-surface-soft) !important;
   color: var(--ff-ink) !important;
-  transition: border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease !important;
+  transition:
+    border-color 220ms var(--ff-ease),
+    background-color 220ms var(--ff-ease),
+    box-shadow 220ms var(--ff-ease) !important;
 }
 
 .ff-search-field:focus {
   border-color: var(--ff-accent) !important;
   background: #fff !important;
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, .1) !important;
 }
 
 .ff-catalog-card {
   border-color: var(--ff-line) !important;
-  border-radius: .9rem !important;
+  border-radius: 1rem !important;
   box-shadow: none !important;
-  transition: transform 170ms var(--ff-ease), border-color 170ms ease, background-color 170ms ease !important;
+  transition:
+    transform 300ms var(--ff-ease),
+    border-color 220ms var(--ff-ease),
+    background-color 220ms var(--ff-ease),
+    box-shadow 300ms var(--ff-ease) !important;
 }
 
 .ff-catalog-card:hover {
   border-color: var(--ff-accent-line) !important;
   background: var(--ff-accent-soft) !important;
-  transform: translateX(-2px);
+  box-shadow: 0 14px 30px -24px rgba(37, 99, 235, .5) !important;
+  transform: translateX(-3px);
 }
 
+/* ------------------------------------------------------------------ */
+/* Studio-Kopf, Status- und Run-Inseln                                 */
+/* ------------------------------------------------------------------ */
+
 .ff-studio-header {
-  border-color: var(--ff-line) !important;
-  background: rgba(255, 255, 255, .97) !important;
-  box-shadow: 0 14px 38px -34px rgba(15, 23, 42, .72) !important;
-  backdrop-filter: blur(18px);
+  border-color: rgba(221, 227, 236, .85) !important;
+  background: rgba(255, 255, 255, .9) !important;
+  box-shadow: 0 18px 44px -38px rgba(11, 18, 32, .7) !important;
+  backdrop-filter: blur(20px) saturate(1.35);
 }
 
 .ff-status-island {
@@ -316,12 +470,14 @@
   align-items: center;
   gap: .5rem;
   min-height: 2.15rem;
-  border: 1px solid var(--ff-line);
-  border-radius: .8rem;
-  background: var(--ff-ink);
+  border: 1px solid rgba(255, 255, 255, .08);
+  border-radius: .85rem;
+  background:
+    radial-gradient(circle at 85% -40%, rgba(79, 125, 249, .3), transparent 4rem),
+    linear-gradient(180deg, #131d31, var(--ff-ink-deep));
   padding: .35rem .65rem;
   color: #fff;
-  box-shadow: 0 12px 24px -20px rgba(15, 23, 42, .9);
+  box-shadow: var(--ff-island-shadow);
 }
 
 .ff-status-island .ff-status-dot {
@@ -343,20 +499,29 @@
   align-items: center;
   gap: .2rem;
   border: 1px solid var(--ff-line) !important;
-  border-radius: .9rem !important;
-  background: var(--ff-surface-soft) !important;
+  border-radius: 1rem !important;
+  background:
+    linear-gradient(180deg, rgba(11, 18, 32, .035), rgba(11, 18, 32, 0) 40%),
+    var(--ff-surface-soft) !important;
   padding: .22rem !important;
 }
 
 .ff-segmented-control > button {
-  border-radius: .68rem !important;
-  transition: color 160ms ease, background-color 160ms ease, box-shadow 160ms ease, transform 160ms var(--ff-ease) !important;
+  border-radius: .78rem !important;
+  transition:
+    color 220ms var(--ff-ease),
+    background-color 220ms var(--ff-ease),
+    box-shadow 220ms var(--ff-ease),
+    transform 220ms var(--ff-ease) !important;
 }
 
 .ff-segmented-control > button[aria-pressed="true"] {
   background: #fff !important;
   color: var(--ff-ink) !important;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, .08), 0 6px 16px -12px rgba(15, 23, 42, .42) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 1),
+    0 1px 2px rgba(11, 18, 32, .1),
+    0 8px 20px -14px rgba(11, 18, 32, .45) !important;
 }
 
 .ff-studio-commandbar {
@@ -369,20 +534,25 @@
   align-items: center;
   gap: .18rem;
   min-width: max-content;
-  border: 1px solid var(--ff-ink) !important;
-  border-radius: .95rem !important;
-  background: var(--ff-ink) !important;
+  border: 1px solid rgba(255, 255, 255, .1) !important;
+  border-radius: 1.05rem !important;
+  background:
+    radial-gradient(circle at 12% -50%, rgba(79, 125, 249, .3), transparent 5rem),
+    linear-gradient(180deg, #131d31, var(--ff-ink-deep)) !important;
   padding: .24rem !important;
-  box-shadow: 0 14px 30px -22px rgba(15, 23, 42, .9) !important;
+  box-shadow: var(--ff-island-shadow) !important;
 }
 
 .ff-run-island > button {
   border: 0 !important;
-  border-radius: .7rem !important;
+  border-radius: .8rem !important;
   background: transparent !important;
   color: #cbd5e1 !important;
   box-shadow: none !important;
-  transition: color 160ms ease, background-color 160ms ease, transform 160ms var(--ff-ease) !important;
+  transition:
+    color 200ms var(--ff-ease),
+    background-color 200ms var(--ff-ease),
+    transform 240ms var(--ff-ease) !important;
 }
 
 .ff-run-island > button:hover:not(:disabled) {
@@ -391,19 +561,28 @@
 }
 
 .ff-run-island > button.ff-run-primary {
-  background: var(--ff-accent) !important;
+  background: linear-gradient(180deg, var(--ff-accent-bright), var(--ff-accent)) !important;
   color: #fff !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, .28),
+    0 8px 18px -10px rgba(37, 99, 235, .8) !important;
 }
 
 .ff-run-island > button:active:not(:disabled) {
-  transform: scale(.975);
+  transform: scale(.955);
 }
 
 .ff-selected-task {
   border-color: var(--ff-accent-line) !important;
   background: var(--ff-accent-soft) !important;
-  box-shadow: inset 3px 0 0 var(--ff-accent) !important;
+  box-shadow:
+    inset 3px 0 0 var(--ff-accent),
+    0 10px 26px -22px rgba(37, 99, 235, .65) !important;
 }
+
+/* ------------------------------------------------------------------ */
+/* Browserfenster & Werkzeuge                                          */
+/* ------------------------------------------------------------------ */
 
 .ff-browser-strip {
   border-color: var(--ff-line) !important;
@@ -412,83 +591,119 @@
 
 .ff-browser-card {
   border-color: var(--ff-line) !important;
-  border-radius: .9rem !important;
+  border-radius: 1rem !important;
   background: var(--ff-surface-soft) !important;
-  box-shadow: none !important;
-  transition: border-color 170ms ease, background-color 170ms ease, transform 170ms var(--ff-ease) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .8) !important;
+  transition:
+    border-color 220ms var(--ff-ease),
+    background-color 220ms var(--ff-ease),
+    box-shadow 300ms var(--ff-ease),
+    transform 300ms var(--ff-ease) !important;
 }
 
 .ff-browser-card:hover {
   border-color: var(--ff-accent-line) !important;
   background: var(--ff-accent-soft) !important;
-  transform: translateY(-1px);
+  box-shadow: 0 14px 32px -26px rgba(37, 99, 235, .55) !important;
+  transform: translateY(-2px);
 }
 
 .ff-tool-dock {
-  border-color: var(--ff-line) !important;
-  background: rgba(255, 255, 255, .96) !important;
-  backdrop-filter: blur(14px);
+  border-color: rgba(221, 227, 236, .85) !important;
+  background: rgba(255, 255, 255, .92) !important;
+  backdrop-filter: blur(18px) saturate(1.3);
 }
 
 .ff-tool-button {
   border-color: var(--ff-line) !important;
   background: var(--ff-surface-soft) !important;
   color: #475569 !important;
-  transition: border-color 160ms ease, color 160ms ease, background-color 160ms ease, transform 160ms var(--ff-ease) !important;
+  transition:
+    border-color 200ms var(--ff-ease),
+    color 200ms var(--ff-ease),
+    background-color 200ms var(--ff-ease),
+    transform 280ms var(--ff-ease),
+    box-shadow 280ms var(--ff-ease) !important;
 }
 
 .ff-tool-button:hover {
   border-color: var(--ff-accent-line) !important;
   background: var(--ff-accent-soft) !important;
   color: #1d4ed8 !important;
-  transform: translateY(-1px);
+  box-shadow: 0 10px 24px -18px rgba(37, 99, 235, .6) !important;
+  transform: translateY(-2px);
 }
 
+/* ------------------------------------------------------------------ */
+/* Gemeinsame Run-Vorschau                                             */
+/* ------------------------------------------------------------------ */
+
 .ff-run-preview-card {
-  border-color: var(--ff-line) !important;
-  border-radius: 1rem !important;
-  box-shadow: var(--ff-shadow-sm) !important;
+  border-color: rgba(255, 255, 255, .7) !important;
+  border-radius: 1.15rem !important;
+  box-shadow:
+    0 0 0 1px rgba(11, 18, 32, .05),
+    inset 0 1px 0 rgba(255, 255, 255, .9),
+    var(--ff-shadow-sm) !important;
 }
 
 .ff-run-preview-header {
   border-color: var(--ff-line) !important;
-  background: rgba(255, 255, 255, .98) !important;
+  background: rgba(255, 255, 255, .96) !important;
+  backdrop-filter: blur(14px);
 }
 
 .ff-loading-island {
-  border-color: var(--ff-line) !important;
-  border-radius: .85rem !important;
-  background: var(--ff-ink) !important;
+  border-color: rgba(255, 255, 255, .1) !important;
+  border-radius: .95rem !important;
+  background:
+    radial-gradient(circle at 50% -60%, rgba(79, 125, 249, .4), transparent 5rem),
+    linear-gradient(180deg, #131d31, var(--ff-ink-deep)) !important;
   color: #fff !important;
-  box-shadow: 0 18px 42px -24px rgba(15, 23, 42, .82) !important;
+  box-shadow: var(--ff-island-shadow) !important;
 }
+
+/* ------------------------------------------------------------------ */
+/* Copilot: Launcher, Panel, Chat                                      */
+/* ------------------------------------------------------------------ */
 
 .ff-copilot-launcher {
   width: 3.5rem;
   justify-content: flex-start !important;
   gap: .65rem;
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, .14) !important;
-  border-radius: 1.05rem !important;
-  background: var(--ff-ink) !important;
+  border: 1px solid rgba(255, 255, 255, .13) !important;
+  border-radius: 1.15rem !important;
+  background:
+    radial-gradient(circle at 22% -50%, rgba(79, 125, 249, .45), transparent 4.5rem),
+    linear-gradient(180deg, #17233a, var(--ff-ink-deep)) !important;
   padding: .55rem !important;
   color: #fff !important;
-  box-shadow: 0 22px 50px -26px rgba(15, 23, 42, .82) !important;
-  transition: width 220ms var(--ff-ease), transform 180ms var(--ff-ease), background-color 180ms ease !important;
+  box-shadow: var(--ff-island-shadow) !important;
+  transition:
+    width 340ms var(--ff-ease),
+    transform 280ms var(--ff-ease),
+    background-color 220ms var(--ff-ease),
+    box-shadow 340ms var(--ff-ease) !important;
   white-space: nowrap;
 }
 
 .ff-copilot-launcher:hover,
 .ff-copilot-launcher:focus-visible {
   width: 9.8rem;
-  background: var(--ff-accent) !important;
+  background: linear-gradient(180deg, #2e4ecc, var(--ff-accent)) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, .2),
+    0 24px 54px -24px rgba(37, 99, 235, .75) !important;
   transform: translateY(-2px);
 }
 
 .ff-copilot-launcher-label {
   opacity: 0;
   transform: translateX(8px);
-  transition: opacity 160ms ease, transform 220ms var(--ff-ease);
+  transition:
+    opacity 220ms var(--ff-ease),
+    transform 340ms var(--ff-ease);
 }
 
 .ff-copilot-launcher:hover .ff-copilot-launcher-label,
@@ -498,47 +713,61 @@
 }
 
 .ff-copilot-panel {
-  border-color: var(--ff-line) !important;
+  border-color: rgba(221, 227, 236, .9) !important;
   background: #fff !important;
-  box-shadow: -26px 0 76px -40px rgba(15, 23, 42, .66) !important;
+  box-shadow:
+    -1px 0 0 rgba(255, 255, 255, .65) inset,
+    -32px 0 96px -44px rgba(11, 18, 32, .66) !important;
 }
 
 .ff-copilot-header {
-  border-color: rgba(255, 255, 255, .08) !important;
+  border-color: rgba(255, 255, 255, .07) !important;
   background:
-    radial-gradient(circle at 95% 0, rgba(37, 99, 235, .25), transparent 15rem),
-    var(--ff-ink) !important;
+    radial-gradient(circle at 96% -10%, rgba(79, 125, 249, .38), transparent 16rem),
+    radial-gradient(circle at 0% 130%, rgba(45, 212, 191, .12), transparent 12rem),
+    linear-gradient(180deg, #101a2c, var(--ff-ink-deep)) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .07);
 }
 
 .ff-copilot-messages {
   background-color: var(--ff-canvas) !important;
-  background-image: radial-gradient(rgba(100, 116, 139, .16) .55px, transparent .55px) !important;
-  background-size: 8px 8px !important;
+  background-image:
+    radial-gradient(circle at 85% 0%, rgba(79, 125, 249, .05), transparent 22rem),
+    radial-gradient(rgba(100, 116, 139, .15) .5px, transparent .5px) !important;
+  background-size: 100% 100%, 8px 8px !important;
 }
 
 .ff-chat-bubble {
-  border-radius: 1rem !important;
-  box-shadow: 0 12px 30px -28px rgba(15, 23, 42, .7) !important;
-  animation: ff-message-enter 180ms var(--ff-ease) both;
+  border-radius: 1.05rem !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, .5),
+    0 14px 34px -30px rgba(11, 18, 32, .75) !important;
+  animation: ff-message-enter 420ms var(--ff-ease-out) both;
 }
 
 .ff-chat-bubble--user {
-  border-color: var(--ff-ink) !important;
+  border-color: rgba(255, 255, 255, .1) !important;
   border-bottom-right-radius: .35rem !important;
-  background: var(--ff-ink) !important;
+  background:
+    radial-gradient(circle at 85% -50%, rgba(79, 125, 249, .4), transparent 6rem),
+    linear-gradient(180deg, #17233a, var(--ff-ink-deep)) !important;
   color: #fff !important;
+  box-shadow: var(--ff-island-shadow) !important;
 }
 
 .ff-chat-bubble--assistant {
-  border-color: var(--ff-line) !important;
+  border-color: rgba(221, 227, 236, .95) !important;
   border-bottom-left-radius: .35rem !important;
   background: rgba(255, 255, 255, .97) !important;
 }
 
 .ff-chat-intro {
-  border-color: var(--ff-line) !important;
-  background: rgba(255, 255, 255, .94) !important;
-  box-shadow: var(--ff-shadow-sm) !important;
+  border-color: rgba(255, 255, 255, .75) !important;
+  background: rgba(255, 255, 255, .93) !important;
+  box-shadow:
+    0 0 0 1px rgba(11, 18, 32, .04),
+    inset 0 1px 0 rgba(255, 255, 255, .95),
+    var(--ff-shadow-sm) !important;
 }
 
 .ff-quick-grid {
@@ -550,10 +779,14 @@
 .ff-quick-command {
   min-height: 5.5rem;
   border-color: var(--ff-line) !important;
-  border-radius: .9rem !important;
+  border-radius: 1rem !important;
   background: rgba(255, 255, 255, .94) !important;
-  box-shadow: none !important;
-  transition: transform 170ms var(--ff-ease), border-color 170ms ease, background-color 170ms ease !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .85) !important;
+  transition:
+    transform 320ms var(--ff-ease),
+    border-color 220ms var(--ff-ease),
+    background-color 220ms var(--ff-ease),
+    box-shadow 320ms var(--ff-ease) !important;
 }
 
 .ff-quick-command:first-child {
@@ -563,29 +796,43 @@
 .ff-quick-command:hover {
   border-color: var(--ff-accent-line) !important;
   background: var(--ff-accent-soft) !important;
-  transform: translateY(-2px);
+  box-shadow: 0 16px 36px -28px rgba(37, 99, 235, .6) !important;
+  transform: translateY(-3px);
 }
 
 .ff-quick-command .ff-quick-icon {
   background: var(--ff-accent-soft) !important;
   color: var(--ff-accent) !important;
+  transition:
+    background-color 220ms var(--ff-ease),
+    color 220ms var(--ff-ease),
+    transform 320ms var(--ff-ease);
 }
 
 .ff-quick-command:hover .ff-quick-icon {
-  background: var(--ff-accent) !important;
+  background: linear-gradient(180deg, var(--ff-accent-bright), var(--ff-accent)) !important;
   color: #fff !important;
+  transform: scale(1.08) rotate(-4deg);
 }
 
 .ff-composer {
   border-color: var(--ff-line-strong) !important;
-  border-radius: 1rem !important;
-  box-shadow: 0 12px 30px -28px rgba(15, 23, 42, .72) !important;
-  transition: border-color 160ms ease, box-shadow 160ms ease !important;
+  border-radius: 1.15rem !important;
+  box-shadow:
+    var(--ff-bezel),
+    inset 0 1px 0 rgba(255, 255, 255, .9),
+    0 14px 34px -30px rgba(11, 18, 32, .72) !important;
+  transition:
+    border-color 220ms var(--ff-ease),
+    box-shadow 320ms var(--ff-ease) !important;
 }
 
 .ff-composer:focus-within {
   border-color: var(--ff-accent) !important;
-  box-shadow: 0 0 0 4px rgba(37, 99, 235, .1), 0 16px 30px -26px rgba(15, 23, 42, .62) !important;
+  box-shadow:
+    0 0 0 4px rgba(37, 99, 235, .12),
+    inset 0 1px 0 rgba(255, 255, 255, 1),
+    0 18px 38px -28px rgba(37, 99, 235, .45) !important;
 }
 
 .ff-jump-latest {
@@ -597,20 +844,26 @@
   align-items: center;
   gap: .45rem;
   min-height: 2.45rem;
-  border: 1px solid rgba(255, 255, 255, .16) !important;
-  border-radius: .85rem !important;
-  background: var(--ff-ink) !important;
+  border: 1px solid rgba(255, 255, 255, .14) !important;
+  border-radius: .95rem !important;
+  background:
+    radial-gradient(circle at 50% -60%, rgba(79, 125, 249, .35), transparent 4rem),
+    linear-gradient(180deg, #131d31, var(--ff-ink-deep)) !important;
   padding: .45rem .7rem !important;
   color: #fff !important;
-  box-shadow: 0 18px 38px -22px rgba(15, 23, 42, .8) !important;
+  box-shadow: var(--ff-island-shadow) !important;
 }
 
 .ff-audio-state {
   border: 1px solid var(--ff-accent-line);
-  border-radius: .75rem;
+  border-radius: .8rem;
   background: var(--ff-accent-soft);
   color: #1e40af;
 }
+
+/* ------------------------------------------------------------------ */
+/* Keyframes                                                           */
+/* ------------------------------------------------------------------ */
 
 @keyframes ff-status-breathe {
   0%, 100% { box-shadow: 0 0 0 4px rgba(74, 222, 128, .12); transform: scale(.94); }
@@ -618,13 +871,22 @@
 }
 
 @keyframes ff-message-enter {
-  from { opacity: 0; transform: translateY(7px) scale(.99); }
+  from { opacity: 0; transform: translateY(9px) scale(.985); filter: blur(3px); }
+  to { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
+}
+
+@keyframes ff-menu-pop {
+  from { opacity: 0; transform: translateY(-6px) scale(.96); }
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
+/* ------------------------------------------------------------------ */
+/* Responsivitaet — Geometrie identisch zum Vorstand                   */
+/* ------------------------------------------------------------------ */
+
 @media (max-width: 1139px) {
   .ff-command-surface {
-    border-radius: 1rem !important;
+    border-radius: 1.1rem !important;
   }
 
   .ff-metric-rail {
