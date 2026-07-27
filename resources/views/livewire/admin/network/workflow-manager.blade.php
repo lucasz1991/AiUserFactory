@@ -78,7 +78,7 @@
     $quickPreviewReturnLabel = $quickPreviewRun ? $workflowReturnLabel($quickPreviewRun) : null;
 @endphp
 <div
-    class="space-y-5"
+    class="workflow-experience space-y-5"
     wire:loading.class="opacity-60 pointer-events-none"
     x-data="{
         taskInsertTarget: null,
@@ -119,16 +119,16 @@
         }
     "
 >
-    <div class="p-box shadow-box bg-box border border-box rounded-box">
-        <div class="flex flex-wrap items-start justify-between gap-2">
+    <section class="ff-command-surface px-4 py-5 sm:px-6 sm:py-6" aria-labelledby="workflow-manager-title">
+        <div class="relative z-10 flex flex-wrap items-start justify-between gap-5">
             <div class="min-w-0">
                 <div class="flex flex-wrap items-center gap-2">
-                    <a href="{{ route('network.workflows') }}" class="text-sm font-semibold text-slate-700 hover:text-slate-950">Workflows</a>
-                    <span class="text-sm text-slate-400">/</span>
-                    <span class="text-sm text-slate-500">Management</span>
+                    <a href="{{ route('network.workflows') }}" class="ff-kicker transition hover:text-blue-800">Workflow Management</a>
+                    <span class="text-xs text-slate-300" aria-hidden="true">/</span>
+                    <span class="text-xs font-semibold text-slate-500">Editor</span>
                 </div>
                 <div class="mt-2 flex items-center gap-2">
-                    <h1 class="text-2xl font-semibold text-gray-900">{{ $selectedWorkflow?->name ?? 'Workflow Management' }}</h1>
+                    <h1 id="workflow-manager-title" class="ff-page-title">{{ $selectedWorkflow?->name ?? 'Workflow Management' }}</h1>
                     @if($workflowLocked)
                         <span title="{{ $selectedWorkflow->lock_reason }}" class="inline-flex h-7 w-7 items-center justify-center rounded-full bg-amber-100 text-amber-700" aria-label="Workflow gesperrt">
                             <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
@@ -137,23 +137,24 @@
                         </span>
                     @endif
                 </div>
-                <p class="mt-1 text-sm text-gray-500">
-                    Workflow als Prozessablauf: Aufgaben als Listen, Tasks als Karten, Verzweigungen nach Ergebnisstatus.
+                <p class="ff-page-copy mt-2 text-sm">
+                    Listen strukturieren den Ablauf. Tasks lassen sich direkt platzieren, verbinden und anschließend schrittweise testen.
                 </p>
             </div>
 
             @if($selectedWorkflow)
-                <div class="ml-auto flex max-w-full flex-col items-end gap-2">
+                <div class="ml-auto flex max-w-full flex-col items-end gap-3">
                     <div class="flex flex-wrap justify-end gap-2">
                         <div class="relative" x-data="{ open: false }" x-on:keydown.escape.window="open = false">
-                            <button type="button" x-on:click="open = ! open" x-bind:aria-expanded="open" class="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">
+                            <button type="button" x-on:click="open = ! open" x-bind:aria-expanded="open" class="ff-action-trigger ff-action-trigger--primary inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold">
+                                <span class="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-white/10" aria-hidden="true">▶</span>
                                 Testen
                                 <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" /></svg>
                             </button>
-                            <div x-cloak x-show="open" x-transition x-on:click.outside="open = false" class="absolute right-0 z-50 mt-2 w-56 rounded-lg border border-slate-200 bg-white p-1.5 shadow-xl">
+                            <div x-cloak x-show="open" x-transition.origin.top.right x-on:click.outside="open = false" class="ff-menu absolute right-0 z-50 mt-2 w-72 p-1.5">
                                 <button type="button" wire:click="openTestWorkbench('interactive')" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-slate-900 hover:bg-slate-100">
-                                    Interaktiv testen
-                                    <span class="mt-0.5 block text-xs font-medium text-slate-500">Schrittweise testen, pausieren und Tasks bearbeiten</span>
+                                    Eine Task nach der anderen
+                                    <span class="mt-0.5 block text-xs font-medium text-slate-500">Auswählen, ausführen, prüfen und direkt bearbeiten</span>
                                 </button>
                                 <button type="button" wire:click="openTestWorkbench('autonomous')" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-cyan-800 hover:bg-cyan-50">
                                     Autonom optimieren
@@ -180,11 +181,11 @@
                         </div>
 
                         <div class="relative" x-data="{ open: false }" x-on:keydown.escape.window="open = false">
-                            <button type="button" x-on:click="open = ! open" x-bind:aria-expanded="open" class="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
+                            <button type="button" x-on:click="open = ! open" x-bind:aria-expanded="open" class="ff-action-trigger inline-flex items-center gap-2 px-3 py-2 text-sm font-semibold">
                                 Bearbeiten
                                 <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" /></svg>
                             </button>
-                            <div x-cloak x-show="open" x-transition x-on:click.outside="open = false" class="absolute right-0 z-50 mt-2 w-56 rounded-lg border border-slate-200 bg-white p-1.5 shadow-xl">
+                            <div x-cloak x-show="open" x-transition.origin.top.right x-on:click.outside="open = false" class="ff-menu absolute right-0 z-50 mt-2 w-64 p-1.5">
                                 <button type="button" wire:click="$set('showWorkflowModal', true)" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-100">Workflow-Einstellungen</button>
                                 <button type="button" wire:click="$set('showAddStepModal', true)" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-100">Liste hinzufügen</button>
                                 <button type="button" wire:click="$set('showActionLibraryModal', true)" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-amber-700 hover:bg-amber-50">Aktionsbibliothek</button>
@@ -192,11 +193,11 @@
                         </div>
 
                         <div class="relative" x-data="{ open: false }" x-on:keydown.escape.window="open = false">
-                            <button type="button" x-on:click="open = ! open" x-bind:aria-expanded="open" class="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
+                            <button type="button" x-on:click="open = ! open" x-bind:aria-expanded="open" class="ff-action-trigger inline-flex items-center gap-2 px-3 py-2 text-sm font-semibold">
                                 Weitere
                                 <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" /></svg>
                             </button>
-                            <div x-cloak x-show="open" x-transition x-on:click.outside="open = false" class="absolute right-0 z-50 mt-2 w-56 rounded-lg border border-slate-200 bg-white p-1.5 shadow-xl">
+                            <div x-cloak x-show="open" x-transition.origin.top.right x-on:click.outside="open = false" class="ff-menu absolute right-0 z-50 mt-2 w-64 p-1.5">
                                 <button type="button" wire:click="openRevisionHistory" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-violet-700 hover:bg-violet-50">
                                     Revisionen
                                     <span class="mt-0.5 block text-xs font-medium text-violet-500">Einsehen, vergleichen, zurücksetzen</span>
@@ -212,25 +213,25 @@
                         </div>
                     </div>
 
-                    <div class="flex flex-wrap justify-end gap-1.5" aria-label="Workflow-Statistik">
+                    <dl class="ff-metric-rail" aria-label="Workflow-Statistik">
                         @foreach([
-                            ['Aufgaben', $summary['actions'], 'bg-slate-100 text-slate-700'],
-                            ['Listen', $summary['lists'], 'bg-blue-50 text-blue-700'],
-                            ['Tasks', $summary['task_cards'], 'bg-amber-50 text-amber-700'],
-                            ['Benutzt', $summary['runs'], 'bg-slate-100 text-slate-700'],
-                            ['Erfolgreich', $summary['successful_runs'], 'bg-emerald-50 text-emerald-700'],
-                            ['Fehlerhaft', $summary['failed_runs'], 'bg-red-50 text-red-700'],
-                        ] as [$label, $value, $classes])
-                            <span class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] leading-none {{ $classes }}">
-                                <span class="font-medium opacity-75">{{ $label }}</span>
-                                <span class="font-bold tabular-nums">{{ $value }}</span>
-                            </span>
+                            ['Aufgaben', $summary['actions']],
+                            ['Listen', $summary['lists']],
+                            ['Tasks', $summary['task_cards']],
+                            ['Testläufe', $summary['runs']],
+                            ['Erfolgreich', $summary['successful_runs']],
+                            ['Fehlerhaft', $summary['failed_runs']],
+                        ] as [$label, $value])
+                            <div class="ff-metric">
+                                <dt>{{ $label }}</dt>
+                                <dd>{{ $value }}</dd>
+                            </div>
                         @endforeach
-                    </div>
+                    </dl>
                 </div>
             @endif
         </div>
-    </div>
+    </section>
 
     @if (session()->has('success'))
         <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-2 text-sm text-emerald-900">
@@ -605,11 +606,12 @@
                 x-init="refreshRouteLines()"
                 x-on:keydown.escape.window="setFullscreen(false)"
                 x-bind:class="isFullscreen ? 'fixed inset-0 z-[60] flex flex-col rounded-none border-0' : 'rounded-xl border border-slate-200'"
-                class="overflow-hidden "
+                class="ff-canvas-shell overflow-hidden"
             >
-                <div class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white p-box">
+                <div class="ff-canvas-toolbar flex shrink-0 flex-wrap items-center justify-between gap-3 border-b p-4 sm:px-5">
                     <div class="min-w-0">
-                        <p class="text-sm font-semibold text-slate-900">{{ $selectedWorkflow->name }}</p>
+                        <p class="ff-kicker">Workflow-Canvas</p>
+                        <p class="mt-1 text-sm font-bold text-slate-950">{{ $selectedWorkflow->name }}</p>
                         <p class="mt-0.5 text-xs text-slate-500">
                             <span x-show="! isFullscreen">Listen horizontal anordnen, Tasks verschieben oder aus der Bibliothek hineinziehen.</span>
                             <span x-cloak x-show="isFullscreen">Vollbildansicht · Mit Esc beenden.</span>
@@ -646,8 +648,7 @@
                     x-ref="routeSurface"
                     x-on:scroll.debounce.100ms="refreshRouteLines()"
                     x-bind:class="isFullscreen ? 'min-h-0 flex-1 max-h-none' : ' min-h-70vh'"
-                    class="relative isolate overflow-x-auto overflow-y-hidden bg-white scroll-container"
-                    style="background-image:linear-gradient(rgba(203,213,225,.18) 1px,transparent 1px),linear-gradient(90deg,rgba(203,213,225,.18) 1px,transparent 1px),linear-gradient(rgba(226,232,240,.12) 1px,transparent 1px),linear-gradient(90deg,rgba(226,232,240,.12) 1px,transparent 1px);background-size:20px 20px,20px 20px,100px 100px,100px 100px;"
+                    class="ff-canvas-grid relative isolate overflow-x-auto overflow-y-hidden scroll-container"
                 >
                     <svg
                         x-cloak
@@ -701,27 +702,29 @@
                 type="button"
                 x-on:click="clearTaskInsert()"
                 wire:click="$set('showTaskPanel', true)"
-                class="fixed right-0 top-1/2 z-[65] flex -translate-y-1/2 items-center gap-2 rounded-l-xl border border-r-0 border-slate-700 bg-slate-900 px-3 py-3 text-sm font-semibold text-white shadow-xl transition hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:ring-offset-2"
+                class="ff-task-library-launcher fixed right-0 top-1/2 z-[65] flex -translate-y-1/2 items-center gap-2 px-3 py-3 text-sm font-semibold text-white"
                 aria-label="Task-Bibliothek oeffnen"
             >
-                <svg class="h-5 w-5 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                <svg class="h-5 w-5 shrink-0 text-blue-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
                     <rect x="3" y="3" width="7" height="7" rx="1.5"></rect>
                     <rect x="14" y="3" width="7" height="7" rx="1.5"></rect>
                     <rect x="3" y="14" width="7" height="7" rx="1.5"></rect>
                     <path d="M17.5 14v7M14 17.5h7"></path>
                 </svg>
+                <span class="ff-task-library-label overflow-hidden text-left text-xs font-bold">Task-Bibliothek</span>
             </button>
         @endif
 
         @if($showTaskPanel)
             <div
-                x-data="{}"
+                x-data="{ search: '' }"
                 x-on:keydown.escape.window="clearTaskInsert()"
-                class="fixed inset-y-0 right-0 z-[70] flex w-full max-w-md flex-col border-l border-slate-200 bg-white shadow-2xl"
+                class="ff-task-drawer fixed inset-y-0 right-0 z-[70] flex w-full max-w-md flex-col border-l"
             >
-                <div class="flex items-start justify-between gap-3 border-b border-slate-200 bg-slate-50/80 p-5">
+                <div class="flex items-start justify-between gap-3 border-b border-slate-200 bg-white p-5">
                     <div class="min-w-0">
-                        <h2 class="text-base font-semibold text-slate-900">Task-Bibliothek</h2>
+                        <p class="ff-kicker">Katalog</p>
+                        <h2 class="mt-1 text-lg font-bold tracking-tight text-slate-950">Task-Bibliothek</h2>
                         <p class="mt-1 text-xs text-slate-500" x-show="! taskInsertTarget">Task auf eine Liste ziehen, danach oeffnet sich das Formular.</p>
                         <div x-cloak x-show="taskInsertTarget" role="status" class="mt-1 flex flex-wrap items-center gap-2">
                             <p class="text-xs text-emerald-700">
@@ -733,11 +736,19 @@
                         </div>
                     </div>
                     <button type="button" x-on:click="clearTaskInsert()" wire:click="$set('showTaskPanel', false)" class="flex h-8 w-8 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-900">
-                        x
+                        <span aria-hidden="true">×</span><span class="sr-only">Task-Bibliothek schließen</span>
                     </button>
                 </div>
+                <div class="border-b border-slate-100 px-4 py-3">
+                    <label for="workflow-task-search" class="sr-only">Tasks durchsuchen</label>
+                    <div class="relative">
+                        <svg class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-4-4"></path></svg>
+                        <input id="workflow-task-search" x-model.debounce.120ms="search" type="search" class="ff-search-field block w-full py-2 pl-10 pr-9 text-sm" placeholder="Task, Kategorie oder Funktion suchen …">
+                        <button x-cloak x-show="search" type="button" x-on:click="search = ''; $nextTick(() => document.getElementById('workflow-task-search')?.focus())" class="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-slate-400 hover:bg-white hover:text-slate-800" aria-label="Suche leeren">×</button>
+                    </div>
+                </div>
                 <div class="border-b border-slate-200 px-4">
-                    <nav class="-mb-px flex gacontainer overflow-x-auto" aria-label="Task Gruppen">
+                    <nav class="-mb-px flex gap-4 overflow-x-auto" aria-label="Task-Gruppen">
                         @foreach($taskGroups as $taskGroup)
                             <button
                                 type="button"
@@ -751,7 +762,7 @@
                         @endforeach
                     </nav>
                 </div>
-                <div class="flex-1 space-y-3 overflow-y-auto container">
+                <div class="flex-1 space-y-3 overflow-y-auto p-4">
                     @foreach($visibleTaskDefinitions as $taskDefinition)
                         <div
                             data-workflow-task-catalog-key="{{ $taskDefinition['key'] }}"
@@ -765,7 +776,9 @@
                             x-bind:tabindex="taskInsertTarget ? 0 : -1"
                             x-bind:role="taskInsertTarget ? 'button' : null"
                             x-bind:class="taskInsertTarget ? 'cursor-pointer ring-1 ring-emerald-300 hover:ring-emerald-500' : 'cursor-grab active:cursor-grabbing'"
-                            class="rounded-xl border border-slate-200 bg-white container shadow-sm transition hover:border-slate-400 hover:shadow-md"
+                            x-show="search === '' || @js(\Illuminate\Support\Str::lower(implode(' ', [$taskDefinition['label'], $taskDefinition['kind'], $taskDefinition['key'], $taskDefinition['description']]))).includes(search.trim().toLocaleLowerCase('de-DE'))"
+                            x-transition.opacity.duration.120ms
+                            class="ff-catalog-card border bg-white p-4 transition"
                         >
                             <div class="flex items-start justify-between gap-3">
                                 <p class="text-sm font-semibold text-slate-900">{{ $taskDefinition['label'] }}</p>

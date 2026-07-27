@@ -46,7 +46,7 @@
     x-on:workflow-studio-open-builder.window="$wire.openStudioPanel('builder')"
     data-workflow-studio-shell
     data-workflow-studio-mode="{{ $embedded ? 'embedded' : 'standalone' }}"
-    class="{{ $embedded ? 'relative h-[100dvh]' : 'fixed inset-0 top-0 z-[70] h-[100dvh]' }} flex min-h-0 flex-col overflow-hidden bg-slate-100 text-slate-900"
+    class="workflow-experience {{ $embedded ? 'relative h-[100dvh]' : 'fixed inset-0 top-0 z-[70] h-[100dvh]' }} flex min-h-0 flex-col overflow-hidden bg-slate-100 text-slate-900"
     wire:poll.{{ $studioPollSeconds ?? 2 }}s="refreshStudio"
 >
     @php
@@ -84,33 +84,35 @@
         };
     @endphp
 
-    <header class="relative z-30 shrink-0 border-b border-slate-200 bg-white shadow-sm">
-        <div class="flex flex-wrap items-center gap-3 px-4 py-3 lg:px-6">
+    <header class="ff-studio-header relative z-30 shrink-0 border-b">
+        <div class="flex flex-wrap items-center gap-3 px-3 py-3 sm:px-4 lg:px-6">
             @if($embedded)
-                <button type="button" x-on:click="$dispatch('workflow-studio-unpin-copilot')" wire:click="closeStudio" class="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-cyan-500">
+                <button type="button" x-on:click="$dispatch('workflow-studio-unpin-copilot')" wire:click="closeStudio" class="ff-action-trigger inline-flex h-9 items-center gap-2 px-3 text-xs font-semibold">
                     <span aria-hidden="true">←</span> Manager
                 </button>
             @else
-                <a href="{{ route('network.workflows.manage', $workflow) }}" class="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-cyan-500">
+                <a href="{{ route('network.workflows.manage', $workflow) }}" class="ff-action-trigger inline-flex h-9 items-center gap-2 px-3 text-xs font-semibold">
                     <span aria-hidden="true">←</span> Manager
                 </a>
             @endif
 
             <div class="min-w-[220px] flex-1">
-                <div class="flex flex-wrap items-center gap-2">
-                    <span class="text-[9px] font-black uppercase tracking-[0.18em] text-cyan-700">Workflow-Test</span>
-                    <span class="text-slate-300">/</span>
-                    <h1 class="max-w-xl truncate text-sm font-bold text-slate-950">{{ $workflow->name }}</h1>
-                    <span class="rounded-full border px-2.5 py-1 text-[10px] font-black {{ $statusTone }}"><span class="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-current align-middle"></span>{{ $statusLabel }}</span>
+                <div class="flex flex-wrap items-center gap-2.5">
+                    <span class="ff-kicker">Workflow-Test</span>
+                    <h1 class="max-w-xl truncate text-base font-bold tracking-tight text-slate-950">{{ $workflow->name }}</h1>
+                    <span class="ff-status-island" data-active="{{ $isActive ? 'true' : 'false' }}" role="status" aria-live="polite">
+                        <span class="ff-status-dot" aria-hidden="true"></span>
+                        <span class="text-[10px] font-bold tracking-wide">{{ $statusLabel }}</span>
+                    </span>
                 </div>
                 <p class="mt-1 text-[10px] text-slate-500">Sitzung #{{ $session->id }} · Revision {{ $workflow->copilot_revision }} · {{ $permissionLabel }}</p>
             </div>
 
-            <div class="flex items-center gap-1 rounded-xl border border-slate-200 bg-slate-50 p-1" aria-label="Testmodus">
-                <button type="button" wire:click="chooseControlMode('interactive')" @disabled($modeLocked) class="h-8 rounded-lg px-3 text-[11px] font-bold transition {{ ! $autonomousMode ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-500 hover:text-slate-800' }} disabled:cursor-not-allowed">
+            <div class="ff-segmented-control" aria-label="Testmodus">
+                <button type="button" wire:click="chooseControlMode('interactive')" aria-pressed="{{ ! $autonomousMode ? 'true' : 'false' }}" @disabled($modeLocked) class="h-8 px-3 text-[11px] font-bold {{ ! $autonomousMode ? 'text-slate-950' : 'text-slate-500 hover:text-slate-800' }} disabled:cursor-not-allowed">
                     Eigenes Testen
                 </button>
-                <button type="button" wire:click="chooseControlMode('autonomous')" @disabled($modeLocked) class="h-8 rounded-lg px-3 text-[11px] font-bold transition {{ $autonomousMode ? 'bg-cyan-700 text-white shadow-sm' : 'text-slate-500 hover:text-cyan-800' }} disabled:cursor-not-allowed">
+                <button type="button" wire:click="chooseControlMode('autonomous')" aria-pressed="{{ $autonomousMode ? 'true' : 'false' }}" @disabled($modeLocked) class="h-8 px-3 text-[11px] font-bold {{ $autonomousMode ? 'text-slate-950' : 'text-slate-500 hover:text-blue-800' }} disabled:cursor-not-allowed">
                     Autonomer Copilot
                 </button>
             </div>
@@ -125,9 +127,9 @@
         </div>
 
         @if(! $autonomousMode)
-            <div class="flex min-w-0 flex-wrap items-center gap-2 border-t border-slate-100 px-4 py-2.5 lg:px-6">
+            <div class="ff-studio-commandbar flex min-w-0 items-center gap-2 overflow-x-auto border-t border-slate-100 px-3 py-2.5 sm:px-4 lg:px-6">
                 {{-- Anders als das Select in den Copilot-Einstellungen bleibt die Personenwahl hier auch nach dem Modus-Lock zwischen Laeufen aenderbar; der Kontext wird erst beim Start in den Run-Context eingefroren --}}
-                <label class="flex items-center gap-2 rounded-xl border border-slate-200 bg-white py-1 pl-3 pr-1" title="Person / Testkontext für diesen Lauf">
+                <label class="flex shrink-0 items-center gap-2 rounded-xl border border-slate-200 bg-white py-1 pl-3 pr-1" title="Person / Testkontext für diesen Lauf">
                     <span class="shrink-0 text-[9px] font-black uppercase tracking-[0.16em] text-slate-400">Person</span>
                     <select wire:model="personId" @disabled($isActive || $isPaused) class="h-8 max-w-[200px] rounded-lg border-slate-200 bg-white text-[11px] font-bold text-slate-700 shadow-sm focus:border-cyan-500 focus:ring-cyan-500 disabled:cursor-not-allowed disabled:opacity-40">
                         <option value="">Keine Person</option>
@@ -137,22 +139,22 @@
                     </select>
                 </label>
 
-                <div class="flex items-center gap-1 rounded-xl border border-slate-200 bg-slate-50 p-1">
-                    <button type="button" wire:click="startRun" @disabled($isActive || $isPaused) class="inline-flex h-8 items-center gap-2 rounded-lg bg-slate-900 px-3 text-[11px] font-bold text-white shadow-sm transition hover:bg-slate-800 active:translate-y-px disabled:cursor-not-allowed disabled:opacity-35">
-                        <span aria-hidden="true">▶</span> Bis Ende starten
-                    </button>
-                    <button type="button" wire:click="runSingleTask" @disabled($isActive || ! $selectedTask) class="inline-flex h-8 items-center gap-2 rounded-lg bg-cyan-700 px-3 text-[11px] font-bold text-white shadow-sm transition hover:bg-cyan-600 active:translate-y-px disabled:cursor-not-allowed disabled:opacity-35">
+                <div class="ff-run-island shrink-0" aria-label="Test starten">
+                    <button type="button" wire:click="runSingleTask" @disabled($isActive || ! $selectedTask) class="ff-run-primary inline-flex h-8 items-center gap-2 px-3 text-[11px] font-bold disabled:cursor-not-allowed disabled:opacity-35">
                         <span aria-hidden="true">▷|</span> Eine Task
                     </button>
-                    <button type="button" wire:click="runRealPlayback" @disabled($isActive || $isPaused) title="Wie im echten Ablauf: ohne Screenshots, DOM oder Cursor – am Ende nur das Ergebnis." class="inline-flex h-8 items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 text-[11px] font-bold text-slate-700 shadow-sm transition hover:bg-slate-100 active:translate-y-px disabled:cursor-not-allowed disabled:opacity-35">
+                    <button type="button" wire:click="startRun" @disabled($isActive || $isPaused) class="inline-flex h-8 items-center gap-2 px-3 text-[11px] font-bold disabled:cursor-not-allowed disabled:opacity-35">
+                        <span aria-hidden="true">▶</span> Bis Ende
+                    </button>
+                    <button type="button" wire:click="runRealPlayback" @disabled($isActive || $isPaused) title="Wie im echten Ablauf: ohne Screenshots, DOM oder Cursor – am Ende nur das Ergebnis." class="inline-flex h-8 items-center gap-2 px-3 text-[11px] font-bold disabled:cursor-not-allowed disabled:opacity-35">
                         <span aria-hidden="true">⏵</span> Echter Ablauf
                     </button>
                 </div>
 
-                <div class="flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-1">
-                    <button type="button" wire:click="selectPreviousTask" @disabled(! $hasPreviousTask) class="h-8 rounded-lg px-2.5 text-[11px] font-bold text-slate-700 transition hover:bg-slate-100 disabled:opacity-30">←</button>
+                <div class="ff-segmented-control shrink-0">
+                    <button type="button" wire:click="selectPreviousTask" aria-label="Vorherige Task auswählen" @disabled(! $hasPreviousTask) class="h-8 px-2.5 text-[11px] font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-30">←</button>
                     <span class="min-w-12 text-center font-mono text-[10px] font-bold text-slate-400">{{ $selectedTaskNumber ?: '–' }}/{{ $taskCount }}</span>
-                    <button type="button" wire:click="selectNextTask" @disabled(! $hasNextTask) class="h-8 rounded-lg px-2.5 text-[11px] font-bold text-slate-700 transition hover:bg-slate-100 disabled:opacity-30">→</button>
+                    <button type="button" wire:click="selectNextTask" aria-label="Nächste Task auswählen" @disabled(! $hasNextTask) class="h-8 px-2.5 text-[11px] font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-30">→</button>
                 </div>
 
                 <button type="button" wire:click="pauseRun" @disabled(! $isActive) class="h-9 rounded-lg border border-amber-200 bg-amber-50 px-3 text-[11px] font-bold text-amber-800 transition hover:bg-amber-100 disabled:opacity-30">Pausieren</button>
@@ -161,9 +163,9 @@
                 <button type="button" wire:click="stopRun" wire:confirm="Diesen Lauf wirklich stoppen?" @disabled(! $isActive && ! $isPaused) class="h-9 rounded-lg border border-rose-200 bg-white px-3 text-[11px] font-bold text-rose-700 transition hover:bg-rose-50 disabled:opacity-30">Stoppen</button>
 
                 @if($selectedTask)
-                    <button type="button" wire:click="editSelectedTask" class="ml-auto flex min-w-0 max-w-sm items-center gap-2 rounded-xl border border-cyan-200 bg-cyan-50 px-3 py-1.5 text-left transition hover:border-cyan-400 hover:bg-cyan-100">
-                        <span class="h-2.5 w-2.5 shrink-0 rounded-full bg-cyan-500"></span>
-                        <span class="min-w-0"><span class="block text-[8px] font-black uppercase tracking-[0.16em] text-cyan-700">Task bearbeiten</span><span class="block truncate text-[11px] font-bold text-cyan-950">{{ $selectedStep?->name }} / {{ $selectedTask['title'] ?? $selectedTaskKey }}</span></span>
+                    <button type="button" wire:click="editSelectedTask" class="ff-selected-task ml-auto flex min-w-[13rem] max-w-sm shrink-0 items-center gap-2 rounded-xl border px-3 py-1.5 text-left transition hover:border-blue-400">
+                        <span class="h-2.5 w-2.5 shrink-0 rounded-full bg-blue-600"></span>
+                        <span class="min-w-0"><span class="block text-[8px] font-black uppercase tracking-[0.16em] text-blue-700">Ausgewählte Task bearbeiten</span><span class="block truncate text-[11px] font-bold text-blue-950">{{ $selectedStep?->name }} / {{ $selectedTask['title'] ?? $selectedTaskKey }}</span></span>
                     </button>
                 @endif
             </div>
@@ -189,13 +191,13 @@
     @endunless
 
     {{-- isolate kapselt die Diagramm-/Overlay-z-Werte (Minimap z-10/z-20, Lade-Overlay z-50) in einen eigenen Stacking-Kontext, damit sie nie mit den Shell-Modalen konkurrieren --}}
-    <main class="relative isolate min-h-0 flex-1 overflow-hidden bg-slate-100 p-3">
+    <main class="ff-canvas-grid relative isolate min-h-0 flex-1 overflow-hidden p-3">
         <section class="h-full min-h-0 min-w-0" aria-label="Workflow-Vorschau und Live-Ausführung">
             @include('livewire.admin.network.workflow-studio.browser')
         </section>
 
         <div wire:loading.delay.flex wire:target="startRun,runRealPlayback,pauseRun,resumeRun,runSingleTask,stopRun,restartRun,runProbe,commitProbeAsTask,saveSessionDefinition,startCopilot,setPermissionMode,chooseControlMode" class="pointer-events-none absolute inset-0 z-50 hidden items-center justify-center bg-white/55 backdrop-blur-[1px]">
-            <span class="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-700 shadow-xl"><span class="h-3 w-3 animate-spin rounded-full border-2 border-slate-300 border-t-cyan-600"></span>Test wird aktualisiert …</span>
+            <span class="ff-loading-island inline-flex items-center gap-2 border px-4 py-2 text-xs font-bold"><span class="h-3 w-3 animate-spin rounded-full border-2 border-slate-500 border-t-white"></span>Test wird aktualisiert …</span>
         </div>
     </main>
 

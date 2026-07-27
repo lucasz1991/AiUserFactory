@@ -9,16 +9,16 @@
     $loopPairSegment = trim((string) data_get($task, 'loop_pair_segment', ''));
     $kind = trim((string) data_get($task, 'kind', 'data')) ?: 'data';
     $kindTone = match ($kind) {
-        'browser' => 'bg-sky-500',
-        'input' => 'bg-violet-500',
+        'browser' => 'bg-blue-500',
+        'input' => 'bg-blue-400',
         'wait' => 'bg-amber-500',
-        'workflow' => 'bg-fuchsia-500',
+        'workflow' => 'bg-slate-700',
         default => 'bg-slate-400',
     };
     $hasFailedRoute = is_array(data_get($task, 'on_error'));
 @endphp
 
-<div {{ $attributes->merge(['class' => 'relative w-full min-w-0 max-w-full rounded-lg border border-slate-300 bg-white px-3 py-3 shadow-sm transition hover:-translate-y-px hover:border-slate-400 hover:shadow-md']) }}>
+<div {{ $attributes->merge(['class' => 'ff-task-card relative w-full min-w-0 max-w-full rounded-lg border bg-white px-3 py-3']) }}>
     @if($showPorts)
         <span class="absolute -left-[5px] top-1/2 z-30 h-2.5 w-2.5 -translate-y-1/2 rounded-full border-2 border-white bg-slate-400 shadow-sm" title="Eingang" aria-hidden="true"></span>
         <span class="absolute -right-[5px] top-[40%] z-30 h-2.5 w-2.5 -translate-y-1/2 rounded-full border-2 border-white bg-emerald-500 shadow-sm" title="Erfolg" aria-hidden="true"></span>
@@ -28,18 +28,18 @@
     @endif
     <div class="flex min-w-0 items-center justify-between gap-2">
         <div class="flex min-w-0 flex-1 items-center gap-2">
-            <div class="flex h-6 w-6 shrink-0 cursor-grab items-center justify-center rounded text-[10px] font-bold text-slate-400 hover:bg-slate-100 hover:text-slate-700 active:cursor-grabbing">
-                ::
+            <div class="flex h-6 w-6 shrink-0 cursor-grab items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-700 active:cursor-grabbing" title="Task verschieben">
+                <svg class="h-3.5 w-3.5" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="5" cy="3" r="1"></circle><circle cx="11" cy="3" r="1"></circle><circle cx="5" cy="8" r="1"></circle><circle cx="11" cy="8" r="1"></circle><circle cx="5" cy="13" r="1"></circle><circle cx="11" cy="13" r="1"></circle></svg>
             </div>
             <span class="h-2 w-2 shrink-0 rounded-full {{ $kindTone }}"></span>
             <p class="min-w-0 break-words line-clamp-2 text-sm font-semibold leading-5 text-slate-900">{{ $task['title'] ?? 'Task' }}</p>
         </div>
         @isset($actions)
             <div class="relative shrink-0" x-data="{ open: false }">
-                <button type="button" x-on:click.stop="open = ! open" class="flex h-7 w-7 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-900">
-                    ...
+                <button type="button" x-on:click.stop="open = ! open" x-bind:aria-expanded="open" class="flex h-7 w-7 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-900" aria-label="Taskaktionen">
+                    <svg class="h-4 w-4" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="8" r="1.25"></circle><circle cx="8" cy="8" r="1.25"></circle><circle cx="13" cy="8" r="1.25"></circle></svg>
                 </button>
-                <div x-cloak x-show="open" x-transition x-on:click.stop x-on:click.outside="open = false" class="absolute right-0 z-30 mt-1 w-36 rounded-md border border-slate-200 bg-white p-1 shadow-lg">
+                <div x-cloak x-show="open" x-transition.origin.top.right x-on:click.stop x-on:click.outside="open = false" class="ff-menu absolute right-0 z-30 mt-1 w-36 p-1">
                     {{ $actions }}
                 </div>
             </div>

@@ -1,19 +1,22 @@
-<div class="space-y-6" wire:loading.class="opacity-90">
-    <div class="flex flex-wrap items-start justify-between gap-4">
-        <div>
-            <h1 class="text-2xl font-semibold text-white">Workflows</h1>
-            <p class="mt-1 text-sm text-white">
-                Workflows gruppiert nach Prozessbereich, als kompakte Liste mit Kennzahlen.
+<div class="workflow-experience space-y-6" wire:loading.class="opacity-90">
+    <section class="ff-command-surface px-4 py-5 sm:px-6 sm:py-6" aria-labelledby="workflows-index-title">
+        <div class="relative z-10 flex flex-wrap items-start justify-between gap-5">
+        <div class="min-w-0">
+            <p class="ff-kicker">Automation Workspace</p>
+            <h1 id="workflows-index-title" class="ff-page-title mt-2">Workflows</h1>
+            <p class="ff-page-copy mt-2 text-sm">
+                Prozesse organisieren, den letzten Lauf prüfen oder direkt in einen schrittweisen Test wechseln.
             </p>
         </div>
         <div class="ml-auto flex max-w-full flex-col items-end gap-2">
             <div class="flex flex-wrap justify-end gap-2">
                 <div class="relative" x-data="{ open: false }" x-on:keydown.escape.window="open = false">
-                    <button type="button" x-on:click="open = ! open" x-bind:aria-expanded="open" class="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">
+                    <button type="button" x-on:click="open = ! open" x-bind:aria-expanded="open" class="ff-action-trigger ff-action-trigger--primary inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold">
+                        <span class="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-white/10 text-lg leading-none" aria-hidden="true">+</span>
                         Verwalten
                         <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" /></svg>
                     </button>
-                    <div x-cloak x-show="open" x-transition x-on:click.outside="open = false" class="absolute right-0 z-50 mt-2 w-56 rounded-lg border border-slate-200 bg-white p-1.5 shadow-xl">
+                    <div x-cloak x-show="open" x-transition.origin.top.right x-on:click.outside="open = false" class="ff-menu absolute right-0 z-50 mt-2 w-64 p-1.5">
                         <button type="button" wire:click="$set('showCreateWorkflowModal', true)" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-100">Neuer Workflow</button>
                         <button type="button" wire:click="$set('showImportWorkflowModal', true)" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-blue-700 hover:bg-blue-50">Workflows importieren</button>
                         <button type="button" wire:click="$set('showCopilotRunsModal', true)" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-cyan-800 hover:bg-cyan-50">Copilot-Optimierungslaeufe</button>
@@ -21,32 +24,33 @@
                 </div>
 
                 <div class="relative" x-data="{ open: false }" x-on:keydown.escape.window="open = false">
-                    <button type="button" x-on:click="open = ! open" x-bind:aria-expanded="open" class="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
+                    <button type="button" x-on:click="open = ! open" x-bind:aria-expanded="open" class="ff-action-trigger inline-flex items-center gap-2 px-3 py-2 text-sm font-semibold">
                         Weitere
                         <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" /></svg>
                     </button>
-                    <div x-cloak x-show="open" x-transition x-on:click.outside="open = false" class="absolute right-0 z-50 mt-2 w-52 rounded-lg border border-slate-200 bg-white p-1.5 shadow-xl">
+                    <div x-cloak x-show="open" x-transition.origin.top.right x-on:click.outside="open = false" class="ff-menu absolute right-0 z-50 mt-2 w-56 p-1.5">
                         <a href="{{ route('network.actions') }}" class="block rounded-md px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">Aktionsplanung öffnen</a>
                         <a href="{{ route('processes.index') }}" class="block rounded-md px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">Prozesse öffnen</a>
                     </div>
                 </div>
             </div>
 
-            <div class="flex flex-wrap justify-end gap-1.5" aria-label="Workflow-Statistik">
+            <dl class="ff-metric-rail" aria-label="Workflow-Statistik">
                 @foreach([
-                    ['Workflows', $summary['workflows'], 'bg-slate-100 text-slate-700'],
-                    ['Aktiv', $summary['active_workflows'], 'bg-emerald-50 text-emerald-700'],
-                    ['Listen', $summary['lists'], 'bg-blue-50 text-blue-700'],
-                    ['Tasks', $summary['task_cards'], 'bg-amber-50 text-amber-700'],
-                ] as [$label, $value, $classes])
-                    <span class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] leading-none {{ $classes }}">
-                        <span class="font-medium opacity-75">{{ $label }}</span>
-                        <span class="font-bold tabular-nums">{{ $value }}</span>
-                    </span>
+                    ['Workflows', $summary['workflows']],
+                    ['Aktiv', $summary['active_workflows']],
+                    ['Listen', $summary['lists']],
+                    ['Tasks', $summary['task_cards']],
+                ] as [$label, $value])
+                    <div class="ff-metric">
+                        <dt>{{ $label }}</dt>
+                        <dd>{{ $value }}</dd>
+                    </div>
                 @endforeach
-            </div>
+            </dl>
         </div>
-    </div>
+        </div>
+    </section>
 
     @if (session()->has('success'))
         <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
@@ -96,7 +100,7 @@
         }
     @endphp
 
-    <x-admin.panel class="overflow-visible border-slate-200 shadow-sm">
+    <x-admin.panel class="ff-canvas-shell overflow-visible">
         <x-ui.navigation.horizontal.tabs.horizontal-tabs-panel
             :tabs="$workflowGroupTabs"
             :default="$activeGroup"
@@ -176,8 +180,8 @@
             </div>
         </div>
 
-        <div class="overflow-visible bg-white">
-            <table class="w-full table-fixed divide-y divide-slate-200">
+        <div class="overflow-x-auto bg-white">
+            <table class="min-w-[920px] w-full table-fixed divide-y divide-slate-200">
                 <thead class="bg-slate-50">
                     <tr>
                         <th class="w-[4%] px-3 py-3 text-left">
@@ -202,7 +206,7 @@
                             data-workflow-row-id="{{ $workflow->id }}"
                             data-assistant-highlight="workflow_row:{{ $workflow->id }}"
                             data-assistant-highlight-key="{{ $workflow->slug ?: $workflow->id }}"
-                            class="hover:bg-slate-50"
+                            class="transition-colors hover:bg-blue-50/40"
                         >
                             <td class="px-3 py-3 align-middle">
                                 <input type="checkbox" wire:model.live="selectedWorkflowIds" value="{{ $workflow->id }}" class="rounded border-slate-300 text-blue-600 shadow-sm focus:ring-blue-500" aria-label="{{ $workflow->name }} auswählen">

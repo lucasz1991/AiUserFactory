@@ -5,7 +5,7 @@
 
 @php
     $enabledClass = $step->is_enabled
-        ? 'border-slate-200 border-dashed'
+        ? 'border-slate-200 bg-white/70'
         : 'border-slate-200 bg-slate-50 opacity-70 shadow-sm';
     $routeNodeForStep = static function (?array $route): string {
         if (! is_array($route)) {
@@ -51,29 +51,31 @@
     data-assistant-highlight-key="{{ $step->action_key }}"
     data-step-route-success="{{ $stepSuccessTarget }}"
     data-step-route-failed="{{ $stepFailedTarget }}"
-    {{ $attributes->merge(['class' => 'group/step relative flex min-h-[300px] w-[296px] min-w-[296px] max-w-[296px] shrink-0 flex-col rounded-xl border '.$enabledClass]) }}
+    {{ $attributes->merge(['class' => 'ff-step-column group/step relative flex min-h-[300px] w-[296px] min-w-[296px] max-w-[296px] shrink-0 flex-col rounded-xl border '.$enabledClass]) }}
 >
-    <div class="relative z-30 rounded-xl border border-sky-200 bg-sky-100 px-4 py-3 mb-4">
+    <div class="ff-step-header relative z-30 mb-4 rounded-xl border px-4 py-3">
         <div class="flex items-start justify-between gap-3">
             <div class="min-w-0">
                 <div class="flex flex-wrap items-center gap-2">
-                    <p class="text-sm font-semibold leading-5 text-slate-900">{{ $step->name }}</p>
+                    <p class="text-sm font-bold leading-5 text-white">{{ $step->name }}</p>
                     @if(! $step->is_enabled)
                         <x-workflows.status-badge status="skipped" />
                     @endif
                 </div>
-                <p class="mt-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">{{ $step->type_label }}</p>
+                <p class="mt-1 text-[10px] font-semibold uppercase tracking-[.12em] text-slate-400">{{ $step->type_label }}</p>
             </div>
             <div class="flex items-center gap-1">
                 @if(! $locked)
-                    <div x-sort:handle class="flex h-8 w-8 cursor-grab items-center justify-center rounded-md text-xs font-bold text-slate-700 hover:bg-slate-200 hover:text-slate-700 active:cursor-grabbing">::</div>
+                    <div x-sort:handle class="flex h-8 w-8 cursor-grab items-center justify-center rounded-md text-slate-400 transition hover:bg-white/10 hover:text-white active:cursor-grabbing" title="Liste verschieben" aria-label="Liste verschieben">
+                        <svg class="h-4 w-4" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="5" cy="3" r="1"></circle><circle cx="11" cy="3" r="1"></circle><circle cx="5" cy="8" r="1"></circle><circle cx="11" cy="8" r="1"></circle><circle cx="5" cy="13" r="1"></circle><circle cx="11" cy="13" r="1"></circle></svg>
+                    </div>
                 @endif
                 @isset($actions)
                     <div class="relative" x-data="{ open: false }">
-                        <button type="button" x-on:click.stop="open = ! open" class="flex h-8 w-8 items-center justify-center rounded-md text-slate-700 hover:bg-slate-200 hover:text-slate-900">
-                            ...
+                        <button type="button" x-on:click.stop="open = ! open" x-bind:aria-expanded="open" class="flex h-8 w-8 items-center justify-center rounded-md text-slate-400 transition hover:bg-white/10 hover:text-white" aria-label="Listenaktionen">
+                            <svg class="h-4 w-4" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="8" r="1.25"></circle><circle cx="8" cy="8" r="1.25"></circle><circle cx="13" cy="8" r="1.25"></circle></svg>
                         </button>
-                        <div x-cloak x-show="open" x-transition x-on:click.stop x-on:click.outside="open = false" class="absolute right-0 z-30 mt-1 w-40 rounded-md border border-slate-200 bg-white p-1 shadow-lg">
+                        <div x-cloak x-show="open" x-transition.origin.top.right x-on:click.stop x-on:click.outside="open = false" class="ff-menu absolute right-0 z-30 mt-1 w-40 p-1">
                             {{ $actions }}
                         </div>
                     </div>
