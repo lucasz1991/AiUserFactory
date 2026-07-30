@@ -1071,6 +1071,13 @@
 }
 
 @media (max-width: 767px) {
+  [data-workflow-studio-shell] .ff-action-trigger,
+  [data-workflow-studio-shell] .ff-tool-button,
+  [data-workflow-studio-shell] .ff-segmented-control > button,
+  [data-workflow-studio-shell] .ff-run-island > button {
+    min-height: 44px !important;
+  }
+
   [data-workflow-studio-shell] [data-studio-primary-bar] {
     align-items: stretch;
     padding-inline: .75rem !important;

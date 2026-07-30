@@ -52,6 +52,10 @@ class ChatbotViewMarkupTest extends TestCase
         $this->assertStringContainsString("isDesktopDocked: window.matchMedia('(min-width: 1140px)').matches", $definition);
         $this->assertStringContainsString("this.isDesktopDocked = window.matchMedia('(min-width: 1140px)').matches", $definition);
         $this->assertStringContainsString("window.matchMedia('(min-width: 1140px)')", $definition);
+        $this->assertStringContainsString(
+            'this.showChat = this.isDesktopDocked && (storedChatOpen || this.studioPinned);',
+            $definition,
+        );
         $this->assertStringEndsWith('}', trim($definition));
 
         $activeSpeechLabels = (new DOMXPath($document))->query(

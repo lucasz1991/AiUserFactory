@@ -104,6 +104,22 @@
             this.$watch('showChat', (open) => {
                 sessionStorage.setItem('workflow-copilot-open', open ? '1' : '0');
                 this.syncDockLayout();
+
+                if (! open) {
+                    return;
+                }
+
+                // Der Verlauf liegt in einem bedingt gerenderten Template. Startet die Seite
+                // mit geschlossenem Panel, existiert $refs.messages im init-$nextTick
+                // noch nicht und observeMessages() kehrt wirkungslos zurueck — der
+                // Chat wuerde danach keiner Streaming-Antwort mehr folgen. Beide
+                // Beobachter trennen eine bestehende Bindung selbst, sind also
+                // gefahrlos wiederholbar.
+                this.$nextTick(() => {
+                    this.observeMessages();
+                    this.observeAssistantStatusStream();
+                    this.scrollMessages(false, true);
+                });
             });
             this.$watch('chatHistory', (history) => {
                 this.handleNewAssistantMessages(history);
@@ -686,7 +702,17 @@
             const url = URL.createObjectURL(blob);
             this.ttsObjectUrls.push(url);
 
-            await this.playAudioUrl(url, index);
+            try {
+                await this.playAudioUrl(url, index);
+            } finally {
+                // Jede Vorlesung erzeugt eine eigene Object-URL. Ohne sofortige
+                // Freigabe haelt der Browser bei aktivem Auto-Vorlesen saemtliche
+                // bereits abgespielten Audiodateien im Speicher, bis der Nutzer
+                // manuell stoppt. Das Sammelaufraeumen in stopSpeaking() bleibt
+                // als Sicherheitsnetz fuer noch nicht abgespielte Eintraege.
+                URL.revokeObjectURL(url);
+                this.ttsObjectUrls = this.ttsObjectUrls.filter((entry) => entry !== url);
+            }
         },
         playAudioUrl(url, index = null) {
             return new Promise((resolve, reject) => {
@@ -1881,7 +1907,7 @@
                                     @if(! $isUser)
                                         <button
                                             type="button"
-                                            x-show="speechSupported"
+                                            x-show.important="speechSupported"
                                             x-cloak
                                             x-on:click="ttsActive() && ttsActiveIndex === {{ $index }} ? stopSpeaking() : speak(@js($item['content'] ?? ''), {{ $index }})"
                                             class="inline-flex h-6 w-6 items-center justify-center rounded-md text-slate-400 transition hover:bg-slate-100 hover:text-cyan-700"
@@ -1952,7 +1978,7 @@
                                         @foreach($item['options'] as $optionIndex => $option)
                                             <button
                                                 type="button"
-                                                x-show="selectedChatOptionIndex({{ $index }}, @js($item['selected_option_index'] ?? null)) === null || selectedChatOptionIndex({{ $index }}, @js($item['selected_option_index'] ?? null)) === {{ $optionIndex }}"
+                                                x-show.important="selectedChatOptionIndex({{ $index }}, @js($item['selected_option_index'] ?? null)) === null || selectedChatOptionIndex({{ $index }}, @js($item['selected_option_index'] ?? null)) === {{ $optionIndex }}"
                                                 x-on:click="chooseChatOption({{ $index }}, @js($item['selected_option_index'] ?? null), @js($option), {{ $optionIndex }})"
                                                 x-bind:disabled="busy() || selectedChatOptionIndex({{ $index }}, @js($item['selected_option_index'] ?? null)) !== null"
                                                 x-bind:class="selectedChatOptionIndex({{ $index }}, @js($item['selected_option_index'] ?? null)) === {{ $optionIndex }}
@@ -2182,8 +2208,11 @@
                             </button>
                         </div>
                     </template>
+                    {{-- .important ist Pflicht: tailwind.config.js setzt important:true,
+                         die Utility `flex` erzeugt also display:flex!important. Ein nacktes
+                         x-show verliert dagegen und liesse das leere Fehlerbanner stehen. --}}
                     <div
-                        x-show="ttsError"
+                        x-show.important="ttsError"
                         x-cloak
                         class="flex items-start justify-between gap-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs leading-5 text-rose-800"
                         role="alert"

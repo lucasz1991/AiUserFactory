@@ -80,6 +80,7 @@ class WorkflowCopilotUiMarkupTest extends TestCase
         $this->assertStringContainsString('h-20 w-36', $browserWindows);
         $this->assertStringContainsString('data-workflow-test-workbench', $manager);
         $this->assertStringContainsString('fixed inset-0 top-0', $manager);
+        $this->assertStringContainsString('style="margin-top: 0 !important;"', $manager);
         $this->assertStringContainsString('workflow-studio-pin-copilot', $studio);
         $this->assertStringContainsString('workflow-studio-unpin-copilot', $studio);
         $this->assertStringContainsString('[data-workflow-test-workbench]', $chat);
@@ -90,6 +91,10 @@ class WorkflowCopilotUiMarkupTest extends TestCase
         $this->assertStringContainsString('timerProgressBar: true', $studio);
         $this->assertStringContainsString("import Swal from 'sweetalert2'", $javascript);
         $this->assertStringContainsString("import 'sweetalert2/dist/sweetalert2.min.css'", $javascript);
+
+        $responsiveStyles = file_get_contents($root.'/resources/css/workflow-experience.css');
+        $this->assertStringContainsString('@media (max-width: 767px)', $responsiveStyles);
+        $this->assertStringContainsString('min-height: 44px !important;', $responsiveStyles);
 
         $domInspector = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-studio/dom-inspector.blade.php');
         $toolModal = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-studio/tool-modal.blade.php');

@@ -31,6 +31,12 @@ class Chatbot extends Component
 
     private const COPILOT_ACTIVITY_STALE_AFTER_SECONDS = 120;
 
+    /**
+     * Obergrenze in Woertern, bis zu der eine Chatnachricht als Copilot-
+     * Steuerbefehl gilt. Laengerer Text ist eine Anweisung an die Sitzung.
+     */
+    private const COPILOT_CONTROL_MAX_WORDS = 4;
+
     public string $message = '';
 
     public array $chatHistory = [];
@@ -337,7 +343,12 @@ class Chatbot extends Component
         }
 
         $this->copilotEventFeed = array_slice($this->copilotEventFeed, -20);
-        $this->copilotStatus = $this->copilotStatusPayload($session->fresh(['workflow']) ?? $session);
+
+        // `fresh(['workflow'])` warf das oben bereits geladene Modell samt
+        // Relation weg und holte es pro Poll-Tick erneut aus der Datenbank. Die
+        // eingelesenen Ereignisse stammen ohnehin aus demselben Request, der
+        // Status darf deshalb direkt vom vorhandenen Modell kommen.
+        $this->copilotStatus = $this->copilotStatusPayload($session);
     }
 
     public function pauseCopilotSession(): void
@@ -432,6 +443,19 @@ class Chatbot extends Component
         }
 
         $normalized = Str::lower($message);
+
+        // Die Muster unten suchen ihren Treffer irgendwo im Text. In einer
+        // ausformulierten Anweisung ("Warte auf das Modal und lass den Browser
+        // kurz anhalten") waere das ein Fehltreffer: sendMessage() bricht dann
+        // ab, die Anweisung erreicht die Sitzung nie und pause/resume/replan
+        // laufen sogar ohne Rueckfrage los. Steuerbefehle sind kurz — laengerer
+        // Freitext bleibt deshalb Freitext.
+        $wordCount = count(preg_split('/\s+/u', $normalized, -1, PREG_SPLIT_NO_EMPTY) ?: []);
+
+        if ($wordCount > self::COPILOT_CONTROL_MAX_WORDS) {
+            return null;
+        }
+
         if (preg_match('/\b(neu\s*start|neustart|restart|stoppen\s+und\s+neu)/u', $normalized) === 1) {
             return ['action' => 'restart', 'confirmed' => false];
         }
@@ -684,7 +708,10 @@ class Chatbot extends Component
             ];
 
             foreach ($toolCalls as $toolCall) {
-                $this->stream('assistant-status-stream', $this->assistantToolStatus($toolCall['name']), true);
+                // Livewire schreibt gestreamte Inhalte per innerHTML in die Seite.
+                // Der Toolname stammt unkontrolliert aus der Modellantwort, muss
+                // hier also genauso escaped werden wie der Antwortstrom weiter oben.
+                $this->stream('assistant-status-stream', e($this->assistantToolStatus($toolCall['name'])), true);
                 $auditTrail[] = [
                     'event_type' => 'tool.called',
                     'message' => 'Assistant-Tool `'.$toolCall['name'].'` wurde aufgerufen.',
@@ -820,18 +847,33 @@ class Chatbot extends Component
 
     private function trimTranscript(array $messages): array
     {
-        return collect($messages)
+        $trimmed = collect($messages)
             ->filter(fn (array $message): bool => ($message['role'] ?? null) !== 'system')
             ->take(-36)
-            ->values()
-            ->all();
+            ->values();
+
+        // `take(-36)` schneidet rein positional. Faellt die Grenze mitten in eine
+        // Toolrunde, bleiben `role=tool`-Antworten ohne die `assistant`-Nachricht
+        // stehen, die sie per `tool_calls` angefordert hat. OpenAI-kompatible
+        // Anbieter lehnen ein solches Transcript ab; da es in der Session
+        // persistiert wird, bliebe der Chat dauerhaft unbenutzbar. Deshalb die
+        // verwaisten Antworten am Anfang abschneiden.
+        while ($trimmed->isNotEmpty() && ($trimmed->first()['role'] ?? null) === 'tool') {
+            $trimmed = $trimmed->slice(1);
+        }
+
+        return $trimmed->values()->all();
     }
 
     private function normalizeToolCalls(mixed $toolCalls): array
     {
         return collect(is_array($toolCalls) ? $toolCalls : [])
             ->map(function (array $toolCall, int $index): ?array {
-                $id = trim((string) ($toolCall['id'] ?? 'tool-call-'.$index));
+                // `??` greift nur bei null. Der Streaming-Parser legt jeden
+                // Tool-Call mit 'id' => '' an (AiConnectionService) und fuellt sie
+                // nur, wenn der Anbieter ein ID-Delta sendet. Ohne diese Pruefung
+                // bliebe die ID leer und die Tool-Antwort waere nicht zuordenbar.
+                $id = trim((string) ($toolCall['id'] ?? '')) ?: 'tool-call-'.$index;
                 $name = trim((string) data_get($toolCall, 'function.name', $toolCall['name'] ?? ''));
                 $arguments = data_get($toolCall, 'function.arguments', $toolCall['arguments'] ?? '{}');
 
@@ -900,13 +942,17 @@ class Chatbot extends Component
 
     private function appendToolEvent(string $toolName, array $arguments, array $result): void
     {
+        // Bewusst nur die tatsaechlich gerenderten Felder: Der Eintrag liegt als
+        // public Property im Livewire-Snapshot und wird per @entangle zusaetzlich
+        // nach Alpine gespiegelt. Die vollstaendigen Roh-Argumente und
+        // Tool-Ergebnisse (Workflow-Graph, Steps, Laufhistorie) wuerden dort bei
+        // aktiver Sitzung im wire:poll-Takt mitwandern, ohne je angezeigt zu
+        // werden. Redigiert bleiben sie im Auditlog via flushCopilotAuditTrail().
         $this->toolEvents[] = [
             'id' => (string) Str::uuid(),
             'tool' => $toolName,
             'status' => ($result['ok'] ?? false) ? 'success' : 'error',
             'message' => (string) ($result['message'] ?? $result['error'] ?? 'Tool ausgefuehrt.'),
-            'arguments' => $arguments,
-            'result' => $result,
             'time' => now()->format('H:i:s'),
         ];
 
@@ -999,7 +1045,10 @@ class Chatbot extends Component
             'navigate' => 'Ansicht wird vorbereitet.',
             'highlight_workflow_element' => 'Workflow-Element wird markiert.',
             'present_workflow_improvements' => 'Verbesserungen werden im Workflow zugeordnet.',
-            default => 'Werkzeug '.$toolName.' wird ausgefuehrt.',
+            // Bewusst ohne den Namen: Er stammt aus der Modellantwort und ist
+            // weder kataloggebunden noch zeichenbeschraenkt. Bekannte Werkzeuge
+            // haben oben ihren eigenen, sprechenden Text.
+            default => 'Werkzeug wird ausgefuehrt.',
         };
     }
 
@@ -1465,7 +1514,12 @@ class Chatbot extends Component
     {
         $directUrl = trim((string) data_get($state, 'latest_screenshot_url', data_get($state, 'observation.screenshot_url', '')));
 
-        if ($directUrl !== '') {
+        // Der Wert stammt aus dem Node-Ergebnis und landet in der Vorschau als
+        // `href`. Ohne Schema-Allowlist koennte ein kompromittierter Node dort
+        // `javascript:` unterbringen und beim Klick des Admins Code in dessen
+        // Sitzung ausfuehren. Erlaubt sind deshalb nur echte Ziele: absolute
+        // http(s)-Adressen oder projektinterne, absolute Pfade.
+        if ($directUrl !== '' && preg_match('#^(?:https?://|/(?!/))#i', $directUrl) === 1) {
             return $directUrl;
         }
 
