@@ -92,6 +92,11 @@ class WorkflowRouteMarkupTest extends TestCase
         $this->assertStringContainsString('$workflow = $workflow ?: $workflowRun?->workflow', $source);
         $this->assertStringContainsString('$configuredRouteEvents', $source);
         $this->assertStringContainsString("'configured' => true", $source);
+        $this->assertStringContainsString('WorkflowRouteMapPresenter::class', $source);
+        $this->assertStringContainsString('WorkflowRouteMapPresenter::MODE_COMBINED', $source);
+        $this->assertStringContainsString('arrow-runtime', $source);
+        $this->assertStringContainsString('data-minimap-node="terminal::end"', $source);
+        $this->assertStringContainsString('data-minimap-node="terminal::fail"', $source);
         $this->assertStringContainsString('Str::slug($mapInstance)', $source);
         $this->assertStringContainsString('x-on:keydown.space.prevent.stop', $source);
         $this->assertStringContainsString('aria-pressed="{{ $isTaskSelected ? \'true\' : \'false\' }}"', $source);

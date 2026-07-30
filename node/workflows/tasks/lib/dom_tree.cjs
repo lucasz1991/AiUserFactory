@@ -14,14 +14,20 @@ const SAFE_ATTRIBUTE_NAMES = Object.freeze([
   'aria-label',
   'aria-labelledby',
   'autocomplete',
+  'checked',
+  'contenteditable',
   'data-cy',
   'data-qa',
   'data-test',
   'data-testid',
+  'disabled',
   'href',
   'name',
   'placeholder',
+  'readonly',
+  'required',
   'role',
+  'selected',
   'title',
   'type',
 ]);
@@ -125,6 +131,7 @@ function materializeFrameNodes(records, options = {}, limit = records.length) {
   accepted.forEach((record, position) => {
     const structuralPath = normalizeText(record.path, 240) || String(record.index ?? position);
     const selector = normalizeText(record.selector, 500);
+    const attributes = normalizeAttributes(record.attributes);
     const selectorIsStable = /^(?:#[^\s>+~]+|[a-z0-9_-]+\[(?:data-testid|data-test|data-cy|data-qa|name|aria-label|title)=)/i.test(selector);
     const identity = selectorIsStable && record.inShadowDom !== true
       ? `selector:${selector}`
@@ -133,7 +140,7 @@ function materializeFrameNodes(records, options = {}, limit = records.length) {
         `tag:${normalizeText(record.tag, 40)}`,
         `id:${normalizeText(record.id, 120)}`,
         `selector:${selector}`,
-        `role:${normalizeText(record.role, 80)}`,
+        `role:${normalizeText(record.role || attributes.role, 80)}`,
       ].join('|');
     const fingerprint = crypto.createHash('sha1').update(identity).digest('hex').slice(0, 20);
 
@@ -143,20 +150,15 @@ function materializeFrameNodes(records, options = {}, limit = records.length) {
   return accepted.map((record, position) => {
     const index = record.index ?? position;
     const parentIndex = Number.isInteger(record.parentIndex) ? record.parentIndex : null;
-
-    return {
-      nodeRef: indexToRef.get(index),
-      parentRef: parentIndex !== null ? (indexToRef.get(parentIndex) || null) : null,
-      depth: Math.max(0, Number(record.depth || 0)),
-      tag: normalizeText(record.tag, 40).toLowerCase(),
+    const classes = Array.isArray(record.classes)
+      ? record.classes.map((item) => normalizeText(item, 80)).filter(Boolean).slice(0, MAX_CLASSES)
+      : [];
+    const selectorCandidates = normalizeSelectorCandidates(record.selectorCandidates);
+    const attributes = normalizeAttributes(record.attributes);
+    const optionalText = {
       id: normalizeText(record.id, 120),
-      classes: Array.isArray(record.classes)
-        ? record.classes.map((item) => normalizeText(item, 80)).filter(Boolean).slice(0, MAX_CLASSES)
-        : [],
       text: normalizeText(record.text),
       selector: normalizeText(record.selector, 500),
-      selectorCandidates: normalizeSelectorCandidates(record.selectorCandidates),
-      attributes: normalizeAttributes(record.attributes),
       role: normalizeText(record.role, 80),
       type: normalizeText(record.type, 80),
       name: normalizeText(record.name, 120),
@@ -165,14 +167,40 @@ function materializeFrameNodes(records, options = {}, limit = records.length) {
       placeholder: normalizeText(record.placeholder, 160),
       title: normalizeText(record.title, 160),
       href: normalizeText(record.href, 300),
+    };
+    const node = {
+      nodeRef: indexToRef.get(index),
+      parentRef: parentIndex !== null ? (indexToRef.get(parentIndex) || null) : null,
+      depth: Math.max(0, Number(record.depth || 0)),
+      tag: normalizeText(record.tag, 40).toLowerCase(),
       rect: normalizeRect(record.rect, offset),
       visible: record.visible === true,
-      enabled: record.enabled !== false,
-      focused: record.focused === true,
-      editable: record.editable === true,
-      actionable: record.actionable === true,
-      inShadowDom: record.inShadowDom === true,
     };
+
+    if (classes.length > 0) {
+      node.classes = classes;
+    }
+    if (selectorCandidates.length > 0) {
+      node.selectorCandidates = selectorCandidates;
+    }
+    if (Object.keys(attributes).length > 0) {
+      node.attributes = attributes;
+    }
+    for (const [key, value] of Object.entries(optionalText)) {
+      if (value !== '') {
+        node[key] = value;
+      }
+    }
+    if (record.enabled === false) {
+      node.enabled = false;
+    }
+    for (const flag of ['focused', 'editable', 'actionable', 'inShadowDom']) {
+      if (record[flag] === true) {
+        node[flag] = true;
+      }
+    }
+
+    return node;
   });
 }
 
@@ -395,6 +423,15 @@ async function frameRecords(frame, options = {}) {
         }
       }
 
+      for (const attribute of ['checked', 'disabled', 'readonly', 'required', 'selected']) {
+        if (element.hasAttribute(attribute) || element[attribute] === true) {
+          attributes[attribute] = 'true';
+        }
+      }
+      if (element.isContentEditable === true) {
+        attributes.contenteditable = 'true';
+      }
+
       const href = safeHref(element);
       if (href !== '') {
         attributes.href = href;
@@ -402,100 +439,11 @@ async function frameRecords(frame, options = {}) {
 
       return attributes;
     };
-    const selectorCandidatesFor = (element) => {
+    const structuralSelectorFor = (element) => {
       const tag = String(element.tagName || '').toLowerCase();
-      const queryRoot = element.getRootNode?.() || document;
-      const candidates = [];
-      const seen = new Set();
 
       if (!tag) {
-        return candidates;
-      }
-
-      const addCandidate = (selector, kind, score, forcedMatchCount = null) => {
-        if (!selector || seen.has(selector)) {
-          return;
-        }
-
-        let matchCount = forcedMatchCount;
-        try {
-          matchCount ??= queryRoot.querySelectorAll(selector).length;
-        } catch {
-          return;
-        }
-
-        if (matchCount <= 0) {
-          return;
-        }
-
-        seen.add(selector);
-        candidates.push({
-          selector,
-          kind,
-          unique: matchCount === 1,
-          matchCount,
-          score,
-        });
-      };
-
-      const attributeScores = {
-        'data-testid': 100,
-        'data-test': 98,
-        'data-cy': 98,
-        'data-qa': 98,
-        name: 90,
-        'aria-label': 96,
-        title: 94,
-        placeholder: 92,
-      };
-
-      for (const attribute of Object.keys(attributeScores)) {
-        const value = element.getAttribute(attribute);
-
-        if (!value) {
-          continue;
-        }
-
-        const candidate = `${tag}[${attribute}="${cssString(value)}"]`;
-        addCandidate(candidate, 'attribute', attributeScores[attribute]);
-      }
-
-      const role = element.getAttribute('role');
-      const ariaLabel = element.getAttribute('aria-label');
-      if (role && ariaLabel) {
-        addCandidate(
-          `[role="${cssString(role)}"][aria-label="${cssString(ariaLabel)}"]`,
-          'aria',
-          97,
-        );
-      } else if (role) {
-        addCandidate(`[role="${cssString(role)}"]`, 'role', 82);
-      }
-
-      if (element.id) {
-        const idSelector = `#${cssIdentifier(element.id)}`;
-        const generatedLooking = /(?:^|[-_])(?:ember|react|vue|radix|headlessui)[-_]|\d{5,}|[a-f0-9]{12,}/i.test(element.id);
-
-        addCandidate(idSelector, 'id', generatedLooking ? 35 : 76);
-      }
-
-      const type = element.getAttribute('type');
-      if (type) {
-        addCandidate(`${tag}[type="${cssString(type)}"]`, 'type', 58);
-      }
-
-      const stableClasses = Array.from(element.classList || [])
-        .filter((className) => (
-          className.length <= 80
-          && !/(?:^css-|^sc-|__|[a-f0-9]{10,}|\d{5,})/i.test(className)
-        ))
-        .slice(0, 2);
-      if (stableClasses.length > 0) {
-        addCandidate(
-          `${tag}${stableClasses.map((className) => `.${cssIdentifier(className)}`).join('')}`,
-          'class',
-          55,
-        );
+        return '';
       }
 
       const segments = [];
@@ -530,15 +478,56 @@ async function frameRecords(frame, options = {}) {
         }
       }
 
-      addCandidate(segments.join(' > '), 'path', 20);
+      return segments.join(' > ');
+    };
+    const primarySelectorFor = (element, attributes) => {
+      const tag = String(element.tagName || '').toLowerCase();
 
-      return candidates
-        .sort((left, right) => (
-          right.score - left.score
-          || Number(right.unique) - Number(left.unique)
-          || left.matchCount - right.matchCount
+      if (!tag) {
+        return '';
+      }
+
+      for (const attribute of [
+        'data-testid',
+        'data-test',
+        'data-cy',
+        'data-qa',
+        'aria-label',
+        'name',
+        'placeholder',
+        'title',
+      ]) {
+        const value = attributes[attribute];
+
+        if (value) {
+          return `${tag}[${attribute}="${cssString(value)}"]`;
+        }
+      }
+
+      if (attributes.role && attributes['aria-label']) {
+        return `[role="${cssString(attributes.role)}"][aria-label="${cssString(attributes['aria-label'])}"]`;
+      }
+
+      if (element.id) {
+        return `#${cssIdentifier(element.id)}`;
+      }
+
+      if (attributes.type) {
+        return `${tag}[type="${cssString(attributes.type)}"]`;
+      }
+
+      const stableClasses = Array.from(element.classList || [])
+        .filter((className) => (
+          className.length <= 80
+          && !/(?:^css-|^sc-|__|[a-f0-9]{10,}|\d{5,})/i.test(className)
         ))
-        .slice(0, classLimit);
+        .slice(0, 2);
+
+      if (stableClasses.length > 0) {
+        return `${tag}${stableClasses.map((className) => `.${cssIdentifier(className)}`).join('')}`;
+      }
+
+      return structuralSelectorFor(element) || tag;
     };
     const directText = (element) => {
       const tag = String(element.tagName || '').toLowerCase();
@@ -589,7 +578,6 @@ async function frameRecords(frame, options = {}) {
       const index = records.length;
       const tag = String(element.tagName || '').toLowerCase();
       const attributes = safeAttributes(element);
-      const selectorCandidates = selectorCandidatesFor(element);
 
       records.push({
         index,
@@ -600,19 +588,9 @@ async function frameRecords(frame, options = {}) {
         id: element.id || '',
         classes: Array.from(element.classList || []).slice(0, classLimit),
         text: directText(element),
-        selector: selectorCandidates.find((candidate) => candidate.unique)?.selector
-          || selectorCandidates[0]?.selector
-          || tag,
-        selectorCandidates,
+        selector: primarySelectorFor(element, attributes),
         attributes,
-        role: element.getAttribute('role') || '',
-        type: element.getAttribute('type') || '',
-        name: element.getAttribute('name') || '',
-        ariaLabel: element.getAttribute('aria-label') || '',
         label: labelFor(element),
-        placeholder: element.getAttribute('placeholder') || '',
-        title: element.getAttribute('title') || '',
-        href: safeHref(element),
         rect: {
           x: Number(rect.x.toFixed(2)),
           y: Number(rect.y.toFixed(2)),

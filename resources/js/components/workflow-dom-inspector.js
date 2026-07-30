@@ -189,7 +189,9 @@ export function workflowDomInspector(config = {}) {
     return {
         nodes: [],
         nodeIndex: {},
+        childrenByParent: {},
         searchFrames: [],
+        searchElementByRef: {},
         selectedRef: null,
         selectedSuggestions: [],
         collapsed: {},
@@ -200,6 +202,8 @@ export function workflowDomInspector(config = {}) {
         windowKey: 'main',
         query: '',
         matchedRefs: [],
+        matchedLookup: {},
+        matchOrder: {},
         searchError: '',
         copiedSelector: '',
         selectionNotice: '',
@@ -220,6 +224,9 @@ export function workflowDomInspector(config = {}) {
             const normalizedNodes = rawNodes.map((node, index) => {
                 const frameRef = normalizedString(node.frameRef) || 'main';
                 const nodeRef = normalizedString(node.nodeRef) || `${frameRef}:snapshot:${index}`;
+                const attributes = node.attributes && typeof node.attributes === 'object' && !Array.isArray(node.attributes)
+                    ? node.attributes
+                    : {};
 
                 return {
                     ...node,
@@ -228,16 +235,37 @@ export function workflowDomInspector(config = {}) {
                     parentRef: normalizedString(node.parentRef) || null,
                     tag: normalizedTag(node.tag),
                     classes: normalizedClasses(node.classes ?? node.className),
-                    attributes: node.attributes && typeof node.attributes === 'object' && !Array.isArray(node.attributes)
-                        ? node.attributes
-                        : {},
+                    attributes,
+                    role: normalizedString(node.role || attributes.role),
+                    type: normalizedString(node.type || attributes.type),
+                    name: normalizedString(node.name || attributes.name),
+                    ariaLabel: normalizedString(node.ariaLabel || attributes['aria-label']),
+                    placeholder: normalizedString(node.placeholder || attributes.placeholder),
+                    title: normalizedString(node.title || attributes.title),
+                    href: normalizedString(node.href || attributes.href),
                     rect: normalizedRect(node),
                     depth: Math.max(0, Number(node.depth || 0)),
+                    visible: node.visible === true,
+                    enabled: node.enabled !== false,
+                    focused: node.focused === true,
+                    editable: node.editable === true,
+                    actionable: node.actionable === true,
+                    inShadowDom: node.inShadowDom === true,
+                    selectorCandidates: Array.isArray(node.selectorCandidates) ? node.selectorCandidates : [],
                 };
             });
 
             this.nodes = bodyOnlyNodes(normalizedNodes);
             this.nodeIndex = Object.fromEntries(this.nodes.map((node) => [node.nodeRef, node]));
+            this.childrenByParent = {};
+            for (const node of this.nodes) {
+                if (!node.parentRef) {
+                    continue;
+                }
+
+                this.childrenByParent[node.parentRef] ||= [];
+                this.childrenByParent[node.parentRef].push(node.nodeRef);
+            }
             this.viewport = payload.viewport || null;
             this.cursor = payload.cursor || null;
             this.windowKey = normalizedString(payload.windowKey) || 'main';
@@ -250,10 +278,10 @@ export function workflowDomInspector(config = {}) {
                 : null;
 
             if (this.query !== '') {
-                this.search(false);
+                this.search();
             }
 
-            if (!this.selectedRef) {
+            if (!this.selectedRef && this.query === '') {
                 const initialNode = this.nodes.find((node) => node.focused === true && this.isControl(node))
                     || this.nodes.find((node) => node.visible === true && this.isControl(node))
                     || this.nodes.find((node) => node.visible === true)
@@ -312,6 +340,7 @@ export function workflowDomInspector(config = {}) {
 
         buildSearchFrames() {
             const frameGroups = new Map();
+            this.searchElementByRef = {};
 
             for (const node of this.nodes) {
                 const group = frameGroups.get(node.frameRef) || [];
@@ -370,6 +399,7 @@ export function workflowDomInspector(config = {}) {
                         normalizedString(node.text || node.label || node.ariaLabel),
                     ));
                     elements[node.nodeRef] = element;
+                    this.searchElementByRef[node.nodeRef] = element;
                 }
 
                 return { documentNode, elements, frameRef };
@@ -405,7 +435,9 @@ export function workflowDomInspector(config = {}) {
 
             return candidates
                 .filter((node) => {
-                    const actual = nodeSearchText(node);
+                    const descendantText = normalizedString(this.searchElementByRef[node.nodeRef]?.textContent)
+                        .toLocaleLowerCase('de');
+                    const actual = `${nodeSearchText(node)} ${descendantText}`.trim();
 
                     return exact ? actual === expected : actual.includes(expected);
                 })
@@ -452,8 +484,8 @@ export function workflowDomInspector(config = {}) {
         search(selectFirst = true) {
             const result = this.matchQuery(this.query);
             this.matchedRefs = result.refs;
+            this.updateMatchIndex();
             this.searchError = result.error;
-            this.persistState();
 
             if (
                 selectFirst
@@ -461,7 +493,22 @@ export function workflowDomInspector(config = {}) {
                 && !this.matchedRefs.includes(this.selectedRef)
             ) {
                 this.select(this.nodeIndex[this.matchedRefs[0]]);
+            } else if (
+                selectFirst
+                && this.query !== ''
+                && !this.searchError
+                && this.matchedRefs.length === 0
+            ) {
+                this.selectedRef = null;
+                this.selectedSuggestions = [];
             }
+
+            this.persistState();
+        },
+
+        updateMatchIndex() {
+            this.matchedLookup = Object.fromEntries(this.matchedRefs.map((ref) => [ref, true]));
+            this.matchOrder = Object.fromEntries(this.matchedRefs.map((ref, index) => [ref, index + 1]));
         },
 
         runQuickQuery(query) {
@@ -472,6 +519,7 @@ export function workflowDomInspector(config = {}) {
         clearSearch() {
             this.query = '';
             this.matchedRefs = [];
+            this.updateMatchIndex();
             this.searchError = '';
             this.persistState();
         },
@@ -524,7 +572,7 @@ export function workflowDomInspector(config = {}) {
         },
 
         hasChildren(node) {
-            return this.nodes.some((candidate) => candidate.parentRef === node.nodeRef);
+            return (this.childrenByParent[node.nodeRef] || []).length > 0;
         },
 
         toggle(node) {
@@ -622,14 +670,30 @@ export function workflowDomInspector(config = {}) {
         },
 
         isMatched(node) {
-            return this.matchedRefs.includes(node?.nodeRef);
+            return this.matchedLookup[node?.nodeRef] === true;
+        },
+
+        matchNumber(node) {
+            return this.matchOrder[node?.nodeRef] || '';
         },
 
         overlayNodes() {
+            const viewportWidth = Number(this.viewport?.width || 0);
+            const viewportHeight = Number(this.viewport?.height || 0);
+
             return this.matchedRefs
                 .filter((ref) => ref !== this.selectedRef)
                 .map((ref) => this.nodeIndex[ref])
-                .filter((node) => node?.visible === true && node.rect?.width > 0 && node.rect?.height > 0);
+                .filter((node) => (
+                    node?.visible === true
+                    && node.rect?.width > 0
+                    && node.rect?.height > 0
+                    && node.rect.x < viewportWidth
+                    && node.rect.y < viewportHeight
+                    && node.rect.x + node.rect.width > 0
+                    && node.rect.y + node.rect.height > 0
+                ))
+                .slice(0, 250);
         },
 
         overlayStyle(rect, viewport = null) {
@@ -728,6 +792,46 @@ export function workflowDomInspector(config = {}) {
             return Number(fallback || 40);
         },
 
+        structuralSelector(node) {
+            if (!node) {
+                return '';
+            }
+
+            const segments = [];
+            let current = node;
+            let guard = 0;
+
+            while (current && guard < 32) {
+                const tag = normalizedTag(current.tag);
+                let segment = tag;
+
+                if (current.parentRef) {
+                    const sameTagSiblings = this.nodes.filter((candidate) => (
+                        candidate.parentRef === current.parentRef
+                        && normalizedTag(candidate.tag) === tag
+                    ));
+
+                    if (sameTagSiblings.length > 1) {
+                        const position = sameTagSiblings.findIndex((candidate) => candidate.nodeRef === current.nodeRef);
+                        if (position >= 0) {
+                            segment += `:nth-of-type(${position + 1})`;
+                        }
+                    }
+                }
+
+                segments.unshift(segment);
+
+                if (tag === 'body' || !current.parentRef) {
+                    break;
+                }
+
+                current = this.nodeIndex[current.parentRef] || null;
+                guard += 1;
+            }
+
+            return segments.join(' > ');
+        },
+
         buildSelectorSuggestions(node) {
             if (!node) {
                 return [];
@@ -759,6 +863,8 @@ export function workflowDomInspector(config = {}) {
                     'aria',
                     94,
                 );
+            } else if (node.role) {
+                add(`[role="${cssAttributeValue(node.role)}"]`, 'role', 74);
             }
 
             for (const candidate of Array.isArray(node.selectorCandidates) ? node.selectorCandidates : []) {
@@ -772,6 +878,7 @@ export function workflowDomInspector(config = {}) {
                 add(`${tag}${node.classes.slice(0, 2).map((className) => `.${cssIdentifier(className)}`).join('')}`, 'class', 55);
             }
             add(node.selector, 'snapshot', 35);
+            add(this.structuralSelector(node), 'path', 20);
 
             return candidates
                 .map((candidate) => {
@@ -804,7 +911,7 @@ export function workflowDomInspector(config = {}) {
         },
 
         useSelector(selector) {
-            if (!this.selectedNodeActionable()) {
+            if (!this.selectedNodeProbeable()) {
                 return;
             }
 
@@ -820,8 +927,11 @@ export function workflowDomInspector(config = {}) {
                 return;
             }
 
+            let copied = false;
+
             try {
                 await navigator.clipboard.writeText(normalized);
+                copied = true;
             } catch {
                 const textarea = document.createElement('textarea');
                 textarea.value = normalized;
@@ -829,8 +939,14 @@ export function workflowDomInspector(config = {}) {
                 textarea.style.opacity = '0';
                 document.body.appendChild(textarea);
                 textarea.select();
-                document.execCommand('copy');
+                copied = document.execCommand('copy') === true;
                 textarea.remove();
+            }
+
+            if (!copied) {
+                this.selectionNotice = 'Der Selektor konnte nicht in die Zwischenablage kopiert werden.';
+
+                return;
             }
 
             this.copiedSelector = normalized;

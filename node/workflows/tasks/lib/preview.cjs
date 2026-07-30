@@ -429,16 +429,15 @@ function domTreeViewModel(domTree = {}) {
           bytes: frame.truncated.bytes === true,
         }
         : null,
-      nodes: (Array.isArray(frame.nodes) ? frame.nodes : []).map((node) => ({
-        nodeRef: normalizeText(node.nodeRef),
-        parentRef: normalizeText(node.parentRef) || null,
-        depth: Number(node.depth || 0),
-        tag: normalizeText(node.tag),
-        id: normalizeText(node.id),
-        className: Array.isArray(node.classes) ? node.classes.map((item) => normalizeText(item)).filter(Boolean).join(' ') : '',
-        text: normalizeText(node.text),
-        selector: normalizeText(node.selector),
-        selectorCandidates: (Array.isArray(node.selectorCandidates) ? node.selectorCandidates : [])
+      nodes: (Array.isArray(frame.nodes) ? frame.nodes : []).map((node) => {
+        const attributes = node.attributes && typeof node.attributes === 'object' && !Array.isArray(node.attributes)
+          ? Object.fromEntries(
+            Object.entries(node.attributes)
+              .map(([key, value]) => [normalizeText(key), normalizeText(value)])
+              .filter(([key, value]) => key !== '' && value !== ''),
+          )
+          : {};
+        const selectorCandidates = (Array.isArray(node.selectorCandidates) ? node.selectorCandidates : [])
           .map((candidate) => ({
             selector: normalizeText(candidate?.selector),
             kind: normalizeText(candidate?.kind) || 'css',
@@ -446,33 +445,63 @@ function domTreeViewModel(domTree = {}) {
             matchCount: Math.max(0, Number(candidate?.matchCount || 0)),
             score: Math.max(0, Math.min(100, Number(candidate?.score || 0))),
           }))
-          .filter((candidate) => candidate.selector !== ''),
-        attributes: node.attributes && typeof node.attributes === 'object' && !Array.isArray(node.attributes)
-          ? Object.fromEntries(
-            Object.entries(node.attributes)
-              .map(([key, value]) => [normalizeText(key), normalizeText(value)])
-              .filter(([key, value]) => key !== '' && value !== ''),
-          )
-          : {},
-        role: normalizeText(node.role),
-        type: normalizeText(node.type),
-        name: normalizeText(node.name),
-        ariaLabel: normalizeText(node.ariaLabel),
-        label: normalizeText(node.label),
-        placeholder: normalizeText(node.placeholder),
-        title: normalizeText(node.title),
-        href: normalizeText(node.href),
-        x: Number(node.rect?.x || 0),
-        y: Number(node.rect?.y || 0),
-        width: Number(node.rect?.width || 0),
-        height: Number(node.rect?.height || 0),
-        visible: node.visible === true,
-        enabled: node.enabled !== false,
-        focused: node.focused === true,
-        editable: node.editable === true,
-        actionable: node.actionable === true,
-        inShadowDom: node.inShadowDom === true,
-      })),
+          .filter((candidate) => candidate.selector !== '');
+        const optionalText = {
+          id: normalizeText(node.id),
+          className: Array.isArray(node.classes) ? node.classes.map((item) => normalizeText(item)).filter(Boolean).join(' ') : '',
+          text: normalizeText(node.text),
+          selector: normalizeText(node.selector),
+          label: normalizeText(node.label),
+        };
+        const view = {
+          nodeRef: normalizeText(node.nodeRef),
+          parentRef: normalizeText(node.parentRef) || null,
+          depth: Number(node.depth || 0),
+          tag: normalizeText(node.tag),
+          x: Number(node.rect?.x || 0),
+          y: Number(node.rect?.y || 0),
+          width: Number(node.rect?.width || 0),
+          height: Number(node.rect?.height || 0),
+          visible: node.visible === true,
+        };
+
+        if (Object.keys(attributes).length > 0) {
+          view.attributes = attributes;
+        }
+        if (selectorCandidates.length > 0) {
+          view.selectorCandidates = selectorCandidates;
+        }
+        for (const [key, value] of Object.entries(optionalText)) {
+          if (value !== '') {
+            view[key] = value;
+          }
+        }
+        for (const [key, attribute] of Object.entries({
+          role: 'role',
+          type: 'type',
+          name: 'name',
+          ariaLabel: 'aria-label',
+          placeholder: 'placeholder',
+          title: 'title',
+          href: 'href',
+        })) {
+          const value = normalizeText(node[key]);
+
+          if (value !== '' && !attributes[attribute]) {
+            view[key] = value;
+          }
+        }
+        if (node.enabled === false) {
+          view.enabled = false;
+        }
+        for (const flag of ['focused', 'editable', 'actionable', 'inShadowDom']) {
+          if (node[flag] === true) {
+            view[flag] = true;
+          }
+        }
+
+        return view;
+      }),
     })),
     nodeCount: Number(domTree.nodeCount || 0),
     truncated: domTree.truncated && typeof domTree.truncated === 'object'

@@ -297,6 +297,7 @@
                     <x-workflows.minimap
                         :workflow="$workflow"
                         :workflow-run="$activeRun"
+                        :route-map="$routeMap"
                         :active-step-id="$activeRun?->current_workflow_step_id"
                         :active-task-key="data_get($activeRun?->context_json, 'next_task_key')"
                         :selected-step-id="$overviewSelectedStepId"
@@ -416,6 +417,7 @@
     </div>
     @endunless
 
+    @unless($modalOnly)
     <x-ui.dialog-modal wire:model="showAddStepModal" maxWidth="2xl">
         <x-slot name="title">
             <div><span class="text-base font-semibold text-slate-950">Neue Workflow-Liste</span><p class="mt-1 text-xs font-normal text-slate-500">Eine Liste gruppiert zusammengehörige Tasks und besitzt eigene Erfolgs- und Fehlerwege.</p></div>
@@ -514,6 +516,7 @@
             <button type="button" x-on:click.prevent="const source = document.querySelector('[data-workflow-task-mailbox-source=&quot;newTask&quot;]')?.value || 'person'; $wire.addTaskCard(source);" class="ml-2 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-cyan-500">Task einsetzen</button>
         </x-slot>
     </x-ui.dialog-modal>
+    @endunless
 
     <x-ui.dialog-modal wire:model="showEditTaskModal" maxWidth="5xl">
         <x-slot name="title">
@@ -563,6 +566,7 @@
         </x-slot>
     </x-ui.dialog-modal>
 
+    @unless($modalOnly)
     <x-ui.dialog-modal wire:model="showMoveTaskModal" maxWidth="lg">
         <x-slot name="title">
             <div><span class="text-base font-semibold text-slate-950">Task in andere Liste verschieben</span><p class="mt-1 text-xs font-normal text-slate-500">Die Task wird ans Ende der gewählten Liste verschoben. Gekoppelte Loop-Blöcke bleiben zusammen.</p></div>
@@ -583,4 +587,5 @@
             <button type="button" wire:click="confirmTaskMove" class="ml-2 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-cyan-500">Task verschieben</button>
         </x-slot>
     </x-ui.dialog-modal>
+    @endunless
 </div>

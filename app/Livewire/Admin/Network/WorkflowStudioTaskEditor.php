@@ -479,13 +479,15 @@ class WorkflowStudioTaskEditor extends WorkflowManager
         $studioSession = $this->studioSession();
         $activeRun = $studioSession->activeRun;
         $this->synchronizeTaskEditAccess($studioSession, $activeRun);
-        $routeMap = app(WorkflowRouteMapPresenter::class)->present(
-            $workflow,
-            $activeRun,
-            $activeRun
-                ? WorkflowRouteMapPresenter::MODE_COMBINED
-                : WorkflowRouteMapPresenter::MODE_DEFINITION,
-        );
+        $routeMap = $this->modalOnly
+            ? ['mode' => WorkflowRouteMapPresenter::MODE_DEFINITION, 'nodes' => [], 'edges' => [], 'meta' => []]
+            : app(WorkflowRouteMapPresenter::class)->present(
+                $workflow,
+                $activeRun,
+                $activeRun
+                    ? WorkflowRouteMapPresenter::MODE_COMBINED
+                    : WorkflowRouteMapPresenter::MODE_DEFINITION,
+            );
         $selectedOverviewStep = $steps->firstWhere('id', $this->overviewSelectedStepId);
 
         if (! $selectedOverviewStep) {

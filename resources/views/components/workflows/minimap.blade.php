@@ -11,6 +11,7 @@
     'zoomable' => false,
     'initialZoom' => 'detail',
     'instance' => null,
+    'routeMap' => null,
 ])
 
 @php
@@ -451,6 +452,81 @@
             $routeEvents->push($pendingRouteEvent);
         }
     }
+
+    // Both the definition editor and the test preview consume the same
+    // presentation graph. The preview keeps all configured paths and adds the
+    // executed/pending runtime path with a distinct tone.
+    $routeMap = is_array($routeMap)
+        ? $routeMap
+        : ($workflow
+            ? app(\App\Services\Workflows\WorkflowRouteMapPresenter::class)->present(
+                $workflow,
+                $workflowRun,
+                $workflowRun
+                    ? \App\Services\Workflows\WorkflowRouteMapPresenter::MODE_COMBINED
+                    : \App\Services\Workflows\WorkflowRouteMapPresenter::MODE_DEFINITION,
+            )
+            : ['nodes' => [], 'edges' => []]);
+    $presentedNodes = collect($routeMap['nodes'] ?? [])->keyBy('id');
+    $routeEvents = collect($routeMap['edges'] ?? [])
+        ->filter(fn (array $edge): bool => ($edge['reachable'] ?? true) !== false)
+        ->sortBy(fn (array $edge): int => ($edge['runtime'] ?? false) ? 1 : 0)
+        ->values()
+        ->map(function (array $edge) use ($presentedNodes): array {
+            $outcome = mb_strtolower(trim((string) ($edge['outcome'] ?? '')));
+            $sourceNode = trim((string) ($edge['source'] ?? ''));
+            $targetNode = trim((string) ($edge['target'] ?? ''));
+            $source = $presentedNodes->get($sourceNode, []);
+            $target = $presentedNodes->get($targetNode, []);
+            $runtime = (bool) ($edge['runtime'] ?? false);
+            $pending = (bool) ($edge['pending'] ?? false);
+            $executed = (bool) ($edge['executed'] ?? false);
+            $direction = trim((string) ($edge['direction'] ?? 'route')) ?: 'route';
+            $targetKind = trim((string) ($target['kind'] ?? ''));
+
+            return [
+                'id' => (string) ($edge['id'] ?? 'route-'.sha1($sourceNode.'|'.$targetNode.'|'.$outcome)),
+                'at' => (string) ($edge['latest_at'] ?? ''),
+                'outcome' => $outcome,
+                'outcomeLabel' => match ($outcome) {
+                    'success' => 'Erfolg',
+                    'failed' => 'Fehler',
+                    'partial' => 'Teilergebnis',
+                    'timeout' => 'Zeitüberschreitung',
+                    'enter' => 'Listeneinstieg',
+                    default => $outcome !== '' ? $outcome : 'Route',
+                },
+                'logicalOutcome' => (string) ($edge['logical_outcome'] ?? ''),
+                'routeDisposition' => (string) ($edge['route_disposition'] ?? ''),
+                'type' => (string) ($edge['type'] ?? 'route'),
+                'direction' => $direction,
+                'directionLabel' => match (true) {
+                    $pending => 'Aktive Route',
+                    $runtime && $executed && $direction === 'back' => 'Laufweg zurück',
+                    $runtime && $executed => 'Laufweg',
+                    $direction === 'back' => 'Geplanter Rücksprung',
+                    $direction === 'loop' => 'Geplante Schleife',
+                    default => 'Geplante Route',
+                },
+                'lineTone' => match (true) {
+                    $runtime && ($executed || $pending) => 'runtime',
+                    in_array($outcome, ['failed', 'timeout'], true) => 'failed',
+                    $outcome === 'success' => 'success',
+                    $outcome === 'partial' => 'waiting',
+                    default => 'default',
+                },
+                'sourceNode' => $sourceNode,
+                'targetNode' => $targetNode,
+                'sourceLabel' => (string) ($source['title'] ?? $sourceNode),
+                'targetLabel' => (string) ($target['title'] ?? $targetNode),
+                'routeLabel' => (string) ($edge['label'] ?? ($target['title'] ?? $targetNode)),
+                'configured' => in_array('definition', $edge['origins'] ?? [], true),
+                'runtime' => $runtime,
+                'runtimeCount' => (int) ($edge['runtime_count'] ?? 0),
+                'pending' => $pending,
+                'terminal' => $targetKind === 'terminal',
+            ];
+        });
     $routeBadgesByNode = [];
 
     // Feature R3: Alle Knoten des Laufwegs behalten ihr Quelle-/Ziel-Abzeichen —
@@ -521,6 +597,7 @@
     };
     $routeChipClass = static function (array $routeEvent): string {
         return match ($routeEvent['lineTone'] ?? 'default') {
+            'runtime' => 'bg-sky-50 text-sky-700 ring-sky-200',
             'success' => 'bg-emerald-50 text-emerald-700 ring-emerald-200',
             'failed' => 'bg-red-50 text-red-700 ring-red-200',
             'waiting' => 'bg-amber-50 text-amber-700 ring-amber-200',
@@ -529,6 +606,7 @@
     };
     $routeBadgeClass = static function (array $badge): string {
         return match ($badge['tone'] ?? 'default') {
+            'runtime' => 'bg-sky-100 text-sky-700 ring-sky-200',
             'success' => 'bg-emerald-100 text-emerald-700 ring-emerald-200',
             'failed' => 'bg-red-100 text-red-700 ring-red-200',
             'waiting' => 'bg-amber-100 text-amber-700 ring-amber-200',
@@ -569,6 +647,7 @@
                 activeRouteNode: @js($activeRouteNode),
                 zoomLevel: @js($initialZoom),
                 markerIds: {
+                    runtime: @js($mapId.'-arrow-runtime'),
                     success: @js($mapId.'-arrow-success'),
                     failed: @js($mapId.'-arrow-failed'),
                     waiting: @js($mapId.'-arrow-waiting'),
@@ -621,6 +700,7 @@
 
                     this.routeSvgMarkup = this.routeLines.map((line) => {
                         const color = {
+                            runtime: '#0ea5e9',
                             success: '#34d399',
                             failed: '#f87171',
                             waiting: '#f59e0b',
@@ -866,6 +946,9 @@
                 aria-hidden="true"
             >
                 <defs>
+                    <marker id="{{ $mapId }}-arrow-runtime" markerWidth="7" markerHeight="7" refX="6.5" refY="3.5" orient="auto" markerUnits="userSpaceOnUse">
+                        <path d="M0,0 L0,7 L7,3.5 z" fill="#0ea5e9"></path>
+                    </marker>
                     <marker id="{{ $mapId }}-arrow-success" markerWidth="6" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
                         <path d="M0,0 L0,6 L6,3 z" fill="#34d399"></path>
                     </marker>
@@ -1032,6 +1115,30 @@
                         @endif
                     </div>
                 @endforeach
+
+                @if($steps->isNotEmpty())
+                    <div
+                        class="ml-8 flex shrink-0 flex-col gap-2"
+                        x-bind:class="zoomLevel === 'overview' ? 'w-28' : (zoomLevel === 'standard' ? 'w-36' : 'w-44')"
+                        data-minimap-step-column="terminal"
+                        aria-label="Workflow-Terminalziele"
+                    >
+                        <div
+                            data-minimap-node="terminal::end"
+                            class="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-2 text-emerald-900 shadow-sm"
+                        >
+                            <span class="block text-[8px] font-black uppercase tracking-wide text-emerald-700">Ende</span>
+                            <span class="mt-0.5 block truncate text-[10px] font-bold">Workflow-Ende</span>
+                        </div>
+                        <div
+                            data-minimap-node="terminal::fail"
+                            class="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-2 text-rose-900 shadow-sm"
+                        >
+                            <span class="block text-[8px] font-black uppercase tracking-wide text-rose-700">Fehler</span>
+                            <span class="mt-0.5 block truncate text-[10px] font-bold">Workflow-Abbruch</span>
+                        </div>
+                    </div>
+                @endif
             </div>
         </div>
 

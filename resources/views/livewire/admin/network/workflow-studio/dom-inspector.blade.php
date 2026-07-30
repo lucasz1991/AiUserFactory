@@ -119,7 +119,7 @@
 
                 <div
                     x-cloak
-                    x-show="selectedNode()?.rect"
+                    x-show.important="selectedNode()?.rect"
                     x-bind:style="overlayStyle(selectedNode()?.rect)"
                     class="pointer-events-none absolute z-20 border-2 border-cyan-300 bg-cyan-300/20 shadow-[0_0_0_1px_rgba(8,145,178,.45),0_0_24px_rgba(34,211,238,.4)]"
                 >
@@ -128,7 +128,7 @@
 
                 <div
                     x-cloak
-                    x-show="cursorPoint"
+                    x-show.important="cursorPoint"
                     x-bind:style="cursorStyle()"
                     class="pointer-events-none absolute z-30 transition-all duration-300 ease-out"
                     aria-hidden="true"
@@ -136,7 +136,7 @@
                     <svg class="h-6 w-6 -translate-x-[3px] -translate-y-[2px] drop-shadow-[0_2px_2px_rgba(15,23,42,.65)]" viewBox="0 0 24 24" fill="none">
                         <path d="M3 2.5 19 13l-7.1 1.2L8 21.5 3 2.5Z" fill="white" stroke="#0f172a" stroke-width="1.7" stroke-linejoin="round"/>
                     </svg>
-                    <span x-show="cursorClicked" data-workflow-cursor-click class="absolute left-0 top-0 h-8 w-8 rounded-full border-2 border-cyan-400 bg-cyan-300/25"></span>
+                    <span x-show.important="cursorClicked" data-workflow-cursor-click class="absolute left-0 top-0 h-8 w-8 rounded-full border-2 border-cyan-400 bg-cyan-300/25"></span>
                 </div>
 
                 <a
@@ -151,7 +151,7 @@
 
                 <p
                     x-cloak
-                    x-show="selectionNotice"
+                    x-show.important="selectionNotice"
                     x-text="selectionNotice"
                     class="absolute bottom-3 left-1/2 z-30 -translate-x-1/2 rounded-lg bg-slate-950/90 px-3 py-2 text-[10px] font-semibold text-white shadow-xl"
                 ></p>
@@ -173,10 +173,10 @@
                     </div>
                     <p class="mt-1 text-[11px] text-slate-500" x-text="nodes.length ? `${nodes.length} Body-Knoten im Snapshot` : 'Kein Body-DOM in diesem Lauf erfasst'"></p>
                 </div>
-                <span x-show="selectedNode()?.inShadowDom" class="rounded-full bg-violet-100 px-2.5 py-1 text-[9px] font-black uppercase text-violet-700">Shadow DOM</span>
+                <span x-show.important="selectedNode()?.inShadowDom" class="rounded-full bg-violet-100 px-2.5 py-1 text-[9px] font-black uppercase text-violet-700">Shadow DOM</span>
             </div>
 
-            <div x-show="nodes.length" class="mt-3 grid gap-2 lg:grid-cols-[minmax(16rem,1fr)_auto]">
+            <div x-show.important="nodes.length" class="mt-3 grid gap-2 lg:grid-cols-[minmax(16rem,1fr)_auto]">
                 <div class="relative">
                     <label class="sr-only" for="workflow-dom-search-{{ md5($inspectorStorageKey) }}">DOM nach CSS-Selektor oder Text durchsuchen</label>
                     <svg class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
@@ -197,7 +197,7 @@
                     >
                     <button
                         x-cloak
-                        x-show="query"
+                        x-show.important="query"
                         type="button"
                         x-on:click="clearSearch()"
                         class="absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700"
@@ -223,7 +223,7 @@
                 </div>
             </div>
 
-            <div x-show="nodes.length" class="mt-2 flex flex-wrap items-center gap-2">
+            <div x-show.important="nodes.length" class="mt-2 flex flex-wrap items-center gap-2">
                 <span class="text-[9px] font-black uppercase tracking-wider text-slate-400">Schnellfilter</span>
                 <button type="button" x-on:click="runQuickQuery('button, input:not([type=hidden]), textarea, select, a[href], [role=button]')" class="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[9px] font-bold text-slate-600 hover:border-cyan-300 hover:text-cyan-800">Eingaben & Buttons</button>
                 <button type="button" x-on:click="runQuickQuery('input:not([type=hidden]), textarea, select, [contenteditable=true]')" class="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[9px] font-bold text-slate-600 hover:border-cyan-300 hover:text-cyan-800">Formularfelder</button>
@@ -232,7 +232,7 @@
             </div>
         </header>
 
-        <div x-show="nodes.length" class="grid min-h-0 xl:grid-cols-[minmax(0,1.35fr)_minmax(20rem,.65fr)]">
+        <div x-show.important="nodes.length" class="grid min-h-0 xl:grid-cols-[minmax(0,1.35fr)_minmax(20rem,.65fr)]">
             <div class="min-h-[22rem] max-h-[38rem] overflow-auto bg-slate-950 py-2 xl:border-r xl:border-slate-800" data-workflow-preview-scrollbar>
                 <template x-for="node in visibleNodes()" :key="node.nodeRef">
                     <div
@@ -258,16 +258,16 @@
                         <button type="button" x-on:click="select(node)" class="flex min-w-0 flex-1 items-center gap-1.5 py-1.5 text-left">
                             <span class="text-slate-500">&lt;</span>
                             <span class="font-bold text-fuchsia-300" x-text="node.tag"></span>
-                            <span x-show="node.id" class="text-cyan-300" x-text="`#${node.id}`"></span>
-                            <span x-show="node.classes?.length" class="truncate text-amber-200" x-text="`.${node.classes.slice(0, 3).join('.')}`"></span>
+                            <span x-show.important="node.id" class="text-cyan-300" x-text="`#${node.id}`"></span>
+                            <span x-show.important="node.classes?.length" class="truncate text-amber-200" x-text="`.${node.classes.slice(0, 3).join('.')}`"></span>
                             <span class="text-slate-500">&gt;</span>
                             <span class="min-w-0 truncate pl-1 font-sans text-[10px] text-slate-500" x-text="nodeSummary(node)"></span>
                         </button>
-                        <span x-show="isMatched(node)" class="my-auto ml-2 rounded bg-amber-300 px-1.5 py-0.5 font-sans text-[8px] font-black text-amber-950" x-text="matchedRefs.indexOf(node.nodeRef) + 1"></span>
+                        <span x-show.important="isMatched(node)" class="my-auto ml-2 rounded bg-amber-300 px-1.5 py-0.5 font-sans text-[8px] font-black text-amber-950" x-text="matchedRefs.indexOf(node.nodeRef) + 1"></span>
                     </div>
                 </template>
 
-                <div x-show="query && !searchError && matchedRefs.length === 0" class="flex min-h-56 items-center justify-center px-6 text-center">
+                <div x-show.important="query && !searchError && matchedRefs.length === 0" class="flex min-h-56 items-center justify-center px-6 text-center">
                     <div>
                         <p class="text-sm font-bold text-slate-300">Kein Treffer im Body-DOM</p>
                         <p class="mt-2 text-xs leading-5 text-slate-500">Prüfe den CSS-Selektor oder suche mit <span class="font-mono text-slate-400">text=Beschriftung</span>.</p>
@@ -285,11 +285,11 @@
                                     <p class="mt-1 truncate font-mono text-xs font-bold text-slate-950" x-text="nodeLabel(selectedNode())"></p>
                                 </div>
                                 <div class="flex flex-wrap gap-1.5">
-                                    <span x-show="selectedNode().focused" class="rounded-full bg-cyan-100 px-2 py-1 text-[8px] font-black uppercase text-cyan-800">Fokus</span>
-                                    <span x-show="selectedNode().actionable || selectedNode().editable" class="rounded-full bg-emerald-100 px-2 py-1 text-[8px] font-black uppercase text-emerald-800">Bedienbar</span>
+                                    <span x-show.important="selectedNode().focused" class="rounded-full bg-cyan-100 px-2 py-1 text-[8px] font-black uppercase text-cyan-800">Fokus</span>
+                                    <span x-show.important="selectedNode().actionable || selectedNode().editable" class="rounded-full bg-emerald-100 px-2 py-1 text-[8px] font-black uppercase text-emerald-800">Bedienbar</span>
                                 </div>
                             </div>
-                            <p x-show="nodeSummary(selectedNode())" class="mt-3 max-h-20 overflow-auto rounded-lg bg-slate-50 p-2.5 text-[10px] leading-4 text-slate-600" x-text="nodeSummary(selectedNode())"></p>
+                            <p x-show.important="nodeSummary(selectedNode())" class="mt-3 max-h-20 overflow-auto rounded-lg bg-slate-50 p-2.5 text-[10px] leading-4 text-slate-600" x-text="nodeSummary(selectedNode())"></p>
                         </div>
 
                         <dl class="grid grid-cols-2 gap-x-4 gap-y-3 text-[10px]">
@@ -303,7 +303,7 @@
                             <div><dt class="font-black uppercase tracking-wide text-slate-400">Rechteck</dt><dd class="mt-1 font-mono text-slate-700" x-text="`${Math.round(selectedNode().rect.x)}, ${Math.round(selectedNode().rect.y)} · ${Math.round(selectedNode().rect.width)}×${Math.round(selectedNode().rect.height)}`"></dd></div>
                         </dl>
 
-                        <div x-show="Object.keys(selectedNode().attributes || {}).length">
+                        <div x-show.important="Object.keys(selectedNode().attributes || {}).length">
                             <p class="text-[9px] font-black uppercase tracking-[0.14em] text-slate-400">Sichere Attribute</p>
                             <dl class="mt-2 divide-y divide-slate-100 rounded-xl border border-slate-200 bg-slate-50 px-3">
                                 <template x-for="[attribute, value] in Object.entries(selectedNode().attributes || {})" :key="attribute">
@@ -334,10 +334,10 @@
                                         </div>
                                         <div class="mt-2 flex flex-wrap items-center gap-1.5">
                                             <span class="rounded bg-slate-100 px-1.5 py-0.5 text-[8px] font-bold uppercase text-slate-500" x-text="candidate.kind"></span>
-                                            <span x-show="candidate.unique" class="rounded bg-emerald-100 px-1.5 py-0.5 text-[8px] font-black uppercase text-emerald-700">eindeutig</span>
-                                            <span x-show="candidate.count !== null && !candidate.unique" class="rounded bg-amber-100 px-1.5 py-0.5 text-[8px] font-bold text-amber-800" x-text="`${candidate.count} Treffer`"></span>
+                                            <span x-show.important="candidate.unique" class="rounded bg-emerald-100 px-1.5 py-0.5 text-[8px] font-black uppercase text-emerald-700">eindeutig</span>
+                                            <span x-show.important="candidate.count !== null && !candidate.unique" class="rounded bg-amber-100 px-1.5 py-0.5 text-[8px] font-bold text-amber-800" x-text="`${candidate.count} Treffer`"></span>
                                             <button
-                                                x-show="interactive"
+                                                x-show.important="interactive"
                                                 type="button"
                                                 x-on:click="useSelector(candidate.selector)"
                                                 x-bind:disabled="!selectedNodeActionable()"
@@ -355,13 +355,13 @@
                             <p class="text-[10px] font-bold" x-bind:class="canProbe ? 'text-emerald-800' : 'text-amber-800'" x-text="canProbe ? 'Der Lauf ist pausiert: Live-Proben sind verfügbar.' : 'Snapshot-Suche bleibt verfügbar. Für echte Browseraktionen den Lauf manuell pausieren.'"></p>
                         </div>
 
-                        <p x-show="selectedNode() && !selectedNodeActionable() && interactive" class="text-[9px] leading-4 text-amber-700">
+                        <p x-show.important="selectedNode() && !selectedNodeActionable() && interactive" class="text-[9px] leading-4 text-amber-700">
                             Iframe- und Shadow-DOM-Elemente lassen sich im Snapshot markieren und kopieren. Eine Live-Probe bleibt gesperrt, bis der Frame beziehungsweise Root eindeutig adressierbar ist.
                         </p>
                     </div>
                 </template>
 
-                <div x-show="!selectedNode()" class="flex min-h-52 items-center justify-center text-center">
+                <div x-show.important="!selectedNode()" class="flex min-h-52 items-center justify-center text-center">
                     <div>
                         <p class="text-sm font-bold text-slate-700">Element auswählen</p>
                         <p class="mt-2 text-xs leading-5 text-slate-500">Klicke in den Screenshot oder auf eine Zeile im Body-DOM.</p>
@@ -370,7 +370,7 @@
             </aside>
         </div>
 
-        <div x-show="!nodes.length" class="px-5 py-10 text-center">
+        <div x-show.important="!nodes.length" class="px-5 py-10 text-center">
             <p class="text-sm font-bold text-slate-700">Noch kein Body-DOM verfügbar</p>
             <p class="mx-auto mt-2 max-w-xl text-xs leading-5 text-slate-500">DOM-Snapshots werden in Debug- und Copilot-Testläufen erfasst. Im Real-Playback bleiben Screenshot und DOM bewusst deaktiviert.</p>
         </div>

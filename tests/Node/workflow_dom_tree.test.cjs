@@ -232,22 +232,68 @@ test('browser-side tree traversal starts at body and never serializes html or he
   assert.doesNotMatch(source, /const root = document\.documentElement;/);
 });
 
-test('browser-side selector suggestions rank semantic attributes before raw ids and structural paths', () => {
+test('browser snapshot captures a cheap semantic primary selector and leaves match counts to the inspector', () => {
   const source = fs.readFileSync(
     path.resolve(__dirname, '../../node/workflows/tasks/lib/dom_tree.cjs'),
     'utf8',
   );
-  const semanticAttributes = source.indexOf('const attributeScores = {');
-  const rawId = source.indexOf('if (element.id) {', semanticAttributes);
-  const scoreSort = source.indexOf('right.score - left.score', rawId);
-  const uniqueSort = source.indexOf('Number(right.unique) - Number(left.unique)', scoreSort);
+  const primarySelector = source.indexOf('const primarySelectorFor = (element, attributes) => {');
+  const testAttribute = source.indexOf("'data-testid'", primarySelector);
+  const rawId = source.indexOf('if (element.id) {', primarySelector);
 
-  assert.ok(semanticAttributes >= 0);
-  assert.ok(rawId > semanticAttributes);
-  assert.ok(scoreSort > rawId);
-  assert.ok(uniqueSort > scoreSort);
-  assert.match(source, /'data-testid': 100/);
-  assert.match(source, /addCandidate\(idSelector, 'id', generatedLooking \? 35 : 76\)/);
+  assert.ok(primarySelector >= 0);
+  assert.ok(testAttribute > primarySelector);
+  assert.ok(rawId > testAttribute);
+  assert.match(source, /selector: primarySelectorFor\(element, attributes\)/);
+  assert.doesNotMatch(source, /queryRoot\.querySelectorAll/);
+  assert.doesNotMatch(source, /const selectorCandidatesFor =/);
+});
+
+test('a thousand simple body controls fit into the default snapshot byte budget', () => {
+  const controls = [
+    record(0, {
+      parentIndex: null,
+      depth: 0,
+      path: '0',
+      tag: 'body',
+      id: '',
+      classes: [],
+      text: '',
+      selector: 'body',
+      selectorCandidates: [],
+      attributes: {},
+    }),
+    ...Array.from({ length: 1000 }, (_, index) => record(index + 1, {
+      parentIndex: 0,
+      depth: 1,
+      path: `0.${index}`,
+      tag: 'button',
+      id: '',
+      classes: [],
+      text: 'Aktion',
+      selector: 'button',
+      selectorCandidates: [],
+      attributes: { type: 'button' },
+      role: '',
+      type: '',
+      name: '',
+      ariaLabel: '',
+      label: '',
+      placeholder: '',
+      title: '',
+      href: '',
+      focused: false,
+      editable: false,
+      actionable: true,
+    })),
+  ];
+  const tree = buildFrameTree(controls, {
+    frameRef: 'main',
+    windowKey: 'main',
+  });
+
+  assert.equal(tree.nodeCount, controls.length);
+  assert.equal(tree.truncated.bytes, false);
 });
 
 test('atomic JSON writer safely replaces an existing Windows-readable file', () => {
