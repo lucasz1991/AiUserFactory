@@ -936,6 +936,82 @@
   .ff-jump-latest {
     bottom: 8.25rem;
   }
+
+  div[data-workflow-table-scroll] {
+    overflow: visible !important;
+  }
+
+  table[data-workflow-table] {
+    display: block;
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  table[data-workflow-table] thead {
+    display: none;
+  }
+
+  table[data-workflow-table] tbody {
+    display: grid;
+    gap: .55rem;
+    padding: .65rem;
+    background: var(--ff-surface-soft);
+  }
+
+  table[data-workflow-table] tbody tr {
+    display: grid;
+    min-width: 0;
+    grid-template-columns: 2rem minmax(0, 1fr) 2.5rem;
+    grid-template-rows: auto auto;
+    align-items: center;
+    gap: .15rem .4rem;
+    overflow: visible;
+    border: 1px solid var(--ff-line);
+    border-radius: .9rem;
+    background: #fff;
+    box-shadow: var(--ff-shadow-sm);
+  }
+
+  table[data-workflow-table] tbody td {
+    display: none;
+    min-width: 0;
+    border: 0;
+  }
+
+  table[data-workflow-table] tbody td:nth-child(1) {
+    display: block;
+    grid-column: 1;
+    grid-row: 1 / span 2;
+    padding: .85rem 0 .85rem .75rem;
+  }
+
+  table[data-workflow-table] tbody td:nth-child(2) {
+    display: block;
+    grid-column: 2;
+    grid-row: 1;
+    padding: .8rem .2rem .1rem;
+  }
+
+  table[data-workflow-table] tbody td:nth-child(5) {
+    display: block;
+    grid-column: 2;
+    grid-row: 2;
+    padding: .1rem .2rem .8rem;
+  }
+
+  table[data-workflow-table] tbody td:nth-child(6) {
+    display: block;
+    grid-column: 3;
+    grid-row: 1 / span 2;
+    padding: .75rem .65rem .75rem 0;
+  }
+
+  table[data-workflow-table] tbody td[colspan] {
+    display: block !important;
+    grid-column: 1 / -1 !important;
+    grid-row: 1 !important;
+    padding: 1.5rem !important;
+  }
 }
 
 @media (max-width: 480px) {
@@ -968,6 +1044,15 @@
 }
 
 [data-workflow-studio-shell] .ff-studio-commandbar::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+[data-workflows-index-root] :is(.overflow-x-auto, [role="tablist"]) {
+  scrollbar-width: none;
+}
+
+[data-workflows-index-root] :is(.overflow-x-auto, [role="tablist"])::-webkit-scrollbar {
   width: 0;
   height: 0;
 }

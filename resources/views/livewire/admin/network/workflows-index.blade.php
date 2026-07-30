@@ -1,4 +1,4 @@
-<div class="workflow-experience space-y-6" wire:loading.class="opacity-90">
+<div class="workflow-experience space-y-6" data-workflows-index-root wire:loading.class="opacity-90">
     <section class="ff-command-surface px-4 py-5 sm:px-6 sm:py-6" aria-labelledby="workflows-index-title">
         <div class="relative z-10 flex flex-wrap items-start justify-between gap-5">
         <div class="min-w-0">
@@ -180,8 +180,8 @@
             </div>
         </div>
 
-        <div class="overflow-x-auto bg-white">
-            <table class="min-w-[920px] w-full table-fixed divide-y divide-slate-200">
+        <div class="overflow-x-auto bg-white" data-workflow-table-scroll>
+            <table class="min-w-[920px] w-full table-fixed divide-y divide-slate-200" data-workflow-table>
                 <thead class="bg-slate-50">
                     <tr>
                         <th class="w-[4%] px-3 py-3 text-left">

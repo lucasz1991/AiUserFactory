@@ -80,7 +80,7 @@
             const storedChatOpen = sessionStorage.getItem('workflow-copilot-open') === '1';
             this.studioPinned = Boolean(document.querySelector('[data-workflow-studio-shell]'));
             this.studioChatWasOpen = storedChatOpen;
-            this.showChat = storedChatOpen || (this.studioPinned && this.isDesktopDocked);
+            this.showChat = this.isDesktopDocked && (storedChatOpen || this.studioPinned);
             this.showImportPanel = false;
             this.clearVoiceCaptureState();
             this.autoRead = this.readBool('workflow-copilot-auto-read', this.autoRead);
@@ -225,7 +225,13 @@
             return this.isDesktopDocked;
         },
         syncDockLayout() {
+            const wasDesktopDocked = this.isDesktopDocked;
             this.isDesktopDocked = window.matchMedia('(min-width: 1140px)').matches;
+
+            if (wasDesktopDocked && !this.isDesktopDocked && this.showChat) {
+                this.showChat = false;
+            }
+
             document.body.classList.toggle('workflow-copilot-docked', this.showChat && this.isDesktopDocked);
         },
         busy() {

@@ -311,14 +311,16 @@ body[data-sidebar-expanded='true'] .ff-topbar-brand__copy {
 .ff-menu-icon {
     position: relative;
     display: grid;
-    width: 1.35rem;
-    height: 1.05rem;
+    width: 1.35rem !important;
+    min-width: 1.35rem !important;
+    height: 1.05rem !important;
     align-content: space-between;
 }
 
 .ff-menu-icon > span {
     display: block;
-    width: 100%;
+    width: 100% !important;
+    min-width: 100% !important;
     height: 1.5px;
     border-radius: 999px;
     background: currentColor;
