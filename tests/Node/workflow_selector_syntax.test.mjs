@@ -17,6 +17,7 @@ test('top-level candidates preserve commas in brackets, quotes and parentheses',
 test('element candidate syntax accepts resolver extensions and rejects malformed input', () => {
     for (const value of [
         'button[type=submit], text=Weiter',
+        "text=What's new",
         'text-is="Jetzt anmelden"',
         'css=body',
         'button:has-text("Weiter")',

@@ -13,6 +13,7 @@ class WorkflowSelectorSyntaxServiceTest extends TestCase
 
         foreach ([
             'button[type=submit], text=Weiter',
+            "text=What's new",
             'text-is="Jetzt anmelden"',
             'css=body',
             'button:has-text("Weiter")',

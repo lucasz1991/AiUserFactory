@@ -131,7 +131,11 @@ class WorkflowSelectorSyntaxService
 
     protected function validateElementCandidates(string $value): ?string
     {
-        [$candidates, $splitError] = $this->splitTopLevelSelectorList($value);
+        // The Node resolver keeps an unmatched quote as ordinary text instead
+        // of failing. This matters for unquoted contractions such as
+        // text=What's new. CSS candidates still pass through the strict CSS
+        // validation below.
+        [$candidates, $splitError] = $this->splitTopLevelSelectorList($value, true);
 
         if ($splitError !== null) {
             return $splitError;
@@ -442,7 +446,7 @@ class WorkflowSelectorSyntaxService
     /**
      * @return array{0: list<string>, 1: ?string}
      */
-    protected function splitTopLevelSelectorList(string $value): array
+    protected function splitTopLevelSelectorList(string $value, bool $allowUnclosedQuote = false): array
     {
         $entries = [];
         $current = '';
@@ -520,7 +524,7 @@ class WorkflowSelectorSyntaxService
             return [[], 'Ein Escape-Zeichen am Ende ist unvollstaendig.'];
         }
 
-        if ($quote !== '') {
+        if ($quote !== '' && ! $allowUnclosedQuote) {
             return [[], 'Ein Textwert besitzt kein schliessendes Anfuehrungszeichen.'];
         }
 

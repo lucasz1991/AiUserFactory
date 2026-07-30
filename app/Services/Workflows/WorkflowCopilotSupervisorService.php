@@ -2619,6 +2619,15 @@ class WorkflowCopilotSupervisorService
             '/^technischer?\s+status\s+(?:ist|gleich|=|equals)\s+(.+)$/iu' => ['technical_status', 'equals'],
             '/^technical[-\s]?status\s+(?:is|=|equals)\s+(.+)$/iu' => ['technical_status', 'equals'],
             '/^(?:fachlicher?\s+status|business[-\s]?status)\s+(?:ist|is|gleich|=|equals)\s+(.+)$/iu' => ['business_status', 'equals'],
+            // Ergaenzt die strikte Rueckgabewert-Regel weiter oben um zwei Faelle,
+            // die produktiv tatsaechlich eingegeben wurden und dort still auf
+            // `unsupported` fielen: den technischen Namen `workflow_return` und
+            // einen erklaerenden Zusatz hinter dem Typ ("array mit ergebnissen").
+            // Gefangen wird nur der Typname selbst — compareAssertionValue kennt
+            // ausschliesslich diese Woerter. Da evaluateSuccessCriteria() bei null
+            // Assertionen vakuum-wahr `pass=true` meldet, blieb die fachliche
+            // Pruefung sonst wirkungslos, ohne dass es auffiel.
+            '/^(?:workflow[_\s-]?return|r(?:ue|ü)ckgabe(?:wert)?|return[_\s-]?value)\s*(?:ist|is|=|gleich|equals|hat\s+typ|type\s+is)\s*(array|liste|list|object|objekt|string|text|number|zahl|integer|boolean|bool|null)\b.*$/iu' => ['result_type', 'type_is'],
             '/^text\s+(.+?)\s+(?:ist\s+sichtbar|is\s+visible)$/iu' => ['visible_text', 'contains'],
             '/^(?:seite|page)\s+(?:zeigt|enth(?:ae|ä)lt|shows|contains)\s+(.+)$/iu' => ['visible_text', 'contains'],
             '/^(.+?)\s+(?:ist\s+sichtbar|is\s+visible)$/iu' => ['visible_text', 'contains'],

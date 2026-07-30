@@ -15,7 +15,7 @@ export const SELECTOR_MODES = Object.freeze({
     variablePath: 'variable_path',
 });
 
-export function splitTopLevelSelectorList(value) {
+export function splitTopLevelSelectorList(value, { allowUnclosedQuote = false } = {}) {
     const input = String(value ?? '').trim();
 
     if (input === '') {
@@ -93,7 +93,7 @@ export function splitTopLevelSelectorList(value) {
         return { entries: [], error: 'Ein Escape-Zeichen am Ende ist unvollständig.' };
     }
 
-    if (quote !== '') {
+    if (quote !== '' && !allowUnclosedQuote) {
         return { entries: [], error: 'Ein Textwert besitzt kein schließendes Anführungszeichen.' };
     }
 
@@ -272,7 +272,10 @@ function validateExtendedOrNativeCss(value) {
 }
 
 function validateElementCandidates(value) {
-    const { entries, error } = splitTopLevelSelectorList(value);
+    // Keep parity with normalizeElementCandidates(): an unmatched quote stays
+    // part of a plain text candidate, e.g. text=What's new. Any CSS candidate
+    // is validated strictly after it has been classified.
+    const { entries, error } = splitTopLevelSelectorList(value, { allowUnclosedQuote: true });
 
     if (error) {
         return error;
