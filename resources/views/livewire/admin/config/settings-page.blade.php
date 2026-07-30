@@ -1,14 +1,9 @@
-<div class="space-y-6" wire:loading.class="opacity-50 pointer-events-none cursor-wait">
-    <div class="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-        <div class="flex flex-wrap items-start justify-between gap-4">
-            <div>
-                <h1 class="text-2xl font-semibold text-gray-900">Einstellungen</h1>
-                <p class="mt-2 text-sm text-gray-500">
-                    Zentrale Konfiguration fuer externe Dienste und Transfers.
-                </p>
-            </div>
-        </div>
-    </div>
+<div class="space-y-6" wire:loading.class="opacity-50 pointer-events-none cursor-wait" data-ff-settings-page>
+    <x-ui.page-header
+        eyebrow="System"
+        title="Einstellungen"
+        description="Externe Dienste, AI-Verbindungen, ClientController und Laufzeitverhalten zentral konfigurieren."
+    />
 
     @if (session()->has('success'))
         <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
@@ -16,7 +11,7 @@
         </div>
     @endif
 
-    <div class="rounded-lg border border-gray-200 bg-white shadow-sm">
+    <div class="ff-ui-surface" data-ff-settings-surface>
         <div class="border-b border-gray-200 px-6 py-4">
             <div class="flex flex-wrap gap-2">
                 <button type="button" wire:click="switchTab('scraper-transfer')" class="rounded-md px-4 py-2 text-sm font-semibold {{ $activeTab === 'scraper-transfer' ? 'bg-slate-900 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200' }}">

@@ -2,6 +2,9 @@
 <html lang="de" dir="ltr">
 
 <head>
+    {{-- Spur W (PWA + Web-Push), siehe layouts/master.blade.php: muss VOR
+         layouts.metahead stehen. --}}
+    @include('layouts.pwa-head')
     @include('layouts.metahead')
     <title>@yield('title') | Factory AI · User Factory</title>
     <!-- css -->

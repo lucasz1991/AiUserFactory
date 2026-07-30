@@ -1,27 +1,20 @@
-<div wire:loading.class="cursor-wait" class="space-y-6">
-    {{-- Hero --}}
-    <div class="relative overflow-hidden rounded-2xl bg-gradient-to-br from-primary-base via-[#2c5391] to-secondary-base p-6 text-white shadow-lg sm:p-8">
-        <div class="pointer-events-none absolute -right-16 -top-20 h-56 w-56 rounded-full bg-white/10 blur-3xl"></div>
-        <div class="pointer-events-none absolute -bottom-24 left-1/3 h-64 w-64 rounded-full bg-secondary-base/20 blur-3xl"></div>
-        <div class="relative flex flex-wrap items-start justify-between gap-4">
-            <div>
-                <span class="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-white/70">
-                    <span class="h-1.5 w-1.5 rounded-full bg-white"></span> Dashboard
-                </span>
-                <h1 class="mt-2 text-2xl font-bold sm:text-3xl">Factory AI</h1>
-                <p class="mt-1.5 max-w-xl text-sm text-white/80">
-                    Zentrale Uebersicht fuer Personen, Instagram-Sessions und spaetere Bot-Automation.
-                </p>
-            </div>
+<div wire:loading.class="cursor-wait" class="space-y-6" data-ff-dashboard>
+    <x-ui.page-header
+        eyebrow="Control Center"
+        title="Factory AI"
+        description="Personen, Automationen, Verbindungen und Workflow-Aktivitaet in einer klaren Arbeitsoberflaeche."
+    >
+        <x-slot:actions>
             <a href="{{ route('persons.index') }}"
-               class="rounded-lg bg-white px-4 py-2.5 text-sm font-semibold text-primary-base shadow-sm transition hover:bg-white/90">
+               wire:navigate
+               class="ff-primary-action">
                 Personen verwalten
             </a>
-        </div>
-    </div>
+        </x-slot:actions>
+    </x-ui.page-header>
 
     {{-- Kennzahlen --}}
-    <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+    <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-5" data-ff-dashboard-metrics>
         <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition hover:shadow-md">
             <div class="flex items-center justify-between">
                 <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Benutzer</p>

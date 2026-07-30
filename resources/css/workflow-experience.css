@@ -963,7 +963,13 @@
 [data-workflow-studio-shell] .ff-studio-commandbar {
   overscroll-behavior-inline: contain;
   scroll-padding-inline: .75rem;
+  scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
+}
+
+[data-workflow-studio-shell] .ff-studio-commandbar::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 [data-workflow-studio-shell] .ff-studio-commandbar > * {

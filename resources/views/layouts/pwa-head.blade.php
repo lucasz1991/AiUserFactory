@@ -8,8 +8,10 @@
 
     Einbindung: `@include('layouts.pwa-head')` im `<head>` von
     `layouts/master.blade.php` und `layouts/master-without-nav.blade.php` —
-    **nach** `layouts.metahead`, weil bei zwei `<link rel="manifest">` das
-    erste gewinnt und das Alt-Manifest kein `display: standalone` deklariert.
+    **vor** `layouts.metahead`. Browser werten nur das **erste**
+    `<link rel="manifest">` aus; metahead traegt ein zweites, das nicht
+    installierbar ist (und dessen `href` dort ausserdem als woertlicher
+    Blade-Ausdruck landet, weil die Datei `.php` statt `.blade.php` heisst).
 
     Der Block ist absichtlich frei von Datenbank-Zugriffen ausser dem
     Auth-Block, damit auch Fehlerseiten ihn einbinden koennen.

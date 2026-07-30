@@ -2,10 +2,11 @@
 
 @section('content')
 <div class="space-y-6" data-ff-client-controller-page>
-            <div class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
-                <h1 class="text-2xl font-semibold text-gray-900">ClientController-Jobs</h1>
-                <p class="mt-1 text-sm text-gray-500">Workflows auf einem ClientController-Node oder technische Roh-Jobs einplanen.</p>
-            </div>
+            <x-ui.page-header
+                eyebrow="ClientController"
+                title="Jobs"
+                description="Workflows auf einem ClientController-Node oder technische Roh-Jobs kontrolliert einplanen."
+            />
 
             @if(session('success'))
                 <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">{{ session('success') }}</div>

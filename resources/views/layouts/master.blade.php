@@ -5,6 +5,12 @@
 <!DOCTYPE html>
 <html lang="{{ str_replace('_', '-', app()->getLocale()) }}" dir="ltr">
 <head>
+    {{-- Spur W (PWA + Web-Push): muss VOR layouts.metahead stehen. Browser
+         werten ausschliesslich das erste <link rel="manifest"> aus, und
+         metahead traegt ein zweites, das nicht installierbar ist. Beim
+         App-Shell-Umbau bitte Zeile und Reihenfolge uebernehmen — sonst
+         faellt Installation und Push still aus. --}}
+    @include('layouts.pwa-head')
     @include('layouts.metahead')
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>{{ $documentTitle }} | Factory AI &middot; User Factory</title>
