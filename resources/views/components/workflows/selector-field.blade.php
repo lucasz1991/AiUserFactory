@@ -27,7 +27,7 @@
                 'text-is=Jetzt anmelden',
                 'button:has-text("Weiter")',
             ],
-            'note' => 'Die Suche umfasst alle iFrames und offene Shadow DOMs. role= wird nicht unterstuetzt; verwende stattdessen z. B. [role=button].',
+            'note' => 'Die Suche umfasst alle iFrames und offene Shadow DOMs. role= waere nur normaler Suchtext; fuer Rollen verwende z. B. [role=button].',
         ],
         'selector_field_definitions' => [
             'title' => 'Felddefinitionen',
