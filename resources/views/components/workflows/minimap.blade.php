@@ -340,6 +340,21 @@
                         $outcome,
                     );
                 }
+
+                foreach (is_array($task['status_routes'] ?? null) ? $task['status_routes'] : [] as $status => $route) {
+                    $outcome = mb_strtolower(trim((string) $status));
+
+                    if ($outcome === '') {
+                        continue;
+                    }
+
+                    $appendConfiguredRoute(
+                        $stepAction.'::'.$taskKey,
+                        $stepAction,
+                        $route,
+                        $outcome,
+                    );
+                }
             }
         }
     }

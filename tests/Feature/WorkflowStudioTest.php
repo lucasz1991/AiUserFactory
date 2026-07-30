@@ -1042,6 +1042,12 @@ class WorkflowStudioTest extends TestCase
     public function test_builder_renders_the_shared_static_minimap_with_three_zoom_levels_before_the_first_run(): void
     {
         [$workflow, $step] = $this->workflow();
+        $stepConfig = $step->config_json;
+        $stepConfig['tasks'][0]['status_routes']['timeout'] = [
+            'type' => 'fail',
+            'label' => 'Timeout beenden',
+        ];
+        $step->update(['config_json' => $stepConfig]);
         $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
         $session = app(WorkflowStudioSessionService::class)->open($workflow, $admin, 'manual', 'ask_critical');
         $this->actingAs($admin);
@@ -1056,6 +1062,7 @@ class WorkflowStudioTest extends TestCase
             ->assertSeeHtml('data-workflow-minimap-zoom-level="detail"')
             ->assertSeeHtml('data-minimap-node="browser-tasks::first-task"')
             ->assertSeeHtml('workflow-minimap-builder-'.$session->id.'-arrow-default')
+            ->assertSee('Geplante Route: Zeitüberschreitung -> Timeout beenden')
             ->assertSet('overviewSelectedStepId', $step->id)
             ->assertSet('overviewSelectedTaskKey', 'first-task');
     }
