@@ -1062,9 +1062,35 @@ class WorkflowStudioTest extends TestCase
             ->assertSeeHtml('data-workflow-minimap-zoom-level="detail"')
             ->assertSeeHtml('data-minimap-node="browser-tasks::first-task"')
             ->assertSeeHtml('workflow-minimap-builder-'.$session->id.'-arrow-default')
-            ->assertSee('Geplante Route: Zeitüberschreitung -> Timeout beenden')
+            ->assertSee('Zeitüberschreitung')
+            ->assertSee('Timeout beenden')
             ->assertSet('overviewSelectedStepId', $step->id)
             ->assertSet('overviewSelectedTaskKey', 'first-task');
+    }
+
+    public function test_builder_static_minimap_hides_status_route_shadowed_by_on_error(): void
+    {
+        [$workflow, $step] = $this->workflow();
+        $stepConfig = $step->config_json;
+        $stepConfig['tasks'][0]['on_error'] = [
+            'type' => 'fail',
+            'label' => 'Alle Fehler beenden',
+        ];
+        $stepConfig['tasks'][0]['status_routes']['timeout'] = [
+            'type' => 'end',
+            'label' => 'Unerreichbare Timeout-Route',
+        ];
+        $step->update(['config_json' => $stepConfig]);
+        $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
+        $session = app(WorkflowStudioSessionService::class)->open($workflow, $admin, 'manual', 'ask_critical');
+        $this->actingAs($admin);
+
+        Livewire::test(WorkflowStudioTaskEditor::class, [
+            'workflow' => $workflow,
+            'studioSessionId' => $session->id,
+        ])
+            ->assertSee('Alle Fehler beenden')
+            ->assertDontSee('Unerreichbare Timeout-Route');
     }
 
     public function test_builder_overview_selection_rejects_foreign_tasks_and_focuses_a_real_task(): void

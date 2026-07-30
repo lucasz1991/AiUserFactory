@@ -12,6 +12,7 @@ use App\Models\WorkflowRun;
 use App\Models\WorkflowRunCheckpoint;
 use App\Models\WorkflowStep;
 use App\Models\WorkflowStepRun;
+use App\Models\WorkflowStudioSession;
 use App\Models\WorkflowTaskAttempt;
 use App\Services\Ai\WorkflowCopilotAiUsageTracker;
 use App\Services\Ai\WorkflowCopilotVisionService;
@@ -1111,14 +1112,53 @@ class WorkflowCopilotSupervisorService
             $failureRepeats = $failureSignature !== '' && hash_equals($previousFailureSignature, $failureSignature)
                 ? max(0, (int) ($state['repair_failure_repeats'] ?? 0)) + 1
                 : 0;
+            // Eigener Zaehler, bewusst getrennt von `repair_iterations`: Jener
+            // begrenzt technische Fehllaeufe (Laeufe, die gar nicht erst starten),
+            // dieser die Checkpoint-Reparaturen im Normalbetrieb.
+            //
+            // Der Signaturzaehler oben faellt auf 0 zurueck, sobald sich die
+            // Fehlersignatur aendert. Ein Lauf, der abwechselnd an zwei Stellen
+            // scheitert, erreichte das Stillstandslimit deshalb nie und reparierte
+            // endlos weiter (produktiv beobachtet: bis 12 Runden, 29 Revisionen und
+            // 349 Minuten, beendet erst durch den Benutzer). Dieser Zaehler wird nie
+            // zurueckgesetzt und begrenzt die Sitzung unabhaengig davon, wo sie
+            // scheitert.
+            $checkpointRepairs = max(0, (int) ($state['checkpoint_repairs_total'] ?? 0)) + 1;
+
             $state['last_repair_failure_signature'] = $failureSignature;
             $state['repair_failure_repeats'] = $failureRepeats;
+            $state['checkpoint_repairs_total'] = $checkpointRepairs;
             $usage['same_state_repeats'] = $failureRepeats;
+            $usage['checkpoint_repairs_total'] = $checkpointRepairs;
             $session->forceFill([
                 'state_json' => $state,
                 'usage_json' => $usage,
                 'last_activity_at' => now(),
             ])->save();
+
+            $maxCheckpointRepairs = max(1, (int) data_get($session->budget_json, 'max_checkpoint_repairs', 15));
+
+            if ($checkpointRepairs >= $maxCheckpointRepairs) {
+                $this->sessions->appendEvent(
+                    $session,
+                    'repair.no_progress',
+                    'Die Sitzung hat die zulaessige Zahl an Checkpoint-Reparaturen erreicht, ohne den Workflow zum Ziel zu bringen; sie wird beendet statt weiter zu reparieren.',
+                    [
+                        'workflow_run_id' => (int) $run->id,
+                        'workflow_step_id' => (int) $step->id,
+                        'task_key' => $checkpoint['task_key'] ?? null,
+                        'state_signature' => $observation['state_signature'] ?? null,
+                        'checkpoint_repairs_total' => $checkpointRepairs,
+                        'max_checkpoint_repairs' => $maxCheckpointRepairs,
+                    ],
+                    'repairing',
+                    'error',
+                    true,
+                );
+                $this->exhaustBudget($session->fresh() ?? $session);
+
+                return;
+            }
 
             $maxSameFailureRepeats = max(1, (int) data_get($session->budget_json, 'max_same_state_repeats', 2));
 
@@ -1511,7 +1551,7 @@ class WorkflowCopilotSupervisorService
         array $checkpoint,
         array $plan,
     ): bool {
-        $studio = \App\Models\WorkflowStudioSession::query()
+        $studio = WorkflowStudioSession::query()
             ->where('workflow_copilot_session_id', $session->getKey())
             ->latest('id')
             ->first();
@@ -2913,12 +2953,17 @@ class WorkflowCopilotSupervisorService
         array $observation,
         array $plan,
     ): string {
-        if (($plan['action'] ?? 'pause') === 'pause') {
-            return '';
-        }
-
+        // `pause` bekommt bewusst ebenfalls einen Fingerprint: Der wiederholte
+        // Vorschlag "warte auf einen Menschen" im unveraenderten Fehlerzustand ist
+        // genau das Kreisen, das die Duplikaterkennung sichtbar machen soll.
+        //
+        // Die Workflow-Revision gehoert NICHT in den Fingerprint. Jede angewandte
+        // Reparatur erhoeht sie, sodass derselbe wirkungslose Plan danach als neu
+        // galt und die Erkennung praktisch nie griff. Ob sich wirklich etwas
+        // geaendert hat, entscheidet die `state_signature` der Beobachtung
+        // zusammen mit dem Fehlerkontext — und die bleibt gleich, solange der Lauf
+        // im selben Zustand haengt.
         return hash('sha256', json_encode([
-            'workflow_revision' => (int) $session->current_revision,
             'step_action_key' => (string) $step->action_key,
             'resume_task_key' => (string) ($checkpoint['resume_task_key'] ?? $checkpoint['task_key'] ?? ''),
             'failure_task_key' => (string) ($checkpoint['failure_task_key'] ?? ''),

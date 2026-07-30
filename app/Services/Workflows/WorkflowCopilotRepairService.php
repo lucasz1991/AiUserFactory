@@ -7,6 +7,7 @@ use App\Models\WorkflowCopilotSession;
 use App\Models\WorkflowStep;
 use App\Services\Ai\AiConnectionService;
 use Illuminate\Support\Arr;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
@@ -1708,7 +1709,7 @@ class WorkflowCopilotRepairService
         array $observation,
         array $task,
         bool $requiresVisualTarget,
-    ): \Illuminate\Support\Collection {
+    ): Collection {
         $references = collect(array_keys($this->trustedVisionElementRefs($vision, $observation)));
         $elements = collect($observation['interaction_map'] ?? $observation['elements'] ?? [])
             ->filter(fn (mixed $element): bool => is_array($element)
@@ -1769,9 +1770,9 @@ class WorkflowCopilotRepairService
     }
 
     protected function prioritizeSelectorsForInstructions(
-        \Illuminate\Support\Collection $selectors,
+        Collection $selectors,
         WorkflowCopilotSession $session,
-    ): \Illuminate\Support\Collection {
+    ): Collection {
         if ($selectors->count() < 2) {
             return $selectors;
         }
@@ -2155,10 +2156,21 @@ class WorkflowCopilotRepairService
     {
         $confidence = $vision['confidence'] ?? null;
 
-        if (! is_numeric($confidence)
-            || (float) $confidence < self::MIN_VISUAL_CONFIDENCE
-            || (bool) ($vision['safe_pause'] ?? false)
-            || Str::lower(trim((string) ($vision['verdict'] ?? ''))) === 'pause') {
+        // Bewusst nur die Gesamtkonfidenz als pauschaler Ausschluss: Ist die
+        // Beobachtung als Ganzes unbrauchbar, taugt auch keine einzelne Referenz.
+        //
+        // `verdict === 'pause'` und `safe_pause` schliessen dagegen NICHT mehr
+        // pauschal aus. Beide werden im VisionService unter anderem gesetzt, wenn
+        // ein Screenshot fehlt oder eine vorgeschlagene Aktion nicht zuordenbar
+        // war — beides sagt nichts ueber die Verlaesslichkeit der DOM-Referenzen
+        // aus. Da sie zugleich den Reparaturbedarf signalisieren, entzogen sie dem
+        // Copilot die Elementreferenzen genau dann, wenn er sie zum Finden eines
+        // besseren Selektors braucht; die Sitzung pausierte daraufhin erneut im
+        // unveraenderten Zustand. Die Einzelpruefung unten ist strenger als dieser
+        // Pauschalfilter: Sie verlangt ein im DOM beobachtetes, sichtbares und
+        // bedienbares Element mit eigenem Konfidenzwert und sicherem
+        // Selektorkandidaten.
+        if (! is_numeric($confidence) || (float) $confidence < self::MIN_VISUAL_CONFIDENCE) {
             return [];
         }
 

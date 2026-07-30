@@ -348,6 +348,18 @@
                         continue;
                     }
 
+                    // Dieselbe Prioritaet wie die Runtime verwenden: Die
+                    // allgemeinen Task-Routen uebersteuern statusgenaue
+                    // Alternativen. So zeigt die statische Karte keine
+                    // konfigurierte, aber zur Laufzeit unerreichbare Linie.
+                    if (
+                        ($outcome === 'success' && is_array($task['next'] ?? null))
+                        || ($outcome === 'partial' && is_array($task['on_partial'] ?? null))
+                        || (in_array($outcome, ['failed', 'timeout'], true) && is_array($task['on_error'] ?? null))
+                    ) {
+                        continue;
+                    }
+
                     $appendConfiguredRoute(
                         $stepAction.'::'.$taskKey,
                         $stepAction,
@@ -968,10 +980,10 @@
                                          @endif
                                          @if($selectableTasks)
                                              aria-label="{{ $step->name }}: {{ $task['title'] ?? 'Task' }} ({{ $taskStatus }})"
-                                             aria-selected="{{ $isTaskSelected ? 'true' : 'false' }}"
+                                             aria-pressed="{{ $isTaskSelected ? 'true' : 'false' }}"
                                              x-on:keydown.space.prevent.stop="$dispatch('workflow-preview-task-selected', { workflowId: {{ (int) $workflow->id }}, stepId: {{ (int) $step->id }}, taskKey: @js($taskKey) })"
                                          @endif
-                                         class="relative rounded-md border shadow-sm {{ $tone }} {{ $isTaskSelected ? 'ring-2 ring-sky-500 ring-offset-2 ring-offset-white' : '' }} {{ $selectableTasks ? 'cursor-pointer transition hover:-translate-y-px hover:shadow-md focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2' : '' }}"
+                                         class="relative rounded-md border shadow-sm {{ $tone }} {{ $isTaskSelected ? 'ring-2 ring-sky-500 ring-offset-2 ring-offset-white' : '' }} {{ $selectableTasks ? 'min-h-11 cursor-pointer touch-manipulation transition hover:-translate-y-px hover:shadow-md focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2' : '' }}"
                                          x-bind:class="zoomLevel === 'overview' ? 'px-1.5 py-1 text-[9px]' : (zoomLevel === 'standard' ? 'px-2 py-1 text-[10px]' : 'px-2 py-1.5 text-[11px]')"
                                      >
                                          @if($isTaskSelected)

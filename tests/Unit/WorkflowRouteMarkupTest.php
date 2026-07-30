@@ -89,6 +89,10 @@ class WorkflowRouteMarkupTest extends TestCase
         $this->assertStringContainsString("'configured' => true", $source);
         $this->assertStringContainsString('Str::slug($mapInstance)', $source);
         $this->assertStringContainsString('x-on:keydown.space.prevent.stop', $source);
+        $this->assertStringContainsString('aria-pressed="{{ $isTaskSelected ? \'true\' : \'false\' }}"', $source);
+        $this->assertStringNotContainsString('aria-selected=', $source);
+        $this->assertStringContainsString('min-h-11 cursor-pointer touch-manipulation', $source);
+        $this->assertStringContainsString("in_array(\$outcome, ['failed', 'timeout'], true) && is_array(\$task['on_error'] ?? null)", $source);
     }
 
     private function alpineDefinitionContaining(string $source, string $needle): string
