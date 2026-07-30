@@ -42,7 +42,10 @@ class ChatbotViewMarkupTest extends TestCase
         $this->assertStringContainsString('handleNewAssistantMessages(history)', $definition);
         $this->assertStringContainsString('this.queueTtsSentence(item.content, index)', $definition);
         $this->assertStringNotContainsString("this.\$watch('isLoading', (loading) => {\n                if (loading) {\n                    this.stopSpeaking();", $definition);
-        $this->assertStringNotContainsString("speak(text, index = null) {\n            if (!this.speechSupported || !text) return;\n\n            this.stopSpeaking();", $definition);
+        $this->assertMatchesRegularExpression(
+            '/speak\\(text, index = null\\).*?this\\.stopSpeaking\\(\\);.*?this\\.queueTtsSentence\\(cleanText, index\\);/s',
+            $definition,
+        );
         $this->assertStringContainsString('setWorkflowImprovements(improvements = [])', $definition);
         $this->assertStringContainsString('applyImprovementHighlights()', $definition);
         $this->assertStringContainsString('openWorkflowImprovement(improvement = {})', $definition);
@@ -116,6 +119,31 @@ class ChatbotViewMarkupTest extends TestCase
         $this->assertStringContainsString('data-copilot-activity-timer', $source);
         $this->assertStringContainsString('Keine Statusaenderung seit', $source);
         $this->assertStringContainsString('<template x-if="assistantActivityRunning() || copilotActivityRunning()">', $source);
+    }
+
+    public function test_audio_lifecycle_guards_against_reindexing_cancellation_and_teardown_races(): void
+    {
+        $source = file_get_contents(dirname(__DIR__, 2).'/resources/views/livewire/tools/chatbot.blade.php');
+
+        $this->assertStringContainsString('assistantMessageKey(item) {', $source);
+        $this->assertStringNotContainsString('assistantMessageKey(item, index)', $source);
+        $this->assertStringContainsString("`message:\${item?.time || ''}|\${item?.content || ''}`", $source);
+        $this->assertStringContainsString('const duplicateIsActive = this.ttsActive()', $source);
+        $this->assertStringContainsString('const duplicateIsQueued = this.ttsQueue.some((item) => (', $source);
+
+        $this->assertStringContainsString('ttsPlaybackCancel: null', $source);
+        $this->assertStringContainsString('const cancelPlayback = () => {', $source);
+        $this->assertStringContainsString('audio.onpause = () => {', $source);
+        $this->assertStringContainsString('cancelPlayback();', $source);
+        $this->assertStringContainsString('if (item.generation !== this.ttsCurrentGeneration) return;', $source);
+        $this->assertStringContainsString('cancelPlayback?.();', $source);
+
+        $this->assertStringContainsString('this.cancelVoiceCapture();', $source);
+        $this->assertStringContainsString('voiceCaptureGeneration: 0', $source);
+        $this->assertStringContainsString('this.voiceCaptureGeneration++;', $source);
+        $this->assertStringContainsString('recorder.onstop = null;', $source);
+        $this->assertStringContainsString('recognition.abort();', $source);
+        $this->assertStringContainsString('signal: abortController.signal', $source);
     }
 
     public function test_chatbot_is_mounted_on_the_standalone_workflow_studio_route(): void

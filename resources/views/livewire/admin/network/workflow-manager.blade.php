@@ -119,7 +119,7 @@
         }
     "
 >
-    <section class="ff-command-surface px-4 py-5 sm:px-6 sm:py-6" aria-labelledby="workflow-manager-title">
+    <section class="ff-command-surface overflow-visible px-4 py-5 sm:px-6 sm:py-6" aria-labelledby="workflow-manager-title">
         <div class="relative z-10 flex flex-wrap items-start justify-between gap-5">
             <div class="min-w-0">
                 <div class="flex flex-wrap items-center gap-2">
@@ -618,7 +618,7 @@
                         </p>
                     </div>
                     <div class="flex flex-wrap items-center gap-3">
-                        <div x-show="showRoutes" class="flex items-center gap-2  text-[11px] font-semibold text-slate-500">
+                        <div x-show.important="showRoutes" class="flex items-center gap-2  text-[11px] font-semibold text-slate-500">
                             <span class="inline-flex items-center gap-1.5"><span class="h-0.5 w-5 rounded-full bg-emerald-500"></span>Erfolg</span>
                             <span class="inline-flex items-center gap-1.5"><span class="h-0.5 w-5 border-t-2 border-dashed border-rose-400"></span>Fehlschlag</span>
                         </div>
@@ -691,7 +691,7 @@
                             </div>
                         @endforelse
 
-                        <button x-show="! isFullscreen" type="button" wire:click="$set('showAddStepModal', true)" class="flex min-h-[180px] w-[280px] shrink-0 items-center justify-center rounded-xl border border-dashed border-slate-300 bg-white/70 p-5 text-center text-sm font-semibold text-slate-600 transition hover:border-slate-400 hover:bg-white hover:text-slate-900 hover:shadow-sm">+ Neue Liste anlegen</button>
+                        <button x-show.important="! isFullscreen" type="button" wire:click="$set('showAddStepModal', true)" class="flex min-h-[180px] w-[280px] shrink-0 items-center justify-center rounded-xl border border-dashed border-slate-300 bg-white/70 p-5 text-center text-sm font-semibold text-slate-600 transition hover:border-slate-400 hover:bg-white hover:text-slate-900 hover:shadow-sm">+ Neue Liste anlegen</button>
                     </div>
                 </div>
             </div>
@@ -726,7 +726,7 @@
                         <p class="ff-kicker">Katalog</p>
                         <h2 class="mt-1 text-lg font-bold tracking-tight text-slate-950">Task-Bibliothek</h2>
                         <p class="mt-1 text-xs text-slate-500" x-show="! taskInsertTarget">Task auf eine Liste ziehen, danach oeffnet sich das Formular.</p>
-                        <div x-cloak x-show="taskInsertTarget" role="status" class="mt-1 flex flex-wrap items-center gap-2">
+                        <div x-cloak x-show.important="taskInsertTarget" role="status" class="mt-1 flex flex-wrap items-center gap-2">
                             <p class="text-xs text-emerald-700">
                                 Klick fuegt den Task am Ende von
                                 <span class="font-semibold" x-text="taskInsertTarget ? taskInsertTarget.stepName : ''"></span>
@@ -744,7 +744,7 @@
                     <div class="relative">
                         <svg class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-4-4"></path></svg>
                         <input id="workflow-task-search" x-model.debounce.120ms="search" type="search" class="ff-search-field block w-full py-2 pl-10 pr-9 text-sm" placeholder="Task, Kategorie oder Funktion suchen …">
-                        <button x-cloak x-show="search" type="button" x-on:click="search = ''; $nextTick(() => document.getElementById('workflow-task-search')?.focus())" class="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-slate-400 hover:bg-white hover:text-slate-800" aria-label="Suche leeren">×</button>
+                        <button x-cloak x-show.important="search" type="button" x-on:click="search = ''; $nextTick(() => document.getElementById('workflow-task-search')?.focus())" class="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-slate-400 hover:bg-white hover:text-slate-800" aria-label="Suche leeren">×</button>
                     </div>
                 </div>
                 <div class="border-b border-slate-200 px-4">

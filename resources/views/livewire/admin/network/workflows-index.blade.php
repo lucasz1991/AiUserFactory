@@ -1,5 +1,5 @@
 <div class="workflow-experience space-y-6" data-workflows-index-root wire:loading.class="opacity-90">
-    <section class="ff-command-surface px-4 py-5 sm:px-6 sm:py-6" aria-labelledby="workflows-index-title">
+    <section class="ff-command-surface overflow-visible px-4 py-5 sm:px-6 sm:py-6" aria-labelledby="workflows-index-title">
         <div class="relative z-10 flex flex-wrap items-start justify-between gap-5">
         <div class="min-w-0">
             <p class="ff-kicker">Automation Workspace</p>

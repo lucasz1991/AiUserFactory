@@ -26,8 +26,10 @@
         recognition: null,
         mediaRecorder: null,
         mediaStream: null,
+        voiceCaptureGeneration: 0,
         voiceChunks: [],
         voiceUploading: false,
+        sttAbortController: null,
         ttsEndpoint: @js(\Illuminate\Support\Facades\Route::has('assistant.audio-output.stream') ? route('assistant.audio-output.stream', [], false) : null),
         sttEndpoint: @js(\Illuminate\Support\Facades\Route::has('assistant.audio-input.transcribe') ? route('assistant.audio-input.transcribe', [], false) : null),
         csrfToken: @js(csrf_token()),
@@ -42,7 +44,9 @@
         ttsPlaying: false,
         ttsPreparing: false,
         ttsActiveIndex: null,
+        ttsActiveText: null,
         ttsAbortController: null,
+        ttsPlaybackCancel: null,
         ttsObjectUrls: [],
         ttsCurrentGeneration: 0,
         speaking: false,
@@ -180,6 +184,12 @@
             this.assistantStatusObserver = null;
             window.clearInterval(this.activityTimer);
             this.activityTimer = null;
+            this.cancelVoiceCapture();
+            if (this.sttAbortController) {
+                this.sttAbortController.abort();
+                this.sttAbortController = null;
+            }
+            this.voiceUploading = false;
             this.stopSpeaking();
         },
         readBool(key, fallback) {
@@ -570,12 +580,16 @@
             const item = [...messages].reverse().find((message) => message && message.role === 'assistant');
             return item ? `${item.time || ''}|${item.content || ''}` : null;
         },
-        assistantMessageKey(item, index) {
-            return `${index}|${item?.time || ''}|${item?.content || ''}`;
+        assistantMessageKey(item) {
+            const persistedId = item?.message_id || item?.copilot_event_id || item?.id;
+
+            return persistedId
+                ? `id:${persistedId}`
+                : `message:${item?.time || ''}|${item?.content || ''}`;
         },
         assistantMessageKeys(history) {
             return (Array.isArray(history) ? history : [])
-                .map((item, index) => item?.role === 'assistant' ? this.assistantMessageKey(item, index) : null)
+                .map((item) => item?.role === 'assistant' ? this.assistantMessageKey(item) : null)
                 .filter(Boolean);
         },
         latestWorkflowImprovements(history) {
@@ -602,7 +616,7 @@
             messages.forEach((item, index) => {
                 if (!item || item.role !== 'assistant') return;
 
-                const key = this.assistantMessageKey(item, index);
+                const key = this.assistantMessageKey(item);
                 if (known.has(key)) return;
 
                 known.add(key);
@@ -618,15 +632,41 @@
         speak(text, index = null) {
             if (!this.speechSupported || !text) return;
 
+            const cleanText = String(text).trim().slice(0, 4000);
+            if (!cleanText) return;
+
+            if (
+                this.ttsActive()
+                && this.ttsActiveIndex === index
+                && this.ttsActiveText === cleanText
+            ) {
+                return;
+            }
+
+            // Manuelles Vorlesen ersetzt die aktuelle Ausgabe. Die Auto-Read-
+            // Warteschlange nutzt queueTtsSentence() weiterhin unveraendert.
+            this.stopSpeaking();
             this.ttsError = '';
-            this.queueTtsSentence(String(text), index);
+            this.queueTtsSentence(cleanText, index);
         },
         queueTtsSentence(text, index = null) {
             const cleanText = String(text || '').trim();
             if (!cleanText) return;
 
+            const queuedText = cleanText.slice(0, 4000);
+            const duplicateIsActive = this.ttsActive()
+                && this.ttsActiveIndex === index
+                && this.ttsActiveText === queuedText;
+            const duplicateIsQueued = this.ttsQueue.some((item) => (
+                item.generation === this.ttsCurrentGeneration
+                && item.index === index
+                && item.text === queuedText
+            ));
+
+            if (duplicateIsActive || duplicateIsQueued) return;
+
             this.ttsQueue.push({
-                text: cleanText.slice(0, 4000),
+                text: queuedText,
                 index,
                 generation: this.ttsCurrentGeneration,
             });
@@ -649,17 +689,20 @@
             this.ttsPlaying = true;
             this.ttsPreparing = true;
             this.ttsActiveIndex = item.index;
+            this.ttsActiveText = item.text;
             this.speaking = false;
             this.speakingIndex = null;
 
             try {
-                await this.playTtsViaBlob(item.text, item.index);
+                await this.playTtsViaBlob(item.text, item.index, item.generation);
             } catch (error) {
-                if (error?.name !== 'AbortError') {
+                if (item.generation === this.ttsCurrentGeneration && error?.name !== 'AbortError') {
                     this.ttsError = this.ttsErrorMessage(error);
                     console.warn('Workflow Copilot Audioausgabe fehlgeschlagen:', error);
                 }
             } finally {
+                if (item.generation !== this.ttsCurrentGeneration) return;
+
                 this.ttsPlaying = false;
                 this.ttsPreparing = false;
 
@@ -667,14 +710,13 @@
                     this.playNextTts();
                 } else {
                     this.ttsActiveIndex = null;
+                    this.ttsActiveText = null;
                     this.speaking = false;
                     this.speakingIndex = null;
                 }
             }
         },
-        ttsFetchOptions(text) {
-            this.ttsAbortController = new AbortController();
-
+        ttsFetchOptions(text, abortController) {
             return {
                 method: 'POST',
                 headers: {
@@ -684,74 +726,130 @@
                     'X-Requested-With': 'XMLHttpRequest',
                 },
                 credentials: 'same-origin',
-                signal: this.ttsAbortController.signal,
+                signal: abortController.signal,
                 body: JSON.stringify({
                     text,
                     speed: this.clampSpeechRate(this.speechRate),
                 }),
             };
         },
-        async playTtsViaBlob(text, index = null) {
-            const response = await fetch(this.ttsEndpoint, this.ttsFetchOptions(text));
+        ttsAbortError() {
+            const error = new Error('Audioausgabe abgebrochen.');
+            error.name = 'AbortError';
 
-            if (!response.ok) {
-                throw new Error(await this.ttsResponseError(response));
-            }
-
-            const blob = await response.blob();
-            const url = URL.createObjectURL(blob);
-            this.ttsObjectUrls.push(url);
-
-            try {
-                await this.playAudioUrl(url, index);
-            } finally {
-                // Jede Vorlesung erzeugt eine eigene Object-URL. Ohne sofortige
-                // Freigabe haelt der Browser bei aktivem Auto-Vorlesen saemtliche
-                // bereits abgespielten Audiodateien im Speicher, bis der Nutzer
-                // manuell stoppt. Das Sammelaufraeumen in stopSpeaking() bleibt
-                // als Sicherheitsnetz fuer noch nicht abgespielte Eintraege.
-                URL.revokeObjectURL(url);
-                this.ttsObjectUrls = this.ttsObjectUrls.filter((entry) => entry !== url);
+            return error;
+        },
+        assertTtsGeneration(generation) {
+            if (generation !== this.ttsCurrentGeneration) {
+                throw this.ttsAbortError();
             }
         },
-        playAudioUrl(url, index = null) {
+        async playTtsViaBlob(text, index = null, generation = this.ttsCurrentGeneration) {
+            const abortController = new AbortController();
+            this.ttsAbortController = abortController;
+            let url = null;
+
+            try {
+                const response = await fetch(this.ttsEndpoint, this.ttsFetchOptions(text, abortController));
+                this.assertTtsGeneration(generation);
+
+                if (!response.ok) {
+                    throw new Error(await this.ttsResponseError(response));
+                }
+
+                const blob = await response.blob();
+                this.assertTtsGeneration(generation);
+                url = URL.createObjectURL(blob);
+                this.ttsObjectUrls.push(url);
+
+                await this.playAudioUrl(url, index, generation);
+            } finally {
+                if (url) {
+                    // Jede Vorlesung erzeugt eine eigene Object-URL. Ohne sofortige
+                    // Freigabe haelt der Browser bei aktivem Auto-Vorlesen saemtliche
+                    // bereits abgespielten Audiodateien im Speicher, bis der Nutzer
+                    // manuell stoppt. Das Sammelaufraeumen in stopSpeaking() bleibt
+                    // als Sicherheitsnetz fuer noch nicht abgespielte Eintraege.
+                    URL.revokeObjectURL(url);
+                    this.ttsObjectUrls = this.ttsObjectUrls.filter((entry) => entry !== url);
+                }
+                if (this.ttsAbortController === abortController) {
+                    this.ttsAbortController = null;
+                }
+            }
+        },
+        playAudioUrl(url, index = null, generation = this.ttsCurrentGeneration) {
             return new Promise((resolve, reject) => {
                 const audio = new Audio(url);
                 this.ttsAudio = audio;
+                let settled = false;
 
                 const markNotSpeaking = () => {
+                    if (generation !== this.ttsCurrentGeneration) return;
                     this.speaking = false;
                     this.speakingIndex = null;
                 };
                 const markPreparing = () => {
+                    if (generation !== this.ttsCurrentGeneration) return;
                     markNotSpeaking();
                     this.ttsPreparing = true;
                 };
+                const markPlaybackIdle = () => {
+                    if (generation !== this.ttsCurrentGeneration) return;
+                    this.ttsPreparing = false;
+                    markNotSpeaking();
+                };
+                const cleanup = () => {
+                    audio.onplaying = null;
+                    audio.onwaiting = null;
+                    audio.onpause = null;
+                    audio.onended = null;
+                    audio.onerror = null;
+
+                    if (this.ttsAudio === audio) {
+                        this.ttsAudio = null;
+                    }
+                    if (this.ttsPlaybackCancel === cancelPlayback) {
+                        this.ttsPlaybackCancel = null;
+                    }
+                };
+                const settle = (callback, value) => {
+                    if (settled) return;
+                    settled = true;
+                    cleanup();
+                    callback(value);
+                };
+                const cancelPlayback = () => {
+                    settle(reject, this.ttsAbortError());
+                };
+
+                this.ttsPlaybackCancel = cancelPlayback;
 
                 audio.onplaying = () => {
+                    if (generation !== this.ttsCurrentGeneration) {
+                        cancelPlayback();
+                        return;
+                    }
                     this.ttsPreparing = false;
                     this.speaking = true;
                     this.speakingIndex = index;
                 };
                 audio.onwaiting = markPreparing;
                 audio.onpause = () => {
-                    this.ttsPreparing = false;
-                    markNotSpeaking();
+                    markPlaybackIdle();
+                    cancelPlayback();
                 };
                 audio.onended = () => {
-                    this.ttsPreparing = false;
-                    markNotSpeaking();
-                    resolve();
+                    markPlaybackIdle();
+                    settle(resolve);
                 };
                 audio.onerror = () => {
-                    this.ttsPreparing = false;
-                    markNotSpeaking();
-                    reject(new Error('Audio konnte nicht abgespielt werden.'));
+                    markPlaybackIdle();
+                    settle(reject, new Error('Audio konnte nicht abgespielt werden.'));
                 };
                 audio.play().catch((error) => {
-                    this.ttsPreparing = false;
-                    markNotSpeaking();
-                    reject(error);
+                    markPlaybackIdle();
+                    settle(reject, error);
                 });
             });
         },
@@ -795,17 +893,23 @@
                 this.ttsAbortController = null;
             }
 
-            if (this.ttsAudio) {
-                this.ttsAudio.pause();
-                this.ttsAudio.src = '';
-                this.ttsAudio = null;
+            const audio = this.ttsAudio;
+            const cancelPlayback = this.ttsPlaybackCancel;
+            this.ttsPlaybackCancel = null;
+            cancelPlayback?.();
+
+            if (audio) {
+                audio.pause();
+                audio.src = '';
             }
+            this.ttsAudio = null;
 
             this.ttsObjectUrls.forEach((url) => URL.revokeObjectURL(url));
             this.ttsObjectUrls = [];
             this.ttsPlaying = false;
             this.ttsPreparing = false;
             this.ttsActiveIndex = null;
+            this.ttsActiveText = null;
             this.speaking = false;
             this.speakingIndex = null;
         },
@@ -943,35 +1047,52 @@
 
             this.ttsError = '';
             this.voiceChunks = [];
+            const captureGeneration = ++this.voiceCaptureGeneration;
 
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                if (captureGeneration !== this.voiceCaptureGeneration) {
+                    stream.getTracks().forEach((track) => track.stop());
+                    return;
+                }
+
                 const mimeType = this.supportedRecordedMimeType();
                 const options = mimeType ? { mimeType } : {};
 
                 this.mediaStream = stream;
                 this.mediaRecorder = new MediaRecorder(stream, options);
+                const recorder = this.mediaRecorder;
 
-                this.mediaRecorder.ondataavailable = (event) => {
+                recorder.ondataavailable = (event) => {
+                    if (captureGeneration !== this.voiceCaptureGeneration) return;
                     if (event?.data && event.data.size > 0) {
                         this.voiceChunks.push(event.data);
                     }
                 };
-                this.mediaRecorder.onstop = () => {
+                recorder.onstop = () => {
+                    if (
+                        captureGeneration !== this.voiceCaptureGeneration
+                        || this.mediaRecorder !== recorder
+                    ) {
+                        return;
+                    }
                     this.finishRecordedCapture();
                 };
-                this.mediaRecorder.onerror = (event) => {
+                recorder.onerror = (event) => {
+                    if (captureGeneration !== this.voiceCaptureGeneration) return;
                     this.ttsError = `Spracheingabe: ${event?.error?.message || 'Aufnahme fehlgeschlagen.'}`;
                     this.clearVoiceCaptureState();
                     this.releaseRecordedMediaStream();
                 };
 
-                this.mediaRecorder.start();
+                recorder.start();
                 this.listening = true;
                 this.voiceCaptureActive = true;
                 this.clearVoiceCaptureTimer();
                 this.voiceCaptureTimer = window.setTimeout(() => this.stopListening(), 45000);
             } catch (error) {
+                if (captureGeneration !== this.voiceCaptureGeneration) return;
+
                 this.clearVoiceCaptureState();
                 this.releaseRecordedMediaStream();
                 this.ttsError = `Spracheingabe: ${error?.message || 'Mikrofonstart fehlgeschlagen.'}`;
@@ -1023,6 +1144,9 @@
             this.voiceUploading = true;
             this.startAssistantActivity('Audioaufnahme wird analysiert.');
             this.ttsError = '';
+            const abortController = new AbortController();
+            this.sttAbortController?.abort();
+            this.sttAbortController = abortController;
 
             try {
                 const formData = new FormData();
@@ -1038,6 +1162,7 @@
                         'X-Requested-With': 'XMLHttpRequest',
                     },
                     credentials: 'same-origin',
+                    signal: abortController.signal,
                     body: formData,
                 });
 
@@ -1056,10 +1181,15 @@
                 this.draft = [baseDraft, transcript].filter(Boolean).join(' ');
                 this.resizeComposer();
             } catch (error) {
+                if (error?.name === 'AbortError') return;
+
                 this.ttsError = `Spracheingabe: ${this.ttsErrorMessage(error)}`;
             } finally {
-                this.voiceUploading = false;
-                this.finishAssistantActivityIfIdle();
+                if (this.sttAbortController === abortController) {
+                    this.sttAbortController = null;
+                    this.voiceUploading = false;
+                    this.finishAssistantActivityIfIdle();
+                }
             }
         },
         releaseRecordedMediaStream() {
@@ -1079,6 +1209,50 @@
             this.listening = false;
             this.voiceCaptureActive = false;
             this.resizeComposer();
+        },
+        cancelVoiceCapture() {
+            this.voiceCaptureGeneration++;
+            this.clearVoiceCaptureState();
+
+            const recorder = this.mediaRecorder;
+            this.mediaRecorder = null;
+            this.voiceChunks = [];
+
+            if (recorder) {
+                recorder.ondataavailable = null;
+                recorder.onstop = null;
+                recorder.onerror = null;
+
+                if (recorder.state !== 'inactive') {
+                    try {
+                        recorder.stop();
+                    } catch {
+                        // Der Stream wird unten unabhaengig vom Recorder-Zustand beendet.
+                    }
+                }
+            }
+
+            const recognition = this.recognition;
+            this.recognition = null;
+
+            if (recognition) {
+                recognition.onstart = null;
+                recognition.onresult = null;
+                recognition.onend = null;
+                recognition.onerror = null;
+
+                try {
+                    if (typeof recognition.abort === 'function') {
+                        recognition.abort();
+                    } else {
+                        recognition.stop();
+                    }
+                } catch {
+                    // Ein bereits beendeter Browser-Recognizer darf den Teardown nicht blockieren.
+                }
+            }
+
+            this.releaseRecordedMediaStream();
         },
         stopListening() {
             if (this.usesRecordedSpeechInput()) {
@@ -1464,13 +1638,17 @@
                             :offset="8"
                             dropdown-classes=""
                             content-classes="w-72 rounded-xl border border-slate-200 bg-white text-slate-900"
+                            panel-role="dialog"
+                            panel-label="Sprach-Einstellungen"
                         >
                             <x-slot name="trigger">
                                 <button
                                     type="button"
-                                    x-bind:aria-expanded="open"
+                                    x-bind:aria-controls="dropdownId"
+                                    x-bind:aria-expanded="open.toString()"
                                     class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/25 bg-white/10 text-white transition hover:bg-white/20"
                                     aria-label="Sprach-Einstellungen öffnen"
+                                    aria-haspopup="dialog"
                                     title="Sprach-Einstellungen"
                                 >
                                     <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">

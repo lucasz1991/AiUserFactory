@@ -126,6 +126,21 @@ class WorkflowCopilotUiMarkupTest extends TestCase
         $this->assertStringContainsString('Keine Person', $studio);
     }
 
+    public function test_workflow_command_surfaces_do_not_clip_header_menus_and_conditional_flex_controls_hide_reliably(): void
+    {
+        $root = dirname(__DIR__, 2);
+        $manager = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-manager.blade.php');
+        $index = file_get_contents($root.'/resources/views/livewire/admin/network/workflows-index.blade.php');
+
+        $this->assertStringContainsString('ff-command-surface overflow-visible', $manager);
+        $this->assertStringContainsString('ff-command-surface overflow-visible', $index);
+        $this->assertStringContainsString('x-show.important="showRoutes"', $manager);
+        $this->assertStringContainsString('x-show.important="! isFullscreen"', $manager);
+        $this->assertStringContainsString('x-show.important="taskInsertTarget"', $manager);
+        $this->assertStringContainsString('x-show.important="search"', $manager);
+        $this->assertStringContainsString('class="ff-canvas-shell overflow-hidden"', $manager);
+    }
+
     public function test_copilot_settings_expose_vision_fallback_order_and_default_budgets(): void
     {
         $root = dirname(__DIR__, 2);
