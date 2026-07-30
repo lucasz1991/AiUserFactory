@@ -22,7 +22,6 @@
     $key = $persistKey ?: $autoKey;
     $groupKey = $group ?: $key;
     $htmlIdPrefix = 'tabs-'.substr(md5($groupKey), 0, 10);
-    $tabCount = count($tabs);
     $defaultIcons = [
         'quelle-suche' => 'fad fa-database',
         'filter' => 'fad fa-filter',
@@ -43,9 +42,7 @@
     {{ $attributes->merge(['class' => 'w-full']) }}
     x-data="{
         openTab: @if($persist) $persist(@js($initial)).as(@js($key)) @else @js($initial) @endif,
-        hoverTab: null,
         tabIcons: {},
-        isExpanded(id) { return this.openTab === id || this.hoverTab === id; },
         iconClass(id, fallback) {
             return `${this.tabIcons[id] || fallback} fa-fw shrink-0 text-center leading-none`;
         },
@@ -56,9 +53,36 @@
 
             this.tabIcons[event.detail.tab] = event.detail.icon;
         },
-        selectTab(id) {
+        selectTab(id, button = null) {
             this.openTab = id;
             this.$dispatch('ui-tab-selected', { group: @js($groupKey), tab: id });
+            this.$nextTick(() => button?.scrollIntoView({
+                block: 'nearest',
+                inline: 'nearest',
+                behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+            }));
+        },
+        tabButtons() {
+            return Array.from(this.$refs.tabRow?.querySelectorAll('[role=tab]') || []);
+        },
+        focusRelativeTab(offset) {
+            const buttons = this.tabButtons();
+            const currentIndex = Math.max(0, buttons.indexOf(document.activeElement));
+            const nextButton = buttons[(currentIndex + offset + buttons.length) % buttons.length];
+
+            if (nextButton) {
+                nextButton.focus();
+                this.selectTab(nextButton.dataset.uiTabId, nextButton);
+            }
+        },
+        focusBoundaryTab(position) {
+            const buttons = this.tabButtons();
+            const nextButton = position === 'end' ? buttons[buttons.length - 1] : buttons[0];
+
+            if (nextButton) {
+                nextButton.focus();
+                this.selectTab(nextButton.dataset.uiTabId, nextButton);
+            }
         },
         initTabs() {
             if (!@js(array_map('strval', array_keys($tabs))).includes(this.openTab)) {
@@ -69,9 +93,9 @@
     x-init="initTabs()"
     x-on:ui-tab-icon="registerTabIcon($event)"
 >
-    <div class="w-full max-w-full overflow-hidden">
-        <nav class="w-full max-w-full overflow-hidden" aria-label="Tabs" role="tablist" aria-orientation="horizontal">
-            <ul x-ref="tabRow" class="flex w-full max-w-full justify-start overflow-hidden pt-2">
+    <div class="w-full max-w-full overflow-x-auto overscroll-x-contain [scrollbar-width:thin]">
+        <nav class="w-max min-w-full" aria-label="Task-Einstellungen" role="tablist" aria-orientation="horizontal">
+            <ul x-ref="tabRow" class="flex min-w-max items-end gap-1 p-1 pt-2">
                 @foreach($tabs as $tabKey => $tab)
                     @php
                         $tabId = (string) $tabKey;
@@ -83,39 +107,29 @@
                         $count = $isArray && array_key_exists('count', $tab) ? $tab['count'] : null;
                         $countLabel = $count !== null ? number_format((int) $count, 0, ',', '.') : null;
                     @endphp
-                    <li
-                        class="relative flex-none"
-                        :style="{
-                            zIndex: @js($tabCount - $loop->index),
-                        }"
-                    >
+                    <li class="relative flex-none">
                         <button
                             type="button"
                             id="{{ $htmlIdPrefix }}-item-{{ $tabId }}"
+                            data-ui-tab-id="{{ $tabId }}"
                             aria-controls="{{ $htmlIdPrefix }}-panel-{{ $tabId }}"
                             aria-label="{{ $label }}@if($countLabel) {{ $countLabel }}@endif"
-                            @click.prevent="selectTab(@js($tabId))"
-                            @mouseenter="hoverTab = @js($tabId)"
-                            @mouseleave="hoverTab = null"
-                            class="group/tab relative block overflow-hidden h-full rounded-t-md border border-b-0 border-gray-400 text-sm font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-200"
+                            @click.prevent="selectTab(@js($tabId), $el)"
+                            @keydown.arrow-right.stop.prevent="focusRelativeTab(1)"
+                            @keydown.arrow-left.stop.prevent="focusRelativeTab(-1)"
+                            @keydown.home.stop.prevent="focusBoundaryTab('start')"
+                            @keydown.end.stop.prevent="focusBoundaryTab('end')"
+                            class="group/tab relative inline-flex min-h-11 items-center justify-center rounded-xl border px-3.5 py-2.5 text-sm font-semibold transition focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
                             role="tab"
                             :aria-selected="(openTab === @js($tabId)).toString()"
                             :tabindex="openTab === @js($tabId) ? 0 : -1"
+                            :class="openTab === @js($tabId)
+                                ? 'border-blue-200 bg-blue-50 text-blue-950 shadow-sm'
+                                : 'border-transparent bg-slate-100 text-slate-600 hover:border-slate-200 hover:bg-white hover:text-slate-950'"
                         >
-                            <span
-                                class="flex h-full items-center justify-center overflow-hidden px-4 py-[0.7em] text-ellipsis whitespace-nowrap transition-[background-color,color] duration-200 ease-out"
-                                :class="[
-                                    openTab === @js($tabId) ? 'bg-blue-50 text-blue-950' : 'bg-slate-300 text-slate-700 group-hover/tab:bg-blue-100 group-hover/tab:text-blue-900',
-                                    @js($loop->first) ? 'pl-5' : '',
-                                    @js($loop->last) ? 'pr-5' : ''
-                                ]"
-                            >
-                                <span class="inline-flex h-5 min-w-0 items-center justify-center gap-2 align-middle leading-none">
-                                    <i :class="iconClass(@js($tabId), @js($iconClass))" aria-hidden="true"></i>
-                                    <span class="flex h-5 min-w-0 items-center truncate text-center leading-none" x-show="isExpanded(@js($tabId))" x-transition.opacity.duration.150ms>
-                                        {{ $label }}@if($countLabel)&nbsp;{{ $countLabel }}@endif
-                                    </span>
-                                </span>
+                            <span class="inline-flex min-w-0 items-center justify-center gap-2 whitespace-nowrap leading-none">
+                                <i :class="iconClass(@js($tabId), @js($iconClass))" aria-hidden="true"></i>
+                                <span>{{ $label }}@if($countLabel)&nbsp;{{ $countLabel }}@endif</span>
                             </span>
                         </button>
                     </li>
@@ -124,7 +138,7 @@
         </nav>
     </div>
 
-    <div class="content-wrap bg-white">
+    <div class="content-wrap mt-1 bg-white">
         {{ $slot }}
     </div>
 </section>

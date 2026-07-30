@@ -17,15 +17,13 @@
 
 <div
     id="{{ $htmlIdPrefix }}-panel-{{ $panelFor }}"
-    x-data="{ localOpenTab: @js($activeTab) }"
-    x-init="$nextTick(() => { if (typeof openTab !== 'undefined' && openTab !== null) { localOpenTab = openTab; $watch('openTab', value => localOpenTab = value); } if (@js($iconClass) !== '') { $dispatch('ui-tab-icon', { group: @js($groupKey), tab: @js($panelFor), icon: @js($iconClass) }); } })"
-    x-show="localOpenTab === @js($panelFor)"
-    x-collapse
-    x-on:ui-tab-selected.window="if (@js($groupKey) === '' || $event.detail.group === @js($groupKey)) localOpenTab = $event.detail.tab"
+    x-init="$nextTick(() => { if (@js($iconClass) !== '') { $dispatch('ui-tab-icon', { group: @js($groupKey), tab: @js($panelFor), icon: @js($iconClass) }); } })"
+    x-show.important="openTab === @js($panelFor)"
+    x-transition.opacity.duration.150ms
     x-cloak
     role="tabpanel"
     aria-labelledby="{{ $htmlIdPrefix }}-item-{{ $panelFor }}"
-    :aria-hidden="(localOpenTab !== @js($panelFor)).toString()"
+    :aria-hidden="(openTab !== @js($panelFor)).toString()"
     @unless($isInitiallyActive) style="display: none;" @endunless
 >
     <div class="{{ $panelClass }}">

@@ -5,6 +5,9 @@
     $isLoopPairEdit = $isEdit && in_array($editingTaskLoopPairSegment ?? '', ['start', 'end'], true);
     $selectedDefinition = collect($taskDefinitions)->firstWhere('key', $catalogKey) ?? [];
     $documentation = is_array($selectedDefinition['documentation'] ?? null) ? $selectedDefinition['documentation'] : [];
+    $selectorSyntax = app(\App\Services\Workflows\WorkflowSelectorSyntaxService::class);
+    $primarySelectorMode = $selectorSyntax->modeFor((string) $catalogKey, 'selector');
+    $valueSelectorMode = $selectorSyntax->modeFor((string) $catalogKey, 'value');
     $usesBrowserWindow = in_array($selectedDefinition['kind'] ?? '', ['browser', 'input', 'wait'], true) && $catalogKey !== 'wait.seconds';
     $form = array_replace([
         'browser_window' => $usesBrowserWindow,
@@ -371,9 +374,19 @@
                         <div class="grid gap-4 {{ ($form['selector'] && ($form['value'] || $form['url'])) ? 'md:grid-cols-2' : '' }}">
                             @if($form['selector'])
                                 <div>
-                                    <label class="block text-sm font-medium text-gray-700">{{ $form['selector_label'] }}</label>
-                                    <input type="text" wire:model.defer="{{ $prefix }}ElementSelector" placeholder="{{ $form['selector_placeholder'] }}" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
-                                    @error($prefix.'ElementSelector') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                                    @if($primarySelectorMode)
+                                        <x-workflows.selector-field
+                                            :model="$prefix.'ElementSelector'"
+                                            :label="$form['selector_label']"
+                                            :placeholder="$form['selector_placeholder']"
+                                            :mode="$primarySelectorMode"
+                                            :required="(bool) ($form['selector_required'] ?? true)"
+                                        />
+                                    @else
+                                        <label class="block text-sm font-medium text-gray-700">{{ $form['selector_label'] }}</label>
+                                        <input type="text" wire:model.defer="{{ $prefix }}ElementSelector" placeholder="{{ $form['selector_placeholder'] }}" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                                        @error($prefix.'ElementSelector') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                                    @endif
                                 </div>
                             @endif
 
@@ -384,8 +397,16 @@
                                         x-show="String(valueSource || 'fixed') === 'fixed'"
                                     @endif
                                 >
-                                    <label class="block text-sm font-medium text-gray-700">{{ $form['url'] ? $form['url_label'] : $form['value_label'] }}</label>
-                                    @if(! $form['url'] && ($form['value_type'] ?? 'text') === 'select')
+                                    @if($valueSelectorMode)
+                                        <x-workflows.selector-field
+                                            :model="$prefix.'InputValue'"
+                                            :label="$form['value_label']"
+                                            :placeholder="$form['value_placeholder']"
+                                            :mode="$valueSelectorMode"
+                                            :required="(bool) ($form['value_required'] ?? true)"
+                                        />
+                                    @elseif(! $form['url'] && ($form['value_type'] ?? 'text') === 'select')
+                                        <label class="block text-sm font-medium text-gray-700">{{ $form['value_label'] }}</label>
                                         <select wire:model.defer="{{ $prefix }}InputValue" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
                                             <option value="">{{ $form['value_placeholder'] ?: 'Bitte waehlen' }}</option>
                                             @foreach((array) ($form['value_options'] ?? []) as $optionValue => $optionLabel)
@@ -393,12 +414,15 @@
                                             @endforeach
                                         </select>
                                     @else
+                                        <label class="block text-sm font-medium text-gray-700">{{ $form['url'] ? $form['url_label'] : $form['value_label'] }}</label>
                                         <input type="text" wire:model.defer="{{ $prefix }}InputValue" placeholder="{{ $form['url'] ? $form['url_placeholder'] : $form['value_placeholder'] }}" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
                                     @endif
-                                    @if(! $form['url'] && ($form['value_help'] ?? '') !== '')
+                                    @if(! $valueSelectorMode && ! $form['url'] && ($form['value_help'] ?? '') !== '')
                                         <p class="mt-1 text-xs text-slate-500">{{ $form['value_help'] }}</p>
                                     @endif
-                                    @error($prefix.'InputValue') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                                    @if(! $valueSelectorMode)
+                                        @error($prefix.'InputValue') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                                    @endif
                                 </div>
                             @endif
                         </div>
@@ -481,6 +505,7 @@
                                     $fieldModel = ($form['value_source_control'] ?? false) && isset($dedicatedValueSourceModels[$fieldName])
                                         ? $dedicatedValueSourceModels[$fieldName]
                                         : $prefix.'Extra.'.$fieldName;
+                                    $fieldSelectorMode = $selectorSyntax->modeFor((string) $catalogKey, $fieldName);
                                 @endphp
                                 @if($fieldName !== '')
                                     <div
@@ -490,8 +515,20 @@
                                             x-show="String(valueSource || 'fixed') === @js($visibleWhenValue)"
                                         @endif
                                     >
-                                        <label class="block text-sm font-medium text-gray-700">{{ $fieldLabel }}</label>
-                                        @if($fieldType === 'workflow_input_definitions')
+                                        @if($fieldSelectorMode)
+                                            <x-workflows.selector-field
+                                                :model="$fieldModel"
+                                                :label="$fieldLabel"
+                                                :placeholder="$fieldPlaceholder"
+                                                :mode="$fieldSelectorMode"
+                                                :required="(bool) ($field['required'] ?? false)"
+                                                :type="$fieldType === 'textarea' ? 'textarea' : 'text'"
+                                                :rows="$fieldRows"
+                                                :help="$fieldHelp"
+                                                :wire-key="$prefix.'-extra-'.$catalogKey.'-'.$fieldName"
+                                            />
+                                        @elseif($fieldType === 'workflow_input_definitions')
+                                            <label class="block text-sm font-medium text-gray-700">{{ $fieldLabel }}</label>
                                             @include('livewire.admin.network.partials.workflow-input-definitions-editor', [
                                                 'fieldModel' => $fieldModel,
                                                 'fieldHelp' => $fieldHelp,
@@ -499,6 +536,7 @@
                                                 'prefix' => $prefix,
                                             ])
                                         @elseif($fieldType === 'textarea')
+                                            <label class="block text-sm font-medium text-gray-700">{{ $fieldLabel }}</label>
                                             <textarea
                                                 rows="{{ $fieldRows }}"
                                                 wire:key="{{ $prefix }}-extra-{{ $catalogKey }}-{{ $fieldName }}"
@@ -507,6 +545,7 @@
                                                 class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"
                                             ></textarea>
                                         @elseif($fieldType === 'select')
+                                            <label class="block text-sm font-medium text-gray-700">{{ $fieldLabel }}</label>
                                             <select
                                                 wire:key="{{ $prefix }}-extra-{{ $catalogKey }}-{{ $fieldName }}"
                                                 wire:model.live="{{ $fieldModel }}"
@@ -517,6 +556,7 @@
                                                 @endforeach
                                             </select>
                                         @else
+                                            <label class="block text-sm font-medium text-gray-700">{{ $fieldLabel }}</label>
                                             <input
                                                 type="{{ $fieldType === 'number' ? 'number' : 'text' }}"
                                                 wire:key="{{ $prefix }}-extra-{{ $catalogKey }}-{{ $fieldName }}"
@@ -528,10 +568,12 @@
                                                 class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"
                                             >
                                         @endif
-                                        @if($fieldHelp !== '')
+                                        @if(! $fieldSelectorMode && $fieldHelp !== '')
                                             <p class="mt-1 text-xs text-slate-500">{{ $fieldHelp }}</p>
                                         @endif
-                                        @error($fieldModel) <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                                        @if(! $fieldSelectorMode)
+                                            @error($fieldModel) <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                                        @endif
                                     </div>
                                 @endif
                             @endforeach

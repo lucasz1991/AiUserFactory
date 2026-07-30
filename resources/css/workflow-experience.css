@@ -422,6 +422,35 @@
   backdrop-filter: blur(22px) saturate(1.35);
 }
 
+.ff-task-library-header::after {
+  position: absolute;
+  right: 1rem;
+  bottom: 0;
+  left: 1rem;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(147, 197, 253, .45), transparent);
+  content: '';
+}
+
+.ff-task-group-rail {
+  scroll-snap-type: inline proximity;
+  -webkit-overflow-scrolling: touch;
+}
+
+.ff-task-group-rail > div > :is(button, span) {
+  scroll-snap-align: center;
+}
+
+.ff-task-group-rail::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.ff-task-library-list {
+  scrollbar-gutter: stable;
+  overscroll-behavior: contain;
+}
+
 .ff-search-field {
   min-height: 2.7rem;
   border: 1px solid var(--ff-line) !important;
@@ -455,7 +484,16 @@
   border-color: var(--ff-accent-line) !important;
   background: var(--ff-accent-soft) !important;
   box-shadow: 0 14px 30px -24px rgba(37, 99, 235, .5) !important;
-  transform: translateX(-3px);
+  transform: translateY(-1px);
+}
+
+.ff-catalog-card:focus-visible {
+  border-color: var(--ff-accent) !important;
+  background: var(--ff-accent-soft) !important;
+}
+
+.ff-catalog-card:active {
+  transform: translateY(0) scale(.995);
 }
 
 [data-workflow-minimap-scroll-container] {

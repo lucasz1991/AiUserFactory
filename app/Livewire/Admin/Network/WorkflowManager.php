@@ -19,6 +19,7 @@ use App\Services\Workflows\WorkflowCopilotSessionService;
 use App\Services\Workflows\WorkflowExecutionService;
 use App\Services\Workflows\WorkflowRouteTargetAutoRepairService;
 use App\Services\Workflows\WorkflowRunDebugPackageService;
+use App\Services\Workflows\WorkflowSelectorSyntaxService;
 use App\Services\Workflows\WorkflowStudioRevisionService;
 use App\Services\Workflows\WorkflowStudioSessionService;
 use App\Services\Workflows\WorkflowTaskCatalog;
@@ -3146,6 +3147,10 @@ class WorkflowManager extends Component
             $valid = false;
         }
 
+        if (! $this->validateTaskSelectorSyntax($prefix, $formConfig, $extraValues)) {
+            $valid = false;
+        }
+
         foreach ($this->taskExtraFields($formConfig) as $field) {
             $name = $field['name'];
             $fieldValue = trim((string) ($extraValues[$name] ?? ''));
@@ -3197,6 +3202,50 @@ class WorkflowManager extends Component
                     $valid = false;
                 }
             }
+        }
+
+        return $valid;
+    }
+
+    /**
+     * The field-to-syntax contract comes from the Node task implementations,
+     * not from labels containing the word "Selector". This keeps the
+     * workflow-return variable name out of CSS validation and distinguishes
+     * extended element candidates from raw Chromium CSS.
+     *
+     * @param  array<string, mixed>  $formConfig
+     * @param  array<string, mixed>  $extraValues
+     */
+    protected function validateTaskSelectorSyntax(string $prefix, array $formConfig, array $extraValues): bool
+    {
+        $taskKeyProperty = $prefix.'CatalogKey';
+        $selectorProperty = $prefix.'ElementSelector';
+        $valueProperty = $prefix.'InputValue';
+        $taskKey = trim((string) ($this->{$taskKeyProperty} ?? ''));
+        $syntax = app(WorkflowSelectorSyntaxService::class);
+        $fieldModes = $syntax->fieldModes()[$taskKey] ?? [];
+        $valid = true;
+
+        foreach ($fieldModes as $fieldName => $mode) {
+            if ($fieldName === 'selector') {
+                $value = (string) ($this->{$selectorProperty} ?? '');
+                $errorProperty = $selectorProperty;
+            } elseif ($fieldName === 'value') {
+                $value = (string) ($this->{$valueProperty} ?? '');
+                $errorProperty = $valueProperty;
+            } else {
+                $value = (string) ($extraValues[$fieldName] ?? '');
+                $errorProperty = $this->taskExtraFieldErrorProperty($prefix, $formConfig, $fieldName);
+            }
+
+            $error = $syntax->validate($value, $mode);
+
+            if ($error === null) {
+                continue;
+            }
+
+            $this->addError($errorProperty, $error);
+            $valid = false;
         }
 
         return $valid;

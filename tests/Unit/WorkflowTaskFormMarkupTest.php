@@ -31,4 +31,24 @@ class WorkflowTaskFormMarkupTest extends TestCase
         $this->assertStringContainsString("@foreach((array) (\$form['value_options'] ?? []) as \$optionValue => \$optionLabel)", $source);
         $this->assertStringContainsString('wire:model.defer="{{ $prefix }}InputValue"', $source);
     }
+
+    public function test_selector_fields_use_live_syntax_feedback_and_accessible_help(): void
+    {
+        $root = dirname(__DIR__, 2);
+        $form = file_get_contents($root.'/resources/views/livewire/admin/network/partials/workflow-task-form.blade.php');
+        $field = file_get_contents($root.'/resources/views/components/workflows/selector-field.blade.php');
+        $tabs = file_get_contents($root.'/resources/views/components/ui/accordion/tabs.blade.php');
+        $panel = file_get_contents($root.'/resources/views/components/ui/accordion/tab-panel.blade.php');
+
+        $this->assertStringContainsString('WorkflowSelectorSyntaxService::class', $form);
+        $this->assertStringContainsString('<x-workflows.selector-field', $form);
+        $this->assertStringContainsString('data-workflow-selector-field', $field);
+        $this->assertStringContainsString('x-bind:aria-invalid', $field);
+        $this->assertStringContainsString('aria-live="polite"', $field);
+        $this->assertStringContainsString('Syntaxhilfe fuer', $field);
+        $this->assertStringContainsString('overflow-x-auto', $tabs);
+        $this->assertStringContainsString('@keydown.arrow-right', $tabs);
+        $this->assertStringContainsString('@keydown.home', $tabs);
+        $this->assertStringContainsString('x-show.important="openTab', $panel);
+    }
 }

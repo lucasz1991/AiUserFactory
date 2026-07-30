@@ -7,6 +7,7 @@ import resize from '@alpinejs/resize';
 import intersect from '@alpinejs/intersect';
 import sort from '@alpinejs/sort';
 import './components/workflow-motion';
+import { workflowSelectorField } from './components/workflow-selector-syntax';
 import './app-shell';
 // Spur W (PWA + Web-Push). Beim App-Shell-Umbau bitte uebernehmen — ohne
 // diesen Import registriert sich kein Service Worker und die Alpine-
@@ -21,7 +22,16 @@ import {
 window.Swal = Swal;
 
 function registerAlpinePlugins() {
-    if (!window.Alpine || window.Alpine.__aiUserFactoryPluginsRegistered) {
+    if (!window.Alpine) {
+        return;
+    }
+
+    if (!window.Alpine.__workflowSelectorSyntaxRegistered) {
+        window.Alpine.data('workflowSelectorField', workflowSelectorField);
+        window.Alpine.__workflowSelectorSyntaxRegistered = true;
+    }
+
+    if (window.Alpine.__aiUserFactoryPluginsRegistered) {
         return;
     }
 

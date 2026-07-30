@@ -13,7 +13,9 @@ class WorkflowTaskLibraryMarkupTest extends TestCase
 
         $this->assertStringContainsString("mobilePanel: 'canvas'", $source);
         $this->assertStringContainsString('data-studio-mobile-switch', $source);
-        $this->assertStringContainsString('id="studio-task-group-mobile"', $source);
+        $this->assertStringContainsString('class="ff-task-group-rail', $source);
+        $this->assertStringContainsString('aria-controls="studio-task-catalog-panel"', $source);
+        $this->assertStringContainsString('aria-controls="studio-task-canvas-panel"', $source);
         $this->assertStringContainsString('data-studio-editor-overview', $source);
         $this->assertStringContainsString('<x-workflows.minimap', $source);
         $this->assertStringContainsString(':workflow="$workflow"', $source);

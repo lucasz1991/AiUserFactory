@@ -824,6 +824,29 @@ class WorkflowStudioTest extends TestCase
         $this->assertSame(2, $workflow->studioRevisions()->count());
     }
 
+    public function test_studio_task_editor_rejects_invalid_selector_syntax_before_creating_a_revision(): void
+    {
+        [$workflow, $step] = $this->workflow();
+        $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
+        $session = app(WorkflowStudioSessionService::class)->open($workflow, $admin, 'manual', 'ask_critical');
+        app(WorkflowStudioRevisionService::class)->ensureBaseline($session);
+        $this->actingAs($admin);
+
+        Livewire::test(WorkflowStudioTaskEditor::class, [
+            'workflow' => $workflow,
+            'studioSessionId' => $session->id,
+        ])
+            ->call('openFromStudio', $step->id, 'first-task')
+            ->set('editingTaskCatalogKey', 'browser.click')
+            ->set('editingTaskElementSelector', 'button[type=submit')
+            ->call('saveEditTaskCard')
+            ->assertHasErrors(['editingTaskElementSelector'])
+            ->assertSet('showEditTaskModal', true);
+
+        $this->assertSame(0, $workflow->fresh()->copilot_revision);
+        $this->assertSame(1, $workflow->studioRevisions()->count());
+    }
+
     public function test_studio_task_editor_has_explicit_livewire_close_actions_for_each_child_modal(): void
     {
         [$workflow] = $this->workflow();
