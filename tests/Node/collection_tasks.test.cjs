@@ -775,7 +775,11 @@ test('workflow runner follows a dynamic target returned by a collection decision
     assert.equal(processResult.status, 0, processResult.stderr || processResult.stdout);
     const result = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
     assert.equal(result.ok, true);
-    assert.deepEqual(result.tasks.map((task) => task.key), ['enough-results', 'fallback-return']);
+    assert.deepEqual(result.tasks.map((task) => task.key), [
+      'enough-results',
+      'fallback-return',
+      '__automatic-browser-session-save',
+    ]);
     assert.equal(result.completedTaskKey, 'fallback-return');
     assert.equal(result.completed_task_key, 'fallback-return');
   } finally {
