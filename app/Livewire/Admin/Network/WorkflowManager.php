@@ -2191,7 +2191,12 @@ class WorkflowManager extends Component
     {
         $directUrl = trim((string) data_get($state, 'latest_screenshot_url', data_get($state, 'observation.screenshot_url', '')));
 
-        if ($directUrl !== '') {
+        // Der Wert stammt aus dem Node-Ergebnis und landet in der Vorschau als
+        // `href`. Ohne Schema-Allowlist koennte ein kompromittierter Node dort
+        // `javascript:` unterbringen und beim Klick des Admins Code in dessen
+        // Sitzung ausfuehren. Erlaubt sind deshalb nur echte Ziele: absolute
+        // http(s)-Adressen oder projektinterne, absolute Pfade.
+        if ($directUrl !== '' && preg_match('#^(?:https?://|/(?!/))#i', $directUrl) === 1) {
             return $directUrl;
         }
 
