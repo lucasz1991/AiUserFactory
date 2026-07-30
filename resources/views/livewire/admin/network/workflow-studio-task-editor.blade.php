@@ -2,6 +2,7 @@
     class="h-full min-h-0 overflow-y-auto overscroll-contain xl:overflow-hidden"
     data-studio-task-editor
     x-data="{
+        mobilePanel: 'canvas',
         focusedTask: '',
         hoveredRouteNode: '',
         activeRouteNode: '',
@@ -18,13 +19,54 @@
             return window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
         },
         armTaskInsert(stepId) {
+            this.mobilePanel = 'catalog';
             $wire.selectCatalogTarget(stepId);
             this.$nextTick(() => document.querySelector('[data-studio-task-catalog]')?.scrollIntoView({ behavior: this.scrollBehavior(), block: 'nearest' }));
         },
+        async focusOverviewTask(detail) {
+            const stepId = Number(detail?.stepId || 0);
+            const taskKey = String(detail?.taskKey || '');
+
+            if (!stepId || !taskKey) return;
+
+            await $wire.selectOverviewTask(stepId, taskKey);
+            this.mobilePanel = 'canvas';
+            this.focusedTask = `${stepId}::${taskKey}`;
+            this.$nextTick(() => {
+                const target = Array.from(this.$root.querySelectorAll('[data-workflow-task-key]'))
+                    .find((node) => node.dataset.workflowTaskKey === taskKey && Number(node.closest('[data-workflow-step-id]')?.dataset.workflowStepId || 0) === stepId);
+                this.activeRouteNode = target?.dataset.workflowTaskNode || '';
+                target?.scrollIntoView({ behavior: this.scrollBehavior(), block: 'nearest', inline: 'center' });
+            });
+        },
+        editOverviewTask(detail) {
+            const stepId = Number(detail?.stepId || 0);
+            const taskKey = String(detail?.taskKey || '');
+
+            if (stepId && taskKey) {
+                $wire.openFromStudio(stepId, taskKey);
+            }
+        },
     }"
+    x-on:workflow-preview-task-selected.stop="focusOverviewTask($event.detail)"
+    x-on:workflow-preview-task-edit-requested.stop="editOverviewTask($event.detail)"
 >
-    <div class="ff-canvas-shell grid min-h-full overflow-visible xl:h-full xl:min-h-0 xl:grid-cols-[300px_minmax(0,1fr)] xl:overflow-hidden">
-        <aside data-studio-task-catalog class="ff-task-drawer flex h-[520px] min-h-0 shrink-0 flex-col border-b bg-white text-slate-900 sm:h-[600px] xl:h-auto xl:border-b-0 xl:border-r">
+    <nav data-studio-mobile-switch class="sticky top-0 z-40 grid grid-cols-2 gap-1 border-b border-slate-200 bg-white/95 p-2 backdrop-blur xl:hidden" aria-label="Mobiler Editorbereich">
+        <button type="button" x-on:click="mobilePanel = 'canvas'" x-bind:aria-pressed="mobilePanel === 'canvas'" x-bind:class="mobilePanel === 'canvas' ? 'bg-slate-900 text-white shadow-sm' : 'bg-slate-100 text-slate-600'" class="min-h-11 rounded-xl px-3 text-xs font-bold transition">
+            Workflow <span class="ml-1 font-mono opacity-70">{{ $steps->sum(fn ($step) => count($step->task_cards)) }}</span>
+        </button>
+        <button type="button" x-on:click="mobilePanel = 'catalog'" x-bind:aria-pressed="mobilePanel === 'catalog'" x-bind:class="mobilePanel === 'catalog' ? 'bg-slate-900 text-white shadow-sm' : 'bg-slate-100 text-slate-600'" class="min-h-11 rounded-xl px-3 text-xs font-bold transition">
+            Task-Bibliothek <span class="ml-1 font-mono opacity-70">{{ $taskDefinitions->count() }}</span>
+        </button>
+    </nav>
+
+    <div data-studio-task-layout class="ff-canvas-shell grid min-h-full overflow-visible xl:h-full xl:min-h-0 xl:grid-cols-[320px_minmax(0,1fr)] xl:overflow-hidden">
+        <aside
+            x-cloak
+            x-bind:class="mobilePanel === 'catalog' ? 'flex' : 'hidden xl:flex'"
+            data-studio-task-catalog
+            class="ff-task-drawer h-[calc(100dvh-10rem)] min-h-[480px] shrink-0 flex-col border-b bg-white text-slate-900 xl:h-auto xl:min-h-0 xl:border-b-0 xl:border-r"
+        >
             <div class="border-b border-slate-200 px-4 py-4">
                 <div class="flex items-start justify-between gap-3">
                     <div>
@@ -53,30 +95,55 @@
                 </div>
             </div>
 
-            <nav class="flex shrink-0 gap-1 overflow-x-auto border-b border-slate-200 px-3" aria-label="Task-Gruppen">
+            <div class="border-b border-slate-200 p-3 sm:hidden">
+                <label for="studio-task-group-mobile" class="text-[10px] font-bold uppercase tracking-wide text-slate-500">Aufgabengruppe</label>
+                <select id="studio-task-group-mobile" wire:model.live="activeTaskGroup" class="ff-search-field mt-1.5 w-full px-3 text-xs font-semibold">
+                    @foreach($taskGroups as $taskGroup)
+                        <option value="{{ $taskGroup }}">{{ $taskGroupLabels[$taskGroup] ?? $taskGroup }} ({{ $taskGroupCounts->get($taskGroup, 0) }})</option>
+                    @endforeach
+                </select>
+            </div>
+
+            <nav class="hidden shrink-0 gap-1 overflow-x-auto border-b border-slate-200 px-3 sm:flex" aria-label="Task-Gruppen">
                 @foreach($taskGroups as $taskGroup)
                     <button
                         type="button"
                         wire:click="$set('activeTaskGroup', @js($taskGroup))"
                         aria-pressed="{{ $activeTaskGroup === $taskGroup ? 'true' : 'false' }}"
                         class="whitespace-nowrap border-b-2 px-2 py-3 text-[11px] font-bold transition {{ $activeTaskGroup === $taskGroup ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-950' }}"
-                    >{{ $taskGroupLabels[$taskGroup] ?? $taskGroup }}</button>
+                    >{{ $taskGroupLabels[$taskGroup] ?? $taskGroup }} <span class="font-mono opacity-60">{{ $taskGroupCounts->get($taskGroup, 0) }}</span></button>
                 @endforeach
             </nav>
+
+            <div class="border-b border-slate-200 bg-slate-50/80 px-4 py-2.5 text-[10px] leading-4 text-slate-500" role="status">
+                @if($searchActive)
+                    Suchergebnisse aus allen Aufgabengruppen
+                @else
+                    {{ data_get($taskGroupMeta, $activeTaskGroup.'.description', '') }}
+                @endif
+            </div>
 
             <div class="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
                 @forelse($visibleTaskDefinitions as $taskDefinition)
                     <button
                         type="button"
                         wire:click="prepareCatalogTask(@js($taskDefinition['key']))"
-                        draggable="{{ $canEdit ? 'true' : 'false' }}"
+                        x-on:click="mobilePanel = 'canvas'"
+                        x-bind:draggable="window.matchMedia('(pointer: fine)').matches && @js($canEdit)"
                         x-on:dragstart.stop="$event.dataTransfer.setData('application/x-workflow-task-catalog', @js($taskDefinition['key'])); $event.dataTransfer.setData('text/plain', @js($taskDefinition['key'])); $event.dataTransfer.effectAllowed = 'copy'"
                         @disabled(! $canEdit || $steps->isEmpty())
+                        data-task-library-key="{{ $taskDefinition['key'] }}"
+                        data-task-library-group="{{ $taskDefinition['library_group'] }}"
                         class="ff-catalog-card group block w-full border bg-white p-3 text-left disabled:cursor-not-allowed disabled:opacity-40"
                     >
                         <span class="flex items-start justify-between gap-3">
                             <span class="min-w-0">
-                                <span class="block truncate text-xs font-bold text-slate-950">{{ $taskDefinition['label'] }}</span>
+                                <span class="flex items-center gap-2">
+                                    <span class="min-w-0 flex-1 truncate text-xs font-bold text-slate-950">{{ $taskDefinition['label'] }}</span>
+                                    @if($searchActive)
+                                        <span class="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[9px] font-bold text-slate-500">{{ data_get($taskGroupMeta, $taskDefinition['library_group'].'.short_label', $taskDefinition['library_group']) }}</span>
+                                    @endif
+                                </span>
                                 <span class="mt-1 block line-clamp-2 text-[10px] leading-4 text-slate-500">{{ $taskDefinition['description'] }}</span>
                             </span>
                             <span class="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md border border-blue-200 bg-blue-50 font-mono text-[11px] font-bold text-blue-700">+</span>
@@ -88,7 +155,12 @@
             </div>
         </aside>
 
-        <section class="flex min-h-[560px] min-w-0 shrink-0 flex-col bg-slate-50 xl:min-h-0">
+        <section
+            x-cloak
+            x-bind:class="mobilePanel === 'canvas' ? 'flex' : 'hidden xl:flex'"
+            data-studio-editor-canvas-panel
+            class="min-h-[560px] min-w-0 shrink-0 flex-col bg-slate-50 xl:min-h-0"
+        >
             <div class="ff-canvas-toolbar flex shrink-0 flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
                 <div>
                     <div class="flex items-center gap-2">
@@ -105,6 +177,41 @@
                     <span class="text-base leading-none">+</span> Neue Liste
                 </button>
             </div>
+
+            <section
+                x-data="{ overviewOpen: true }"
+                data-studio-editor-overview
+                class="shrink-0 border-b border-slate-200 bg-white/90"
+                aria-label="Workflow-Übersicht"
+            >
+                <button
+                    type="button"
+                    x-on:click="overviewOpen = ! overviewOpen"
+                    x-bind:aria-expanded="overviewOpen"
+                    class="flex min-h-11 w-full items-center justify-between gap-3 px-4 py-2 text-left transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500"
+                >
+                    <span>
+                        <span class="block text-[10px] font-black uppercase tracking-[0.14em] text-blue-700">Workflow-Karte</span>
+                        <span class="mt-0.5 block text-[11px] text-slate-500">Task antippen, um die zugehörige Karte im Editor zu fokussieren.</span>
+                    </span>
+                    <span class="shrink-0 text-[11px] font-bold text-slate-600" x-text="overviewOpen ? 'Einklappen' : 'Aufklappen'"></span>
+                </button>
+                <div x-cloak x-show="overviewOpen" x-collapse.duration.180ms class="ff-builder-overview-map border-t border-slate-100 px-3 py-2 sm:px-4">
+                    <x-workflows.minimap
+                        :workflow="$workflow"
+                        :workflow-run="$activeRun"
+                        :active-step-id="$activeRun?->current_workflow_step_id"
+                        :active-task-key="data_get($activeRun?->context_json, 'next_task_key')"
+                        :selected-step-id="$overviewSelectedStepId"
+                        :selected-task-key="$overviewSelectedTaskKey"
+                        :show-header="false"
+                        :selectable-tasks="true"
+                        :zoomable="true"
+                        initial-zoom="overview"
+                        :instance="'builder-'.$studioSessionId"
+                    />
+                </div>
+            </section>
 
             <details class="group shrink-0 border-b border-slate-200 bg-white/80 px-4 py-2.5 text-xs text-slate-600">
                 <summary class="flex cursor-pointer list-none items-center justify-between gap-3 font-bold text-slate-700 marker:hidden">
@@ -129,15 +236,16 @@
                 <div class="shrink-0 border-b border-rose-200 bg-rose-50 px-4 py-2.5 text-xs font-semibold text-rose-700">{{ $message }}</div>
             @enderror
 
-            <div class="ff-canvas-grid relative min-h-0 flex-1 overflow-auto">
+            <div data-studio-workflow-canvas class="ff-canvas-grid relative min-h-0 flex-1 overflow-auto overscroll-contain">
                 <div
                     x-sort="$dispatch('reorderWorkflowSteps', { item: $item, position: $position })"
-                    class="flex min-h-full min-w-max items-start gap-8 px-6 pb-10 pt-8"
+                    class="flex min-h-full min-w-max items-start gap-8 px-4 pb-10 pt-6 sm:px-6 sm:pt-8"
                 >
                     @forelse($steps as $step)
                         <div
                             x-sort:item="{{ $step->id }}"
                             wire:key="studio-builder-step-{{ $step->id }}"
+                            data-studio-editor-step
                             class="rounded-2xl transition {{ (string) $step->id === $catalogTargetStepId ? 'ring-2 ring-blue-500 ring-offset-4 ring-offset-slate-50' : '' }}"
                         >
                             <x-workflows.step-card :step="$step" :locked="! $canEdit">
