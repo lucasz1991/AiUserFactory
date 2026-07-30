@@ -13,31 +13,32 @@
                 />
             </div>
         @else
-            <div class="flex h-full min-h-0 items-center justify-center overflow-y-auto rounded-xl border border-dashed border-slate-300 bg-white/90 p-5 sm:p-8">
-                <div class="max-w-lg text-center">
-                    <span class="mx-auto flex h-12 w-12 items-center justify-center rounded-xl border border-blue-200 bg-blue-50 text-blue-700 shadow-sm" aria-hidden="true">
-                        <svg class="h-5 w-5 translate-x-px" viewBox="0 0 24 24" fill="currentColor">
-                            <path d="M8 5.5v13l10-6.5z"></path>
-                        </svg>
-                    </span>
-                    <p class="ff-kicker mt-4">Testlauf</p>
-                    <h3 class="mt-1.5 text-lg font-bold tracking-tight text-slate-950">Bereit für den ersten Test</h3>
-                    <p class="mx-auto mt-2 max-w-md text-xs leading-5 text-slate-500">{{ $autonomousMode ? 'Öffne die Copilot-Einstellungen, prüfe Ziel und Erfolgskriterien und starte danach die Optimierung.' : 'Wähle eine Task im Diagramm. Du kannst genau diese Task testen oder den Ablauf bis zum Ende starten.' }}</p>
-                    @if($selectedTask)
-                        <div class="ff-selected-task mx-auto mt-5 max-w-sm rounded-xl border px-4 py-3 text-left">
-                            <div class="flex items-center justify-between gap-3">
-                                <p class="text-[9px] font-black uppercase tracking-[0.15em] text-blue-700">Ausgewählte Task</p>
-                                <span class="rounded-md border border-blue-200 bg-white/80 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wide text-blue-700">Startpunkt</span>
-                            </div>
-                            <p class="mt-1.5 truncate text-sm font-bold text-slate-950">{{ $selectedTask['title'] ?? $selectedTaskKey }}</p>
-                            <p class="mt-0.5 truncate font-mono text-[10px] text-slate-600">{{ $selectedTask['task_key'] ?? $selectedTaskKey }}</p>
-                        </div>
-                    @elseif(! $autonomousMode)
-                        <p class="mx-auto mt-4 inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[10px] font-semibold text-slate-600 shadow-sm">
-                            <span class="h-1.5 w-1.5 rounded-full bg-blue-500" aria-hidden="true"></span>
-                            Eine Task im Workflow auswählen, dann oben starten.
+            <div class="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white/95 shadow-inner">
+                <div class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-3 py-2.5 sm:px-4">
+                    <div class="min-w-0">
+                        <p class="ff-kicker">Testlauf vorbereiten</p>
+                        <p class="mt-1 text-xs leading-5 text-slate-600">
+                            {{ $autonomousMode ? 'Definition prüfen und danach die Copilot-Optimierung starten.' : 'Task auswählen; Doppelklick öffnet direkt die gemeinsamen Task-Einstellungen.' }}
                         </p>
+                    </div>
+                    @if($selectedTask)
+                        <div class="ff-selected-task max-w-full rounded-lg border px-3 py-2">
+                            <p class="text-[9px] font-black uppercase tracking-[0.15em] text-blue-700">Startpunkt</p>
+                            <p class="mt-0.5 max-w-64 truncate text-xs font-bold text-slate-950">{{ $selectedTask['title'] ?? $selectedTaskKey }}</p>
+                        </div>
                     @endif
+                </div>
+                <div class="min-h-0 flex-1 overflow-auto p-3">
+                    <x-workflows.minimap
+                        :workflow="$workflow"
+                        :selected-step-id="$selectedStepId !== '' ? (int) $selectedStepId : null"
+                        :selected-task-key="$selectedTaskKey ?: null"
+                        :show-header="false"
+                        :selectable-tasks="! $autonomousMode"
+                        :zoomable="true"
+                        initial-zoom="overview"
+                        :instance="'studio-definition-'.$session->id"
+                    />
                 </div>
             </div>
         @endif

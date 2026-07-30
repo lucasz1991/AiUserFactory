@@ -44,6 +44,7 @@
 @endphp
 
 <div
+    tabindex="-1"
     data-workflow-step-column
     data-workflow-step-id="{{ $step->id }}"
     data-workflow-step-action="{{ $step->action_key }}"
@@ -70,13 +71,13 @@
             </div>
             <div class="flex items-center gap-1">
                 @if(! $locked)
-                    <div x-sort:handle class="flex h-8 w-8 cursor-grab items-center justify-center rounded-md text-slate-400 transition hover:bg-white/10 hover:text-white active:cursor-grabbing" title="Liste verschieben" aria-label="Liste verschieben">
+                    <div x-sort:handle class="ff-step-header-control flex h-8 w-8 cursor-grab items-center justify-center rounded-md text-slate-400 transition hover:bg-white/10 hover:text-white active:cursor-grabbing" title="Liste verschieben" aria-label="Liste verschieben">
                         <svg class="h-4 w-4" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="5" cy="3" r="1"></circle><circle cx="11" cy="3" r="1"></circle><circle cx="5" cy="8" r="1"></circle><circle cx="11" cy="8" r="1"></circle><circle cx="5" cy="13" r="1"></circle><circle cx="11" cy="13" r="1"></circle></svg>
                     </div>
                 @endif
                 @isset($actions)
                     <div class="relative" x-data="{ open: false }">
-                        <button type="button" x-on:click.stop="open = ! open" x-bind:aria-expanded="open" class="flex h-8 w-8 items-center justify-center rounded-md text-slate-400 transition hover:bg-white/10 hover:text-white" aria-label="Listenaktionen">
+                        <button type="button" x-on:click.stop="open = ! open" x-bind:aria-expanded="open" class="ff-step-header-control flex h-8 w-8 items-center justify-center rounded-md text-slate-400 transition hover:bg-white/10 hover:text-white" aria-label="Listenaktionen">
                             <svg class="h-4 w-4" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="8" r="1.25"></circle><circle cx="8" cy="8" r="1.25"></circle><circle cx="13" cy="8" r="1.25"></circle></svg>
                         </button>
                         <div x-cloak x-show="open" x-transition.origin.top.right x-on:click.stop x-on:click.outside="open = false" class="ff-menu absolute right-0 z-30 mt-1 w-40 p-1">

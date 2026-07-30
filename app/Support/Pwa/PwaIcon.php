@@ -57,10 +57,15 @@ final class PwaIcon
 
     /** Normalisierte Geometrie, abgeleitet aus `public/favicon.svg` (64er Raster). */
     private const SPHERE_RADIUS = 0.250;
+
     private const ORBIT_RX = 0.422;
+
     private const ORBIT_RY = 0.166;
+
     private const ORBIT_ROTATION = -24.0;
+
     private const ORBIT_HALF_WIDTH = 0.027;
+
     private const ORBIT_OPACITY = 0.85;
 
     /** Partikel als [Bahnphase, Radius]. */

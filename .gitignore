@@ -30,3 +30,4 @@ Homestead.json
 .env.testing
 .phpactor.json
 auth.json
+__pycache__/

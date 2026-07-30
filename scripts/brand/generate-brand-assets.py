@@ -715,12 +715,15 @@ def render_wordmark_png(height: int, dark: bool) -> Image.Image:
 # --------------------------------------------------------------------------
 
 def write_ico(path: Path, sizes=(16, 32, 48, 64)) -> None:
-    images = []
-    for size in sizes:
-        spec = COMPACT if size <= 32 else STANDARD
-        images.append(render_mark(size, spec=spec))
-    images[0].save(path, format="ICO", sizes=[(i.width, i.height) for i in images],
-                   append_images=images[1:])
+    """Pillow verwirft ICO-Groessen, die groesser als das Basisbild sind —
+    das groesste Bild muss deshalb das Basisbild sein."""
+    ordered = sorted(sizes, reverse=True)
+    images = [render_mark(size, spec=COMPACT if size <= 32 else STANDARD) for size in ordered]
+    images[0].save(
+        path, format="ICO",
+        sizes=[(size, size) for size in ordered],
+        append_images=images[1:],
+    )
 
 
 def build_gif(path: Path, size: int = 128, frames: int = 30, duration: int = 66) -> None:

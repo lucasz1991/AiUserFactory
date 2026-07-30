@@ -95,20 +95,29 @@
     }
     $stepById = $steps->keyBy('id');
     $stepByAction = $steps->keyBy(fn ($step) => (string) $step->action_key);
-    $actionKeyForTask = static function (string $taskKey) use ($steps): string {
+    $actionKeyForTask = static function (string $taskKey, string $preferredAction = '') use ($steps): string {
         if ($taskKey === '') {
             return '';
         }
 
+        $matchingActions = [];
+
         foreach ($steps as $step) {
             foreach (collect($step->task_cards)->values() as $task) {
                 if ((string) ($task['key'] ?? '') === $taskKey) {
-                    return trim((string) $step->action_key);
+                    $action = trim((string) $step->action_key);
+                    if ($action === $preferredAction) {
+                        return $action;
+                    }
+
+                    if ($action !== '' && ! in_array($action, $matchingActions, true)) {
+                        $matchingActions[] = $action;
+                    }
                 }
             }
         }
 
-        return '';
+        return count($matchingActions) === 1 ? $matchingActions[0] : '';
     };
     $nodePositions = [];
     $firstTaskNodeByStep = [];
@@ -510,9 +519,10 @@
                 },
                 'lineTone' => match (true) {
                     $runtime && ($executed || $pending) => 'runtime',
-                    in_array($outcome, ['failed', 'timeout'], true) => 'failed',
+                    $outcome === 'failed' => 'failed',
+                    $outcome === 'timeout' => 'timeout',
                     $outcome === 'success' => 'success',
-                    $outcome === 'partial' => 'waiting',
+                    $outcome === 'partial' => 'partial',
                     default => 'default',
                 },
                 'sourceNode' => $sourceNode,
@@ -572,7 +582,10 @@
     $mapId = 'workflow-minimap-'.(\Illuminate\Support\Str::slug($mapInstance) ?: 'preview');
     $activeStep = $stepById->get((int) $activeStepId);
     $activeStepAction = trim((string) ($activeStep?->action_key ?? ''));
-    $activeTaskAction = $activeTaskKey !== '' ? $actionKeyForTask($activeTaskKey) : '';
+    $contextTaskAction = trim((string) data_get($workflowRun?->context_json, 'next_step_action_key', ''));
+    $activeTaskAction = $activeTaskKey !== ''
+        ? $actionKeyForTask($activeTaskKey, $contextTaskAction !== '' ? $contextTaskAction : $activeStepAction)
+        : '';
     $activeRouteAction = $activeTaskAction !== '' ? $activeTaskAction : $activeStepAction;
     $activeRouteNode = $activeRouteAction !== ''
         ? $activeRouteAction.'::'.($activeTaskKey !== '' ? $activeTaskKey : '*')
@@ -600,6 +613,8 @@
             'runtime' => 'bg-sky-50 text-sky-700 ring-sky-200',
             'success' => 'bg-emerald-50 text-emerald-700 ring-emerald-200',
             'failed' => 'bg-red-50 text-red-700 ring-red-200',
+            'partial' => 'bg-amber-50 text-amber-700 ring-amber-200',
+            'timeout' => 'bg-violet-50 text-violet-700 ring-violet-200',
             'waiting' => 'bg-amber-50 text-amber-700 ring-amber-200',
             default => 'bg-slate-100 text-slate-600 ring-slate-200',
         };
@@ -609,6 +624,8 @@
             'runtime' => 'bg-sky-100 text-sky-700 ring-sky-200',
             'success' => 'bg-emerald-100 text-emerald-700 ring-emerald-200',
             'failed' => 'bg-red-100 text-red-700 ring-red-200',
+            'partial' => 'bg-amber-100 text-amber-700 ring-amber-200',
+            'timeout' => 'bg-violet-100 text-violet-700 ring-violet-200',
             'waiting' => 'bg-amber-100 text-amber-700 ring-amber-200',
             default => 'bg-slate-100 text-slate-600 ring-slate-200',
         };
@@ -650,6 +667,8 @@
                     runtime: @js($mapId.'-arrow-runtime'),
                     success: @js($mapId.'-arrow-success'),
                     failed: @js($mapId.'-arrow-failed'),
+                    partial: @js($mapId.'-arrow-partial'),
+                    timeout: @js($mapId.'-arrow-timeout'),
                     waiting: @js($mapId.'-arrow-waiting'),
                     default: @js($mapId.'-arrow-default'),
                 },
@@ -703,11 +722,17 @@
                             runtime: '#0ea5e9',
                             success: '#34d399',
                             failed: '#f87171',
+                            partial: '#f59e0b',
+                            timeout: '#8b5cf6',
                             waiting: '#f59e0b',
                             default: '#94a3b8',
                         }[line.tone] || '#94a3b8';
                         const marker = this.markerIds[line.tone] || this.markerIds.default;
-                        const dash = line.tone === 'failed' || line.direction === 'back' ? ' stroke-dasharray=&quot;6 5&quot;' : '';
+                        const dash = line.direction === 'back' || line.tone === 'failed'
+                            ? ' stroke-dasharray=&quot;6 5&quot;'
+                            : (line.tone === 'partial'
+                                ? ' stroke-dasharray=&quot;4 4&quot;'
+                                : (line.tone === 'timeout' ? ' stroke-dasharray=&quot;3 4&quot;' : ''));
                         const related = !hasRelatedLine || line.sourceNode === focusNode || line.targetNode === focusNode;
                         // Feature R3: Das Alter bestimmt die Grunddeckkraft — juengere
                         // Linien kraeftiger, aeltere blasser, aber nie unsichtbar.
@@ -954,6 +979,12 @@
                     </marker>
                     <marker id="{{ $mapId }}-arrow-failed" markerWidth="6" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
                         <path d="M0,0 L0,6 L6,3 z" fill="#f87171"></path>
+                    </marker>
+                    <marker id="{{ $mapId }}-arrow-partial" markerWidth="6" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+                        <path d="M0,0 L0,6 L6,3 z" fill="#f59e0b"></path>
+                    </marker>
+                    <marker id="{{ $mapId }}-arrow-timeout" markerWidth="6" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+                        <path d="M0,0 L0,6 L6,3 z" fill="#8b5cf6"></path>
                     </marker>
                     <marker id="{{ $mapId }}-arrow-waiting" markerWidth="6" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
                         <path d="M0,0 L0,6 L6,3 z" fill="#f59e0b"></path>

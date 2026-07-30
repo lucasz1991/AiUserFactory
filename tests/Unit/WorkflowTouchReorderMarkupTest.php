@@ -38,6 +38,8 @@ class WorkflowTouchReorderMarkupTest extends TestCase
     public function test_touch_controls_are_hidden_by_default_and_have_44_pixel_targets_on_coarse_pointers(): void
     {
         $source = file_get_contents(dirname(__DIR__, 2).'/resources/css/workflow-experience.css');
+        $step = file_get_contents(dirname(__DIR__, 2).'/resources/views/components/workflows/step-card.blade.php');
+        $task = file_get_contents(dirname(__DIR__, 2).'/resources/views/components/workflows/task-card.blade.php');
 
         $this->assertStringContainsString(".ff-touch-step-reorder,\n.ff-touch-task-reorder {\n  display: none;", $source);
         $this->assertStringContainsString('@media (hover: none), (pointer: coarse)', $source);
@@ -45,5 +47,8 @@ class WorkflowTouchReorderMarkupTest extends TestCase
         $this->assertStringContainsString('min-width: 44px;', $source);
         $this->assertStringContainsString('min-height: 44px;', $source);
         $this->assertStringContainsString('touch-action: manipulation;', $source);
+        $this->assertStringContainsString('[data-workflow-definition-editor] :is(button, select, [role="tab"])', $source);
+        $this->assertStringContainsString('ff-step-header-control', $step);
+        $this->assertStringContainsString('ff-task-card-control', $task);
     }
 }

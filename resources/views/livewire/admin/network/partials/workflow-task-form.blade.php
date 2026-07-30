@@ -1,6 +1,7 @@
 @php
     $isEdit = ($mode ?? 'create') === 'edit';
     $prefix = $isEdit ? 'editingTask' : 'newTask';
+    $formInstance = \Illuminate\Support\Str::slug((string) ($formInstance ?? 'workflow-editor')) ?: 'workflow-editor';
     $catalogKey = $isEdit ? $editingTaskCatalogKey : $newTaskCatalogKey;
     $isLoopPairEdit = $isEdit && in_array($editingTaskLoopPairSegment ?? '', ['start', 'end'], true);
     $selectedDefinition = collect($taskDefinitions)->firstWhere('key', $catalogKey) ?? [];
@@ -209,9 +210,10 @@
     }
 
     $defaultExtraTab = (string) ($taskSpecificTabIds[$inputTabLabel] ?? array_key_first($taskSettingsTabOptions) ?? '');
-    $extraFieldTabGroup = 'workflow-task-'.$prefix.'-'.(\Illuminate\Support\Str::slug((string) $catalogKey) ?: 'task').'-settings';
-    $taskSettingsTabsKey = 'workflow-task-settings-tabs-'.$prefix.'-'.(\Illuminate\Support\Str::slug((string) $catalogKey) ?: 'task').'-'.md5(json_encode(array_keys($taskSettingsTabOptions)));
-    $browserWindowDatalistId = 'workflow-'.$prefix.'-browser-windows';
+    $extraFieldTabGroup = 'workflow-task-'.$formInstance.'-'.$prefix.'-'.(\Illuminate\Support\Str::slug((string) $catalogKey) ?: 'task').'-settings';
+    $taskSettingsTabsKey = 'workflow-task-settings-tabs-'.$formInstance.'-'.$prefix.'-'.(\Illuminate\Support\Str::slug((string) $catalogKey) ?: 'task').'-'.md5(json_encode(array_keys($taskSettingsTabOptions)));
+    $browserWindowDatalistId = 'workflow-'.$formInstance.'-'.$prefix.'-browser-windows';
+    $newTaskListId = 'workflow-'.$formInstance.'-new-task-list';
     $valueSourceProperty = $prefix.'ValueSource';
 @endphp
 
@@ -225,8 +227,8 @@
     <div class="grid gap-4 md:grid-cols-2">
         @if(! $isEdit)
             <div>
-                <label for="workflow-new-task-list" class="block text-sm font-medium text-gray-700">Liste</label>
-                <select id="workflow-new-task-list" wire:model.defer="newTaskListId" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                <label for="{{ $newTaskListId }}" class="block text-sm font-medium text-gray-700">Liste</label>
+                <select id="{{ $newTaskListId }}" wire:model.defer="newTaskListId" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
                     <option value="">Bitte waehlen</option>
                     @foreach($steps as $step)
                         <option value="{{ $step->id }}">{{ $step->name }}</option>
@@ -381,6 +383,7 @@
                                             :placeholder="$form['selector_placeholder']"
                                             :mode="$primarySelectorMode"
                                             :required="(bool) ($form['selector_required'] ?? true)"
+                                            :id-suffix="$formInstance"
                                         />
                                     @else
                                         <label class="block text-sm font-medium text-gray-700">{{ $form['selector_label'] }}</label>
@@ -414,6 +417,7 @@
                                             :placeholder="$form['value_placeholder']"
                                             :mode="$valueSelectorMode"
                                             :required="(bool) ($form['value_required'] ?? true)"
+                                            :id-suffix="$formInstance"
                                         />
                                     @elseif(! $form['url'] && ($form['value_type'] ?? 'text') === 'select')
                                         <label class="block text-sm font-medium text-gray-700">{{ $form['value_label'] }}</label>
@@ -535,7 +539,8 @@
                                                 :type="$fieldType === 'textarea' ? 'textarea' : 'text'"
                                                 :rows="$fieldRows"
                                                 :help="$fieldHelp"
-                                                :wire-key="$prefix.'-extra-'.$catalogKey.'-'.$fieldName"
+                                                :wire-key="$formInstance.'-'.$prefix.'-extra-'.$catalogKey.'-'.$fieldName"
+                                                :id-suffix="$formInstance"
                                             />
                                         @elseif($fieldType === 'workflow_input_definitions')
                                             <label class="block text-sm font-medium text-gray-700">{{ $fieldLabel }}</label>

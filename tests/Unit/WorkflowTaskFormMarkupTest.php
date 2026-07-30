@@ -46,6 +46,10 @@ class WorkflowTaskFormMarkupTest extends TestCase
         $this->assertStringContainsString('x-bind:aria-invalid', $field);
         $this->assertStringContainsString('aria-live="polite"', $field);
         $this->assertStringContainsString('Syntaxhilfe fuer', $field);
+        $this->assertStringContainsString("'idSuffix' => ''", $field);
+        $this->assertStringContainsString(':id-suffix="$formInstance"', $form);
+        $this->assertStringContainsString('$formInstance', $form);
+        $this->assertStringContainsString('data-workflow-selector-help-trigger', $field);
         $this->assertStringContainsString('overflow-x-auto', $tabs);
         $this->assertStringContainsString('@keydown.arrow-right', $tabs);
         $this->assertStringContainsString('@keydown.home', $tabs);

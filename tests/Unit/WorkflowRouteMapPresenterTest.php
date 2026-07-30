@@ -281,6 +281,42 @@ class WorkflowRouteMapPresenterTest extends TestCase
         $this->assertSame('failed', $this->node($map, 'terminal::fail')['status']);
     }
 
+    public function test_pending_runtime_focus_uses_current_step_when_task_keys_repeat(): void
+    {
+        $first = $this->step(61, 'first', 10, [
+            $this->task('shared', 10),
+        ]);
+        $second = $this->step(62, 'second', 20, [
+            $this->task('origin', 10),
+            $this->task('shared', 20),
+        ]);
+        $workflow = $this->workflow($first, $second);
+        $run = $this->workflowRun($workflow, $second, [
+            'next_task_key' => 'shared',
+            'next_task_route_outcome' => 'success',
+            'next_task_route_source_key' => 'origin',
+            'next_task_logical_outcome' => 'success',
+            'next_task_route_disposition' => 'continue',
+        ], [
+            $this->stepRun(701, 62, 'running', [
+                ['key' => 'origin', 'status' => 'completed'],
+            ]),
+        ]);
+
+        $map = (new WorkflowRouteMapPresenter)->present(
+            $workflow,
+            $run,
+            WorkflowRouteMapPresenter::MODE_COMBINED,
+        );
+
+        $this->assertFalse($this->node($map, 'first::shared')['active']);
+        $this->assertTrue($this->node($map, 'second::shared')['active']);
+
+        $pending = $this->edge($map, 'second::origin', 'second::shared', 'success');
+        $this->assertTrue($pending['pending']);
+        $this->assertFalse($pending['executed']);
+    }
+
     public function test_unknown_mode_is_rejected(): void
     {
         $this->expectException(InvalidArgumentException::class);

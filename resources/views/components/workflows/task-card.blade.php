@@ -36,7 +36,7 @@
         </div>
         @isset($actions)
             <div class="relative shrink-0" x-data="{ open: false }">
-                <button type="button" x-on:click.stop="open = ! open" x-bind:aria-expanded="open" class="flex h-7 w-7 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-900" aria-label="Taskaktionen">
+                <button type="button" x-on:click.stop="open = ! open" x-bind:aria-expanded="open" class="ff-task-card-control flex h-7 w-7 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-900" aria-label="Taskaktionen">
                     <svg class="h-4 w-4" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="8" r="1.25"></circle><circle cx="8" cy="8" r="1.25"></circle><circle cx="13" cy="8" r="1.25"></circle></svg>
                 </button>
                 <div x-cloak x-show="open" x-transition.origin.top.right x-on:click.stop x-on:click.outside="open = false" class="ff-menu absolute right-0 z-30 mt-1 w-36 p-1">

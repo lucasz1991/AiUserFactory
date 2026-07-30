@@ -95,6 +95,10 @@ class WorkflowRouteMarkupTest extends TestCase
         $this->assertStringContainsString('WorkflowRouteMapPresenter::class', $source);
         $this->assertStringContainsString('WorkflowRouteMapPresenter::MODE_COMBINED', $source);
         $this->assertStringContainsString('arrow-runtime', $source);
+        $this->assertStringContainsString('arrow-partial', $source);
+        $this->assertStringContainsString('arrow-timeout', $source);
+        $this->assertStringContainsString("'partial' => 'bg-amber-50", $source);
+        $this->assertStringContainsString("'timeout' => 'bg-violet-50", $source);
         $this->assertStringContainsString('data-minimap-node="terminal::end"', $source);
         $this->assertStringContainsString('data-minimap-node="terminal::fail"', $source);
         $this->assertStringContainsString('Str::slug($mapInstance)', $source);
@@ -103,6 +107,18 @@ class WorkflowRouteMarkupTest extends TestCase
         $this->assertStringNotContainsString('aria-selected=', $source);
         $this->assertStringContainsString('min-h-11 cursor-pointer touch-manipulation', $source);
         $this->assertStringContainsString("in_array(\$outcome, ['failed', 'timeout'], true) && is_array(\$task['on_error'] ?? null)", $source);
+    }
+
+    public function test_test_window_shows_selectable_definition_map_before_first_run(): void
+    {
+        $source = file_get_contents(dirname(__DIR__, 2).'/resources/views/livewire/admin/network/workflow-studio/browser.blade.php');
+
+        $this->assertStringContainsString('@if($run)', $source);
+        $this->assertStringContainsString('<x-workflows.minimap', $source);
+        $this->assertStringContainsString(':workflow="$workflow"', $source);
+        $this->assertStringContainsString(':selectable-tasks="! $autonomousMode"', $source);
+        $this->assertStringContainsString('initial-zoom="overview"', $source);
+        $this->assertStringContainsString('Doppelklick öffnet direkt die gemeinsamen Task-Einstellungen.', $source);
     }
 
     private function alpineDefinitionContaining(string $source, string $needle): string

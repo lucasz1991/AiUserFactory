@@ -8,10 +8,15 @@
     'rows' => 3,
     'help' => '',
     'wireKey' => null,
+    'idSuffix' => '',
 ])
 
 @php
-    $fieldId = 'workflow-selector-'.\Illuminate\Support\Str::slug((string) $model).'-'.substr(md5((string) $model), 0, 8);
+    $idScope = \Illuminate\Support\Str::slug((string) $idSuffix);
+    $fieldIdentity = (string) $model.'|'.$idScope;
+    $fieldId = 'workflow-selector-'.\Illuminate\Support\Str::slug((string) $model)
+        .($idScope !== '' ? '-'.$idScope : '')
+        .'-'.substr(md5($fieldIdentity), 0, 8);
     $helpId = $fieldId.'-help';
     $statusId = $fieldId.'-status';
     $isTextarea = $type === 'textarea';
@@ -91,7 +96,8 @@
         <div class="relative shrink-0" x-on:click.outside="closeHelp()">
             <button
                 type="button"
-                class="inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 bg-white text-sm font-black text-slate-600 shadow-sm transition hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700 sm:h-8 sm:w-8"
+                data-workflow-selector-help-trigger
+                class="inline-flex h-11 w-11 items-center justify-center rounded-full border border-slate-200 bg-white text-sm font-black text-slate-600 shadow-sm transition hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700 sm:h-8 sm:w-8"
                 x-on:click="toggleHelp()"
                 x-bind:aria-expanded="helpOpen.toString()"
                 aria-controls="{{ $helpId }}"
@@ -111,7 +117,7 @@
                         <p class="font-bold text-white">{{ $syntaxHelp['title'] }}</p>
                         <p class="mt-1 text-slate-300">{{ $syntaxHelp['summary'] }}</p>
                     </div>
-                    <button type="button" x-on:click="closeHelp()" class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-lg text-slate-400 hover:bg-white/10 hover:text-white" aria-label="Syntaxhilfe schliessen">&times;</button>
+                    <button type="button" x-on:click="closeHelp()" data-workflow-selector-help-close class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-lg text-slate-400 hover:bg-white/10 hover:text-white sm:h-8 sm:w-8" aria-label="Syntaxhilfe schliessen">&times;</button>
                 </div>
                 <div class="mt-3 space-y-1.5">
                     @foreach($syntaxHelp['examples'] as $example)

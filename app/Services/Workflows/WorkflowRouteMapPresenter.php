@@ -91,7 +91,7 @@ final class WorkflowRouteMapPresenter
         $stepNodeByAction = [];
         $stepByAction = [];
         $tasksByAction = [];
-        $taskActionByKey = [];
+        $taskActionsByKey = [];
         $enabledActions = [];
 
         foreach ($steps as $stepIndex => $step) {
@@ -128,7 +128,10 @@ final class WorkflowRouteMapPresenter
             foreach ($tasks as $taskIndex => $task) {
                 $taskKey = $this->taskKey($task, $step, $taskIndex);
                 $taskNode = $action.'::'.$taskKey;
-                $taskActionByKey[$taskKey] ??= $action;
+                $taskActionsByKey[$taskKey] ??= [];
+                if (! in_array($action, $taskActionsByKey[$taskKey], true)) {
+                    $taskActionsByKey[$taskKey][] = $action;
+                }
 
                 $nodes[$taskNode] = [
                     'id' => $taskNode,
@@ -195,7 +198,7 @@ final class WorkflowRouteMapPresenter
             'step_node_by_action' => $stepNodeByAction,
             'step_by_action' => $stepByAction,
             'tasks_by_action' => $tasksByAction,
-            'task_action_by_key' => $taskActionByKey,
+            'task_actions_by_key' => $taskActionsByKey,
             'enabled_actions' => $enabledActions,
         ];
     }
@@ -418,7 +421,7 @@ final class WorkflowRouteMapPresenter
             }
         }
 
-        $pending = $this->pendingRuntimeEdge($context, $graph);
+        $pending = $this->pendingRuntimeEdge($context, $graph, $run);
         if ($pending !== null) {
             $key = $this->edgeMatchKey($pending['source'], $pending['target'], $pending['outcome']);
             if (isset($grouped[$key])) {
@@ -555,7 +558,13 @@ final class WorkflowRouteMapPresenter
         }
 
         $pendingTaskKey = trim((string) ($context['next_task_key'] ?? ''));
-        $pendingTaskAction = $this->actionForTaskKey($pendingTaskKey, $graph);
+        $activeStepAction = $this->actionForStepId($activeStepId, $graph);
+        $contextStepAction = trim((string) ($context['next_step_action_key'] ?? ''));
+        $pendingTaskAction = $this->actionForTaskKey(
+            $pendingTaskKey,
+            $graph,
+            $contextStepAction !== '' ? $contextStepAction : $activeStepAction,
+        );
 
         foreach ($nodes as $nodeId => $node) {
             if ($node['kind'] === 'step') {
@@ -723,7 +732,7 @@ final class WorkflowRouteMapPresenter
      * @param  array<string, mixed>  $graph
      * @return array<string, mixed>|null
      */
-    private function pendingRuntimeEdge(array $context, array $graph): ?array
+    private function pendingRuntimeEdge(array $context, array $graph, WorkflowRun $run): ?array
     {
         $targetTask = trim((string) ($context['next_task_key'] ?? ''));
         $outcome = strtolower(trim((string) ($context['next_task_route_outcome'] ?? '')));
@@ -734,8 +743,11 @@ final class WorkflowRouteMapPresenter
             return null;
         }
 
-        $targetAction = $targetAction !== '' ? $targetAction : $this->actionForTaskKey($targetTask, $graph);
-        $sourceAction = $this->actionForTaskKey($sourceTask, $graph);
+        $currentAction = $this->actionForStepId((int) ($run->current_workflow_step_id ?? 0), $graph);
+        $targetAction = $targetAction !== ''
+            ? $targetAction
+            : $this->actionForTaskKey($targetTask, $graph, $currentAction);
+        $sourceAction = $this->actionForTaskKey($sourceTask, $graph, $targetAction);
         $sourceAction = $sourceAction !== '' ? $sourceAction : $targetAction;
 
         if ($sourceAction === '' || $targetAction === '') {
@@ -880,20 +892,55 @@ final class WorkflowRouteMapPresenter
             return strstr((string) $graph['step_node_by_id'][$stepId], '::*', true) ?: '';
         }
 
+        $explicitAction = trim((string) (
+            $route['_source_action_key']
+            ?? $event['workflow_step_action_key']
+            ?? $event['step_action_key']
+            ?? ''
+        ));
+        if ($explicitAction !== '' && isset($graph['step_node_by_action'][$explicitAction])) {
+            return $explicitAction;
+        }
+
         $sourceTask = trim((string) ($route['_source_card_key'] ?? ''));
         if ($sourceTask !== '') {
             return $this->actionForTaskKey($sourceTask, $graph);
         }
 
-        return trim((string) ($event['workflow_step_action_key'] ?? $event['step_action_key'] ?? ''));
+        return '';
     }
 
     /**
      * @param  array<string, mixed>  $graph
      */
-    private function actionForTaskKey(string $taskKey, array $graph): string
+    private function actionForTaskKey(string $taskKey, array $graph, string $preferredAction = ''): string
     {
-        return $taskKey !== '' ? (string) ($graph['task_action_by_key'][$taskKey] ?? '') : '';
+        if ($taskKey === '') {
+            return '';
+        }
+
+        if ($preferredAction !== '' && isset($graph['nodes'][$preferredAction.'::'.$taskKey])) {
+            return $preferredAction;
+        }
+
+        $actions = array_values(array_unique(array_filter(
+            (array) ($graph['task_actions_by_key'][$taskKey] ?? []),
+            fn (mixed $action): bool => is_string($action) && $action !== '',
+        )));
+
+        return count($actions) === 1 ? $actions[0] : '';
+    }
+
+    /**
+     * @param  array<string, mixed>  $graph
+     */
+    private function actionForStepId(int $stepId, array $graph): string
+    {
+        if ($stepId <= 0 || ! isset($graph['step_node_by_id'][$stepId])) {
+            return '';
+        }
+
+        return strstr((string) $graph['step_node_by_id'][$stepId], '::*', true) ?: '';
     }
 
     /**

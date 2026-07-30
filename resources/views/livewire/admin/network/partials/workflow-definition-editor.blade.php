@@ -44,16 +44,24 @@
             const stepId = Number(detail?.stepId || 0);
             const taskKey = String(detail?.taskKey || '');
 
-            if (!stepId || !taskKey) return;
+            if (!stepId) return;
 
             await $wire.selectOverviewTask(stepId, taskKey);
             this.mobilePanel = 'canvas';
-            this.focusedTask = `${stepId}::${taskKey}`;
+            this.focusedTask = taskKey ? `${stepId}::${taskKey}` : '';
             this.$nextTick(() => {
-                const target = Array.from(this.$root.querySelectorAll('[data-workflow-task-key]'))
-                    .find((node) => node.dataset.workflowTaskKey === taskKey && Number(node.closest('[data-workflow-step-id]')?.dataset.workflowStepId || 0) === stepId);
-                this.activeRouteNode = target?.dataset.workflowTaskNode || '';
+                const stepTarget = Array.from(this.$root.querySelectorAll('[data-workflow-step-id]'))
+                    .find((node) => Number(node.dataset.workflowStepId || 0) === stepId);
+                const taskTarget = taskKey
+                    ? Array.from(stepTarget?.querySelectorAll('[data-workflow-task-key]') || [])
+                        .find((node) => node.dataset.workflowTaskKey === taskKey)
+                    : null;
+                const target = taskTarget || stepTarget;
+                this.activeRouteNode = taskTarget?.dataset.workflowTaskNode
+                    || stepTarget?.querySelector('[data-workflow-route-node]')?.dataset.workflowRouteNode
+                    || '';
                 target?.scrollIntoView({ behavior: this.scrollBehavior(), block: 'nearest', inline: 'center' });
+                target?.focus({ preventScroll: true });
                 this.queueRouteRefresh();
             });
         },
@@ -139,7 +147,7 @@
             <nav class="ff-task-group-rail shrink-0 overflow-x-auto overscroll-x-contain border-b border-slate-200 bg-slate-50 px-3 py-3 [scrollbar-width:none]" aria-label="Task-Gruppen">
                 <div class="flex min-w-max items-center gap-1.5" role="group" aria-label="Bibliothek filtern">
                     @if($searchActive)
-                        <span class="inline-flex min-h-10 items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3 text-[11px] font-bold text-blue-800">
+                        <span class="inline-flex min-h-11 items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3 text-[11px] font-bold text-blue-800">
                             Alle Treffer
                             <span class="rounded-md bg-white px-1.5 py-0.5 font-mono text-[10px]">{{ $visibleTaskDefinitions->count() }}</span>
                         </span>
@@ -150,7 +158,7 @@
                             wire:click="$set('activeTaskGroup', @js($taskGroup))"
                             x-on:click="$el.scrollIntoView({ block: 'nearest', inline: 'center', behavior: scrollBehavior() })"
                             aria-pressed="{{ ! $searchActive && $activeTaskGroup === $taskGroup ? 'true' : 'false' }}"
-                            class="inline-flex min-h-10 items-center gap-2 whitespace-nowrap rounded-xl border px-3 text-[11px] font-bold transition {{ ! $searchActive && $activeTaskGroup === $taskGroup ? 'border-blue-200 bg-blue-50 text-blue-800 shadow-sm' : 'border-transparent bg-white text-slate-600 hover:border-slate-200 hover:text-slate-950' }}"
+                            class="inline-flex min-h-11 items-center gap-2 whitespace-nowrap rounded-xl border px-3 text-[11px] font-bold transition {{ ! $searchActive && $activeTaskGroup === $taskGroup ? 'border-blue-200 bg-blue-50 text-blue-800 shadow-sm' : 'border-transparent bg-white text-slate-600 hover:border-slate-200 hover:text-slate-950' }}"
                         >
                             {{ data_get($taskGroupMeta, $taskGroup.'.short_label', $taskGroupLabels[$taskGroup] ?? $taskGroup) }}
                             <span class="rounded-md bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-500">{{ $taskGroupCounts->get($taskGroup, 0) }}</span>
@@ -266,7 +274,7 @@
                         type="button"
                         x-on:click="showRoutes = !showRoutes; $nextTick(() => queueRouteRefresh())"
                         x-bind:aria-pressed="showRoutes"
-                        class="inline-flex min-h-10 items-center rounded-xl border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 transition hover:border-blue-300 hover:text-blue-700"
+                        class="inline-flex min-h-11 items-center rounded-xl border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 transition hover:border-blue-300 hover:text-blue-700"
                         x-text="showRoutes ? 'Linien ausblenden' : 'Linien einblenden'"
                     ></button>
                     <button type="button" wire:click="$set('showAddStepModal', true)" @disabled(! $canEdit) class="ff-action-trigger ff-action-trigger--primary inline-flex h-10 items-center gap-2 px-3 text-xs font-bold disabled:cursor-not-allowed disabled:opacity-40">
@@ -510,15 +518,15 @@
         <x-slot name="title">
             <div><span class="text-base font-semibold text-slate-950">Task einsetzen</span><p class="mt-1 text-xs font-normal text-slate-500">Parameter, Browserfenster sowie Erfolgs- und Fehlerwege vor dem Einfügen festlegen.</p></div>
         </x-slot>
-        <x-slot name="content">@include('livewire.admin.network.partials.workflow-task-form', ['mode' => 'create', 'steps' => $steps, 'taskDefinitions' => $taskDefinitions])</x-slot>
+        <x-slot name="content">@include('livewire.admin.network.partials.workflow-task-form', ['mode' => 'create', 'steps' => $steps, 'taskDefinitions' => $taskDefinitions, 'formInstance' => $editorInstance])</x-slot>
         <x-slot name="footer">
             <button type="button" wire:click="closeAddTaskModal" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">Abbrechen</button>
-            <button type="button" x-on:click.prevent="const source = document.querySelector('[data-workflow-task-mailbox-source=&quot;newTask&quot;]')?.value || 'person'; $wire.addTaskCard(source);" class="ml-2 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-cyan-500">Task einsetzen</button>
+            <button type="button" x-on:click.prevent="const source = $el.closest('.jetstream-modal')?.querySelector('[data-workflow-task-mailbox-source=&quot;newTask&quot;]')?.value || 'person'; $wire.addTaskCard(source);" class="ml-2 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-cyan-500">Task einsetzen</button>
         </x-slot>
     </x-ui.dialog-modal>
     @endunless
 
-    <x-ui.dialog-modal wire:model="showEditTaskModal" maxWidth="5xl">
+    <x-ui.dialog-modal :id="$routeMarkerId.'-edit-task-modal'" wire:model="showEditTaskModal" maxWidth="5xl">
         <x-slot name="title">
             <div><span class="text-base font-semibold text-slate-950">Task bearbeiten</span><p class="mt-1 text-xs font-normal text-slate-500">{{ $revisionMode ? 'Im pausierten Testlauf werden Änderungen als neue Workflow-Revision gespeichert.' : 'Task-Einstellungen, Datenquellen und Routen an einer Stelle bearbeiten.' }}</p></div>
         </x-slot>
@@ -542,7 +550,7 @@
                     data-workflow-task-form-readonly
                 @endif
             >
-                @include('livewire.admin.network.partials.workflow-task-form', ['mode' => 'edit', 'steps' => $steps, 'taskDefinitions' => $taskDefinitions])
+                @include('livewire.admin.network.partials.workflow-task-form', ['mode' => 'edit', 'steps' => $steps, 'taskDefinitions' => $taskDefinitions, 'formInstance' => $editorInstance])
             </div>
         </x-slot>
         <x-slot name="footer">
@@ -561,7 +569,7 @@
                     </button>
                 @endif
             @else
-                <button type="button" x-on:click.prevent="const source = document.querySelector('[data-workflow-task-mailbox-source=&quot;editingTask&quot;]')?.value || 'person'; $wire.saveEditTaskCard(source);" class="ml-2 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-cyan-500">{{ $revisionMode ? 'Speichern & Revision erstellen' : 'Speichern' }}</button>
+                <button type="button" x-on:click.prevent="const source = $el.closest('.jetstream-modal')?.querySelector('[data-workflow-task-mailbox-source=&quot;editingTask&quot;]')?.value || 'person'; $wire.saveEditTaskCard(source);" class="ml-2 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-cyan-500">{{ $revisionMode ? 'Speichern & Revision erstellen' : 'Speichern' }}</button>
             @endif
         </x-slot>
     </x-ui.dialog-modal>

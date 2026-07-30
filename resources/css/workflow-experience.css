@@ -1218,6 +1218,20 @@
     min-height: 44px !important;
   }
 
+  [data-workflow-definition-editor] :is(button, select, [role="tab"]) {
+    min-height: 44px !important;
+  }
+
+  [data-workflow-definition-editor] :is(
+    .ff-step-header-control,
+    .ff-task-card-control,
+    [data-workflow-selector-help-trigger],
+    [data-workflow-selector-help-close]
+  ) {
+    min-width: 44px !important;
+    min-height: 44px !important;
+  }
+
   [data-studio-task-editor] .ff-catalog-card:hover {
     transform: none;
   }
@@ -1234,6 +1248,20 @@
   [data-workflow-studio-shell] .ff-tool-button,
   [data-workflow-studio-shell] .ff-segmented-control > button,
   [data-workflow-studio-shell] .ff-run-island > button {
+    min-height: 44px !important;
+  }
+
+  [data-workflow-definition-editor] :is(button, select, [role="tab"]) {
+    min-height: 44px !important;
+  }
+
+  [data-workflow-definition-editor] :is(
+    .ff-step-header-control,
+    .ff-task-card-control,
+    [data-workflow-selector-help-trigger],
+    [data-workflow-selector-help-close]
+  ) {
+    min-width: 44px !important;
     min-height: 44px !important;
   }
 
