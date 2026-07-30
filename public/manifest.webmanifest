@@ -1,0 +1,38 @@
+{
+    "id": "./",
+    "name": "Factory AI · User Factory",
+    "short_name": "Factory AI",
+    "description": "Factory AI - User Factory fuer Browser-Sessions und Automationen.",
+    "lang": "de",
+    "dir": "ltr",
+    "start_url": "./?source=pwa",
+    "scope": "./",
+    "display": "standalone",
+    "background_color": "#081b2d",
+    "theme_color": "#2f5c9e",
+    "orientation": "any",
+    "categories": [
+        "business",
+        "productivity"
+    ],
+    "icons": [
+        {
+            "src": "pwa-icons/pwa-192.png",
+            "sizes": "192x192",
+            "type": "image/png",
+            "purpose": "any"
+        },
+        {
+            "src": "pwa-icons/pwa-512.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "any"
+        },
+        {
+            "src": "pwa-icons/pwa-maskable-512.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "maskable"
+        }
+    ]
+}

@@ -71,10 +71,14 @@ function setDesktopSidebarExpanded(expanded) {
     }
 
     const next = Boolean(expanded);
+    const current = body.dataset.sidebarExpanded === 'true';
     body.dataset.sidebarExpanded = next ? 'true' : 'false';
     body.dataset.sidebarSize = next ? 'lg' : 'sm';
     syncToggleState();
-    queueLayoutChanged();
+
+    if (current !== next) {
+        queueLayoutChanged();
+    }
 }
 
 function setMobileSidebarOpen(open) {
@@ -84,9 +88,14 @@ function setMobileSidebarOpen(open) {
         return;
     }
 
-    body.classList.toggle('sidebar-enable', Boolean(open));
+    const next = Boolean(open);
+    const current = body.classList.contains('sidebar-enable');
+    body.classList.toggle('sidebar-enable', next);
     syncToggleState();
-    queueLayoutChanged();
+
+    if (current !== next) {
+        queueLayoutChanged();
+    }
 }
 
 function sidebarHoveredOrFocused() {
@@ -340,7 +349,9 @@ function syncResponsiveMode() {
     body.dataset.sidebarCollapsible = desktop ? 'true' : 'false';
 
     if (desktop) {
-        setMobileSidebarOpen(false);
+        if (body.classList.contains('sidebar-enable')) {
+            setMobileSidebarOpen(false);
+        }
         body.dataset.sidebarSize = body.dataset.sidebarExpanded === 'true' ? 'lg' : 'sm';
     } else {
         clearSidebarTimers();
