@@ -198,7 +198,7 @@ class WorkflowManager extends Component
 
     public ?int $revisionStudioSessionId = null;
 
-    public string $activeTaskGroup = 'browser';
+    public string $activeTaskGroup = 'navigation';
 
     public ?int $editingStepId = null;
 
@@ -313,20 +313,19 @@ class WorkflowManager extends Component
             ->get();
         $catalogPersons = $catalog->persons();
         $actions = array_slice($catalog->actions($catalogPersons, $this->actionPersonFilter, $this->actionTypeFilter), 0, 30);
-        $taskDefinitions = collect($taskCatalog->options())
-            ->concat($this->workflowTaskOptions($selectedWorkflow));
+        $taskDefinitions = collect($taskCatalog->arrangeLibraryOptions(
+            collect($taskCatalog->options())
+                ->concat($this->workflowTaskOptions($selectedWorkflow))
+                ->values()
+                ->all(),
+        ));
         $taskGroups = $taskDefinitions
-            ->pluck('kind')
+            ->pluck('library_group')
             ->unique()
-            ->sortBy(function (string $kind): int {
-                $index = array_search($kind, ['browser', 'input', 'wait', 'data', 'workflow'], true);
-
-                return $index === false ? 99 : $index;
-            })
             ->values();
 
         if (! $taskGroups->contains($this->activeTaskGroup)) {
-            $this->activeTaskGroup = (string) ($taskGroups->first() ?? 'browser');
+            $this->activeTaskGroup = (string) ($taskGroups->first() ?? 'navigation');
         }
 
         $runStats = $selectedWorkflow
@@ -350,7 +349,7 @@ class WorkflowManager extends Component
             'taskGroupLabels' => $this->taskGroupLabels(),
             'importableWorkflows' => $this->importableWorkflows($selectedWorkflow),
             'visibleTaskDefinitions' => $taskDefinitions
-                ->where('kind', $this->activeTaskGroup)
+                ->where('library_group', $this->activeTaskGroup)
                 ->values()
                 ->toArray(),
             'summary' => [
@@ -2811,13 +2810,9 @@ class WorkflowManager extends Component
 
     protected function taskGroupLabels(): array
     {
-        return [
-            'browser' => 'Browser',
-            'input' => 'Eingaben',
-            'wait' => 'Warten & Status',
-            'data' => 'Daten',
-            'workflow' => 'Workflows',
-        ];
+        return collect(app(WorkflowTaskCatalog::class)->libraryGroups())
+            ->mapWithKeys(fn (array $group, string $key): array => [$key => (string) ($group['label'] ?? $key)])
+            ->all();
     }
 
     protected function workflowTaskOptions(?Workflow $selectedWorkflow): array

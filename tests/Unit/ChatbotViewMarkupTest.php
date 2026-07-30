@@ -123,7 +123,9 @@ class ChatbotViewMarkupTest extends TestCase
 
     public function test_audio_lifecycle_guards_against_reindexing_cancellation_and_teardown_races(): void
     {
-        $source = file_get_contents(dirname(__DIR__, 2).'/resources/views/livewire/tools/chatbot.blade.php');
+        $root = dirname(__DIR__, 2);
+        $source = file_get_contents($root.'/resources/views/livewire/tools/chatbot.blade.php');
+        $anchorDropdown = file_get_contents($root.'/resources/views/components/ui/dropdown/anchor-dropdown.blade.php');
 
         $this->assertStringContainsString('assistantMessageKey(item) {', $source);
         $this->assertStringNotContainsString('assistantMessageKey(item, index)', $source);
@@ -144,6 +146,13 @@ class ChatbotViewMarkupTest extends TestCase
         $this->assertStringContainsString('recorder.onstop = null;', $source);
         $this->assertStringContainsString('recognition.abort();', $source);
         $this->assertStringContainsString('signal: abortController.signal', $source);
+
+        $this->assertStringContainsString('panel-role="dialog"', $source);
+        $this->assertStringContainsString('aria-haspopup="dialog"', $source);
+        $this->assertStringContainsString('resizeHandler: null', $anchorDropdown);
+        $this->assertStringContainsString("window.removeEventListener('resize', this.resizeHandler)", $anchorDropdown);
+        $this->assertStringContainsString('overflow-y-auto', $anchorDropdown);
+        $this->assertStringContainsString('max-height:calc(100dvh - 16px)', $anchorDropdown);
     }
 
     public function test_chatbot_is_mounted_on_the_standalone_workflow_studio_route(): void

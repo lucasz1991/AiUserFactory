@@ -1,5 +1,6 @@
 @props([
-    'workflowRun',
+    'workflowRun' => null,
+    'workflow' => null,
     'activeStepId' => null,
     'activeTaskKey' => null,
     'selectedStepId' => null,
@@ -7,10 +8,21 @@
     'compact' => false,
     'showHeader' => true,
     'selectableTasks' => false,
+    'zoomable' => false,
+    'initialZoom' => 'detail',
+    'instance' => null,
 ])
 
 @php
-    $workflow = $workflowRun?->workflow;
+    $workflow = $workflow ?: $workflowRun?->workflow;
+    $zoomLevels = [
+        'overview' => 'Übersicht',
+        'standard' => 'Standard',
+        'detail' => 'Detail',
+    ];
+    $initialZoom = array_key_exists((string) $initialZoom, $zoomLevels)
+        ? (string) $initialZoom
+        : ($compact ? 'standard' : 'detail');
     $steps = collect($workflow?->steps ?? [])->values();
     $stepRuns = collect($workflowRun?->stepRuns ?? [])->values();
     $runningStepRun = $stepRuns->first(fn ($stepRun) => in_array($stepRun->status, ['running', 'waiting'], true));
@@ -334,7 +346,8 @@
             return $routeEvent;
         })
         ->all();
-    $mapId = 'workflow-minimap-'.($workflowRun?->id ?? 'preview');
+    $mapInstance = trim((string) ($instance ?: ($workflowRun?->id ? 'run-'.$workflowRun->id : 'workflow-'.$workflow?->id)));
+    $mapId = 'workflow-minimap-'.(\Illuminate\Support\Str::slug($mapInstance) ?: 'preview');
     $activeStep = $stepById->get((int) $activeStepId);
     $activeStepAction = trim((string) ($activeStep?->action_key ?? ''));
     $activeTaskAction = $activeTaskKey !== '' ? $actionKeyForTask($activeTaskKey) : '';
@@ -379,7 +392,7 @@
 @endphp
 
 <div {{ $attributes->merge(['class' => 'space-y-3']) }}>
-    @if(! $workflowRun || ! $workflow)
+    @if(! $workflow)
         <div class="rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
             Keine Workflow-Daten fuer diesen Prozess gefunden.
         </div>
@@ -388,9 +401,15 @@
             <div class="flex flex-wrap items-center justify-between gap-3">
                 <div class="min-w-0">
                     <div class="truncate text-sm font-semibold text-slate-900">{{ $workflow->name }}</div>
-                    <div class="mt-1 truncate text-xs text-slate-500">Run #{{ $workflowRun->id }} - {{ $workflowRun->status }}</div>
+                    @if($workflowRun)
+                        <div class="mt-1 truncate text-xs text-slate-500">Run #{{ $workflowRun->id }} - {{ $workflowRun->status }}</div>
+                    @else
+                        <div class="mt-1 truncate text-xs text-slate-500">Workflow-Definition · {{ $steps->count() }} Listen</div>
+                    @endif
                 </div>
-                <x-workflows.status-badge :status="$workflowRun->status" />
+                @if($workflowRun)
+                    <x-workflows.status-badge :status="$workflowRun->status" />
+                @endif
             </div>
         @endif
 
@@ -402,6 +421,7 @@
                 routeLines: [],
                 hoveredRouteNode: '',
                 activeRouteNode: @js($activeRouteNode),
+                zoomLevel: @js($initialZoom),
                 markerIds: {
                     success: @js($mapId.'-arrow-success'),
                     failed: @js($mapId.'-arrow-failed'),
@@ -416,11 +436,26 @@
                     window.addEventListener('resize', this._refreshMinimapRoutes);
                     document.addEventListener('livewire:updated', this._refreshMinimapRoutes);
                     document.addEventListener('livewire:navigated', this._refreshMinimapRoutes);
+                    if (window.ResizeObserver) {
+                        this._minimapResizeObserver = new ResizeObserver(() => this.refreshRouteLines());
+                        this._minimapResizeObserver.observe(this.$refs.minimapSurface);
+                    }
                 },
                 destroy() {
                     window.removeEventListener('resize', this._refreshMinimapRoutes);
                     document.removeEventListener('livewire:updated', this._refreshMinimapRoutes);
                     document.removeEventListener('livewire:navigated', this._refreshMinimapRoutes);
+                    this._minimapResizeObserver?.disconnect();
+                },
+                setZoom(level) {
+                    if (!['overview', 'standard', 'detail'].includes(level) || this.zoomLevel === level) {
+                        return;
+                    }
+
+                    this.zoomLevel = level;
+                    this.$dispatch('workflow-minimap-zoom-changed', { level });
+                    this.$nextTick(() => this.refreshRouteLines());
+                    setTimeout(() => this.refreshRouteLines(), 80);
                 },
                 routeFocusNode() {
                     return this.hoveredRouteNode || this.activeRouteNode || '';
@@ -656,6 +691,27 @@
             data-workflow-preview-scrollbar
             class="relative overflow-x-auto pb-2"
         >
+            @if($zoomable)
+                <div
+                    class="sticky left-0 top-0 z-30 mb-2 flex w-max max-w-full items-center gap-1 rounded-xl border border-slate-200 bg-white/95 p-1 shadow-sm backdrop-blur"
+                    role="group"
+                    aria-label="Zoomstufe Workflow-Karte"
+                    data-workflow-minimap-zoom
+                >
+                    @foreach($zoomLevels as $zoomKey => $zoomLabel)
+                        <button
+                            type="button"
+                            x-on:click="setZoom(@js($zoomKey))"
+                            x-bind:aria-pressed="zoomLevel === @js($zoomKey)"
+                            x-bind:class="zoomLevel === @js($zoomKey) ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'"
+                            class="inline-flex min-h-11 items-center rounded-lg px-3 text-[11px] font-bold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+                            data-workflow-minimap-zoom-level="{{ $zoomKey }}"
+                        >{{ $zoomLabel }}</button>
+                    @endforeach
+                    <span class="sr-only" aria-live="polite" x-text="`Zoomstufe ${zoomLevel}`"></span>
+                </div>
+            @endif
+
             <svg
                 class="pointer-events-none absolute left-0 top-0 z-20"
                 x-bind:width="routeOverlay.width"
@@ -680,7 +736,11 @@
                 <g x-html="routeSvgMarkup"></g>
             </svg>
 
-            <div class="relative z-10 flex min-w-max items-start gap-0 pt-7">
+            <div
+                class="relative z-10 flex min-w-max items-start gap-0"
+                x-bind:class="zoomLevel === 'overview' ? 'pt-3' : (zoomLevel === 'standard' ? 'pt-5' : 'pt-7')"
+                data-workflow-minimap-stage
+            >
                 @foreach($steps as $step)
                     @php
                         $stepRun = $stepRunByStep->get($step->id);
@@ -695,21 +755,29 @@
                     @endphp
 
                     <div class="flex items-start">
-                        <div class="w-56 shrink-0" data-minimap-step-column="{{ $step->action_key }}">
+                        <div
+                            class="shrink-0"
+                            x-bind:class="zoomLevel === 'overview' ? 'w-36' : (zoomLevel === 'standard' ? 'w-48' : 'w-56')"
+                            data-minimap-step-column="{{ $step->action_key }}"
+                        >
                             <div
                                 data-minimap-node="{{ $stepNode }}"
                                 data-workflow-minimap-active-step="{{ $isActiveStep ? 'true' : 'false' }}"
                                 x-on:mouseenter="setHoveredRouteNode(@js($stepNode))"
                                 x-on:mouseleave="setHoveredRouteNode('')"
-                                class="mb-2 flex items-center justify-between gap-2 rounded px-1 py-1"
+                                class="flex items-center justify-between gap-2 rounded px-1 py-1"
+                                x-bind:class="zoomLevel === 'overview' ? 'mb-1' : 'mb-2'"
                             >
-                                <div class="truncate text-xs font-semibold text-slate-800">{{ $step->name }}</div>
+                                <div
+                                    class="truncate font-semibold text-slate-800"
+                                    x-bind:class="zoomLevel === 'overview' ? 'text-[9px]' : 'text-xs'"
+                                >{{ $step->name }}</div>
                                 @if($stepRun?->status)
-                                    <span class="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold {{ $stepTone }}">
+                                    <span x-show="zoomLevel !== 'overview'" class="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold {{ $stepTone }}">
                                         {{ $stepRun->status }}
                                     </span>
                                 @elseif($stepRouteBadge)
-                                    <span class="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 {{ $routeBadgeClass($stepRouteBadge) }}">
+                                    <span x-show="zoomLevel !== 'overview'" class="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 {{ $routeBadgeClass($stepRouteBadge) }}">
                                         {{ $stepRouteBadge['label'] }}
                                     </span>
                                 @endif
@@ -737,8 +805,11 @@
 
                                     @if(! $loop->first)
                                         <div
-                                            class="ml-4 h-4 transition-all {{ $lineTone }}"
+                                            class="ml-4 transition-all {{ $lineTone }}"
                                             x-bind:class="{
+                                                'h-2': zoomLevel === 'overview',
+                                                'h-3': zoomLevel === 'standard',
+                                                'h-4': zoomLevel === 'detail',
                                                 'opacity-50': routeFocusNode() && ![@js($previousTaskNode), @js($taskNode)].includes(routeFocusNode()),
                                                 'opacity-100 w-0.5': routeFocusNode() && [@js($previousTaskNode), @js($taskNode)].includes(routeFocusNode()),
                                                 'w-px': !routeFocusNode() || ![@js($previousTaskNode), @js($taskNode)].includes(routeFocusNode()),
@@ -761,18 +832,24 @@
                                              x-on:dblclick.stop="$dispatch('workflow-preview-task-edit-requested', { workflowId: {{ (int) $workflow->id }}, stepId: {{ (int) $step->id }}, taskKey: @js($taskKey) })"
                                              title="Task auswählen; Doppelklick zum Bearbeiten"
                                          @endif
-                                         class="relative rounded-md border px-2 py-1.5 text-[11px] shadow-sm {{ $tone }} {{ $isTaskSelected ? 'ring-2 ring-sky-500 ring-offset-2 ring-offset-white' : '' }} {{ $selectableTasks ? 'cursor-pointer transition hover:-translate-y-px hover:shadow-md focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2' : '' }}"
+                                         @if($selectableTasks)
+                                             aria-label="{{ $step->name }}: {{ $task['title'] ?? 'Task' }} ({{ $taskStatus }})"
+                                             aria-selected="{{ $isTaskSelected ? 'true' : 'false' }}"
+                                             x-on:keydown.space.prevent.stop="$dispatch('workflow-preview-task-selected', { workflowId: {{ (int) $workflow->id }}, stepId: {{ (int) $step->id }}, taskKey: @js($taskKey) })"
+                                         @endif
+                                         class="relative rounded-md border shadow-sm {{ $tone }} {{ $isTaskSelected ? 'ring-2 ring-sky-500 ring-offset-2 ring-offset-white' : '' }} {{ $selectableTasks ? 'cursor-pointer transition hover:-translate-y-px hover:shadow-md focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2' : '' }}"
+                                         x-bind:class="zoomLevel === 'overview' ? 'px-1.5 py-1 text-[9px]' : (zoomLevel === 'standard' ? 'px-2 py-1 text-[10px]' : 'px-2 py-1.5 text-[11px]')"
                                      >
                                          @if($isTaskSelected)
                                              <span class="absolute inset-y-1.5 -left-1 w-1 rounded-full bg-sky-500" aria-hidden="true"></span>
                                          @endif
                                         @if($taskRouteBadge)
-                                            <span class="absolute right-1 top-1 rounded-full px-1.5 py-0.5 text-[9px] font-semibold ring-1 {{ $routeBadgeClass($taskRouteBadge) }}">
+                                            <span x-show="zoomLevel !== 'overview'" class="absolute right-1 top-1 rounded-full px-1.5 py-0.5 text-[9px] font-semibold ring-1 {{ $routeBadgeClass($taskRouteBadge) }}">
                                                 {{ $taskRouteBadge['label'] }}
                                             </span>
                                         @endif
                                         <div class="truncate {{ $taskRouteBadge ? 'pr-16' : 'pr-2' }} font-semibold">{{ $task['title'] ?? 'Task' }}</div>
-                                        <div class="mt-0.5 truncate opacity-70">{{ $taskStatus }}</div>
+                                        <div x-show="zoomLevel !== 'overview'" class="mt-0.5 truncate opacity-70">{{ $taskStatus }}</div>
                                     </div>
                                 @empty
                                     <div
@@ -791,8 +868,14 @@
                                 $nextStepAction = trim((string) ($steps->get($loop->index + 1)?->action_key ?? ''));
                             @endphp
                             <div
-                                class="flex h-20 w-12 shrink-0 items-center px-2 transition-opacity"
-                                x-bind:class="routeFocusNode() && !routeFocusBelongsToStep(@js((string) $step->action_key)) && !routeFocusBelongsToStep(@js($nextStepAction)) ? 'opacity-50' : 'opacity-100'"
+                                class="flex h-20 shrink-0 items-center px-2 transition-all"
+                                x-bind:class="{
+                                    'w-7': zoomLevel === 'overview',
+                                    'w-9': zoomLevel === 'standard',
+                                    'w-12': zoomLevel === 'detail',
+                                    'opacity-50': routeFocusNode() && !routeFocusBelongsToStep(@js((string) $step->action_key)) && !routeFocusBelongsToStep(@js($nextStepAction)),
+                                    'opacity-100': !routeFocusNode() || routeFocusBelongsToStep(@js((string) $step->action_key)) || routeFocusBelongsToStep(@js($nextStepAction)),
+                                }"
                             >
                                 <div
                                     class="flex-1 transition-all {{ $connectorTone($stepStatus, $isActiveStep) }}"

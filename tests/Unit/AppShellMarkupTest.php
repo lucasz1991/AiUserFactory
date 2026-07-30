@@ -75,6 +75,62 @@ class AppShellMarkupTest extends TestCase
         $this->assertStringContainsString("'resources/css/app-shell.css'", $master);
     }
 
+    public function test_sidebar_groups_and_mobile_drawer_expose_keyboard_and_focus_contracts(): void
+    {
+        $root = dirname(__DIR__, 2);
+        $group = file_get_contents($root.'/resources/views/components/menu/sidebar-nav-group.blade.php');
+        $script = file_get_contents($root.'/resources/js/app-shell.js');
+        $styles = file_get_contents($root.'/resources/css/app-shell.css');
+
+        $this->assertStringContainsString('<button', $group);
+        $this->assertStringContainsString('type="button"', $group);
+        $this->assertStringContainsString('aria-controls="{{ $groupId }}"', $group);
+        $this->assertStringContainsString('id="{{ $groupId }}"', $group);
+        $this->assertStringNotContainsString('href="#"', $group);
+
+        $this->assertStringContainsString("sidebar.toggleAttribute('inert', hidden)", $script);
+        $this->assertStringContainsString("sidebar.setAttribute('aria-hidden', hidden ? 'true' : 'false')", $script);
+        $this->assertStringContainsString('focusFirstSidebarControl()', $script);
+        $this->assertStringContainsString('restoreFocus: true', $script);
+        $this->assertStringContainsString('desktopSidebarExpandedState', $script);
+        $this->assertStringContainsString('captureDesktopSidebarState()', $script);
+        $this->assertStringContainsString("document.addEventListener('livewire:navigate'", $script);
+        $this->assertStringContainsString('event.defaultPrevented', $script);
+        $this->assertStringNotContainsString("link.dataset.menuActive === 'true'", $script);
+
+        $this->assertMatchesRegularExpression(
+            '/\.ff-sidebar-section\s*\{[^}]*height:\s*0\s*!important/s',
+            $styles,
+        );
+        $this->assertMatchesRegularExpression(
+            '/@media \(max-width: 1023\.98px\).*?\.ff-sidebar-section\s*\{[^}]*height:\s*2\.5rem\s*!important/s',
+            $styles,
+        );
+    }
+
+    public function test_shared_dropdown_escapes_overflow_and_supports_menu_keyboard_navigation(): void
+    {
+        $root = dirname(__DIR__, 2);
+        $dropdown = file_get_contents($root.'/resources/views/components/ui/dropdown.blade.php');
+        $dropdownLink = file_get_contents($root.'/resources/views/components/ui/dropdown-link.blade.php');
+        $workflowActions = file_get_contents($root.'/resources/views/components/workflows/actions-dropdown.blade.php');
+
+        $this->assertStringContainsString('x-teleport="body"', $dropdown);
+        $this->assertStringContainsString('x-anchor.{{ $anchorPlacement }}.offset.8.flip.shift', $dropdown);
+        $this->assertStringContainsString('data-ff-dropdown-root', $dropdown);
+        $this->assertStringContainsString('data-ff-dropdown-panel', $dropdown);
+        $this->assertStringContainsString('role="menu"', $dropdown);
+        $this->assertStringContainsString('@keydown.arrow-down.prevent.stop', $dropdown);
+        $this->assertStringContainsString('@keydown.arrow-up.prevent.stop', $dropdown);
+        $this->assertStringContainsString('@keydown.escape.prevent.stop="hide(true)"', $dropdown);
+        $this->assertStringContainsString('focus({ preventScroll: true })', $dropdown);
+
+        $this->assertStringContainsString("'role' => 'menuitem'", $dropdownLink);
+        $this->assertStringContainsString('aria-haspopup="menu"', $workflowActions);
+        $this->assertStringContainsString('x-bind:aria-expanded="open.toString()"', $workflowActions);
+        $this->assertStringContainsString('role="menuitem"', $workflowActions);
+    }
+
     public function test_manager_workbench_and_standalone_studio_stay_above_the_shell(): void
     {
         $root = dirname(__DIR__, 2);

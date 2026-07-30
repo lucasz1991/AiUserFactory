@@ -260,10 +260,9 @@ function initActiveMenu() {
                 && pageUrl.startsWith(`${href}/`);
         })
         .sort((left, right) => normalizedUrl(right.href).length - normalizedUrl(left.href).length);
-    const server = links.filter((link) => link.dataset.menuActive === 'true');
     const activeLinks = exact.length > 0
         ? exact
-        : (prefix.length > 0 ? [prefix[0]] : server);
+        : (prefix.length > 0 ? [prefix[0]] : []);
 
     activeLinks.forEach((link) => {
         link.classList.add('active');

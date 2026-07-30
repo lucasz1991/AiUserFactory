@@ -21,11 +21,18 @@ class WorkflowStudioTaskEditor extends WorkflowManager
 
     public string $catalogTargetStepId = '';
 
+    public int $overviewSelectedStepId = 0;
+
+    public string $overviewSelectedTaskKey = '';
+
     public function mount(Workflow $workflow, ?int $studioSessionId = null): void
     {
         $this->selectedWorkflowId = (int) $workflow->getKey();
         $this->studioSessionId = (int) $studioSessionId;
-        $this->catalogTargetStepId = (string) ($workflow->steps()->ordered()->value('id') ?: '');
+        $firstStep = $workflow->steps()->ordered()->first();
+        $this->catalogTargetStepId = (string) ($firstStep?->getKey() ?: '');
+        $this->overviewSelectedStepId = (int) ($firstStep?->getKey() ?: 0);
+        $this->overviewSelectedTaskKey = trim((string) data_get($firstStep?->task_cards, '0.key', ''));
     }
 
     #[On('open-workflow-studio-task-editor')]
@@ -46,7 +53,25 @@ class WorkflowStudioTaskEditor extends WorkflowManager
     {
         if ($this->stepForSelectedWorkflow($stepId)) {
             $this->catalogTargetStepId = (string) $stepId;
+            $this->overviewSelectedStepId = $stepId;
+            $this->overviewSelectedTaskKey = '';
         }
+    }
+
+    public function selectOverviewTask(int $stepId, string $taskKey): void
+    {
+        $taskKey = trim($taskKey);
+        $step = $this->stepForSelectedWorkflow($stepId);
+
+        if (! $step || $taskKey === '' || ! collect($step->task_cards)->contains(
+            fn (array $task): bool => trim((string) ($task['key'] ?? '')) === $taskKey,
+        )) {
+            return;
+        }
+
+        $this->catalogTargetStepId = (string) $stepId;
+        $this->overviewSelectedStepId = $stepId;
+        $this->overviewSelectedTaskKey = $taskKey;
     }
 
     public function prepareCatalogTask(string $taskKey): void
@@ -387,24 +412,25 @@ class WorkflowStudioTaskEditor extends WorkflowManager
     {
         $workflow = $this->selectedWorkflow();
         $steps = $workflow?->steps()->ordered()->get() ?? new Collection;
-        $taskDefinitions = collect(app(WorkflowTaskCatalog::class)->options())
-            ->concat($this->workflowTaskOptions($workflow))
-            ->values();
+        $workflow?->setRelation('steps', $steps);
+        $taskCatalog = app(WorkflowTaskCatalog::class);
+        $taskDefinitions = collect($taskCatalog->arrangeLibraryOptions(
+            collect($taskCatalog->options())
+                ->concat($this->workflowTaskOptions($workflow))
+                ->values()
+                ->all(),
+        ));
         $taskGroups = $taskDefinitions
-            ->pluck('kind')
+            ->pluck('library_group')
             ->unique()
-            ->sortBy(function (string $kind): int {
-                $index = array_search($kind, ['browser', 'input', 'wait', 'data', 'workflow'], true);
-
-                return $index === false ? 99 : $index;
-            })
             ->values();
         if (! $taskGroups->contains($this->activeTaskGroup)) {
-            $this->activeTaskGroup = (string) ($taskGroups->first() ?? 'browser');
+            $this->activeTaskGroup = (string) ($taskGroups->first() ?? 'navigation');
         }
         $search = mb_strtolower(trim($this->taskSearch));
-        $visibleTaskDefinitions = $taskDefinitions
-            ->where('kind', $this->activeTaskGroup)
+        $visibleTaskDefinitions = ($search === ''
+            ? $taskDefinitions->where('library_group', $this->activeTaskGroup)
+            : $taskDefinitions)
             ->filter(function (array $definition) use ($search): bool {
                 if ($search === '') {
                     return true;
@@ -418,15 +444,31 @@ class WorkflowStudioTaskEditor extends WorkflowManager
             })
             ->values();
         $activeRun = WorkflowStudioSession::query()->findOrFail($this->studioSessionId)->activeRun;
+        $selectedOverviewStep = $steps->firstWhere('id', $this->overviewSelectedStepId);
+
+        if (! $selectedOverviewStep) {
+            $selectedOverviewStep = $steps->first();
+            $this->overviewSelectedStepId = (int) ($selectedOverviewStep?->getKey() ?: 0);
+            $this->overviewSelectedTaskKey = '';
+        } elseif ($this->overviewSelectedTaskKey !== '' && ! collect($selectedOverviewStep->task_cards)->contains(
+            fn (array $task): bool => trim((string) ($task['key'] ?? '')) === $this->overviewSelectedTaskKey,
+        )) {
+            $this->overviewSelectedTaskKey = '';
+        }
 
         return view('livewire.admin.network.workflow-studio-task-editor', [
+            'workflow' => $workflow,
             'steps' => $steps,
             'taskDefinitions' => $taskDefinitions,
             'taskGroups' => $taskGroups,
             'taskGroupLabels' => $this->taskGroupLabels(),
+            'taskGroupMeta' => $taskCatalog->libraryGroups(),
+            'taskGroupCounts' => $taskDefinitions->countBy('library_group'),
             'visibleTaskDefinitions' => $visibleTaskDefinitions,
+            'searchActive' => $search !== '',
             'canEdit' => $this->definitionIsEditable($activeRun),
             'runStatus' => $activeRun?->status,
+            'activeRun' => $activeRun,
         ]);
     }
 

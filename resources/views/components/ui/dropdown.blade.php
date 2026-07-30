@@ -132,7 +132,7 @@
             x-transition:leave-start="transform opacity-100 scale-100"
             x-transition:leave-end="transform opacity-0 scale-95"
             class="absolute z-[60] {{ $widthClass }} rounded-md shadow-lg {{ $originClasses }} {{ $dropdownClasses }}"
-            style="display: none;"
+            style="display: none; max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); overflow-y: auto;"
             role="menu"
             data-ff-dropdown-panel
             @click.outside="hide(false)"
