@@ -303,6 +303,9 @@
                             :selected-task-key="$selectedTaskKey"
                             :selectable-tasks="$selectableTasks"
                             :show-header="false"
+                            :zoomable="true"
+                            initial-zoom="standard"
+                            :instance="'run-preview-'.$workflowRun->id"
                         />
                     </div>
                 </div>

@@ -440,6 +440,9 @@ class WorkflowStudioTaskEditor extends WorkflowManager
                     (string) ($definition['label'] ?? ''),
                     (string) ($definition['description'] ?? ''),
                     (string) ($definition['key'] ?? ''),
+                    (string) ($definition['library_group_label'] ?? ''),
+                    (string) ($definition['library_group_short_label'] ?? ''),
+                    (string) ($definition['library_group_description'] ?? ''),
                 ])), $search);
             })
             ->values();

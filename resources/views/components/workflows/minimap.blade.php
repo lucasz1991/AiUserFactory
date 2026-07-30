@@ -160,7 +160,7 @@
 
         return 'forward';
     };
-    $routeEvents = collect(data_get($workflowRun?->context_json, 'route_history', []))
+    $runtimeRouteEvents = collect(data_get($workflowRun?->context_json, 'route_history', []))
         ->filter(fn ($event) => is_array($event) && is_array(data_get($event, 'route')))
         ->map(function (array $event, int $index) use ($stepById, $stepByAction, $firstTaskNodeByStep, $taskLabelByNode, $routeDirection) {
             $route = data_get($event, 'route', []);
@@ -230,6 +230,125 @@
             ];
         })
         ->filter()
+        ->values();
+    $configuredRouteEvents = collect();
+
+    if (! $workflowRun) {
+        $appendConfiguredRoute = static function (
+            string $sourceNode,
+            string $sourceAction,
+            mixed $route,
+            string $outcome,
+        ) use (&$configuredRouteEvents, $firstTaskNodeByStep, $taskLabelByNode, $stepByAction, $routeDirection): void {
+            if (! is_array($route)) {
+                return;
+            }
+
+            $routeType = trim((string) data_get($route, 'type', ''));
+            $targetAction = trim((string) data_get($route, 'action_key', data_get($route, 'step', '')));
+            $targetCard = trim((string) data_get($route, 'card_key', data_get($route, 'card', '')));
+
+            if ($targetAction === '' && $targetCard !== '') {
+                $targetAction = $sourceAction;
+            }
+
+            if (in_array($targetAction, ['end', 'fail'], true)) {
+                $routeType = $targetAction;
+            }
+
+            if (in_array($routeType, ['end', 'fail'], true)) {
+                $targetNode = '';
+            } elseif ($targetAction === '' || $targetAction === 'next') {
+                // Die lineare Standardroute ist bereits durch die grauen
+                // Kartenverbinder sichtbar und braucht keine zweite Linie.
+                return;
+            } else {
+                $targetNode = $targetAction.'::'.($targetCard !== '' ? $targetCard : '*');
+
+                if ($targetCard === '' && isset($firstTaskNodeByStep[$targetAction])) {
+                    $targetNode = $firstTaskNodeByStep[$targetAction];
+                }
+            }
+
+            $direction = $routeDirection($sourceNode, $targetNode, $routeType ?: 'step');
+            $targetStep = $stepByAction->get($targetAction);
+            $configuredRouteEvents->push([
+                'id' => 'configured-'.$configuredRouteEvents->count(),
+                'at' => '',
+                'outcome' => $outcome,
+                'outcomeLabel' => match ($outcome) {
+                    'success' => 'Erfolg',
+                    'failed' => 'Fehler',
+                    'partial' => 'Teilergebnis',
+                    'timeout' => 'Zeitüberschreitung',
+                    default => $outcome,
+                },
+                'logicalOutcome' => '',
+                'routeDisposition' => '',
+                'type' => $routeType ?: 'step',
+                'direction' => $direction,
+                'directionLabel' => 'Geplante Route',
+                'lineTone' => 'default',
+                'sourceNode' => $sourceNode,
+                'targetNode' => $targetNode,
+                'sourceLabel' => $taskLabelByNode[$sourceNode] ?? $sourceNode,
+                'targetLabel' => $targetNode !== ''
+                    ? ($taskLabelByNode[$targetNode] ?? ($targetStep?->name ?? $targetAction))
+                    : ($routeType === 'fail' ? 'Fehlerroute' : 'Workflow-Ende'),
+                'routeLabel' => (string) data_get($route, 'label', $targetCard ?: $targetAction ?: $routeType),
+                'configured' => true,
+            ]);
+        };
+
+        foreach ($steps as $step) {
+            $stepAction = trim((string) $step->action_key);
+
+            if ($stepAction === '') {
+                continue;
+            }
+
+            foreach ([
+                'success' => 'success',
+                'failed' => 'failed',
+                'partial' => 'partial',
+                'timeout' => 'timeout',
+            ] as $routeName => $outcome) {
+                $appendConfiguredRoute(
+                    $stepAction.'::*',
+                    $stepAction,
+                    data_get($step->routes, $routeName),
+                    $outcome,
+                );
+            }
+
+            foreach (collect($step->task_cards)->values() as $task) {
+                $taskKey = trim((string) ($task['key'] ?? ''));
+
+                if ($taskKey === '') {
+                    continue;
+                }
+
+                foreach ([
+                    'next' => 'success',
+                    'on_error' => 'failed',
+                    'on_partial' => 'partial',
+                ] as $routeName => $outcome) {
+                    $appendConfiguredRoute(
+                        $stepAction.'::'.$taskKey,
+                        $stepAction,
+                        data_get($task, $routeName),
+                        $outcome,
+                    );
+                }
+            }
+        }
+    }
+    $routeEvents = $workflowRun ? $runtimeRouteEvents : $configuredRouteEvents
+        ->unique(fn (array $event): string => implode('|', [
+            (string) ($event['sourceNode'] ?? ''),
+            (string) ($event['targetNode'] ?? ''),
+            (string) ($event['outcome'] ?? ''),
+        ]))
         ->values();
     $pendingRouteTargetCard = trim((string) data_get($workflowRun?->context_json, 'next_task_key', ''));
     $pendingRouteOutcome = trim((string) data_get($workflowRun?->context_json, 'next_task_route_outcome', ''));

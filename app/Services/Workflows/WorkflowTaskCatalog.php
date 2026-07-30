@@ -2029,10 +2029,14 @@ class WorkflowTaskCatalog
             $taskKey = trim((string) ($option['key'] ?? $option['task_key'] ?? ''));
             $group = $this->libraryGroupFor($taskKey, $option);
             $groupOrder = array_search($group, $groupKeys, true);
+            $groupMeta = self::LIBRARY_GROUPS[$group] ?? [];
 
             $arranged[] = [
                 ...$option,
                 'library_group' => $group,
+                'library_group_label' => (string) ($groupMeta['label'] ?? $group),
+                'library_group_short_label' => (string) ($groupMeta['short_label'] ?? $group),
+                'library_group_description' => (string) ($groupMeta['description'] ?? ''),
                 'library_group_order' => $groupOrder === false ? count($groupKeys) : $groupOrder,
                 'library_order' => self::LIBRARY_TASK_ORDER[$taskKey] ?? 500,
             ];

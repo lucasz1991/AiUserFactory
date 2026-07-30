@@ -62,6 +62,35 @@ class WorkflowRouteMarkupTest extends TestCase
         $this->assertStringContainsString("'opacity-50'", $source);
     }
 
+    public function test_minimap_zoom_uses_semantic_density_and_recalculates_route_geometry(): void
+    {
+        $source = file_get_contents(dirname(__DIR__, 2).'/resources/views/components/workflows/minimap.blade.php');
+        $definition = $this->alpineDefinitionContaining($source, 'routeEvents:');
+
+        $this->assertStringContainsString("['overview', 'standard', 'detail']", $definition);
+        $this->assertStringContainsString('setZoom(level)', $definition);
+        $this->assertStringContainsString('this.$nextTick(() => this.refreshRouteLines())', $definition);
+        $this->assertStringContainsString('new ResizeObserver(() => this.refreshRouteLines())', $definition);
+        $this->assertStringContainsString('data-workflow-minimap-zoom-level="{{ $zoomKey }}"', $source);
+        $this->assertStringContainsString("zoomLevel === 'overview' ? 'w-36'", $source);
+        $this->assertStringContainsString("'w-48' : 'w-56'", $source);
+        $this->assertStringNotContainsString('transform: scale(', $source);
+        $this->assertStringNotContainsString('zoomist', strtolower($source));
+    }
+
+    public function test_minimap_supports_static_workflow_routes_and_unique_instances(): void
+    {
+        $source = file_get_contents(dirname(__DIR__, 2).'/resources/views/components/workflows/minimap.blade.php');
+
+        $this->assertStringContainsString("'workflowRun' => null", $source);
+        $this->assertStringContainsString("'workflow' => null", $source);
+        $this->assertStringContainsString('$workflow = $workflow ?: $workflowRun?->workflow', $source);
+        $this->assertStringContainsString('$configuredRouteEvents', $source);
+        $this->assertStringContainsString("'configured' => true", $source);
+        $this->assertStringContainsString('Str::slug($mapInstance)', $source);
+        $this->assertStringContainsString('x-on:keydown.space.prevent.stop', $source);
+    }
+
     private function alpineDefinitionContaining(string $source, string $needle): string
     {
         $document = new DOMDocument;

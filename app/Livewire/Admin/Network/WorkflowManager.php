@@ -347,11 +347,13 @@ class WorkflowManager extends Component
             'taskDefinitions' => $taskDefinitions->values()->toArray(),
             'taskGroups' => $taskGroups->values()->toArray(),
             'taskGroupLabels' => $this->taskGroupLabels(),
+            'taskGroupMeta' => $taskCatalog->libraryGroups(),
+            'taskGroupCounts' => $taskDefinitions->countBy('library_group'),
             'importableWorkflows' => $this->importableWorkflows($selectedWorkflow),
-            'visibleTaskDefinitions' => $taskDefinitions
-                ->where('library_group', $this->activeTaskGroup)
-                ->values()
-                ->toArray(),
+            // Alle Optionen bleiben im DOM, damit die lokale Suche auch Treffer
+            // aus einer anderen fachlichen Gruppe anzeigen kann. Ohne Suche
+            // filtert die Blade-Ansicht weiterhin auf activeTaskGroup.
+            'visibleTaskDefinitions' => $taskDefinitions->values()->toArray(),
             'summary' => [
                 'actions' => $steps->filter(fn (WorkflowStep $step): bool => $step->type !== WorkflowStep::TYPE_WAIT)->count(),
                 'lists' => $steps->count(),

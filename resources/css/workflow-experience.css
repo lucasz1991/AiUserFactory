@@ -458,6 +458,24 @@
   transform: translateX(-3px);
 }
 
+[data-workflow-minimap-scroll-container] {
+  overscroll-behavior: contain;
+  scroll-padding-inline: .75rem;
+  scrollbar-gutter: stable;
+  -webkit-overflow-scrolling: touch;
+}
+
+.ff-builder-overview-map {
+  max-height: clamp(11rem, 30dvh, 18rem);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+[data-studio-workflow-canvas] {
+  scroll-padding-inline: 1rem;
+  -webkit-overflow-scrolling: touch;
+}
+
 /* ------------------------------------------------------------------ */
 /* Studio-Kopf, Status- und Run-Inseln                                 */
 /* ------------------------------------------------------------------ */
@@ -906,6 +924,32 @@
   }
 }
 
+@media (max-width: 1279px) {
+  [data-studio-task-editor] {
+    min-height: 0;
+    overscroll-behavior: contain;
+  }
+
+  [data-studio-task-editor] [data-studio-task-layout] {
+    min-height: calc(100dvh - 10rem);
+    border-radius: 0 !important;
+  }
+
+  [data-studio-task-editor] [data-studio-editor-canvas-panel] {
+    height: calc(100dvh - 10rem);
+    min-height: 32rem;
+  }
+
+  [data-studio-task-editor] [data-studio-workflow-canvas] {
+    scroll-snap-type: inline proximity;
+  }
+
+  [data-studio-task-editor] [data-studio-editor-step] {
+    scroll-snap-align: start;
+    scroll-snap-stop: normal;
+  }
+}
+
 @media (max-width: 767px) {
   .ff-metric-rail {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -935,6 +979,26 @@
 
   .ff-jump-latest {
     bottom: 8.25rem;
+  }
+
+  [data-studio-task-editor] [data-workflow-step-column] {
+    width: min(18.5rem, calc(100vw - 2.5rem)) !important;
+    min-width: min(18.5rem, calc(100vw - 2.5rem)) !important;
+    max-width: min(18.5rem, calc(100vw - 2.5rem)) !important;
+  }
+
+  [data-studio-task-editor] [data-workflow-minimap-zoom] {
+    width: max-content;
+  }
+
+  [data-studio-task-editor] [data-workflow-minimap-zoom] > button {
+    min-width: 4.6rem;
+    min-height: 44px;
+  }
+
+  [data-studio-task-editor] .ff-builder-overview-map {
+    max-height: min(15rem, 32dvh);
+    padding-inline: .5rem !important;
   }
 
   div[data-workflow-table-scroll] {
@@ -1067,6 +1131,10 @@
   [data-workflow-studio-shell] .ff-segmented-control > button,
   [data-workflow-studio-shell] .ff-run-island > button {
     min-height: 44px !important;
+  }
+
+  [data-studio-task-editor] .ff-catalog-card:hover {
+    transform: none;
   }
 }
 

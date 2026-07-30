@@ -1039,6 +1039,102 @@ class WorkflowStudioTest extends TestCase
         $this->assertSame(1, data_get($run->fresh()->result_json, 'process_termination.external_runs'));
     }
 
+    public function test_builder_renders_the_shared_static_minimap_with_three_zoom_levels_before_the_first_run(): void
+    {
+        [$workflow, $step] = $this->workflow();
+        $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
+        $session = app(WorkflowStudioSessionService::class)->open($workflow, $admin, 'manual', 'ask_critical');
+        $this->actingAs($admin);
+
+        Livewire::test(WorkflowStudioTaskEditor::class, [
+            'workflow' => $workflow,
+            'studioSessionId' => $session->id,
+        ])
+            ->assertSeeHtml('data-studio-editor-overview')
+            ->assertSeeHtml('data-workflow-minimap-zoom-level="overview"')
+            ->assertSeeHtml('data-workflow-minimap-zoom-level="standard"')
+            ->assertSeeHtml('data-workflow-minimap-zoom-level="detail"')
+            ->assertSeeHtml('data-minimap-node="browser-tasks::first-task"')
+            ->assertSeeHtml('workflow-minimap-builder-'.$session->id.'-arrow-default')
+            ->assertSet('overviewSelectedStepId', $step->id)
+            ->assertSet('overviewSelectedTaskKey', 'first-task');
+    }
+
+    public function test_builder_overview_selection_rejects_foreign_tasks_and_focuses_a_real_task(): void
+    {
+        [$workflow, $step] = $this->workflow();
+        $secondStep = $workflow->steps()->create([
+            'name' => 'Abschluss',
+            'type' => WorkflowStep::TYPE_BROWSER_TASK,
+            'action_key' => 'abschluss',
+            'position' => 20,
+            'is_enabled' => true,
+            'config_json' => ['tasks' => [[
+                'key' => 'return-result',
+                'task_key' => 'data.workflow_return',
+                'title' => 'Ergebnis zurückgeben',
+            ]]],
+        ]);
+        $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
+        $session = app(WorkflowStudioSessionService::class)->open($workflow, $admin, 'manual', 'ask_critical');
+        $this->actingAs($admin);
+
+        Livewire::test(WorkflowStudioTaskEditor::class, [
+            'workflow' => $workflow,
+            'studioSessionId' => $session->id,
+        ])
+            ->call('selectOverviewTask', 999999, 'return-result')
+            ->assertSet('overviewSelectedStepId', $step->id)
+            ->assertSet('overviewSelectedTaskKey', 'first-task')
+            ->call('selectOverviewTask', $secondStep->id, 'missing-task')
+            ->assertSet('overviewSelectedStepId', $step->id)
+            ->call('selectOverviewTask', $secondStep->id, 'return-result')
+            ->assertSet('catalogTargetStepId', (string) $secondStep->id)
+            ->assertSet('overviewSelectedStepId', $secondStep->id)
+            ->assertSet('overviewSelectedTaskKey', 'return-result');
+    }
+
+    public function test_builder_searches_across_library_groups_and_group_names(): void
+    {
+        [$workflow] = $this->workflow();
+        $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
+        $session = app(WorkflowStudioSessionService::class)->open($workflow, $admin, 'manual', 'ask_critical');
+        $this->actingAs($admin);
+
+        Livewire::test(WorkflowStudioTaskEditor::class, [
+            'workflow' => $workflow,
+            'studioSessionId' => $session->id,
+        ])
+            ->assertSet('activeTaskGroup', 'navigation')
+            ->assertSeeHtml('data-task-library-key="browser.open"')
+            ->assertDontSeeHtml('data-task-library-key="loop.for_each_element"')
+            ->set('taskSearch', 'Schleifen')
+            ->assertSee('Suchergebnisse aus allen Aufgabengruppen')
+            ->assertSeeHtml('data-task-library-key="loop.for_each_element"')
+            ->assertDontSeeHtml('data-task-library-key="browser.highlight"');
+    }
+
+    public function test_static_minimap_instances_have_unique_svg_marker_ids(): void
+    {
+        [$workflow] = $this->workflow();
+        $workflow->load('steps');
+
+        $first = view('components.workflows.minimap', [
+            'workflow' => $workflow,
+            'workflowRun' => null,
+            'instance' => 'builder-one',
+        ])->render();
+        $second = view('components.workflows.minimap', [
+            'workflow' => $workflow,
+            'workflowRun' => null,
+            'instance' => 'builder-two',
+        ])->render();
+
+        $this->assertStringContainsString('id="workflow-minimap-builder-one-arrow-default"', $first);
+        $this->assertStringContainsString('id="workflow-minimap-builder-two-arrow-default"', $second);
+        $this->assertStringNotContainsString('workflow-minimap-builder-two-arrow-default', $first);
+    }
+
     public function test_force_cancelling_a_node_runner_terminates_its_exact_windows_process_tree(): void
     {
         if (PHP_OS_FAMILY !== 'Windows') {

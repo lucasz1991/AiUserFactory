@@ -757,7 +757,7 @@
                                 class="whitespace-nowrap border-b-2 py-3 text-sm font-semibold {{ $activeTaskGroup === $taskGroup ? 'border-slate-900 text-slate-900' : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700' }}"
                             >
                                 {{ $taskGroupLabels[$taskGroup] ?? $taskGroup }}
-                                <span class="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{{ collect($taskDefinitions)->where('kind', $taskGroup)->count() }}</span>
+                                <span class="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{{ $taskGroupCounts->get($taskGroup, 0) }}</span>
                             </button>
                         @endforeach
                     </nav>
@@ -776,13 +776,22 @@
                             x-bind:tabindex="taskInsertTarget ? 0 : -1"
                             x-bind:role="taskInsertTarget ? 'button' : null"
                             x-bind:class="taskInsertTarget ? 'cursor-pointer ring-1 ring-emerald-300 hover:ring-emerald-500' : 'cursor-grab active:cursor-grabbing'"
-                            x-show="search === '' || @js(\Illuminate\Support\Str::lower(implode(' ', [$taskDefinition['label'], $taskDefinition['kind'], $taskDefinition['key'], $taskDefinition['description']]))).includes(search.trim().toLocaleLowerCase('de-DE'))"
+                            x-show="search.trim() !== ''
+                                ? @js(\Illuminate\Support\Str::lower(implode(' ', [
+                                    $taskDefinition['label'],
+                                    $taskDefinition['key'],
+                                    $taskDefinition['description'],
+                                    $taskDefinition['library_group_label'],
+                                    $taskDefinition['library_group_short_label'],
+                                    $taskDefinition['library_group_description'],
+                                ]))).includes(search.trim().toLocaleLowerCase('de-DE'))
+                                : @js($taskDefinition['library_group'] === $activeTaskGroup)"
                             x-transition.opacity.duration.120ms
                             class="ff-catalog-card border bg-white p-4 transition"
                         >
                             <div class="flex items-start justify-between gap-3">
                                 <p class="text-sm font-semibold text-slate-900">{{ $taskDefinition['label'] }}</p>
-                                <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">{{ $taskDefinition['kind'] }}</span>
+                                <span class="rounded bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">{{ $taskDefinition['library_group_short_label'] }}</span>
                             </div>
                             <p class="mt-2 line-clamp-2 text-xs leading-5 text-slate-500">{{ $taskDefinition['description'] }}</p>
                         </div>
