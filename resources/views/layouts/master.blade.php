@@ -1,62 +1,73 @@
+@php
+    $viewportMode = ($contentMode ?? null) === 'viewport';
+    $documentTitle = trim($__env->yieldContent('title')) ?: 'Factory AI';
+@endphp
 <!DOCTYPE html>
-<html lang="de" dir="ltr">
-
+<html lang="{{ str_replace('_', '-', app()->getLocale()) }}" dir="ltr">
 <head>
     @include('layouts.metahead')
     <meta name="csrf-token" content="{{ csrf_token() }}">
-    <title>@yield('title') | Factory AI · User Factory</title>
-    <!-- css files -->
+    <title>{{ $documentTitle }} | Factory AI &middot; User Factory</title>
     @include('layouts.head-css')
-    @vite(['resources/css/app.css'])
-    <!-- Styles -->
+    @vite(['resources/css/app.css', 'resources/css/app-shell.css'])
     @livewireStyles
     @yield('css')
+    @stack('styles')
 </head>
-    <body data-mode="light" data-sidebar-size="lg" class="group font-notosans">
-        <!-- sidebar -->
-        @include('layouts.sidebar')
-        <!-- topbar -->
-        @include('layouts.topbar')
-        <!-- content -->
-        @yield('content')
-        <!-- Page Content -->
-        @if(isset($slot))
-            <main class="bg-mainbg-base">
-                <div class="main-content group-data-[sidebar-size=sm]:ml-[70px]">
-                    <div class="min-h-screen page-content px-1" style="box-shadow: inset 0px 80px 30px -10px rgba(0, 0, 0, 0.2);">
-                        <div class="container-fluid px-0 md:px-5">
-                            @php
-                                $routeName = Route::currentRouteName();
-                                $bgWhiteRoutes = [
-                                    'admin.dashboard',
-                                    'admin.index', 
-                                    'admin.network.workflows', 
-                                    'admin.network.workflow.edit', 
-                                    'admin.network.workflow.create', 
-                                    'admin.network.workflow.run', 
-                                    'admin.network.workflow.run.edit'
-                                ];
-                                $isBackgroundedWhite = in_array($routeName, $bgWhiteRoutes);
-                            @endphp
-                            <div class=" @if($isBackgroundedWhite) bg-white rounded-md border border-gray-200 p-4  @endif ">
-                                {{ $slot }}
-                            </div>
-                        </div>
-                    </div>
+<body
+    data-mode="light"
+    data-sidebar-size="sm"
+    data-sidebar-collapsible="true"
+    data-sidebar-expanded="false"
+    class="group ff-app-body"
+>
+    <a href="#main-content" class="ff-skip-link">
+        Zum Inhalt springen
+    </a>
+
+    @include('layouts.sidebar')
+    @include('layouts.topbar')
+
+    <main
+        id="main-content"
+        tabindex="-1"
+        data-app-main
+        data-ff-shell-main
+        @class([
+            'ff-app-main',
+            'ff-app-main--viewport' => $viewportMode,
+        ])
+    >
+        <div class="main-content">
+            <div class="page-content">
+                <div class="ff-shell-ambient" aria-hidden="true">
+                    <span class="ff-shell-ambient__grid"></span>
+                    <span class="ff-shell-ambient__orb ff-shell-ambient__orb--one"></span>
+                    <span class="ff-shell-ambient__orb ff-shell-ambient__orb--two"></span>
+                    <span class="ff-shell-ambient__rail"></span>
                 </div>
-            </main>
+
+                <div @class([
+                    'container-fluid ff-shell-container',
+                    'ff-shell-container--viewport' => $viewportMode,
+                ])>
+                    @yield('content')
+                    {{ $slot ?? '' }}
+                </div>
+            </div>
+        </div>
+    </main>
+
+    @auth
+        @if(request()->routeIs('network.workflows', 'network.workflows.manage', 'network.workflows.studio'))
+            @livewire('tools.chatbot')
         @endif
-        @auth
-            @if(request()->routeIs('network.workflows', 'network.workflows.manage', 'network.workflows.studio'))
-                @livewire('tools.chatbot')
-            @endif
-        @endauth
-        <!-- script -->
-        @include('layouts.vendor-scripts')
-        <!-- Scripts -->
-        @vite(['resources/js/app.js'])
-        @livewireScripts
-        @yield('js')
-    </body>
+    @endauth
+
+    @include('layouts.vendor-scripts')
+    @vite(['resources/js/app.js'])
+    @livewireScripts
+    @yield('js')
+    @stack('scripts')
+</body>
 </html>
- 

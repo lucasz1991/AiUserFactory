@@ -12,6 +12,7 @@
         "dompdf/dompdf": "^3.0",
         "guzzlehttp/guzzle": "^7.2",
         "intervention/image-laravel": "^1.3",
+        "laravel-notification-channels/webpush": "^9.0",
         "laravel/framework": "^10.10",
         "laravel/jetstream": "^4.3",
         "laravel/sanctum": "^3.3",

@@ -22,11 +22,12 @@ Homestead.json
 /.vagrant
 .phpunit.result.cache
 /.lmzdev/
+/tests/
 
 /public/build
 /storage/pail
 .env.backup
-.env.production
+.env.productions
 .env.testing
 .phpactor.json
 auth.json

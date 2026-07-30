@@ -38,6 +38,7 @@ export default defineConfig({
                 'resources/scss/tailwind.scss',
                 'resources/scss/icons.scss',
                 'resources/css/app.css',
+                'resources/css/app-shell.css',
                 'resources/js/app.js',
             ],
             refresh: [

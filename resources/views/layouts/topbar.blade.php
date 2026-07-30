@@ -1,40 +1,96 @@
-<nav class="fixed top-0 left-0 right-0 z-10 flex items-center bg-white print:hidden">
-    <div class="flex w-full justify-between">
-        <div class="flex items-center topbar-brand">
-            <div class="hidden lg:flex navbar-brand items-center justify-between shrink px-3 h-[70px] ltr:border-r rtl:border-l bg-[#fbfaff] border-gray-50 shadow-none">
-                <a href="{{ route('admin.index') }}" class="flex items-center text-lg flex-shrink-0 font-bold leading-[69px]">
-                    <x-navigation.application-icon class="inline-block w-10 aspect-square align-middle" />
-                    <span class="hidden font-semibold text-gray-700 align-middle xl:block leading-[69px]">
-                        Factory AI
-                    </span>
-                </a>
-            </div>
+@php
+    $pageContext = match (true) {
+        request()->routeIs('network.workflows*') => 'Workflow Management',
+        request()->routeIs('client-controller.*') => 'ClientController',
+        request()->routeIs('persons.*', 'network.actions') => 'Netzwerk',
+        request()->routeIs('processes.*') => 'Prozesse',
+        request()->routeIs('admin.settings') => 'Einstellungen',
+        default => 'Uebersicht',
+    };
+@endphp
 
-            <button type="button" class="border-b border-gray-300 group-data-[sidebar-size=sm]:border-[#e9e9ef] text-gray-800 h-[70px] px-4 py-1 vertical-menu-btn text-16" id="vertical-menu-btn">
-                <div class="z-50 text-gray-600 burger-container group-data-[sidebar-size=lg]:open">
-                    <div class="burger-bar bar1"></div>
-                    <div class="burger-bar bar2"></div>
-                    <div class="burger-bar bar3"></div>
-                </div>
-            </button>
+<nav
+    class="ff-shell-topbar z-40 print:hidden"
+    data-app-topbar
+    data-ff-shell-topbar
+    aria-label="Kopfnavigation"
+>
+    <div class="ff-topbar-brand topbar-brand">
+        <a
+            href="{{ route('admin.index') }}"
+            class="ff-topbar-brand__link"
+            wire:navigate
+            aria-label="Factory AI Dashboard"
+        >
+            <x-navigation.application-icon class="ff-topbar-brand__mark" />
+            <span class="ff-topbar-brand__copy">
+                <strong>Factory AI</strong>
+                <small>User Factory</small>
+            </span>
+        </a>
+
+        <button
+            type="button"
+            class="vertical-menu-btn ff-mobile-menu-button"
+            id="vertical-menu-btn"
+            aria-label="Hauptnavigation oeffnen"
+            aria-controls="app-sidebar"
+            aria-expanded="false"
+        >
+            <span class="ff-menu-icon" aria-hidden="true">
+                <span></span>
+                <span></span>
+                <span></span>
+            </span>
+        </button>
+    </div>
+
+    <div class="ff-topbar-content">
+        <div class="ff-topbar-context" aria-current="page">
+            <span class="ff-topbar-context__dot" aria-hidden="true"></span>
+            <span>{{ $pageContext }}</span>
         </div>
 
-        <div class="flex w-full items-center justify-end gap-3 ltr:pl-6 rtl:pr-6 ltr:pr-6 rtl:pl-6 border-b border-gray-300">
-            <livewire:system-clock />
+        <div class="ff-topbar-actions">
+            <div class="ff-system-clock">
+                <livewire:system-clock />
+            </div>
 
             @auth
-                <div class="ms-3 relative">
-                    <x-ui.dropdown align="" width="48">
+                <a
+                    href="{{ route('admin.settings') }}"
+                    class="ff-topbar-control"
+                    wire:navigate
+                    aria-label="Einstellungen"
+                    title="Einstellungen"
+                    data-ff-topbar-control
+                >
+                    <i data-feather="settings" aria-hidden="true"></i>
+                </a>
+
+                <div class="ff-profile-menu">
+                    <x-ui.dropdown align="right" width="48" content-classes="py-1 bg-white" dropdown-classes="ff-profile-dropdown">
                         <x-slot name="trigger">
-                            <button class="flex items-center space-x-2 text-sm border-2 border-transparent rounded-full focus:outline-none focus:border-gray-300 transition">
-                                <img class="h-8 w-8 rounded-full object-cover" src="{{ Auth::user()->profile_photo_url }}" alt="{{ Auth::user()->name }}" />
-                                <span class="hidden font-medium xl:block">{{ Auth::user()->name }}</span>
-                                <i class="hidden align-bottom mdi mdi-chevron-down xl:block"></i>
+                            <button
+                                type="button"
+                                class="ff-profile-trigger"
+                                aria-label="Benutzermenue fuer {{ Auth::user()->name }}"
+                            >
+                                <img
+                                    class="ff-profile-trigger__avatar"
+                                    src="{{ Auth::user()->profile_photo_url }}"
+                                    alt=""
+                                />
+                                <span class="ff-profile-trigger__copy">
+                                    <strong>{{ Auth::user()->name }}</strong>
+                                    <small>Konto</small>
+                                </span>
+                                <i data-feather="chevron-down" class="ff-profile-trigger__chevron" aria-hidden="true"></i>
                             </button>
                         </x-slot>
 
                         <x-slot name="content">
-                            <div class="block px-4 py-2 text-xs text-gray-400">
+                            <div class="ff-profile-dropdown__heading">
                                 Konto verwalten
                             </div>
 
@@ -42,7 +98,7 @@
                                 Profil
                             </x-ui.dropdown-link>
 
-                            <div class="border-t border-gray-200"></div>
+                            <div class="ff-profile-dropdown__divider"></div>
 
                             <form method="POST" action="{{ route('logout') }}" x-data>
                                 @csrf
@@ -54,11 +110,9 @@
                     </x-ui.dropdown>
                 </div>
             @else
-                <div class="flex items-center gap-2">
-                    <a href="{{ route('login') }}" class="rounded-md border border-gray-300 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50">
-                        Anmelden
-                    </a>
-                </div>
+                <a href="{{ route('login') }}" class="ff-login-link">
+                    Anmelden
+                </a>
             @endauth
         </div>
     </div>
