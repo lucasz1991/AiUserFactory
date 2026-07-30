@@ -2092,7 +2092,7 @@ async function devDomSnapshot(targetPage) {
       .map(({ item }) => item);
 
     return {
-      html: document.documentElement ? document.documentElement.outerHTML || '' : '',
+      html: document.body ? document.body.outerHTML || '' : '',
       title: document.title || '',
       url: window.location.href,
       readyState: document.readyState,

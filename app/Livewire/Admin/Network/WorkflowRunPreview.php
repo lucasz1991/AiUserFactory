@@ -339,15 +339,22 @@ class WorkflowRunPreview extends Component
                 $hasNamedWindows = is_array(data_get($result, 'registrationWindowStatus')) || is_array(data_get($result, 'webmailWindowStatus'));
                 $hasBrowserWindows = false;
                 $panels = [];
+                $browserWindows = collect((array) data_get($result, 'browserWindows', []))
+                    ->filter(fn (mixed $window): bool => is_array($window))
+                    ->values();
+                $singleBrowserWindow = $browserWindows->count() === 1;
 
-                foreach ((array) data_get($result, 'browserWindows', []) as $window) {
-                    if (! is_array($window)) {
-                        continue;
-                    }
-
+                foreach ($browserWindows as $window) {
                     $image = data_get($window, 'screenshotUrl') ?: $this->publicUrl(data_get($window, 'livePreviewRelativePath'));
                     $domTree = is_array(data_get($window, 'domTree')) ? data_get($window, 'domTree') : null;
                     $cursor = is_array(data_get($window, 'cursor')) ? data_get($window, 'cursor') : null;
+
+                    if (
+                        $domTree !== null
+                        && ! $this->domTreeMatchesBrowserWindow($window, $domTree, $singleBrowserWindow)
+                    ) {
+                        $domTree = null;
+                    }
 
                     if (! $image && ! $domTree && ! $cursor && ! data_get($window, 'error')) {
                         continue;
@@ -398,6 +405,25 @@ class WorkflowRunPreview extends Component
             })
             ->map(fn (Collection $panels): array => $panels->sortBy(fn (array $panel): string => (string) ($panel['capturedAt'] ?? ''))->last())
             ->values();
+    }
+
+    protected function domTreeMatchesBrowserWindow(array $window, array $domTree, bool $singleBrowserWindow): bool
+    {
+        $windowTargetId = trim((string) ($window['targetId'] ?? $window['target_id'] ?? ''));
+        $domTargetId = trim((string) ($domTree['targetId'] ?? $domTree['target_id'] ?? ''));
+
+        if ($windowTargetId !== '' && $domTargetId !== '') {
+            return hash_equals($windowTargetId, $domTargetId);
+        }
+
+        $windowKey = trim((string) ($window['key'] ?? $window['name'] ?? $window['label'] ?? ''));
+        $domWindowKey = trim((string) ($domTree['windowKey'] ?? $domTree['window_key'] ?? ''));
+
+        if ($windowKey !== '' && $domWindowKey !== '') {
+            return hash_equals($windowKey, $domWindowKey);
+        }
+
+        return $singleBrowserWindow;
     }
 
     protected function latestStatusResult(Collection $stepRuns): array
@@ -1023,20 +1049,18 @@ class WorkflowRunPreview extends Component
     {
         $liveResult = is_array(data_get($liveStatus, 'result')) ? data_get($liveStatus, 'result') : [];
         $result = array_replace_recursive($storedResult, $liveStatus, $liveResult);
-        $liveBrowserWindows = data_get($liveStatus, 'browserWindows');
+        $hasLiveBrowserWindows = array_key_exists('browserWindows', $liveStatus)
+            && is_array($liveStatus['browserWindows']);
+        $liveBrowserWindows = $hasLiveBrowserWindows ? $liveStatus['browserWindows'] : null;
 
-        if (! is_array($liveBrowserWindows) || $liveBrowserWindows === []) {
-            $liveBrowserWindows = data_get($liveResult, 'browserWindows');
+        if (! $hasLiveBrowserWindows && array_key_exists('browserWindows', $liveResult) && is_array($liveResult['browserWindows'])) {
+            $hasLiveBrowserWindows = true;
+            $liveBrowserWindows = $liveResult['browserWindows'];
         }
 
-        if (
-            is_array(data_get($storedResult, 'browserWindows'))
-            && data_get($storedResult, 'browserWindows') !== []
-            && (
-                ! is_array($liveBrowserWindows)
-                || $liveBrowserWindows === []
-            )
-        ) {
+        if ($hasLiveBrowserWindows) {
+            $result['browserWindows'] = array_values($liveBrowserWindows);
+        } elseif (is_array(data_get($storedResult, 'browserWindows'))) {
             $result['browserWindows'] = data_get($storedResult, 'browserWindows');
         }
 

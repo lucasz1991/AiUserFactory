@@ -61,28 +61,101 @@ class WorkflowRunPreviewDomInspectorTest extends TestCase
                     'screenshotUrl' => 'https://example.test/live.png',
                     'debugDomPath' => 'C:\\private\\must-not-leak.json',
                     'domTree' => [
+                        'version' => 2,
+                        'rootTag' => 'body',
                         'capturedAt' => '2026-07-24T12:00:00.000Z',
                         'viewport' => ['width' => 800, 'height' => 600, 'deviceScaleFactor' => 1],
                         'frames' => [[
                             'frameRef' => 'main',
                             'name' => 'main',
-                            'nodes' => [[
-                                'nodeRef' => 'main:main:submit',
-                                'parentRef' => null,
-                                'depth' => 0,
-                                'tag' => 'button',
-                                'id' => 'submit',
-                                'className' => 'primary action',
-                                'text' => 'Absenden',
-                                'selector' => '#submit',
-                                'x' => 120,
-                                'y' => 80,
-                                'width' => 160,
-                                'height' => 40,
-                                'visible' => true,
-                                'enabled' => true,
-                                'inShadowDom' => false,
-                            ]],
+                            'rootTag' => 'body',
+                            'nodes' => [
+                                [
+                                    'nodeRef' => 'main:main:body',
+                                    'parentRef' => null,
+                                    'depth' => 0,
+                                    'tag' => 'body',
+                                    'selector' => 'body',
+                                    'x' => 0,
+                                    'y' => 0,
+                                    'width' => 800,
+                                    'height' => 600,
+                                    'visible' => true,
+                                    'enabled' => true,
+                                    'inShadowDom' => false,
+                                ],
+                                [
+                                    'nodeRef' => 'main:main:submit',
+                                    'parentRef' => 'main:main:body',
+                                    'depth' => 1,
+                                    'tag' => 'button',
+                                    'id' => 'submit',
+                                    'className' => 'primary action',
+                                    'text' => 'Absenden',
+                                    'selector' => '#submit',
+                                    'selectorCandidates' => [
+                                        ['selector' => 'button[data-testid="save"]', 'kind' => 'attribute', 'unique' => true, 'matchCount' => 1, 'score' => 100],
+                                        ['selector' => 'button.primary', 'kind' => 'class', 'unique' => false, 'matchCount' => 2, 'score' => 55],
+                                    ],
+                                    'attributes' => [
+                                        'data-testid' => 'save',
+                                        'aria-label' => 'Formular absenden',
+                                    ],
+                                    'role' => 'button',
+                                    'ariaLabel' => 'Formular absenden',
+                                    'label' => 'Absenden',
+                                    'x' => 120,
+                                    'y' => 80,
+                                    'width' => 160,
+                                    'height' => 40,
+                                    'visible' => true,
+                                    'enabled' => true,
+                                    'actionable' => true,
+                                    'inShadowDom' => false,
+                                ],
+                                [
+                                    'nodeRef' => 'main:main:continue',
+                                    'parentRef' => 'main:main:body',
+                                    'depth' => 1,
+                                    'tag' => 'button',
+                                    'className' => 'primary action',
+                                    'text' => 'Weiter',
+                                    'selector' => 'button.primary',
+                                    'x' => 310,
+                                    'y' => 80,
+                                    'width' => 160,
+                                    'height' => 40,
+                                    'visible' => true,
+                                    'enabled' => true,
+                                    'actionable' => true,
+                                    'inShadowDom' => false,
+                                ],
+                                [
+                                    'nodeRef' => 'main:main:email',
+                                    'parentRef' => 'main:main:body',
+                                    'depth' => 1,
+                                    'tag' => 'input',
+                                    'type' => 'email',
+                                    'name' => 'email',
+                                    'placeholder' => 'E-Mail',
+                                    'selector' => 'input[name="email"]',
+                                    'attributes' => [
+                                        'name' => 'email',
+                                        'placeholder' => 'E-Mail',
+                                        'type' => 'email',
+                                    ],
+                                    'x' => 120,
+                                    'y' => 150,
+                                    'width' => 350,
+                                    'height' => 42,
+                                    'visible' => true,
+                                    'enabled' => true,
+                                    'focused' => true,
+                                    'editable' => true,
+                                    'actionable' => true,
+                                    'inShadowDom' => false,
+                                ],
+                            ],
                         ]],
                     ],
                     'cursor' => [
@@ -110,15 +183,93 @@ class WorkflowRunPreviewDomInspectorTest extends TestCase
 
                 return $panels->count() === 1
                     && data_get($panel, 'windowKey') === 'main'
-                    && data_get($panel, 'domTree.frames.0.nodes.0.selector') === '#submit'
+                    && data_get($panel, 'domTree.frames.0.nodes.1.selector') === '#submit'
                     && data_get($panel, 'cursor.toX') === 200;
             })
             ->assertSeeHtml('data-workflow-dom-inspector')
             ->assertSeeHtml('data-workflow-dom-tree')
-            ->assertSee('DOM-Inspektor')
-            ->assertSee('Als Selektor verwenden')
-            ->assertSee('Im Browser markieren')
+            ->assertSeeHtml('data-workflow-dom-search')
+            ->assertSeeHtml('data-workflow-screenshot-picker')
+            ->assertSeeHtml('data-workflow-dom-match-overlay')
+            ->assertSeeHtml('data-workflow-selector-suggestions')
+            ->assertSee('Body-DOM')
+            ->assertSee('Elementdaten')
+            ->assertSee('Selektor-Vorschläge')
+            ->assertSee('Eingaben & Buttons', false)
+            ->assertSee('Für Probe übernehmen')
+            ->assertSee('Kopieren')
             ->assertSee('#submit', false)
+            ->assertSee('button[data-testid=\u0022save\u0022]', false)
+            ->assertSee('canProbe: true', false)
+            ->assertDontSee('workflow-dom-node-highlight', false)
             ->assertDontSee('must-not-leak.json');
+    }
+
+    public function test_snapshot_inspection_stays_available_while_live_probe_is_disabled_for_a_waiting_run(): void
+    {
+        $workflow = Workflow::query()->create([
+            'name' => 'Waiting DOM Preview',
+            'slug' => 'waiting-dom-preview-'.Str::random(8),
+            'is_active' => true,
+            'settings_json' => ['dev_mode' => true],
+        ]);
+        $step = WorkflowStep::query()->create([
+            'workflow_id' => $workflow->id,
+            'name' => 'Browser',
+            'type' => WorkflowStep::TYPE_BROWSER_TASK,
+            'action_key' => 'browser',
+            'position' => 10,
+            'is_enabled' => true,
+            'config_json' => ['tasks' => []],
+        ]);
+        $run = WorkflowRun::query()->create([
+            'run_uuid' => (string) Str::uuid(),
+            'workflow_id' => $workflow->id,
+            'status' => 'waiting',
+            'context_json' => ['interactive_debug' => true],
+            'result_json' => [],
+        ]);
+        WorkflowStepRun::query()->create([
+            'workflow_run_id' => $run->id,
+            'workflow_step_id' => $step->id,
+            'status' => 'waiting',
+            'result_json' => [
+                'browserWindows' => [[
+                    'key' => 'main',
+                    'label' => 'Main',
+                    'screenshotUrl' => 'https://example.test/live.png',
+                    'domTree' => [
+                        'version' => 2,
+                        'rootTag' => 'body',
+                        'viewport' => ['width' => 800, 'height' => 600],
+                        'frames' => [[
+                            'frameRef' => 'main',
+                            'rootTag' => 'body',
+                            'nodes' => [[
+                                'nodeRef' => 'main:body',
+                                'parentRef' => null,
+                                'depth' => 0,
+                                'tag' => 'body',
+                                'selector' => 'body',
+                                'x' => 0,
+                                'y' => 0,
+                                'width' => 800,
+                                'height' => 600,
+                                'visible' => true,
+                            ]],
+                        ]],
+                    ],
+                ]],
+            ],
+        ]);
+
+        Livewire::test(WorkflowRunPreview::class, [
+            'workflowRunId' => $run->id,
+            'selectableTasks' => true,
+        ])
+            ->assertSeeHtml('data-workflow-dom-search')
+            ->assertSeeHtml('data-workflow-screenshot-picker')
+            ->assertSee('Snapshot-Analyse aktiv')
+            ->assertSee('canProbe: false', false);
     }
 }

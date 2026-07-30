@@ -9,6 +9,22 @@ const DEFAULT_MAX_NODES = 2500;
 const DEFAULT_MAX_BYTES = 512 * 1024;
 const MAX_NODE_TEXT_LENGTH = 160;
 const MAX_CLASSES = 8;
+const MAX_SELECTOR_CANDIDATES = 8;
+const SAFE_ATTRIBUTE_NAMES = Object.freeze([
+  'aria-label',
+  'aria-labelledby',
+  'autocomplete',
+  'data-cy',
+  'data-qa',
+  'data-test',
+  'data-testid',
+  'href',
+  'name',
+  'placeholder',
+  'role',
+  'title',
+  'type',
+]);
 
 function boundedInteger(value, fallback, minimum, maximum) {
   const parsed = Number(value);
@@ -47,6 +63,51 @@ function normalizeRect(rect = {}, offset = {}) {
 
 function jsonBytes(value) {
   return Buffer.byteLength(JSON.stringify(value), 'utf8');
+}
+
+function normalizeAttributes(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    SAFE_ATTRIBUTE_NAMES
+      .filter((name) => Object.prototype.hasOwnProperty.call(value, name))
+      .map((name) => [name, normalizeText(value[name], 300)])
+      .filter(([, attributeValue]) => attributeValue !== ''),
+  );
+}
+
+function normalizeSelectorCandidates(value) {
+  const candidates = Array.isArray(value) ? value : [];
+  const seen = new Set();
+
+  return candidates
+    .map((candidate) => {
+      const source = typeof candidate === 'string'
+        ? { selector: candidate }
+        : (candidate && typeof candidate === 'object' ? candidate : {});
+      const selector = normalizeText(source.selector, 500);
+
+      if (selector === '' || seen.has(selector)) {
+        return null;
+      }
+
+      seen.add(selector);
+
+      const rawMatchCount = Number(source.matchCount);
+      const rawScore = Number(source.score);
+
+      return {
+        selector,
+        kind: normalizeText(source.kind, 40) || 'css',
+        unique: source.unique === true,
+        matchCount: Number.isFinite(rawMatchCount) ? Math.max(0, rawMatchCount) : 0,
+        score: Number.isFinite(rawScore) ? Math.max(0, Math.min(100, rawScore)) : 0,
+      };
+    })
+    .filter(Boolean)
+    .slice(0, MAX_SELECTOR_CANDIDATES);
 }
 
 function materializeFrameNodes(records, options = {}, limit = records.length) {
@@ -94,13 +155,22 @@ function materializeFrameNodes(records, options = {}, limit = records.length) {
         : [],
       text: normalizeText(record.text),
       selector: normalizeText(record.selector, 500),
+      selectorCandidates: normalizeSelectorCandidates(record.selectorCandidates),
+      attributes: normalizeAttributes(record.attributes),
       role: normalizeText(record.role, 80),
       type: normalizeText(record.type, 80),
       name: normalizeText(record.name, 120),
       ariaLabel: normalizeText(record.ariaLabel, 160),
+      label: normalizeText(record.label, 160),
+      placeholder: normalizeText(record.placeholder, 160),
+      title: normalizeText(record.title, 160),
+      href: normalizeText(record.href, 300),
       rect: normalizeRect(record.rect, offset),
       visible: record.visible === true,
       enabled: record.enabled !== false,
+      focused: record.focused === true,
+      editable: record.editable === true,
+      actionable: record.actionable === true,
       inShadowDom: record.inShadowDom === true,
     };
   });
@@ -254,27 +324,132 @@ async function frameRecords(frame, options = {}) {
 
       return String(value || '').replace(/[^a-zA-Z0-9_-]/g, (character) => `\\${character}`);
     };
-    const uniqueSelector = (element) => {
-      const tag = String(element.tagName || '').toLowerCase();
-      const queryRoot = element.getRootNode?.() || document;
+    const safeHref = (element) => {
+      const rawHref = String(element.getAttribute('href') || '').trim();
 
-      if (!tag) {
+      if (rawHref === '' || /^(?:javascript|data|vbscript):/i.test(rawHref)) {
         return '';
       }
 
-      if (element.id) {
-        const idSelector = `#${cssIdentifier(element.id)}`;
+      try {
+        const url = new URL(rawHref, window.location.href);
 
-        try {
-          if (queryRoot.querySelectorAll(idSelector).length === 1) {
-            return idSelector;
-          }
-        } catch {
-          // Continue with stable attributes/path.
+        return `${url.origin === window.location.origin ? '' : url.origin}${url.pathname}`;
+      } catch {
+        return rawHref.split(/[?#]/, 1)[0].slice(0, 300);
+      }
+    };
+    const labelFor = (element) => {
+      const labels = element.labels?.length
+        ? Array.from(element.labels).map((label) => label.textContent || '').join(' ')
+        : '';
+
+      return clean(
+        labels
+        || element.closest?.('label')?.textContent
+        || element.getAttribute('aria-label')
+        || '',
+      );
+    };
+    const actionable = (element) => {
+      const tag = String(element.tagName || '').toLowerCase();
+      const type = String(element.getAttribute('type') || '').toLowerCase();
+
+      return ['a', 'button', 'select', 'textarea'].includes(tag)
+        || (tag === 'input' && type !== 'hidden')
+        || ['button', 'link', 'checkbox', 'radio', 'switch', 'textbox', 'combobox', 'option'].includes(
+          String(element.getAttribute('role') || '').toLowerCase(),
+        )
+        || element.isContentEditable === true;
+    };
+    const editable = (element) => {
+      const tag = String(element.tagName || '').toLowerCase();
+      const type = String(element.getAttribute('type') || '').toLowerCase();
+
+      return element.isContentEditable === true
+        || tag === 'textarea'
+        || tag === 'select'
+        || (tag === 'input' && type !== 'hidden');
+    };
+    const safeAttributes = (element) => {
+      const attributes = {};
+
+      for (const attribute of [
+        'aria-label',
+        'aria-labelledby',
+        'autocomplete',
+        'data-cy',
+        'data-qa',
+        'data-test',
+        'data-testid',
+        'name',
+        'placeholder',
+        'role',
+        'title',
+        'type',
+      ]) {
+        const value = clean(element.getAttribute(attribute) || '', 300);
+
+        if (value !== '') {
+          attributes[attribute] = value;
         }
       }
 
-      for (const attribute of ['data-testid', 'data-test', 'data-cy', 'data-qa', 'name', 'aria-label', 'title']) {
+      const href = safeHref(element);
+      if (href !== '') {
+        attributes.href = href;
+      }
+
+      return attributes;
+    };
+    const selectorCandidatesFor = (element) => {
+      const tag = String(element.tagName || '').toLowerCase();
+      const queryRoot = element.getRootNode?.() || document;
+      const candidates = [];
+      const seen = new Set();
+
+      if (!tag) {
+        return candidates;
+      }
+
+      const addCandidate = (selector, kind, score, forcedMatchCount = null) => {
+        if (!selector || seen.has(selector)) {
+          return;
+        }
+
+        let matchCount = forcedMatchCount;
+        try {
+          matchCount ??= queryRoot.querySelectorAll(selector).length;
+        } catch {
+          return;
+        }
+
+        if (matchCount <= 0) {
+          return;
+        }
+
+        seen.add(selector);
+        candidates.push({
+          selector,
+          kind,
+          unique: matchCount === 1,
+          matchCount,
+          score,
+        });
+      };
+
+      const attributeScores = {
+        'data-testid': 100,
+        'data-test': 98,
+        'data-cy': 98,
+        'data-qa': 98,
+        name: 90,
+        'aria-label': 96,
+        title: 94,
+        placeholder: 92,
+      };
+
+      for (const attribute of Object.keys(attributeScores)) {
         const value = element.getAttribute(attribute);
 
         if (!value) {
@@ -282,14 +457,45 @@ async function frameRecords(frame, options = {}) {
         }
 
         const candidate = `${tag}[${attribute}="${cssString(value)}"]`;
+        addCandidate(candidate, 'attribute', attributeScores[attribute]);
+      }
 
-        try {
-          if (queryRoot.querySelectorAll(candidate).length === 1) {
-            return candidate;
-          }
-        } catch {
-          // Continue with the structural path.
-        }
+      const role = element.getAttribute('role');
+      const ariaLabel = element.getAttribute('aria-label');
+      if (role && ariaLabel) {
+        addCandidate(
+          `[role="${cssString(role)}"][aria-label="${cssString(ariaLabel)}"]`,
+          'aria',
+          97,
+        );
+      } else if (role) {
+        addCandidate(`[role="${cssString(role)}"]`, 'role', 82);
+      }
+
+      if (element.id) {
+        const idSelector = `#${cssIdentifier(element.id)}`;
+        const generatedLooking = /(?:^|[-_])(?:ember|react|vue|radix|headlessui)[-_]|\d{5,}|[a-f0-9]{12,}/i.test(element.id);
+
+        addCandidate(idSelector, 'id', generatedLooking ? 35 : 76);
+      }
+
+      const type = element.getAttribute('type');
+      if (type) {
+        addCandidate(`${tag}[type="${cssString(type)}"]`, 'type', 58);
+      }
+
+      const stableClasses = Array.from(element.classList || [])
+        .filter((className) => (
+          className.length <= 80
+          && !/(?:^css-|^sc-|__|[a-f0-9]{10,}|\d{5,})/i.test(className)
+        ))
+        .slice(0, 2);
+      if (stableClasses.length > 0) {
+        addCandidate(
+          `${tag}${stableClasses.map((className) => `.${cssIdentifier(className)}`).join('')}`,
+          'class',
+          55,
+        );
       }
 
       const segments = [];
@@ -324,7 +530,15 @@ async function frameRecords(frame, options = {}) {
         }
       }
 
-      return segments.join(' > ');
+      addCandidate(segments.join(' > '), 'path', 20);
+
+      return candidates
+        .sort((left, right) => (
+          right.score - left.score
+          || Number(right.unique) - Number(left.unique)
+          || left.matchCount - right.matchCount
+        ))
+        .slice(0, classLimit);
     };
     const directText = (element) => {
       const tag = String(element.tagName || '').toLowerCase();
@@ -363,7 +577,7 @@ async function frameRecords(frame, options = {}) {
     };
     const records = [];
     let depthTruncated = false;
-    const root = document.documentElement;
+    const root = document.body;
     const stack = root
       ? [{ element: root, parentIndex: null, depth: 0, path: '0', inShadowDom: false }]
       : [];
@@ -374,6 +588,8 @@ async function frameRecords(frame, options = {}) {
       const rect = element.getBoundingClientRect();
       const index = records.length;
       const tag = String(element.tagName || '').toLowerCase();
+      const attributes = safeAttributes(element);
+      const selectorCandidates = selectorCandidatesFor(element);
 
       records.push({
         index,
@@ -384,11 +600,19 @@ async function frameRecords(frame, options = {}) {
         id: element.id || '',
         classes: Array.from(element.classList || []).slice(0, classLimit),
         text: directText(element),
-        selector: uniqueSelector(element),
+        selector: selectorCandidates.find((candidate) => candidate.unique)?.selector
+          || selectorCandidates[0]?.selector
+          || tag,
+        selectorCandidates,
+        attributes,
         role: element.getAttribute('role') || '',
         type: element.getAttribute('type') || '',
         name: element.getAttribute('name') || '',
         ariaLabel: element.getAttribute('aria-label') || '',
+        label: labelFor(element),
+        placeholder: element.getAttribute('placeholder') || '',
+        title: element.getAttribute('title') || '',
+        href: safeHref(element),
         rect: {
           x: Number(rect.x.toFixed(2)),
           y: Number(rect.y.toFixed(2)),
@@ -397,6 +621,9 @@ async function frameRecords(frame, options = {}) {
         },
         visible: visible(element, rect),
         enabled: !element.disabled && element.getAttribute('aria-disabled') !== 'true',
+        focused: document.activeElement === element,
+        editable: editable(element),
+        actionable: actionable(element),
         inShadowDom: current.inShadowDom,
       });
 
@@ -435,6 +662,7 @@ async function frameRecords(frame, options = {}) {
       records,
       depthTruncated,
       nodeLimitReached: stack.length > 0,
+      rootTag: root ? 'body' : '',
       viewport: {
         width: window.innerWidth,
         height: window.innerHeight,
@@ -521,6 +749,7 @@ async function captureDomTree(page, options = {}) {
       const framePayload = {
         frameRef,
         parentFrameRef: parent ? (frameReferences.get(parent) || null) : null,
+        rootTag: normalizeText(snapshot.rootTag, 20) || 'body',
         name: typeof frame.name === 'function' ? normalizeText(frame.name(), 120) : '',
         url: typeof frame.url === 'function' ? normalizeText(frame.url(), 2000) : '',
         offsetX: geometry.x,
@@ -543,6 +772,7 @@ async function captureDomTree(page, options = {}) {
       capturedFrames.push({
         frameRef,
         parentFrameRef: parent ? (frameReferences.get(parent) || null) : null,
+        rootTag: 'body',
         name: typeof frame.name === 'function' ? normalizeText(frame.name(), 120) : '',
         url: typeof frame.url === 'function' ? normalizeText(frame.url(), 2000) : '',
         offsetX: 0,
@@ -559,10 +789,11 @@ async function captureDomTree(page, options = {}) {
   }
 
   const payload = {
-    version: 1,
+    version: 2,
     capturedAt: new Date().toISOString(),
     windowKey,
     targetId: normalizeText(options.targetId, 200),
+    rootTag: 'body',
     viewport: capturedFrames[0]?.viewport || null,
     frames: capturedFrames,
     nodeCount: capturedFrames.reduce((total, frame) => total + Number(frame.nodeCount || 0), 0),

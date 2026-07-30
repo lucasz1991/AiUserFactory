@@ -8,18 +8,23 @@ use PHPUnit\Framework\TestCase;
 
 class WorkflowRouteMarkupTest extends TestCase
 {
-    public function test_manager_routes_use_local_corridors_and_card_focus(): void
+    public function test_standard_editor_routes_use_shared_surface_mobile_focus_and_livewire_refresh(): void
     {
-        $source = file_get_contents(dirname(__DIR__, 2).'/resources/views/livewire/admin/network/workflow-manager.blade.php');
-        $definition = $this->alpineDefinitionContaining($source, 'focusedTask:');
+        $surface = file_get_contents(dirname(__DIR__, 2).'/resources/js/components/workflow-route-surface.js');
+        $editor = file_get_contents(dirname(__DIR__, 2).'/resources/views/livewire/admin/network/partials/workflow-definition-editor.blade.php');
 
-        $this->assertStringContainsString('renderRouteLines()', $definition);
-        $this->assertStringContainsString('const adjacentSteps', $definition);
-        $this->assertStringContainsString('const corridorY = lowerCost < upperCost ? lowerY : upperY', $definition);
-        $this->assertStringContainsString('line.sourceNode === focusNode || line.targetNode === focusNode', $definition);
-        $this->assertStringContainsString('related ? 1 : 0.5', $definition);
-        $this->assertStringNotContainsString('const topLaneY = 18', $definition);
-        $this->assertStringEndsWith('}', trim($definition));
+        $this->assertStringContainsString('export function workflowRouteSurface', $surface);
+        $this->assertStringContainsString("window.matchMedia('(max-width: 767px)')", $surface);
+        $this->assertStringContainsString('this.showAllRoutes = !event.matches', $surface);
+        $this->assertStringContainsString('line.sourceNode === focusNode || line.targetNode === focusNode', $surface);
+        $this->assertStringContainsString("window.Livewire.hook('morph.updated'", $surface);
+        $this->assertStringContainsString('new ResizeObserver(() => this.queueRouteRefresh())', $surface);
+        $this->assertStringContainsString('workflowRouteSurface({', $editor);
+        $this->assertStringContainsString('data-workflow-route-surface', $editor);
+        $this->assertStringContainsString('x-ref="routeMap"', $editor);
+        $this->assertStringContainsString('Alle Verbindungen', $editor);
+        $this->assertStringContainsString('data-workflow-route-node="terminal::end"', $editor);
+        $this->assertStringContainsString('data-workflow-route-node="terminal::fail"', $editor);
     }
 
     public function test_preview_routes_use_the_same_focus_and_corridor_behavior(): void

@@ -53,7 +53,11 @@
     data-step-route-failed="{{ $stepFailedTarget }}"
     {{ $attributes->merge(['class' => 'ff-step-column group/step relative flex min-h-[300px] w-[296px] min-w-[296px] max-w-[296px] shrink-0 flex-col rounded-xl border '.$enabledClass]) }}
 >
-    <div class="ff-step-header relative z-30 mb-4 rounded-xl border px-4 py-3">
+    <div
+        data-workflow-route-node="{{ $step->action_key }}::*"
+        data-workflow-step-action="{{ $step->action_key }}"
+        class="ff-step-header relative z-30 mb-4 rounded-xl border px-4 py-3"
+    >
         <div class="flex items-start justify-between gap-3">
             <div class="min-w-0">
                 <div class="flex flex-wrap items-center gap-2">
@@ -82,13 +86,75 @@
                 @endisset
             </div>
         </div>
+        @if(! $locked)
+            <div
+                class="ff-touch-step-reorder mt-3"
+                role="group"
+                aria-label="Liste {{ $step->name }} verschieben"
+            >
+                <button
+                    type="button"
+                    class="ff-touch-reorder-button"
+                    data-touch-step-move="left"
+                    x-on:click.stop="$dispatch('workflow-step-move-requested', { stepId: {{ (int) $step->id }}, direction: 'left' })"
+                    aria-label="Liste nach links verschieben"
+                    title="Liste nach links"
+                >
+                    <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M10.5 3.5 6 8l4.5 4.5"></path></svg>
+                </button>
+                <button
+                    type="button"
+                    class="ff-touch-reorder-button"
+                    data-touch-step-move="right"
+                    x-on:click.stop="$dispatch('workflow-step-move-requested', { stepId: {{ (int) $step->id }}, direction: 'right' })"
+                    aria-label="Liste nach rechts verschieben"
+                    title="Liste nach rechts"
+                >
+                    <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m5.5 3.5 4.5 4.5-4.5 4.5"></path></svg>
+                </button>
+            </div>
+        @endif
     </div>
 
     <div
         x-data="{
             dragInside: false,
+            draggingTask: false,
+            taskActivationBlocked: false,
+            dragSequence: 0,
             dragEffect(event) {
                 return Array.from(event.dataTransfer.types || []).includes('application/x-workflow-task-catalog') ? 'copy' : 'move';
+            },
+            beginTaskDrag(event, taskKey, sourceStepId) {
+                this.dragSequence += 1;
+                this.draggingTask = true;
+                this.taskActivationBlocked = true;
+                event.dataTransfer.setData('application/x-workflow-task-key', taskKey);
+                event.dataTransfer.setData('application/x-workflow-source-step-id', sourceStepId);
+                event.dataTransfer.setData('text/plain', taskKey);
+                event.dataTransfer.effectAllowed = 'move';
+            },
+            finishTaskDrag() {
+                const completedSequence = this.dragSequence;
+
+                this.dragInside = false;
+                this.draggingTask = false;
+
+                window.setTimeout(() => {
+                    if (this.dragSequence === completedSequence && !this.draggingTask) {
+                        this.taskActivationBlocked = false;
+                    }
+                }, 220);
+            },
+            taskActivationAllowed(event) {
+                if (!this.draggingTask && !this.taskActivationBlocked) {
+                    return true;
+                }
+
+                event.preventDefault();
+                event.stopPropagation();
+
+                return false;
             },
             taskPositionFromEvent(event) {
                 const list = this.$refs.taskList;
@@ -146,6 +212,7 @@
         x-on:dragover.prevent="$event.dataTransfer.dropEffect = dragEffect($event)"
         x-on:dragleave.self="dragInside = false"
         x-on:drop.prevent.stop="dropTask($event)"
+        x-on:dragend.window="finishTaskDrag()"
         x-bind:class="dragInside ? 'bg-slate-100/80 ring-2 ring-inset ring-slate-300' : ''"
         class="min-w-0 flex-1 space-y-0 px-3 pb-4 pt-2 transition"
     >
@@ -199,17 +266,11 @@
                         data-route-success="{{ $successTarget }}"
                         data-route-failed="{{ $failedTarget }}"
                         @if(! $locked) draggable="true" @endif
-                        @if(! $locked) x-on:dragstart.stop="
-                            $event.dataTransfer.setData('application/x-workflow-task-key', @js($task['key'] ?? ''));
-                            $event.dataTransfer.setData('application/x-workflow-source-step-id', @js((string) $step->id));
-                            $event.dataTransfer.setData('text/plain', @js($task['key'] ?? ''));
-                            $event.dataTransfer.effectAllowed = 'move';
-                        " @endif
-                        @if(! $locked) x-on:dragend.window="dragInside = false" @endif
+                        @if(! $locked) x-on:dragstart.stop="beginTaskDrag($event, @js($task['key'] ?? ''), @js((string) $step->id))" @endif
                         x-on:mouseenter="setHoveredRouteNode(@js($sourceNode))"
                         x-on:mouseleave="setHoveredRouteNode('')"
-                        x-on:click.stop="focusedTask = @js($step->id.'::'.($task['key'] ?? '')); setActiveRouteNode(@js($sourceNode))"
-                        @if(! $locked) x-on:dblclick.stop="$wire.openEditTaskCard({{ $step->id }}, @js($task['key'] ?? ''))" @endif
+                        x-on:click.stop="if (! taskActivationAllowed($event)) return; focusedTask = @js($step->id.'::'.($task['key'] ?? '')); setActiveRouteNode(@js($sourceNode))"
+                        @if(! $locked) x-on:dblclick.stop="if (! taskActivationAllowed($event)) return; $wire.openEditTaskCard({{ $step->id }}, @js($task['key'] ?? ''))" @endif
                         x-bind:class="focusedTask === @js($step->id.'::'.($task['key'] ?? '')) ? 'ring-2 ring-slate-400 ring-offset-2 ring-offset-slate-100' : ''"
                         class="relative z-20 w-full min-w-0 max-w-full rounded-lg"
                     >
@@ -221,6 +282,47 @@
                                 </x-slot>
                             @endif
                         </x-workflows.task-card>
+                        @if(! $locked)
+                            <div
+                                class="ff-touch-task-reorder"
+                                role="group"
+                                aria-label="Task {{ $task['title'] ?? 'Task' }} verschieben"
+                                x-on:dblclick.stop
+                            >
+                                <button
+                                    type="button"
+                                    class="ff-touch-reorder-button"
+                                    data-touch-task-move="up"
+                                    x-on:click.stop="$dispatch('workflow-task-move-requested', { stepId: {{ (int) $step->id }}, taskKey: @js($taskKey), direction: 'up' })"
+                                    aria-label="Task nach oben verschieben"
+                                    title="Task nach oben"
+                                    @disabled($loop->first)
+                                >
+                                    <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3.5 10.5 8 6l4.5 4.5"></path></svg>
+                                </button>
+                                <button
+                                    type="button"
+                                    class="ff-touch-reorder-button"
+                                    data-touch-task-move="down"
+                                    x-on:click.stop="$dispatch('workflow-task-move-requested', { stepId: {{ (int) $step->id }}, taskKey: @js($taskKey), direction: 'down' })"
+                                    aria-label="Task nach unten verschieben"
+                                    title="Task nach unten"
+                                    @disabled($loop->last)
+                                >
+                                    <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m3.5 5.5 4.5 4.5 4.5-4.5"></path></svg>
+                                </button>
+                                <button
+                                    type="button"
+                                    class="ff-touch-reorder-button"
+                                    data-touch-task-move="another-list"
+                                    x-on:click.stop="$dispatch('workflow-task-move-requested', { stepId: {{ (int) $step->id }}, taskKey: @js($taskKey), direction: 'another-list' })"
+                                    aria-label="Task in eine andere Liste verschieben"
+                                    title="In andere Liste"
+                                >
+                                    <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M2.5 4h7M2.5 8h7M2.5 12h7M11 5.5 13.5 8 11 10.5"></path></svg>
+                                </button>
+                            </div>
+                        @endif
                     </div>
                 </div>
             @endforeach

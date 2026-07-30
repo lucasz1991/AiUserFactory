@@ -361,7 +361,7 @@ class WorkflowsIndex extends Component
             ? 'Workflow wurde angelegt, aber der Copilot-Entwurf ist fehlgeschlagen: '.$planningError
             : ($validated['newWorkflowPlanWithCopilot'] ? 'Workflow und Copilot-Entwurf wurden erstellt.' : 'Workflow wurde erstellt.'));
 
-        $this->redirectRoute('network.workflows.studio', ['workflow' => $workflow->id, 'session' => $studio->id]);
+        $this->redirectRoute('network.workflows.manage', ['workflow' => $workflow->id]);
     }
 
     public function openEditWorkflow(int $workflowId): void

@@ -97,14 +97,29 @@ class WorkflowCopilotUiMarkupTest extends TestCase
         $this->assertStringContainsString('min-height: 44px !important;', $responsiveStyles);
 
         $domInspector = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-studio/dom-inspector.blade.php');
+        $domInspectorJavascript = file_get_contents($root.'/resources/js/components/workflow-dom-inspector.js');
         $toolModal = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-studio/tool-modal.blade.php');
         $this->assertStringContainsString('workflow-studio.dom-inspector', $runPreview);
         $this->assertStringContainsString('workflow-studio.dom-inspector', $toolModal);
         $this->assertStringContainsString('data-workflow-dom-inspector', $domInspector);
-        $this->assertStringContainsString('workflow-dom-node-selected', $domInspector);
-        $this->assertStringContainsString('workflow-dom-node-highlight', $domInspector);
-        $this->assertStringContainsString('overlayStyle(rect', $domInspector);
-        $this->assertStringContainsString('cursorStyle()', $domInspector);
+        $this->assertStringContainsString('workflow-dom-node-selected', $domInspectorJavascript);
+        $this->assertStringNotContainsString('workflow-dom-node-highlight', $domInspector);
+        $this->assertStringContainsString('data-workflow-dom-search', $domInspector);
+        $this->assertStringContainsString('data-workflow-screenshot-picker', $domInspector);
+        $this->assertStringContainsString('data-workflow-dom-match-overlay', $domInspector);
+        $this->assertStringContainsString('data-workflow-selector-suggestions', $domInspector);
+        $this->assertStringContainsString('canProbe', $domInspector);
+        $this->assertStringContainsString('data-workflow-browser-tool', $toolModal);
+        $this->assertStringContainsString("'canProbe' => ! \$autonomousMode && \$isPaused", $toolModal);
+        $this->assertStringContainsString('bodyOnlyNodes', $domInspectorJavascript);
+        $this->assertStringContainsString('querySelectorAll', $domInspectorJavascript);
+        $this->assertStringContainsString('selectFromScreenshot', $domInspectorJavascript);
+        $this->assertStringContainsString('scrollSelectedIntoView', $domInspectorJavascript);
+        $this->assertStringContainsString('matchedRefs', $domInspectorJavascript);
+        $this->assertStringContainsString('selectorCandidates', $domInspectorJavascript);
+        $this->assertStringContainsString('navigator.clipboard.writeText', $domInspectorJavascript);
+        $this->assertStringContainsString('window.sessionStorage', $domInspectorJavascript);
+        $this->assertStringNotContainsString("highlight: true", $domInspectorJavascript);
     }
 
     public function test_studio_overlays_use_standard_z_scale_and_toolbar_offers_person_context(): void

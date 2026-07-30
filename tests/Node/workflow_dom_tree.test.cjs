@@ -23,6 +23,18 @@ function record(index, overrides = {}) {
     classes: ['item'],
     text: 'visible label',
     selector: `#node-${index}`,
+    selectorCandidates: [
+      {
+        selector: `#node-${index}`,
+        kind: 'id',
+        unique: true,
+        matchCount: 1,
+        score: 100,
+      },
+    ],
+    attributes: {
+      'data-testid': `node-${index}`,
+    },
     role: '',
     type: '',
     name: '',
@@ -30,6 +42,9 @@ function record(index, overrides = {}) {
     rect: { x: index, y: index * 2, width: 20, height: 10 },
     visible: true,
     enabled: true,
+    focused: false,
+    editable: false,
+    actionable: false,
     inShadowDom: false,
     ...overrides,
   };
@@ -120,6 +135,9 @@ test('iframe rects include border-aware main-frame offsets and content scaling',
   const childRect = childFrame.nodes[0].rect;
 
   assert.equal(tree.frames[0].frameRef, 'main');
+  assert.equal(tree.version, 2);
+  assert.equal(tree.rootTag, 'body');
+  assert.equal(tree.frames[0].rootTag, 'body');
   assert.equal(childFrame.parentFrameRef, 'main');
   assert.equal(childRect.x, 122);
   assert.equal(childRect.y, 62);
@@ -162,6 +180,74 @@ test('complete multi-frame payload remains inside the configured byte ceiling', 
   assert.ok(actualBytes <= 16 * 1024, `${actualBytes} exceeds the configured limit`);
   assert.equal(tree.byteSize, actualBytes);
   assert.equal(tree.truncated.bytes, true);
+});
+
+test('body nodes expose safe element data and ranked selector suggestions without sensitive attributes', () => {
+  const tree = buildFrameTree([
+    record(0, {
+      tag: 'input',
+      attributes: {
+        'aria-label': 'E-Mail',
+        'data-testid': 'login-email',
+        onclick: 'steal()',
+        value: 'secret@example.test',
+      },
+      selectorCandidates: [
+        { selector: '[data-testid="login-email"]', kind: 'attribute', unique: true, matchCount: 1, score: 98 },
+        { selector: 'input[type="email"]', kind: 'type', unique: false, matchCount: 2, score: 58 },
+        { selector: '[data-testid="login-email"]', kind: 'duplicate', unique: false, matchCount: 9, score: 1 },
+      ],
+      focused: true,
+      editable: true,
+      actionable: true,
+    }),
+  ], {
+    frameRef: 'main',
+    windowKey: 'main',
+  });
+  const node = tree.nodes[0];
+
+  assert.deepEqual(node.attributes, {
+    'aria-label': 'E-Mail',
+    'data-testid': 'login-email',
+  });
+  assert.deepEqual(node.selectorCandidates, [
+    { selector: '[data-testid="login-email"]', kind: 'attribute', unique: true, matchCount: 1, score: 98 },
+    { selector: 'input[type="email"]', kind: 'type', unique: false, matchCount: 2, score: 58 },
+  ]);
+  assert.equal(node.focused, true);
+  assert.equal(node.editable, true);
+  assert.equal(node.actionable, true);
+  assert.equal(Object.hasOwn(node.attributes, 'value'), false);
+  assert.equal(Object.hasOwn(node.attributes, 'onclick'), false);
+});
+
+test('browser-side tree traversal starts at body and never serializes html or head as structural roots', () => {
+  const source = fs.readFileSync(
+    path.resolve(__dirname, '../../node/workflows/tasks/lib/dom_tree.cjs'),
+    'utf8',
+  );
+
+  assert.match(source, /const root = document\.body;/);
+  assert.doesNotMatch(source, /const root = document\.documentElement;/);
+});
+
+test('browser-side selector suggestions rank semantic attributes before raw ids and structural paths', () => {
+  const source = fs.readFileSync(
+    path.resolve(__dirname, '../../node/workflows/tasks/lib/dom_tree.cjs'),
+    'utf8',
+  );
+  const semanticAttributes = source.indexOf('const attributeScores = {');
+  const rawId = source.indexOf('if (element.id) {', semanticAttributes);
+  const scoreSort = source.indexOf('right.score - left.score', rawId);
+  const uniqueSort = source.indexOf('Number(right.unique) - Number(left.unique)', scoreSort);
+
+  assert.ok(semanticAttributes >= 0);
+  assert.ok(rawId > semanticAttributes);
+  assert.ok(scoreSort > rawId);
+  assert.ok(uniqueSort > scoreSort);
+  assert.match(source, /'data-testid': 100/);
+  assert.match(source, /addCandidate\(idSelector, 'id', generatedLooking \? 35 : 76\)/);
 });
 
 test('atomic JSON writer safely replaces an existing Windows-readable file', () => {

@@ -1,6 +1,6 @@
 @php
     $toolMeta = [
-        'browser' => ['Browserfenster', 'Live-Vorschauen, URLs und DOM-Zugriffe'],
+        'browser' => ['Browserfenster & Body-DOM', 'Screenshot anklicken, Selektoren suchen und passende Elemente vergleichen'],
         'data' => ['Laufdaten', 'Cursor, Loop-Zustand und Laufkontext'],
         'checkpoints' => ['Checkpoints', 'Gespeicherte Wiederaufnahme- und Fehlerpunkte'],
         'logs' => ['Logs', 'Zeitlicher Verlauf der Studio-Sitzung'],
@@ -22,7 +22,7 @@
     aria-modal="true"
     aria-label="{{ $toolTitle }}"
 >
-    <section class="flex max-h-full w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-white/70 bg-white shadow-2xl">
+    <section class="flex max-h-[calc(100vh-1.5rem)] w-full {{ $activeToolModal === 'browser' ? 'max-w-[96rem]' : 'max-w-6xl' }} flex-col overflow-hidden rounded-2xl border border-white/70 bg-white shadow-2xl">
         <header class="flex shrink-0 items-center justify-between gap-4 border-b border-slate-200 bg-white px-4 py-3 sm:px-5">
             <div class="min-w-0">
                 <p class="text-[9px] font-black uppercase tracking-[0.18em] text-cyan-700">Testwerkzeug</p>
@@ -34,15 +34,25 @@
 
         <div class="min-h-0 flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-5">
             @if($activeToolModal === 'browser')
-                <div class="grid gap-4 lg:grid-cols-2">
+                <div class="space-y-5" data-workflow-browser-tool>
                     @foreach($browserWindows as $window)
-                        <article class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-                            <div class="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3">
+                        <article class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                            <div class="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 px-4 py-3">
                                 <div class="min-w-0">
                                     <div class="flex items-center gap-2"><span class="h-2.5 w-2.5 rounded-full {{ $window['connected'] ? 'bg-emerald-500' : 'bg-slate-300' }}"></span><h3 class="truncate text-sm font-bold text-slate-900">{{ $window['name'] }}</h3>@if($window['active'])<span class="rounded bg-cyan-100 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wide text-cyan-800">aktiv</span>@endif</div>
                                     <p class="mt-1 truncate text-[10px] text-slate-500">{{ $window['url'] ?: 'Noch keine URL erfasst' }}</p>
                                 </div>
-                                @if(! $autonomousMode)<button type="button" wire:click="openSelectorProbe(@js($window['name']))" class="shrink-0 rounded-lg border border-cyan-200 bg-cyan-50 px-3 py-1.5 text-[10px] font-bold text-cyan-800 hover:bg-cyan-100">Selector prüfen</button>@endif
+                                @if(! $autonomousMode)
+                                    <button
+                                        type="button"
+                                        wire:click="openSelectorProbe(@js($window['name']))"
+                                        @disabled(! $isPaused)
+                                        title="{{ $isPaused ? 'Echte Browseraktion im pausierten Lauf vorbereiten' : 'Für Live-Proben den Lauf zuerst manuell pausieren' }}"
+                                        class="shrink-0 rounded-lg border border-cyan-200 bg-cyan-50 px-3 py-2 text-[10px] font-bold text-cyan-800 hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-40"
+                                    >
+                                        Live-Probe
+                                    </button>
+                                @endif
                             </div>
                             @include('livewire.admin.network.workflow-studio.dom-inspector', [
                                 'panel' => [
@@ -54,6 +64,7 @@
                                     'targetId' => $window['target_id'] ?? null,
                                 ],
                                 'interactive' => ! $autonomousMode,
+                                'canProbe' => ! $autonomousMode && $isPaused,
                             ])
                             @if(filled($window['dom_url'] ?? null))
                                 <div class="border-t border-slate-100 px-4 py-2"><a href="{{ $window['dom_url'] }}" target="_blank" rel="noopener" class="text-[10px] font-bold text-cyan-700 hover:text-cyan-900">Bereinigten DOM-Snapshot öffnen</a></div>
@@ -106,7 +117,7 @@
                 <div class="grid gap-3 lg:grid-cols-2">
                     @foreach($steps as $step)
                         @php($isCurrentStep = (int) $cursorStepId === (int) $step->id)
-                        <article class="rounded-xl border bg-white p-4 shadow-sm {{ $isCurrentStep ? 'border-amber-300 ring-2 ring-amber-100' : 'border-slate-200' }}"><div class="flex items-start justify-between gap-3"><div class="min-w-0"><p class="text-[9px] font-black uppercase tracking-wide text-slate-400">{{ $step->position }} · {{ $step->action_key }}</p><h3 class="mt-1 truncate text-sm font-bold text-slate-900">{{ $step->name }}</h3></div><span class="rounded-full px-2 py-1 text-[9px] font-black {{ $step->is_enabled ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500' }}">{{ $step->is_enabled ? 'aktiv' : 'pausiert' }}</span></div><p class="mt-3 text-xs text-slate-500">{{ count($step->task_cards) }} Tasks</p>@if(! $autonomousMode)<button type="button" wire:click="openBuilderForStepFromTool({{ $step->id }})" class="mt-3 rounded-lg border border-cyan-200 bg-cyan-50 px-3 py-1.5 text-[10px] font-bold text-cyan-800">Schritt bearbeiten</button>@endif</article>
+                        <article class="rounded-xl border bg-white p-4 shadow-sm {{ $isCurrentStep ? 'border-amber-300 ring-2 ring-amber-100' : 'border-slate-200' }}"><div class="flex items-start justify-between gap-3"><div class="min-w-0"><p class="text-[9px] font-black uppercase tracking-wide text-slate-400">{{ $step->position }} · {{ $step->action_key }}</p><h3 class="mt-1 truncate text-sm font-bold text-slate-900">{{ $step->name }}</h3></div><span class="rounded-full px-2 py-1 text-[9px] font-black {{ $step->is_enabled ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500' }}">{{ $step->is_enabled ? 'aktiv' : 'pausiert' }}</span></div><p class="mt-3 text-xs text-slate-500">{{ count($step->task_cards) }} Tasks</p>@if(! $autonomousMode)<button type="button" wire:click="openStandardEditorForStepFromTool({{ $step->id }})" class="mt-3 rounded-lg border border-cyan-200 bg-cyan-50 px-3 py-1.5 text-[10px] font-bold text-cyan-800">Im Standardeditor bearbeiten</button>@endif</article>
                     @endforeach
                 </div>
             @elseif($activeToolModal === 'tasks')

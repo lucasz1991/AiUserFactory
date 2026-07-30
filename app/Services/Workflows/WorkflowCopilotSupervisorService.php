@@ -29,6 +29,12 @@ class WorkflowCopilotSupervisorService
 
     private const MIN_VERIFICATION_VISION_CONFIDENCE = 0.7;
 
+    // Kleine Schaetzunsicherheit des Bildmodells darf keinen Rueckschritt
+    // melden; erst ein deutlicher Abfall gilt als Regression.
+    private const GOAL_PROGRESS_REGRESSION_TOLERANCE = 0.05;
+
+    private const MAX_ASSISTANCE_ELEMENT_CANDIDATES = 5;
+
     public function __construct(
         protected WorkflowExecutionService $execution,
         protected WorkflowCopilotSessionService $sessions,
@@ -539,6 +545,31 @@ class WorkflowCopilotSupervisorService
             $payload,
             JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE,
         ));
+    }
+
+    /**
+     * Liest `goal_progress` aus einer Vision-Antwort oder aus dem Sitzungszustand.
+     *
+     * Rueckgabe `null` bedeutet bewusst "keine Aussage" und nicht "0": Ein
+     * fehlender oder nicht numerischer Wert darf weder als Rueckschritt gewertet
+     * werden noch einen frueheren Referenzwert entwerten.
+     *
+     * @param  array<string, mixed>  $source
+     */
+    protected function goalProgressValue(array $source, string $key = 'goal_progress'): ?float
+    {
+        $value = $source[$key] ?? null;
+
+        if (! is_numeric($value)) {
+            return null;
+        }
+
+        return round(max(0.0, min(1.0, (float) $value)), 4);
+    }
+
+    protected function goalProgressLabel(?float $progress): string
+    {
+        return $progress === null ? 'unbekannt' : ((int) round($progress * 100)).' %';
     }
 
     protected function unresolvedRouteTargetFromError(string $error): ?string
@@ -1124,17 +1155,97 @@ class WorkflowCopilotSupervisorService
             // zurueckgesetzt und begrenzt die Sitzung unabhaengig davon, wo sie
             // scheitert.
             $checkpointRepairs = max(0, (int) ($state['checkpoint_repairs_total'] ?? 0)) + 1;
+            // Der vom Bildmodell gelieferte Zielfortschritt war bisher reine
+            // Protokollzeile. Als Regelgroesse macht er den Fall sichtbar, den
+            // Fehlersignatur und Wiederholungszaehler nicht erfassen: Eine
+            // Reparatur greift technisch, entfernt den Lauf aber vom Ziel.
+            $currentGoalProgress = $this->goalProgressValue($vision);
+            $previousGoalProgress = $this->goalProgressValue($state, 'last_goal_progress');
+            $progressRegressions = max(0, (int) ($state['progress_regressions'] ?? 0));
+            $progressRegressed = $currentGoalProgress !== null
+                && $previousGoalProgress !== null
+                && $currentGoalProgress < ($previousGoalProgress - self::GOAL_PROGRESS_REGRESSION_TOLERANCE);
+
+            if ($progressRegressed) {
+                $progressRegressions++;
+            }
 
             $state['last_repair_failure_signature'] = $failureSignature;
             $state['repair_failure_repeats'] = $failureRepeats;
             $state['checkpoint_repairs_total'] = $checkpointRepairs;
             $usage['same_state_repeats'] = $failureRepeats;
             $usage['checkpoint_repairs_total'] = $checkpointRepairs;
+
+            // Ohne verwertbaren Fortschrittswert bleibt der Zustand unberuehrt:
+            // Ein fehlendes oder unbrauchbares Vision-Feld darf weder den
+            // Zaehler bewegen noch einen alten Referenzwert ueberschreiben.
+            if ($currentGoalProgress !== null) {
+                $state['last_goal_progress'] = $currentGoalProgress;
+                $state['progress_regressions'] = $progressRegressions;
+                $usage['progress_regressions'] = $progressRegressions;
+            }
+
             $session->forceFill([
                 'state_json' => $state,
                 'usage_json' => $usage,
                 'last_activity_at' => now(),
             ])->save();
+
+            $maxProgressRegressions = max(1, (int) data_get($session->budget_json, 'max_progress_regressions', 3));
+
+            if ($progressRegressed) {
+                $this->sessions->appendEvent(
+                    $session,
+                    'repair.progress_regressed',
+                    'Der gemeldete Zielfortschritt ist seit der letzten Reparatur von '
+                        .$this->goalProgressLabel($previousGoalProgress).' auf '
+                        .$this->goalProgressLabel($currentGoalProgress)
+                        .' gesunken; die Reparatur laeuft weiter, entfernt den Lauf aber bisher vom Ziel.',
+                    [
+                        'workflow_run_id' => (int) $run->id,
+                        'workflow_step_id' => (int) $step->id,
+                        'task_key' => $checkpoint['task_key'] ?? null,
+                        'state_signature' => $observation['state_signature'] ?? null,
+                        'previous_goal_progress' => $previousGoalProgress,
+                        'goal_progress' => $currentGoalProgress,
+                        'progress_regressions' => $progressRegressions,
+                        'max_progress_regressions' => $maxProgressRegressions,
+                    ],
+                    'repairing',
+                    'warning',
+                    true,
+                );
+                $session = $session->fresh() ?? $session;
+            }
+
+            // Nur abbrechen, wenn dieser Durchlauf tatsaechlich einen Rueckschritt
+            // gemeldet hat. Ohne `$progressRegressed` haette ein bereits am Limit
+            // stehender Zaehler jeden weiteren Checkpoint beendet — auch einen, in
+            // dem der Fortschritt gestiegen ist.
+            if ($progressRegressed && $currentGoalProgress !== null && $progressRegressions >= $maxProgressRegressions) {
+                $this->sessions->appendEvent(
+                    $session,
+                    'repair.no_progress',
+                    'Der Zielfortschritt ist in dieser Sitzung '.$progressRegressions.'x gesunken statt zu steigen; die Reparaturen entfernen den Lauf vom Ziel und werden beendet.',
+                    [
+                        'workflow_run_id' => (int) $run->id,
+                        'workflow_step_id' => (int) $step->id,
+                        'task_key' => $checkpoint['task_key'] ?? null,
+                        'state_signature' => $observation['state_signature'] ?? null,
+                        'previous_goal_progress' => $previousGoalProgress,
+                        'goal_progress' => $currentGoalProgress,
+                        'progress_regressions' => $progressRegressions,
+                        'max_progress_regressions' => $maxProgressRegressions,
+                        'reason_code' => 'goal_progress_regressed',
+                    ],
+                    'repairing',
+                    'error',
+                    true,
+                );
+                $this->exhaustBudget($session->fresh() ?? $session);
+
+                return;
+            }
 
             $maxCheckpointRepairs = max(1, (int) data_get($session->budget_json, 'max_checkpoint_repairs', 15));
 
@@ -1468,7 +1579,8 @@ class WorkflowCopilotSupervisorService
                 900,
                 '',
             );
-            $this->sessions->pause($session, 'Copilot pausiert: '.$pauseReason);
+            $this->requestAssistance($session, $run, $step, $checkpoint, $observation, $vision, $pauseReason);
+            $this->sessions->pause($session->fresh() ?? $session, 'Copilot pausiert: '.$pauseReason);
 
             return;
         }
@@ -1543,6 +1655,123 @@ class WorkflowCopilotSupervisorService
             $plan,
         );
         $this->markContinuationApplied($session, $checkpoint, 'probe');
+    }
+
+    /**
+     * Haengt beim Pausieren eine beantwortbare Rueckfrage an das Auditlog.
+     *
+     * Eine stille Pause zwingt den Benutzer, den Bildschirmzustand selbst zu
+     * rekonstruieren, um ueberhaupt zu wissen, worueber er entscheiden soll.
+     * Deshalb wird die offene Entscheidung als eine Frage plus auswaehlbare
+     * Elementkandidaten protokolliert. Rein additiv: Die Pausenlogik und ihre
+     * bestehenden Ereignisse bleiben unveraendert.
+     *
+     * @param  array<string, mixed>  $checkpoint
+     * @param  array<string, mixed>  $observation
+     * @param  array<string, mixed>  $vision
+     */
+    protected function requestAssistance(
+        WorkflowCopilotSession $session,
+        WorkflowRun $run,
+        WorkflowStep $step,
+        array $checkpoint,
+        array $observation,
+        array $vision,
+        string $reason,
+    ): void {
+        $taskKey = trim((string) ($checkpoint['failure_task_key'] ?? $checkpoint['task_key'] ?? ''));
+        $taskTitle = trim((string) ($checkpoint['task_title'] ?? ''));
+        $taskLabel = $taskTitle !== '' ? $taskTitle : ($taskKey !== '' ? $taskKey : 'die aktuelle Task');
+        $stepName = trim((string) $step->name) !== '' ? trim((string) $step->name) : (string) $step->action_key;
+        $candidates = $this->assistanceElementCandidates($observation, $vision);
+        $question = $candidates === []
+            ? 'Welches Element auf dem aktuellen Bildschirm soll `'.$taskLabel.'` im Step `'.$stepName.'` ansteuern? Es wurde kein verwertbarer Kandidat erkannt.'
+            : 'Welches der '.count($candidates).' erkannten Elemente soll `'.$taskLabel.'` im Step `'.$stepName.'` ansteuern?';
+        $screenshotArtifactId = data_get($observation, 'screenshot.artifact_id')
+            ?? data_get($observation, 'screenshot_artifact_id');
+        $screenshotUrl = trim((string) ($observation['screenshot_url']
+            ?? data_get($session->state_json, 'latest_screenshot_url', ''))) ?: null;
+
+        $this->sessions->appendEvent(
+            $session,
+            'assistance.requested',
+            $question,
+            [
+                'question' => $question,
+                'reason' => Str::limit(trim($reason), 900, ''),
+                'answer_format' => 'element_ref',
+                'workflow_run_id' => (int) $run->id,
+                'workflow_step_id' => (int) $step->id,
+                'workflow_step_name' => $stepName,
+                'workflow_step_action_key' => (string) $step->action_key,
+                'task_key' => $taskKey !== '' ? $taskKey : null,
+                'task_title' => $taskTitle !== '' ? $taskTitle : null,
+                'state_signature' => $observation['state_signature'] ?? null,
+                'page_url' => data_get($observation, 'page.url'),
+                'screenshot_artifact_id' => $screenshotArtifactId !== null ? (int) $screenshotArtifactId : null,
+                'screenshot_url' => $screenshotUrl,
+                'element_candidates' => $candidates,
+            ],
+            'repairing',
+            'warning',
+            true,
+        );
+    }
+
+    /**
+     * Auswaehlbare Elementkandidaten fuer die Rueckfrage.
+     *
+     * Vom Bildmodell als relevant markierte Referenzen stehen vorn, damit die
+     * Oberflaeche die wahrscheinlichste Antwort zuerst anbieten kann; die
+     * uebrigen sichtbaren Elemente bleiben als Alternative erhalten.
+     *
+     * @param  array<string, mixed>  $observation
+     * @param  array<string, mixed>  $vision
+     * @return list<array<string, mixed>>
+     */
+    protected function assistanceElementCandidates(array $observation, array $vision): array
+    {
+        $relevantRefs = collect(is_array($vision['relevant_elements'] ?? null) ? $vision['relevant_elements'] : [])
+            ->filter(fn (mixed $element): bool => is_array($element))
+            ->pluck('element_ref')
+            ->map(fn (mixed $ref): string => trim((string) $ref))
+            ->filter()
+            ->unique();
+
+        return collect(is_array($observation['interaction_map'] ?? null) ? $observation['interaction_map'] : [])
+            ->filter(fn (mixed $element): bool => is_array($element)
+                && trim((string) ($element['element_ref'] ?? '')) !== '')
+            ->sortByDesc(fn (array $element): int => $relevantRefs->contains(trim((string) $element['element_ref'])) ? 1 : 0)
+            ->values()
+            ->take(self::MAX_ASSISTANCE_ELEMENT_CANDIDATES)
+            ->map(function (array $element) use ($relevantRefs): array {
+                $elementRef = trim((string) $element['element_ref']);
+                $label = collect([
+                    $element['text'] ?? null,
+                    $element['semantic_label'] ?? null,
+                    $element['aria'] ?? null,
+                    $element['title'] ?? null,
+                    $element['placeholder'] ?? null,
+                    $element['name'] ?? null,
+                ])
+                    ->map(fn (mixed $value): string => trim((string) $value))
+                    ->first(fn (string $value): bool => $value !== '') ?? '';
+
+                return [
+                    'element_ref' => Str::limit($elementRef, 191, ''),
+                    'label' => Str::limit($label, 160, ''),
+                    'tag' => Str::limit(trim((string) ($element['tag'] ?? '')), 40, ''),
+                    'selector_candidate' => Str::limit(
+                        trim((string) data_get($element, 'selector_candidates.0', '')),
+                        300,
+                        '',
+                    ),
+                    'visible' => $element['visible'] ?? null,
+                    'vision_relevant' => $relevantRefs->contains($elementRef),
+                ];
+            })
+            ->values()
+            ->all();
     }
 
     protected function authorizeStudioRepairPlan(
@@ -2589,6 +2818,26 @@ class WorkflowCopilotSupervisorService
             $pass,
             $pass ? 'Deterministische Assertion erfuellt.' : 'Deterministische Assertion nicht erfuellt.',
         );
+    }
+
+    /**
+     * Meldet, ob ein frei formuliertes Erfolgskriterium automatisch pruefbar ist.
+     *
+     * Gedacht fuer sofortige Rueckmeldung bei der Eingabe: Ein nicht pruefbares
+     * Kriterium wird spaeter als `unsupported` verworfen, und weil
+     * evaluateSuccessCriteria() bei null Assertionen vakuum-wahr `pass=true`
+     * meldet, faellt die fachliche Endpruefung dann wirkungslos aus, ohne dass es
+     * jemand bemerkt. Genau das soll hier sichtbar werden, bevor ein Lauf startet.
+     */
+    public function isCheckableCriterion(string $assertion): bool
+    {
+        $assertion = trim($assertion);
+
+        if ($assertion === '') {
+            return false;
+        }
+
+        return ($this->parseTextAssertion($assertion)['type'] ?? 'unsupported') !== 'unsupported';
     }
 
     protected function parseTextAssertion(string $assertion): array

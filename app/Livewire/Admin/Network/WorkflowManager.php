@@ -10,13 +10,18 @@ use App\Models\Setting;
 use App\Models\Workflow;
 use App\Models\WorkflowCopilotSession;
 use App\Models\WorkflowRun;
+use App\Models\WorkflowRunArtifact;
 use App\Models\WorkflowStep;
 use App\Models\WorkflowStudioSession;
 use App\Services\Workflows\PersonaActionWorkflowCatalog;
 use App\Services\Workflows\WorkflowBrowserSessionService;
+use App\Services\Workflows\WorkflowCopilotLaunchRequest;
+use App\Services\Workflows\WorkflowCopilotLaunchService;
 use App\Services\Workflows\WorkflowCopilotLogExportService;
 use App\Services\Workflows\WorkflowCopilotSessionService;
+use App\Services\Workflows\WorkflowCopilotSupervisorService;
 use App\Services\Workflows\WorkflowExecutionService;
+use App\Services\Workflows\WorkflowRouteMapPresenter;
 use App\Services\Workflows\WorkflowRouteTargetAutoRepairService;
 use App\Services\Workflows\WorkflowRunDebugPackageService;
 use App\Services\Workflows\WorkflowSelectorSyntaxService;
@@ -201,6 +206,22 @@ class WorkflowManager extends Component
 
     public string $activeTaskGroup = 'navigation';
 
+    public string $taskSearch = '';
+
+    public string $catalogTargetStepId = '';
+
+    public int $overviewSelectedStepId = 0;
+
+    public string $overviewSelectedTaskKey = '';
+
+    public bool $showMoveTaskModal = false;
+
+    public ?int $movingTaskStepId = null;
+
+    public string $movingTaskKey = '';
+
+    public string $movingTaskTargetStepId = '';
+
     public ?int $editingStepId = null;
 
     public string $editingStepName = '';
@@ -286,6 +307,7 @@ class WorkflowManager extends Component
         }
 
         $this->selectedWorkflowId = $workflow->id;
+        $this->initializeDefinitionEditorFocus($workflow);
         $this->loadWorkflowForm();
         $this->loadCopilotDefaults();
         $this->restoreWorkflowCopilotSession();
@@ -306,6 +328,7 @@ class WorkflowManager extends Component
         $steps = $selectedWorkflow
             ? $selectedWorkflow->steps()->ordered()->get()
             : collect();
+        $selectedWorkflow?->setRelation('steps', $steps);
         $quickPreviewRun = $selectedWorkflow ? $this->quickPreviewRun($selectedWorkflow) : null;
         $persons = Person::query()
             ->where('platform', 'instagram')
@@ -329,6 +352,35 @@ class WorkflowManager extends Component
             $this->activeTaskGroup = (string) ($taskGroups->first() ?? 'navigation');
         }
 
+        $search = mb_strtolower(trim($this->taskSearch));
+        $visibleTaskDefinitions = ($search === ''
+            ? $taskDefinitions->where('library_group', $this->activeTaskGroup)
+            : $taskDefinitions)
+            ->filter(function (array $definition) use ($search): bool {
+                if ($search === '') {
+                    return true;
+                }
+
+                return str_contains(mb_strtolower(implode(' ', [
+                    (string) ($definition['label'] ?? ''),
+                    (string) ($definition['description'] ?? ''),
+                    (string) ($definition['key'] ?? ''),
+                    (string) ($definition['library_group_label'] ?? ''),
+                    (string) ($definition['library_group_short_label'] ?? ''),
+                    (string) ($definition['library_group_description'] ?? ''),
+                ])), $search);
+            })
+            ->values();
+
+        $this->normalizeDefinitionEditorFocus($steps);
+        $routeMap = $selectedWorkflow
+            ? app(WorkflowRouteMapPresenter::class)->present(
+                $selectedWorkflow,
+                null,
+                WorkflowRouteMapPresenter::MODE_DEFINITION,
+            )
+            : ['mode' => WorkflowRouteMapPresenter::MODE_DEFINITION, 'nodes' => [], 'edges' => [], 'meta' => []];
+
         $runStats = $selectedWorkflow
             ? $this->workflowRunStats($selectedWorkflow)
             : ['runs' => 0, 'successful_runs' => 0, 'failed_runs' => 0];
@@ -345,16 +397,15 @@ class WorkflowManager extends Component
             'runDevices' => Device::query()->with('networkNode')->orderBy('name')->get(),
             'personOptions' => $catalog->personOptions($catalogPersons),
             'actions' => $actions,
-            'taskDefinitions' => $taskDefinitions->values()->toArray(),
-            'taskGroups' => $taskGroups->values()->toArray(),
+            'taskDefinitions' => $taskDefinitions->values(),
+            'taskGroups' => $taskGroups->values(),
             'taskGroupLabels' => $this->taskGroupLabels(),
             'taskGroupMeta' => $taskCatalog->libraryGroups(),
             'taskGroupCounts' => $taskDefinitions->countBy('library_group'),
             'importableWorkflows' => $this->importableWorkflows($selectedWorkflow),
-            // Alle Optionen bleiben im DOM, damit die lokale Suche auch Treffer
-            // aus einer anderen fachlichen Gruppe anzeigen kann. Ohne Suche
-            // filtert die Blade-Ansicht weiterhin auf activeTaskGroup.
-            'visibleTaskDefinitions' => $taskDefinitions->values()->toArray(),
+            'visibleTaskDefinitions' => $visibleTaskDefinitions,
+            'searchActive' => $search !== '',
+            'routeMap' => $routeMap,
             'summary' => [
                 'actions' => $steps->filter(fn (WorkflowStep $step): bool => $step->type !== WorkflowStep::TYPE_WAIT)->count(),
                 'lists' => $steps->count(),
@@ -704,6 +755,233 @@ class WorkflowManager extends Component
         $payload = $this->sortPayload($item, $position);
 
         $this->reorderStep($payload['item'], $payload['position']);
+    }
+
+    public function moveStepRelative(int $stepId, string $direction): void
+    {
+        if (! in_array($direction, ['left', 'right'], true)) {
+            return;
+        }
+
+        $workflow = $this->selectedWorkflow();
+        $steps = $workflow?->steps()->ordered()->get();
+        $currentIndex = $steps?->search(
+            fn (WorkflowStep $step): bool => (int) $step->getKey() === $stepId,
+        );
+
+        if (! $steps || $currentIndex === false) {
+            return;
+        }
+
+        $targetIndex = $direction === 'left'
+            ? max(0, $currentIndex - 1)
+            : min($steps->count() - 1, $currentIndex + 1);
+
+        if ($targetIndex === $currentIndex) {
+            return;
+        }
+
+        $this->reorderStep($stepId, $targetIndex);
+    }
+
+    public function openFromStudio(int $stepId, string $taskKey): void
+    {
+        $this->openEditTaskCard($stepId, $taskKey);
+    }
+
+    public function selectCatalogTarget(int $stepId): void
+    {
+        if (! $this->stepForSelectedWorkflow($stepId)) {
+            return;
+        }
+
+        $this->catalogTargetStepId = (string) $stepId;
+        $this->overviewSelectedStepId = $stepId;
+        $this->overviewSelectedTaskKey = '';
+    }
+
+    public function selectOverviewTask(int $stepId, string $taskKey): void
+    {
+        $taskKey = trim($taskKey);
+        $step = $this->stepForSelectedWorkflow($stepId);
+
+        if (! $step || $taskKey === '' || ! collect($step->task_cards)->contains(
+            fn (array $task): bool => trim((string) ($task['key'] ?? '')) === $taskKey,
+        )) {
+            return;
+        }
+
+        $this->catalogTargetStepId = (string) $stepId;
+        $this->overviewSelectedStepId = $stepId;
+        $this->overviewSelectedTaskKey = $taskKey;
+    }
+
+    public function prepareCatalogTask(string $taskKey): void
+    {
+        $stepId = (int) $this->catalogTargetStepId;
+
+        if ($stepId <= 0) {
+            $this->addError('definitionEditor', 'Wähle zuerst eine Zielliste aus.');
+
+            return;
+        }
+
+        $this->prepareTaskFromCatalog($stepId, $taskKey);
+    }
+
+    public function closeAddStepModal(): void
+    {
+        $this->showAddStepModal = false;
+        $this->resetValidation();
+    }
+
+    public function closeEditStepModal(): void
+    {
+        $this->showEditStepModal = false;
+        $this->resetValidation();
+    }
+
+    public function closeAddTaskModal(): void
+    {
+        $this->showAddTaskModal = false;
+        $this->resetValidation();
+    }
+
+    public function closeEditTaskModal(): void
+    {
+        $this->showEditTaskModal = false;
+        $this->resetValidation();
+    }
+
+    public function moveTaskRelative(int $stepId, string $taskKey, string $direction): void
+    {
+        if (! in_array($direction, ['up', 'down'], true)) {
+            return;
+        }
+
+        $step = $this->stepForSelectedWorkflow($stepId);
+        $tasks = collect($step?->task_cards ?? [])->values();
+        [$blockStart, $blockEnd] = $this->taskMoveBounds($tasks, $taskKey);
+
+        if (! $step || $blockStart === null || $blockEnd === null) {
+            return;
+        }
+
+        if ($direction === 'up') {
+            if ($blockStart <= 0) {
+                return;
+            }
+
+            $targetPosition = $blockStart - 1;
+        } else {
+            if ($blockEnd >= $tasks->count() - 1) {
+                return;
+            }
+
+            // The ordering service removes the current block before inserting it.
+            // Passing the index after the following card yields one visible step down.
+            $targetPosition = $blockEnd + 2;
+        }
+
+        $this->reorderTaskCard($stepId, $taskKey, $targetPosition);
+    }
+
+    public function prepareTaskMove(int $stepId, string $taskKey): void
+    {
+        $workflow = $this->selectedWorkflow();
+        $sourceStep = $this->stepForSelectedWorkflow($stepId);
+        $taskExists = collect($sourceStep?->task_cards ?? [])->contains(
+            fn (array $task): bool => trim((string) ($task['key'] ?? '')) === trim($taskKey),
+        );
+        $target = $workflow?->steps()
+            ->ordered()
+            ->where('id', '!=', $stepId)
+            ->first();
+
+        if (! $sourceStep || ! $taskExists || ! $target) {
+            $this->addError('definitionEditor', 'Für diese Task ist keine andere Zielliste verfügbar.');
+
+            return;
+        }
+
+        $this->movingTaskStepId = $stepId;
+        $this->movingTaskKey = trim($taskKey);
+        $this->movingTaskTargetStepId = (string) $target->getKey();
+        $this->showMoveTaskModal = true;
+    }
+
+    public function confirmTaskMove(): void
+    {
+        $sourceStepId = (int) $this->movingTaskStepId;
+        $targetStepId = (int) $this->movingTaskTargetStepId;
+        $targetStep = $this->stepForSelectedWorkflow($targetStepId);
+
+        if (
+            $sourceStepId <= 0
+            || $targetStepId <= 0
+            || $sourceStepId === $targetStepId
+            || $this->movingTaskKey === ''
+            || ! $targetStep
+        ) {
+            $this->addError('movingTaskTargetStepId', 'Bitte wähle eine andere Zielliste.');
+
+            return;
+        }
+
+        $this->moveTaskCard(
+            $targetStepId,
+            $sourceStepId,
+            $this->movingTaskKey,
+            count($targetStep->task_cards),
+        );
+        $this->catalogTargetStepId = (string) $targetStepId;
+        $this->overviewSelectedStepId = $targetStepId;
+        $this->overviewSelectedTaskKey = $this->movingTaskKey;
+        $this->closeMoveTaskModal();
+    }
+
+    public function closeMoveTaskModal(): void
+    {
+        $this->showMoveTaskModal = false;
+        $this->movingTaskStepId = null;
+        $this->movingTaskKey = '';
+        $this->movingTaskTargetStepId = '';
+        $this->resetErrorBag('movingTaskTargetStepId');
+    }
+
+    #[On('workflow-standard-editor-focus-requested')]
+    public function focusDefinitionEditor(int $stepId, string $taskKey = '', bool $openTask = false): void
+    {
+        $this->showTestWorkbenchModal = false;
+        $this->testWorkbenchRunId = null;
+
+        if ($stepId <= 0) {
+            return;
+        }
+
+        $step = $this->stepForSelectedWorkflow($stepId);
+
+        if (! $step) {
+            return;
+        }
+
+        $taskKey = trim($taskKey);
+
+        if ($taskKey !== '') {
+            $this->selectOverviewTask($stepId, $taskKey);
+        } else {
+            $this->selectCatalogTarget($stepId);
+        }
+
+        $this->dispatch(
+            'workflow-standard-editor-focused',
+            stepId: $stepId,
+            taskKey: $taskKey,
+        );
+
+        if ($openTask && $taskKey !== '') {
+            $this->openEditTaskCard($stepId, $taskKey);
+        }
     }
 
     public function prepareTaskFromCatalog(int $stepId, string $taskKey, ?int $position = null): void
@@ -1467,9 +1745,9 @@ class WorkflowManager extends Component
         $successCriteria = $this->parseCopilotSuccessCriteria($validated['copilotSuccessCriteria']);
 
         try {
-            $launch = app(\App\Services\Workflows\WorkflowCopilotLaunchService::class)->start(
+            $launch = app(WorkflowCopilotLaunchService::class)->start(
                 $workflow,
-                \App\Services\Workflows\WorkflowCopilotLaunchRequest::fromArray([
+                WorkflowCopilotLaunchRequest::fromArray([
                     'person_id' => $validated['copilotPersonId'] ?: null,
                     'goal' => trim($validated['copilotGoal']),
                     'success_criteria' => $successCriteria,
@@ -1962,6 +2240,33 @@ class WorkflowManager extends Component
             : null;
     }
 
+    /**
+     * Zeilenweise Rueckmeldung, ob die eingegebenen Erfolgskriterien automatisch
+     * pruefbar sind.
+     *
+     * Ein nicht pruefbares Kriterium wird spaeter still auf `unsupported`
+     * gesetzt; bleibt keines uebrig, meldet die fachliche Endpruefung bei
+     * `total=0` vakuum-wahr `pass=true`. Produktiv eingegebene Werte wie
+     * `sassion speichern` liefen genau in diese Falle, ohne dass die Oberflaeche
+     * darauf hingewiesen haette.
+     *
+     * @return list<array{text: string, checkable: bool}>
+     */
+    public function getCopilotCriteriaFeedbackProperty(): array
+    {
+        $supervisor = app(WorkflowCopilotSupervisorService::class);
+
+        return collect(preg_split('/\r\n|\r|\n/', $this->copilotSuccessCriteria) ?: [])
+            ->map(fn (string $line): string => trim(ltrim($line, "- *\t")))
+            ->filter()
+            ->map(fn (string $line): array => [
+                'text' => $line,
+                'checkable' => $supervisor->isCheckableCriterion($line),
+            ])
+            ->values()
+            ->all();
+    }
+
     protected function parseCopilotSuccessCriteria(string $criteria): array
     {
         $criteria = trim($criteria);
@@ -2208,7 +2513,7 @@ class WorkflowManager extends Component
             return null;
         }
 
-        $artifact = \App\Models\WorkflowRunArtifact::query()->find($artifactId);
+        $artifact = WorkflowRunArtifact::query()->find($artifactId);
 
         if (! $artifact || ! $artifact->workflow_run_id) {
             return null;
@@ -2231,6 +2536,100 @@ class WorkflowManager extends Component
         }
 
         return Str::limit(json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?: '', 1000, '');
+    }
+
+    protected function initializeDefinitionEditorFocus(Workflow $workflow): void
+    {
+        $steps = $workflow->steps()->ordered()->get();
+        $requestedStepId = max(0, (int) request()->query('focusStep', 0));
+        $requestedTaskKey = trim((string) request()->query('focusTask', ''));
+        $selectedStep = $requestedStepId > 0
+            ? $steps->firstWhere('id', $requestedStepId)
+            : $steps->first();
+
+        $selectedStep ??= $steps->first();
+
+        $this->catalogTargetStepId = (string) ($selectedStep?->getKey() ?: '');
+        $this->overviewSelectedStepId = (int) ($selectedStep?->getKey() ?: 0);
+
+        $selectedTasks = collect($selectedStep?->task_cards ?? []);
+        $selectedTask = $requestedTaskKey !== ''
+            ? $selectedTasks->first(
+                fn (array $task): bool => trim((string) ($task['key'] ?? '')) === $requestedTaskKey,
+            )
+            : $selectedTasks->first();
+
+        $this->overviewSelectedTaskKey = trim((string) ($selectedTask['key'] ?? ''));
+    }
+
+    /**
+     * @param  Collection<int, WorkflowStep>  $steps
+     */
+    protected function normalizeDefinitionEditorFocus(Collection $steps): void
+    {
+        $selectedStep = $steps->firstWhere('id', $this->overviewSelectedStepId)
+            ?: $steps->firstWhere('id', (int) $this->catalogTargetStepId)
+            ?: $steps->first();
+
+        if (! $selectedStep) {
+            $this->catalogTargetStepId = '';
+            $this->overviewSelectedStepId = 0;
+            $this->overviewSelectedTaskKey = '';
+
+            return;
+        }
+
+        $this->catalogTargetStepId = (string) $selectedStep->getKey();
+        $this->overviewSelectedStepId = (int) $selectedStep->getKey();
+
+        if ($this->overviewSelectedTaskKey !== '' && ! collect($selectedStep->task_cards)->contains(
+            fn (array $task): bool => trim((string) ($task['key'] ?? '')) === $this->overviewSelectedTaskKey,
+        )) {
+            $this->overviewSelectedTaskKey = '';
+        }
+    }
+
+    /**
+     * Resolve the visible bounds of a movable task. Loop start/end markers move
+     * their complete paired block, matching WorkflowTaskOrderingService.
+     *
+     * @param  Collection<int, array<string, mixed>>  $tasks
+     * @return array{0: int|null, 1: int|null}
+     */
+    protected function taskMoveBounds(Collection $tasks, string $taskKey): array
+    {
+        $taskKey = trim($taskKey);
+        $taskIndex = $tasks->search(
+            fn (array $task): bool => trim((string) ($task['key'] ?? '')) === $taskKey,
+        );
+
+        if ($taskIndex === false) {
+            return [null, null];
+        }
+
+        $task = $tasks->get($taskIndex);
+        $segment = trim((string) ($task['loop_pair_segment'] ?? $task['loopPairSegment'] ?? ''));
+        $taskType = trim((string) ($task['task_key'] ?? ''));
+        $pairId = trim((string) ($task['loop_pair_id'] ?? $task['loopPairId'] ?? ''));
+        $isLoopMarker = in_array($segment, ['start', 'end'], true)
+            || in_array($taskType, ['loop.for_each_element', 'loop.end'], true);
+
+        if (! $isLoopMarker || $pairId === '') {
+            return [(int) $taskIndex, (int) $taskIndex];
+        }
+
+        $pairIndexes = $tasks
+            ->keys()
+            ->filter(function (int $index) use ($tasks, $pairId): bool {
+                $candidate = $tasks->get($index);
+
+                return trim((string) ($candidate['loop_pair_id'] ?? $candidate['loopPairId'] ?? '')) === $pairId;
+            })
+            ->values();
+
+        return $pairIndexes->isEmpty()
+            ? [(int) $taskIndex, (int) $taskIndex]
+            : [(int) $pairIndexes->min(), (int) $pairIndexes->max()];
     }
 
     protected function isVisibleCopilotEvent(mixed $event): bool
@@ -3216,6 +3615,24 @@ class WorkflowManager extends Component
      * @param  array<string, mixed>  $formConfig
      * @param  array<string, mixed>  $extraValues
      */
+    /**
+     * Nicht blockierende Qualitaetshinweise zum gerade eingegebenen Selector.
+     *
+     * Bewusst getrennt von validateTaskSelectorSyntax(): Jene Pruefung
+     * verhindert das Speichern bei formalen Fehlern. Ein Selector wie
+     * `button:has-text("Decline")` ist dagegen formal einwandfrei und trotzdem
+     * die haeufigste Fehlerursache in den ausgewerteten Produktionslaeufen — der
+     * Klick gelingt technisch, trifft aber das falsche Element. Solche Hinweise
+     * duerfen das Speichern nicht verhindern, sondern nur rechtzeitig warnen.
+     *
+     * @return list<array{code: string, message: string}>
+     */
+    public function selectorQualityWarnings(string $prefix): array
+    {
+        return app(WorkflowSelectorSyntaxService::class)
+            ->qualityWarningsFor((string) ($this->{$prefix.'ElementSelector'} ?? ''));
+    }
+
     protected function validateTaskSelectorSyntax(string $prefix, array $formConfig, array $extraValues): bool
     {
         $taskKeyProperty = $prefix.'CatalogKey';

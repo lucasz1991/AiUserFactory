@@ -125,6 +125,77 @@ class ClientControllerNodeManagementTest extends TestCase
         $this->assertSame($relativePath, $job->fresh()->result_json['browserWindows'][0]['livePreviewRelativePath']);
     }
 
+    public function test_legacy_preview_is_attached_only_to_the_first_browser_window(): void
+    {
+        Storage::fake('public');
+
+        $node = NetworkNode::query()->create([
+            'name' => 'Multi-window progress node',
+            'node_uuid' => 'node-progress-multi-window',
+            'api_key' => 'progress-node-multi-window-key',
+            'status' => 'active',
+        ]);
+        $job = NetworkJob::query()->create([
+            'job_uuid' => '730c7f5d-c0ae-4f4d-9f2f-0b9f3ce0393f',
+            'network_node_id' => $node->id,
+            'type' => 'workflow_task',
+            'payload_json' => ['runtime' => []],
+            'status' => 'dispatched',
+            'queued_at' => now(),
+            'dispatched_at' => now(),
+        ]);
+        $progress = [
+            'state' => 'running',
+            'stage' => 'task-started',
+            'browserWindows' => [
+                [
+                    'key' => 'main',
+                    'label' => 'Main',
+                    'targetId' => 'target-main',
+                    'url' => 'https://example.test/main',
+                ],
+                [
+                    'key' => 'popup',
+                    'label' => 'Popup',
+                    'targetId' => 'target-popup',
+                    'url' => 'https://example.test/popup',
+                    'livePreviewRelativePath' => 'workflow-task-runs/client-controller/stale/live.png',
+                ],
+            ],
+        ];
+
+        $this->withHeader('X-NODE-API-KEY', $node->api_key)
+            ->post('/api/client-controller/job-progress', [
+                'job_uuid' => $job->job_uuid,
+                'progress' => json_encode($progress),
+                'screenshot' => UploadedFile::fake()->create('live.png', 32, 'image/png'),
+            ])
+            ->assertOk()
+            ->assertJsonPath('success', true);
+
+        $relativePath = 'workflow-task-runs/client-controller/'.$job->job_uuid.'/live.png';
+        $windows = $job->fresh()->result_json['browserWindows'];
+
+        $this->assertSame($relativePath, $windows[0]['livePreviewRelativePath']);
+        $this->assertArrayNotHasKey('livePreviewRelativePath', $windows[1]);
+
+        $this->withHeader('X-NODE-API-KEY', $node->api_key)
+            ->postJson('/api/client-controller/job-result', [
+                'job_uuid' => $job->job_uuid,
+                'status' => 'success',
+                'result' => [
+                    'ok' => true,
+                    'browserWindows' => $progress['browserWindows'],
+                ],
+            ])
+            ->assertOk();
+
+        $finalWindows = $job->fresh()->result_json['browserWindows'];
+
+        $this->assertSame($relativePath, $finalWindows[0]['livePreviewRelativePath']);
+        $this->assertArrayNotHasKey('livePreviewRelativePath', $finalWindows[1]);
+    }
+
     public function test_detail_module_queues_only_one_active_remote_command(): void
     {
         $node = NetworkNode::query()->create([

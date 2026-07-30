@@ -43,7 +43,6 @@
             $wire.editTask(Number($event.detail.stepId || 0), String($event.detail.taskKey || ''));
         }
     "
-    x-on:workflow-studio-open-builder.window="$wire.openStudioPanel('builder')"
     data-workflow-studio-shell
     data-workflow-studio-mode="{{ $embedded ? 'embedded' : 'standalone' }}"
     class="workflow-experience {{ $embedded ? 'relative h-[100dvh]' : 'fixed inset-0 top-0 z-[70] h-[100dvh]' }} flex min-h-0 flex-col overflow-hidden bg-slate-100 text-slate-900"
@@ -273,19 +272,12 @@
         </div>
     @endif
 
-    @if($activeStudioPanel === 'builder' && ! $autonomousMode)
-        <div wire:key="workflow-studio-builder-modal" wire:click.self="closeStudioPanel" class="absolute inset-0 z-50 flex items-stretch justify-center bg-slate-950/45 p-2 backdrop-blur-sm sm:p-5" role="dialog" aria-modal="true" aria-label="Workflow bearbeiten">
-            <section class="flex min-h-0 w-full max-w-[1720px] flex-col overflow-hidden rounded-2xl border border-white/30 bg-slate-100 shadow-2xl">
-                <header class="flex shrink-0 items-center justify-between gap-4 border-b border-slate-200 bg-white px-4 py-3 sm:px-5">
-                    <div><p class="text-[9px] font-black uppercase tracking-[0.18em] text-cyan-700">Interaktiver Test</p><h2 class="mt-1 text-base font-bold text-slate-950">Workflow und Task bearbeiten</h2></div>
-                    <button type="button" wire:click="closeStudioPanel" class="h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 hover:bg-slate-100">Schließen ×</button>
-                </header>
-                <div class="min-h-0 flex-1 overflow-hidden p-3 sm:p-4">
-                    <livewire:admin.network.workflow-studio-task-editor :workflow="$workflow" :studio-session-id="$session->id" :key="'workflow-studio-builder-'.$workflow->id.'-'.$session->id" />
-                </div>
-            </section>
-        </div>
-    @endif
+    <livewire:admin.network.workflow-studio-task-editor
+        :workflow="$workflow"
+        :studio-session-id="$session->id"
+        :modal-only="true"
+        :key="'workflow-studio-task-modal-'.$workflow->id.'-'.$session->id"
+    />
 
     @if(! $autonomousMode)
         @include('livewire.admin.network.workflow-studio.selector-modal')

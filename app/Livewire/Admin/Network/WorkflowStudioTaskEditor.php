@@ -4,6 +4,7 @@ namespace App\Livewire\Admin\Network;
 
 use App\Models\Workflow;
 use App\Models\WorkflowStudioSession;
+use App\Services\Workflows\WorkflowRouteMapPresenter;
 use App\Services\Workflows\WorkflowStudioRevisionService;
 use App\Services\Workflows\WorkflowTaskCatalog;
 use Closure;
@@ -17,61 +18,102 @@ class WorkflowStudioTaskEditor extends WorkflowManager
 {
     public int $studioSessionId;
 
-    public string $taskSearch = '';
+    public bool $modalOnly = false;
 
-    public string $catalogTargetStepId = '';
+    public bool $taskEditReadOnly = false;
 
-    public int $overviewSelectedStepId = 0;
+    public bool $taskEditCanRequestPause = false;
 
-    public string $overviewSelectedTaskKey = '';
+    public bool $taskEditPauseRequested = false;
 
-    public function mount(Workflow $workflow, ?int $studioSessionId = null): void
+    public string $taskEditRunStatus = 'idle';
+
+    public string $taskEditLockMessage = '';
+
+    public function mount(Workflow $workflow, ?int $studioSessionId = null, bool $modalOnly = false): void
     {
         $this->selectedWorkflowId = (int) $workflow->getKey();
         $this->studioSessionId = (int) $studioSessionId;
+        $this->modalOnly = $modalOnly;
         $firstStep = $workflow->steps()->ordered()->first();
         $this->catalogTargetStepId = (string) ($firstStep?->getKey() ?: '');
         $this->overviewSelectedStepId = (int) ($firstStep?->getKey() ?: 0);
         $this->overviewSelectedTaskKey = trim((string) data_get($firstStep?->task_cards, '0.key', ''));
+        $this->synchronizeTaskEditAccess();
     }
 
     #[On('open-workflow-studio-task-editor')]
-    public function openFromStudio(int $stepId, string $taskKey): void
+    public function openFromStudio(int $stepId, string $taskKey, ?int $studioSessionId = null): void
     {
-        if (! $this->definitionIsEditable()) {
-            $this->addError('studioBuilder', 'Pausiere den Lauf, bevor du eine Task bearbeitest.');
-
+        if ($studioSessionId !== null && $studioSessionId !== $this->studioSessionId) {
             return;
         }
 
         $this->resetValidation();
+        $this->taskEditPauseRequested = false;
+        $this->selectOverviewTask($stepId, $taskKey);
         $this->openEditTaskCard($stepId, $taskKey);
+        $this->synchronizeTaskEditAccess();
     }
 
-    #[On('workflow-studio-builder-target')]
-    public function selectCatalogTarget(int $stepId): void
+    public function requestPauseForTaskEdit(): void
     {
-        if ($this->stepForSelectedWorkflow($stepId)) {
-            $this->catalogTargetStepId = (string) $stepId;
-            $this->overviewSelectedStepId = $stepId;
-            $this->overviewSelectedTaskKey = '';
-        }
-    }
-
-    public function selectOverviewTask(int $stepId, string $taskKey): void
-    {
-        $taskKey = trim($taskKey);
-        $step = $this->stepForSelectedWorkflow($stepId);
-
-        if (! $step || $taskKey === '' || ! collect($step->task_cards)->contains(
-            fn (array $task): bool => trim((string) ($task['key'] ?? '')) === $taskKey,
-        )) {
+        if (! $this->showEditTaskModal) {
             return;
         }
 
-        $this->catalogTargetStepId = (string) $stepId;
-        $this->overviewSelectedStepId = $stepId;
-        $this->overviewSelectedTaskKey = $taskKey;
+        $session = $this->studioSession();
+        $activeRun = $session->activeRun;
+        $this->synchronizeTaskEditAccess($session, $activeRun);
+
+        if (! $this->taskEditReadOnly) {
+            return;
+        }
+
+        if ($session->mode === 'autonomous') {
+            $this->addError('studioBuilder', 'Im autonomen Modus kann eine Task nicht manuell bearbeitet werden.');
+
+            return;
+        }
+
+        if (! $activeRun) {
+            return;
+        }
+
+        $this->taskEditPauseRequested = true;
+        $this->taskEditLockMessage = 'Pause ist angefordert. Die Bearbeitung wird nach dem sicheren Haltepunkt freigeschaltet.';
+        $this->dispatch(
+            'workflow-studio-pause-for-edit-requested',
+            studioSessionId: $this->studioSessionId,
+            runId: (int) $activeRun->getKey(),
+            stepId: $this->editingTaskStepId,
+            taskKey: $this->editingTaskKey,
+        );
+    }
+
+    #[On('workflow-studio-run-status-changed')]
+    public function handleRunStatusChanged(
+        int $studioSessionId,
+        ?int $runId = null,
+        string $status = 'idle',
+    ): void {
+        if ($studioSessionId !== $this->studioSessionId) {
+            return;
+        }
+
+        $session = $this->studioSession();
+        $activeRun = $session->activeRun;
+
+        if (($runId === null && $activeRun)
+            || ($runId !== null && (! $activeRun || (int) $activeRun->getKey() !== $runId))) {
+            return;
+        }
+
+        $this->synchronizeTaskEditAccess($session, $activeRun);
+
+        if (! $this->taskEditReadOnly) {
+            $this->resetErrorBag('studioBuilder');
+        }
     }
 
     public function prepareCatalogTask(string $taskKey): void
@@ -100,29 +142,14 @@ class WorkflowStudioTaskEditor extends WorkflowManager
         parent::prepareTaskFromCatalog($stepId, $taskKey, $position);
     }
 
-    public function closeAddStepModal(): void
-    {
-        $this->showAddStepModal = false;
-        $this->resetValidation();
-    }
-
-    public function closeEditStepModal(): void
-    {
-        $this->showEditStepModal = false;
-        $this->resetValidation();
-    }
-
-    public function closeAddTaskModal(): void
-    {
-        $this->showAddTaskModal = false;
-        $this->resetValidation();
-    }
-
     public function closeEditTaskModal(): void
     {
         $this->showEditTaskModal = false;
         $this->editingTaskLoopPairSegment = '';
         $this->editingTaskLoopPairEndKey = '';
+        $this->taskEditPauseRequested = false;
+        $this->taskEditCanRequestPause = false;
+        $this->taskEditLockMessage = '';
         $this->resetValidation();
     }
 
@@ -376,6 +403,9 @@ class WorkflowStudioTaskEditor extends WorkflowManager
         $this->showEditTaskModal = false;
         $this->editingTaskLoopPairSegment = '';
         $this->editingTaskLoopPairEndKey = '';
+        $this->taskEditPauseRequested = false;
+        $this->taskEditCanRequestPause = false;
+        $this->taskEditLockMessage = '';
         $this->dispatch('workflow-studio-task-saved', stepId: $editingTaskStepId, taskKey: $editingTaskKey);
     }
 
@@ -446,7 +476,16 @@ class WorkflowStudioTaskEditor extends WorkflowManager
                 ])), $search);
             })
             ->values();
-        $activeRun = WorkflowStudioSession::query()->findOrFail($this->studioSessionId)->activeRun;
+        $studioSession = $this->studioSession();
+        $activeRun = $studioSession->activeRun;
+        $this->synchronizeTaskEditAccess($studioSession, $activeRun);
+        $routeMap = app(WorkflowRouteMapPresenter::class)->present(
+            $workflow,
+            $activeRun,
+            $activeRun
+                ? WorkflowRouteMapPresenter::MODE_COMBINED
+                : WorkflowRouteMapPresenter::MODE_DEFINITION,
+        );
         $selectedOverviewStep = $steps->firstWhere('id', $this->overviewSelectedStepId);
 
         if (! $selectedOverviewStep) {
@@ -469,9 +508,16 @@ class WorkflowStudioTaskEditor extends WorkflowManager
             'taskGroupCounts' => $taskDefinitions->countBy('library_group'),
             'visibleTaskDefinitions' => $visibleTaskDefinitions,
             'searchActive' => $search !== '',
-            'canEdit' => $this->definitionIsEditable($activeRun),
+            'canEdit' => $this->definitionIsEditable($activeRun, $studioSession),
             'runStatus' => $activeRun?->status,
             'activeRun' => $activeRun,
+            'routeMap' => $routeMap,
+            'modalOnly' => $this->modalOnly,
+            'taskEditReadOnly' => $this->taskEditReadOnly,
+            'taskEditCanRequestPause' => $this->taskEditCanRequestPause,
+            'taskEditPauseRequested' => $this->taskEditPauseRequested,
+            'taskEditRunStatus' => $this->taskEditRunStatus,
+            'taskEditLockMessage' => $this->taskEditLockMessage,
         ]);
     }
 
@@ -518,11 +564,14 @@ class WorkflowStudioTaskEditor extends WorkflowManager
         return false;
     }
 
-    private function definitionIsEditable(mixed $activeRun = null): bool
+    private function definitionIsEditable(
+        mixed $activeRun = null,
+        ?WorkflowStudioSession $session = null,
+    ): bool
     {
-        $session = WorkflowStudioSession::query()->findOrFail($this->studioSessionId);
+        $session ??= $this->studioSession();
 
-        if ($session->mode === 'autonomous' && $session->mode_locked_at && ! $session->finished_at) {
+        if ($session->mode === 'autonomous') {
             return false;
         }
 
@@ -531,6 +580,44 @@ class WorkflowStudioTaskEditor extends WorkflowManager
         return ! $activeRun || in_array((string) $activeRun->status, [
             'paused', 'completed', 'failed', 'cancelled', 'timed_out', 'lost',
         ], true);
+    }
+
+    private function studioSession(): WorkflowStudioSession
+    {
+        return WorkflowStudioSession::query()
+            ->where('workflow_id', $this->selectedWorkflowId)
+            ->findOrFail($this->studioSessionId);
+    }
+
+    private function synchronizeTaskEditAccess(
+        ?WorkflowStudioSession $session = null,
+        mixed $activeRun = null,
+    ): void {
+        $session ??= $this->studioSession();
+        $activeRun ??= $session->activeRun;
+        $this->taskEditRunStatus = (string) ($activeRun?->status ?? 'idle');
+        $this->taskEditReadOnly = ! $this->definitionIsEditable($activeRun, $session);
+
+        if (! $this->taskEditReadOnly) {
+            $this->taskEditCanRequestPause = false;
+            $this->taskEditPauseRequested = false;
+            $this->taskEditLockMessage = '';
+
+            return;
+        }
+
+        if ($session->mode === 'autonomous') {
+            $this->taskEditCanRequestPause = false;
+            $this->taskEditPauseRequested = false;
+            $this->taskEditLockMessage = 'Autonome Läufe sind schreibgeschützt und können hier nicht bearbeitet werden.';
+
+            return;
+        }
+
+        $this->taskEditCanRequestPause = (bool) $activeRun;
+        $this->taskEditLockMessage = $this->taskEditPauseRequested
+            ? 'Pause ist angefordert. Die Bearbeitung wird nach dem sicheren Haltepunkt freigeschaltet.'
+            : 'Der Lauf ist aktiv. Pausiere ihn am sicheren Haltepunkt, um diese Task zu bearbeiten.';
     }
 
     private function notifyDefinitionUpdated(?int $stepId = null, ?string $taskKey = null, string $message = 'Workflow wurde aktualisiert.'): void

@@ -37,10 +37,6 @@ use Throwable;
 
 class WorkflowStudio extends Component
 {
-    private const STUDIO_PANELS = [
-        'builder',
-    ];
-
     private const TOOL_MODALS = [
         'browser',
         'data',
@@ -118,8 +114,6 @@ class WorkflowStudio extends Component
     public string $routeRepairIntent = 'start_run';
 
     public string $activeToolModal = '';
-
-    public string $activeStudioPanel = '';
 
     public string $observedCursorSignature = '';
 
@@ -285,6 +279,44 @@ class WorkflowStudio extends Component
             $response = app(WorkflowExecutionService::class)->requestManualPause($run);
 
             return $this->result((string) ($run->fresh()?->status ?? $run->status), $response['message'], $run->fresh());
+        });
+    }
+
+    #[On('workflow-studio-pause-for-edit-requested')]
+    public function pauseRunForTaskEdit(
+        ?int $studioSessionId = null,
+        ?int $runId = null,
+        ?int $stepId = null,
+        ?string $taskKey = null,
+    ): void {
+        if ($studioSessionId !== null && $studioSessionId !== $this->studioSessionId) {
+            return;
+        }
+
+        $session = $this->session();
+        if ($session->mode === 'autonomous') {
+            $this->addError('studio', 'Im autonomen Modus kann der Lauf nicht zum Bearbeiten einer Task pausiert werden.');
+            $this->dispatchRunStatusChanged($this->activeRun());
+
+            return;
+        }
+
+        if ($stepId && filled($taskKey)) {
+            $this->selectTask($stepId, (string) $taskKey);
+        }
+
+        $this->perform('run.pause_for_edit_requested', function () use ($runId): array {
+            app(WorkflowStudioControlService::class)->assertUserControl($this->session());
+            $run = $this->activeRunOrFail();
+
+            if ($runId !== null && (int) $run->getKey() !== $runId) {
+                throw new DomainException('Der zum Bearbeiten angeforderte Lauf ist nicht mehr aktiv.');
+            }
+
+            $response = app(WorkflowExecutionService::class)->requestManualPause($run);
+            $run = $run->fresh();
+
+            return $this->result((string) $run->status, $response['message'], $run);
         });
     }
 
@@ -508,8 +540,19 @@ class WorkflowStudio extends Component
     public function runProbe(?string $confirmationId = null): void
     {
         $this->perform('probe.started', function () use ($confirmationId): array {
-            app(WorkflowStudioControlService::class)->assertUserControl($this->session());
+            $session = $this->session()->fresh();
+            app(WorkflowStudioControlService::class)->assertUserControl($session);
+            if ($session->mode !== 'manual' || $session->control_owner !== 'user') {
+                throw new DomainException('Live-Proben sind ausschliesslich in einer manuell gesteuerten Studio-Sitzung zulaessig.');
+            }
             $run = $this->activeRunOrFail();
+            if (
+                (int) $run->workflow_id !== (int) $session->workflow_id
+                || (int) $run->workflow_studio_session_id !== (int) $session->getKey()
+                || (int) $session->active_workflow_run_id !== (int) $run->getKey()
+            ) {
+                throw new DomainException('Der ausgewaehlte Lauf gehoert nicht zur aktiven Studio-Sitzung.');
+            }
             if ($run->status !== 'paused') {
                 throw new DomainException('Probeaktionen sind ausschliesslich im pausierten Zustand zulaessig.');
             }
@@ -538,6 +581,9 @@ class WorkflowStudio extends Component
                 $task,
                 $this->selectedStepId !== '' ? (int) $this->selectedStepId : null,
             );
+            if (! ($response['ok'] ?? false)) {
+                throw new DomainException((string) ($response['message'] ?? 'Die Probeaktion konnte nicht gestartet werden.'));
+            }
 
             return $this->result('running', $response['message'], $run->fresh());
         });
@@ -636,7 +682,7 @@ class WorkflowStudio extends Component
         $this->moveTaskSelection(1);
     }
 
-    public function openBuilderForStep(int $stepId): void
+    public function openStandardEditorForStep(int $stepId): void
     {
         app(WorkflowStudioControlService::class)->assertUserControl($this->session());
         $step = $this->workflow()->steps()->find($stepId);
@@ -645,28 +691,47 @@ class WorkflowStudio extends Component
         }
 
         $this->selectedStepId = (string) $stepId;
-        $this->openStudioPanel('builder');
-        $this->dispatch('workflow-studio-builder-target', stepId: $stepId);
+        $this->openStandardEditor($stepId);
     }
 
     public function editTask(int $stepId, string $taskKey): void
     {
-        app(WorkflowStudioControlService::class)->assertUserControl($this->session());
         $this->selectTask($stepId, $taskKey);
-        $this->openStudioPanel('builder');
-        $this->dispatch('open-workflow-studio-task-editor', stepId: $stepId, taskKey: $taskKey);
+        $this->dispatch(
+            'open-workflow-studio-task-editor',
+            stepId: $stepId,
+            taskKey: $taskKey,
+            studioSessionId: $this->studioSessionId,
+        );
     }
 
-    public function openStudioPanel(string $panel): void
+    public function openStandardEditor(int $stepId = 0, string $taskKey = '', bool $openTask = false): void
     {
-        $this->activeStudioPanel = in_array($panel, self::STUDIO_PANELS, true)
-            ? $panel
-            : '';
-    }
+        $stepId = max(0, $stepId);
+        $taskKey = trim($taskKey);
 
-    public function closeStudioPanel(): void
-    {
-        $this->activeStudioPanel = '';
+        if ($this->embedded) {
+            $this->dispatch(
+                'workflow-standard-editor-focus-requested',
+                stepId: $stepId,
+                taskKey: $taskKey,
+                openTask: $openTask,
+            );
+
+            return;
+        }
+
+        $parameters = ['workflow' => $this->workflowId];
+
+        if ($stepId > 0) {
+            $parameters['focusStep'] = $stepId;
+        }
+
+        if ($taskKey !== '') {
+            $parameters['focusTask'] = $taskKey;
+        }
+
+        $this->redirect(route('network.workflows.manage', $parameters), navigate: true);
     }
 
     public function openToolModal(string $tool): void
@@ -691,10 +756,10 @@ class WorkflowStudio extends Component
         $this->editTask($stepId, $taskKey);
     }
 
-    public function openBuilderForStepFromTool(int $stepId): void
+    public function openStandardEditorForStepFromTool(int $stepId): void
     {
         $this->closeToolModal();
-        $this->openBuilderForStep($stepId);
+        $this->openStandardEditorForStep($stepId);
     }
 
     public function editSelectedTask(): void
@@ -961,6 +1026,8 @@ class WorkflowStudio extends Component
                 $this->dispatchStudioNotice($this->result((string) $run->status, $message, $run), $previousStatus);
             }
         }
+
+        $this->dispatchRunStatusChanged($run);
     }
 
     public function chooseControlMode(string $mode): void
@@ -1074,6 +1141,18 @@ class WorkflowStudio extends Component
             $this->lastActionResult = $this->result('failed', $exception->getMessage());
             $this->dispatchStudioNotice($this->lastActionResult);
         }
+
+        $this->dispatchRunStatusChanged($this->activeRun());
+    }
+
+    private function dispatchRunStatusChanged(?WorkflowRun $run): void
+    {
+        $this->dispatch(
+            'workflow-studio-run-status-changed',
+            studioSessionId: $this->studioSessionId,
+            runId: $run ? (int) $run->getKey() : null,
+            status: (string) ($run?->status ?? 'idle'),
+        );
     }
 
     private function dispatchStudioNotice(array $result, ?string $previousStatus = null): void

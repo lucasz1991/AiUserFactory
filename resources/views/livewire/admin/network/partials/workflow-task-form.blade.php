@@ -384,8 +384,18 @@
                                         />
                                     @else
                                         <label class="block text-sm font-medium text-gray-700">{{ $form['selector_label'] }}</label>
-                                        <input type="text" wire:model.defer="{{ $prefix }}ElementSelector" placeholder="{{ $form['selector_placeholder'] }}" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                                        <input type="text" wire:model.live.debounce.500ms="{{ $prefix }}ElementSelector" placeholder="{{ $form['selector_placeholder'] }}" class="mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
                                         @error($prefix.'ElementSelector') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+
+                                        {{-- Qualitaetshinweise: blockieren nicht, warnen aber vor genau den
+                                             Mustern, die produktiv "technisch erfolgreich, fachlich wirkungslos"
+                                             waren. Siehe WorkflowSelectorSyntaxService::qualityWarningsFor(). --}}
+                                        @foreach ($this->selectorQualityWarnings($prefix) as $selectorWarning)
+                                            <p class="mt-2 flex items-start gap-2 rounded-md bg-amber-50 px-2 py-1.5 text-xs text-amber-900" role="status" aria-live="polite">
+                                                <span aria-hidden="true" class="mt-px font-bold">!</span>
+                                                <span class="min-w-0 flex-1">{{ $selectorWarning['message'] }}</span>
+                                            </p>
+                                        @endforeach
                                     @endif
                                 </div>
                             @endif

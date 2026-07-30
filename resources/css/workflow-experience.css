@@ -369,6 +369,33 @@
   transform: translateY(-2px) scale(1.004);
 }
 
+.ff-touch-step-reorder,
+.ff-touch-task-reorder {
+  display: none;
+}
+
+.ff-touch-reorder-button {
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  border: 1px solid var(--ff-line) !important;
+  border-radius: .7rem !important;
+  background: rgba(255, 255, 255, .92) !important;
+  color: #475569 !important;
+  touch-action: manipulation;
+}
+
+.ff-touch-reorder-button:focus-visible {
+  outline: 2px solid var(--ff-accent);
+  outline-offset: 2px;
+}
+
+.ff-touch-reorder-button:disabled {
+  cursor: not-allowed;
+  opacity: .38;
+}
+
 /* ------------------------------------------------------------------ */
 /* Task-Bibliothek                                                     */
 /* ------------------------------------------------------------------ */
@@ -1164,6 +1191,26 @@
 }
 
 @media (hover: none), (pointer: coarse) {
+  .ff-touch-step-reorder {
+    grid-template-columns: repeat(2, minmax(44px, 1fr));
+    gap: .5rem;
+  }
+
+  .ff-touch-task-reorder {
+    grid-template-columns: repeat(3, minmax(44px, 1fr));
+    gap: .4rem;
+    margin-top: .45rem;
+  }
+
+  .ff-touch-step-reorder,
+  .ff-touch-task-reorder {
+    display: grid;
+  }
+
+  .ff-touch-reorder-button {
+    display: inline-flex;
+  }
+
   [data-workflow-studio-shell] .ff-action-trigger,
   [data-workflow-studio-shell] .ff-tool-button,
   [data-workflow-studio-shell] .ff-segmented-control > button,
@@ -1172,6 +1219,12 @@
   }
 
   [data-studio-task-editor] .ff-catalog-card:hover {
+    transform: none;
+  }
+
+  .ff-step-column:hover,
+  .ff-step-column:focus-within,
+  .ff-task-card:hover {
     transform: none;
   }
 }

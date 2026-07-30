@@ -825,10 +825,21 @@ class ClientControllerApiController extends Controller
         $payload['livePreviewRelativePath'] = $relativePath;
 
         if (isset($payload['browserWindows']) && is_array($payload['browserWindows'])) {
+            $previewAssigned = false;
+
             foreach ($payload['browserWindows'] as &$window) {
-                if (is_array($window)) {
-                    $window['livePreviewRelativePath'] = $relativePath;
+                if (! is_array($window)) {
+                    continue;
                 }
+
+                if (! $previewAssigned) {
+                    $window['livePreviewRelativePath'] = $relativePath;
+                    $previewAssigned = true;
+
+                    continue;
+                }
+
+                unset($window['livePreviewRelativePath']);
             }
             unset($window);
         }

@@ -22,11 +22,11 @@
     </x-slot>
 
     <x-slot name="content">
-        <a role="menuitem" href="{{ route('network.workflows.studio', ['workflow' => $workflow, 'mode' => 'manual']) }}" class="block px-3 py-2 text-sm font-semibold text-cyan-700 hover:bg-cyan-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-cyan-500/40">
-            Workflow Studio
-        </a>
         <a role="menuitem" href="{{ route('network.workflows.manage', $workflow) }}" class="block px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40">
-            Klassischen Manager oeffnen
+            Standardeditor öffnen
+        </a>
+        <a role="menuitem" href="{{ route('network.workflows.studio', ['workflow' => $workflow, 'mode' => 'manual']) }}" class="block px-3 py-2 text-sm font-semibold text-cyan-700 hover:bg-cyan-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-cyan-500/40">
+            Testlauf öffnen
         </a>
 
         @if($editMethod)

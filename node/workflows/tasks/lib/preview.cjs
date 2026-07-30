@@ -365,7 +365,7 @@ async function frameDomSnapshot(frame) {
         url: window.location.href,
         title: document.title || '',
         text: document.body ? document.body.innerText || '' : '',
-        html: document.documentElement ? document.documentElement.outerHTML || '' : '',
+        html: document.body ? document.body.outerHTML || '' : '',
         workflowDebug: safeDebugValue(window.__workflowDebug),
         workflowMailListScanDebug: safeDebugValue(window.__workflowMailListScanDebug),
         fields: Array.from(document.querySelectorAll(inputSelector)).map((element, index) => ({
@@ -397,20 +397,24 @@ function domTreeViewModel(domTree = {}) {
   const frames = Array.isArray(domTree.frames) ? domTree.frames : [];
 
   return {
-    version: Number(domTree.version || 1),
+    version: Number(domTree.version || 2),
     capturedAt: normalizeText(domTree.capturedAt),
     windowKey: normalizeText(domTree.windowKey),
     targetId: normalizeText(domTree.targetId),
+    rootTag: normalizeText(domTree.rootTag) || 'body',
     viewport: domTree.viewport && typeof domTree.viewport === 'object'
       ? {
         width: Number(domTree.viewport.width || 0),
         height: Number(domTree.viewport.height || 0),
         deviceScaleFactor: Number(domTree.viewport.deviceScaleFactor || 1),
+        scrollX: Number(domTree.viewport.scrollX || 0),
+        scrollY: Number(domTree.viewport.scrollY || 0),
       }
       : null,
     frames: frames.map((frame) => ({
       frameRef: normalizeText(frame.frameRef),
       parentFrameRef: normalizeText(frame.parentFrameRef) || null,
+      rootTag: normalizeText(frame.rootTag) || 'body',
       name: normalizeText(frame.name),
       url: normalizeText(frame.url),
       offsetX: Number(frame.offsetX || 0),
@@ -431,19 +435,42 @@ function domTreeViewModel(domTree = {}) {
         depth: Number(node.depth || 0),
         tag: normalizeText(node.tag),
         id: normalizeText(node.id),
-        className: Array.isArray(node.classes) ? node.classes.map(normalizeText).filter(Boolean).join(' ') : '',
+        className: Array.isArray(node.classes) ? node.classes.map((item) => normalizeText(item)).filter(Boolean).join(' ') : '',
         text: normalizeText(node.text),
         selector: normalizeText(node.selector),
+        selectorCandidates: (Array.isArray(node.selectorCandidates) ? node.selectorCandidates : [])
+          .map((candidate) => ({
+            selector: normalizeText(candidate?.selector),
+            kind: normalizeText(candidate?.kind) || 'css',
+            unique: candidate?.unique === true,
+            matchCount: Math.max(0, Number(candidate?.matchCount || 0)),
+            score: Math.max(0, Math.min(100, Number(candidate?.score || 0))),
+          }))
+          .filter((candidate) => candidate.selector !== ''),
+        attributes: node.attributes && typeof node.attributes === 'object' && !Array.isArray(node.attributes)
+          ? Object.fromEntries(
+            Object.entries(node.attributes)
+              .map(([key, value]) => [normalizeText(key), normalizeText(value)])
+              .filter(([key, value]) => key !== '' && value !== ''),
+          )
+          : {},
         role: normalizeText(node.role),
         type: normalizeText(node.type),
         name: normalizeText(node.name),
         ariaLabel: normalizeText(node.ariaLabel),
+        label: normalizeText(node.label),
+        placeholder: normalizeText(node.placeholder),
+        title: normalizeText(node.title),
+        href: normalizeText(node.href),
         x: Number(node.rect?.x || 0),
         y: Number(node.rect?.y || 0),
         width: Number(node.rect?.width || 0),
         height: Number(node.rect?.height || 0),
         visible: node.visible === true,
         enabled: node.enabled !== false,
+        focused: node.focused === true,
+        editable: node.editable === true,
+        actionable: node.actionable === true,
         inShadowDom: node.inShadowDom === true,
       })),
     })),

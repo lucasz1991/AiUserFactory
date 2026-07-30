@@ -88,7 +88,15 @@
                     <div class="mt-2 flex items-center gap-1.5">
                         <button type="button" wire:click="openToolModal('browser')" class="ff-tool-button inline-flex h-9 items-center rounded-md border px-2.5 text-[10px] font-bold">Öffnen</button>
                         @if(! $autonomousMode)
-                            <button type="button" wire:click="openSelectorProbe(@js($window['name']))" class="ff-tool-button inline-flex h-9 items-center rounded-md border px-2.5 text-[10px] font-bold">Selector prüfen</button>
+                            <button
+                                type="button"
+                                wire:click="openSelectorProbe(@js($window['name']))"
+                                @disabled(! $isPaused)
+                                title="{{ $isPaused ? 'Echte Browseraktion im pausierten Lauf vorbereiten' : 'Für Live-Proben den Lauf zuerst manuell pausieren' }}"
+                                class="ff-tool-button inline-flex h-9 items-center rounded-md border px-2.5 text-[10px] font-bold disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                                Live-Probe
+                            </button>
                         @endif
                     </div>
                 </div>

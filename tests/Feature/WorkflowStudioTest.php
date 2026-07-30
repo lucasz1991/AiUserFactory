@@ -256,7 +256,7 @@ class WorkflowStudioTest extends TestCase
             ->assertSeeHtml('wire:click="stopRun"')
             ->assertDontSeeHtml('wire:click="terminateRun"')
             ->assertSee('Browserfenster')
-            ->assertSee('Selector prüfen')
+            ->assertSee('Live-Probe')
             ->assertSee('Selektoren')
             ->assertSee('Daten')
             ->assertSee('Checkpoints')
@@ -291,6 +291,92 @@ class WorkflowStudioTest extends TestCase
             ->assertSet('probeSelector', '#submit')
             ->assertSet('probeAction', 'selector.search')
             ->assertSet('showSelectorProbeModal', true);
+    }
+
+    public function test_manual_paused_run_can_start_a_selector_probe(): void
+    {
+        Queue::fake();
+        [$workflow, $step] = $this->workflow();
+        $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
+        $session = app(WorkflowStudioSessionService::class)->open($workflow, $admin, 'manual', 'ask_critical');
+        $run = WorkflowRun::query()->create([
+            'run_uuid' => (string) str()->uuid(),
+            'workflow_id' => $workflow->id,
+            'workflow_studio_session_id' => $session->id,
+            'workflow_revision' => 0,
+            'current_workflow_step_id' => $step->id,
+            'status' => 'paused',
+            'requested_by' => 'workflow-studio',
+            'queued_at' => now(),
+            'context_json' => ['next_task_key' => 'first-task'],
+            'result_json' => [],
+        ]);
+        app(WorkflowStudioSessionService::class)->attachRun($session, $run);
+        $this->actingAs($admin);
+
+        Livewire::test(WorkflowStudio::class, ['workflow' => $workflow])
+            ->set('probeAction', 'selector.search')
+            ->set('probeBrowserWindow', 'main')
+            ->set('probeSelector', 'button[data-testid="save"]')
+            ->call('runProbe')
+            ->assertHasNoErrors();
+
+        $run->refresh();
+        $this->assertSame('running', $run->status);
+        $this->assertSame(
+            'button[data-testid="save"]',
+            data_get($run->context_json, 'studio_probe.task.selector'),
+        );
+        Queue::assertPushed(RunWorkflowJob::class, 1);
+    }
+
+    public function test_live_selector_probe_is_rejected_while_waiting_or_under_autonomous_control(): void
+    {
+        Queue::fake();
+
+        foreach ([
+            ['mode' => 'manual', 'status' => 'waiting'],
+            ['mode' => 'autonomous', 'status' => 'paused'],
+        ] as $case) {
+            [$workflow, $step] = $this->workflow();
+            $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
+            $session = app(WorkflowStudioSessionService::class)->open(
+                $workflow,
+                $admin,
+                $case['mode'],
+                'ask_critical',
+            );
+            $run = WorkflowRun::query()->create([
+                'run_uuid' => (string) str()->uuid(),
+                'workflow_id' => $workflow->id,
+                'workflow_studio_session_id' => $session->id,
+                'workflow_revision' => 0,
+                'current_workflow_step_id' => $step->id,
+                'status' => $case['status'],
+                'requested_by' => 'workflow-studio',
+                'queued_at' => now(),
+                'context_json' => ['next_task_key' => 'first-task'],
+                'result_json' => [],
+            ]);
+            app(WorkflowStudioSessionService::class)->attachRun($session, $run);
+            $this->actingAs($admin);
+
+            Livewire::test(WorkflowStudio::class, [
+                'workflow' => $workflow,
+                'initialMode' => $case['mode'] === 'autonomous' ? 'autonomous' : 'interactive',
+            ])
+                ->set('probeAction', 'selector.search')
+                ->set('probeBrowserWindow', 'main')
+                ->set('probeSelector', '#submit')
+                ->call('runProbe')
+                ->assertHasErrors('studio');
+
+            $run->refresh();
+            $this->assertSame($case['status'], $run->status);
+            $this->assertNull(data_get($run->context_json, 'studio_probe'));
+        }
+
+        Queue::assertNothingPushed();
     }
 
     public function test_real_playback_from_studio_is_result_only_and_queues_without_observability(): void
@@ -339,31 +425,28 @@ class WorkflowStudioTest extends TestCase
         $this->assertStringContainsString('limit 40', strtolower((string) $eventQueries->first()));
     }
 
-    public function test_diagnostic_tools_and_builder_use_scoped_modals(): void
+    public function test_diagnostic_tools_remain_scoped_and_general_editing_returns_to_the_standard_editor(): void
     {
-        [$workflow] = $this->workflow();
+        [$workflow, $step] = $this->workflow();
         $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
         $this->actingAs($admin);
 
         Livewire::test(WorkflowStudio::class, ['workflow' => $workflow])
-            ->assertSet('activeStudioPanel', '')
             ->assertSet('activeToolModal', '')
             ->call('openToolModal', 'browser')
             ->assertSet('activeToolModal', 'browser')
-            ->assertSee('Live-Vorschauen, URLs und DOM-Zugriffe')
+            ->assertSee('Screenshot anklicken, Selektoren suchen und passende Elemente vergleichen')
             ->call('closeToolModal')
             ->assertSet('activeToolModal', '')
             ->call('openToolModal', 'invalid-tool')
-            ->assertSet('activeToolModal', '')
-            ->call('openStudioPanel', 'tools')
-            ->assertSet('activeStudioPanel', '')
-            ->call('openStudioPanel', 'builder')
-            ->assertSet('activeStudioPanel', 'builder')
-            ->assertSee('Workflow und Task bearbeiten')
-            ->call('closeStudioPanel')
-            ->assertSet('activeStudioPanel', '')
-            ->call('openStudioPanel', 'invalid-panel')
-            ->assertSet('activeStudioPanel', '');
+            ->assertSet('activeToolModal', '');
+
+        Livewire::test(WorkflowStudio::class, ['workflow' => $workflow])
+            ->call('openStandardEditor', $step->id)
+            ->assertRedirect(route('network.workflows.manage', [
+                'workflow' => $workflow,
+                'focusStep' => $step->id,
+            ]));
     }
 
     public function test_revision_history_is_opened_from_the_workflow_manager_actions(): void
@@ -824,6 +907,161 @@ class WorkflowStudioTest extends TestCase
         $this->assertSame(2, $workflow->studioRevisions()->count());
     }
 
+    public function test_studio_task_edit_request_targets_the_mounted_modal_without_opening_the_builder(): void
+    {
+        [$workflow, $step] = $this->workflow();
+        $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
+        $session = app(WorkflowStudioSessionService::class)->open($workflow, $admin, 'manual', 'ask_critical');
+        $this->actingAs($admin);
+
+        Livewire::test(WorkflowStudio::class, ['workflow' => $workflow])
+            ->call('editTask', $step->id, 'first-task')
+            ->assertSet('selectedStepId', (string) $step->id)
+            ->assertSet('selectedTaskKey', 'first-task')
+            ->assertNotDispatched('workflow-studio-builder-target')
+            ->assertDispatched('open-workflow-studio-task-editor', function (string $name, array $parameters) use ($session, $step): bool {
+                return (int) ($parameters['studioSessionId'] ?? 0) === (int) $session->id
+                    && (int) ($parameters['stepId'] ?? 0) === (int) $step->id
+                    && ($parameters['taskKey'] ?? null) === 'first-task';
+            });
+    }
+
+    public function test_active_interactive_task_modal_stays_read_only_until_a_confirmed_pause(): void
+    {
+        [$workflow, $step] = $this->workflow();
+        $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
+        $session = app(WorkflowStudioSessionService::class)->open($workflow, $admin, 'manual', 'ask_critical');
+        app(WorkflowStudioRevisionService::class)->ensureBaseline($session);
+        $run = WorkflowRun::query()->create([
+            'run_uuid' => (string) str()->uuid(),
+            'workflow_id' => $workflow->id,
+            'workflow_studio_session_id' => $session->id,
+            'workflow_revision' => 0,
+            'current_workflow_step_id' => $step->id,
+            'status' => 'running',
+            'requested_by' => 'workflow-studio',
+            'queued_at' => now(),
+            'started_at' => now(),
+            'context_json' => ['next_task_key' => 'first-task'],
+            'result_json' => [],
+        ]);
+        app(WorkflowStudioSessionService::class)->attachRun($session, $run);
+        $this->actingAs($admin);
+
+        $editor = Livewire::test(WorkflowStudioTaskEditor::class, [
+            'workflow' => $workflow,
+            'studioSessionId' => $session->id,
+            'modalOnly' => true,
+        ])
+            ->assertSet('modalOnly', true)
+            ->call('openFromStudio', $step->id, 'first-task', $session->id)
+            ->assertSet('showEditTaskModal', true)
+            ->assertSet('taskEditReadOnly', true)
+            ->assertSet('taskEditCanRequestPause', true)
+            ->assertSet('taskEditRunStatus', 'running')
+            ->set('editingTaskTitle', 'Darf noch nicht gespeichert werden')
+            ->call('saveEditTaskCard')
+            ->assertHasErrors('studioBuilder')
+            ->assertSet('showEditTaskModal', true)
+            ->call('requestPauseForTaskEdit')
+            ->assertSet('taskEditPauseRequested', true)
+            ->assertDispatched('workflow-studio-pause-for-edit-requested', function (string $name, array $parameters) use ($session, $run): bool {
+                return (int) ($parameters['studioSessionId'] ?? 0) === (int) $session->id
+                    && (int) ($parameters['runId'] ?? 0) === (int) $run->id;
+            })
+            ->call('handleRunStatusChanged', $session->id, $run->id, 'paused')
+            ->assertSet('taskEditReadOnly', true);
+
+        $this->assertSame('Erster Task', data_get($step->fresh()->task_cards, '0.title'));
+        $this->assertSame(0, $workflow->fresh()->copilot_revision);
+        $this->assertSame(1, $workflow->studioRevisions()->count());
+
+        $run->forceFill(['status' => 'paused'])->save();
+
+        $editor
+            ->call('handleRunStatusChanged', $session->id, $run->id, 'paused')
+            ->assertSet('taskEditReadOnly', false)
+            ->assertSet('taskEditCanRequestPause', false)
+            ->assertSet('taskEditPauseRequested', false)
+            ->set('editingTaskTitle', 'Nach bestätigter Pause gespeichert')
+            ->call('saveEditTaskCard')
+            ->assertHasNoErrors()
+            ->assertSet('showEditTaskModal', false);
+
+        $this->assertSame('Nach bestätigter Pause gespeichert', data_get($step->fresh()->task_cards, '0.title'));
+        $this->assertSame(1, $workflow->fresh()->copilot_revision);
+        $this->assertSame(2, $workflow->studioRevisions()->count());
+    }
+
+    public function test_pause_for_edit_event_requests_a_safe_pause_and_broadcasts_the_confirmed_status(): void
+    {
+        [$workflow, $step] = $this->workflow();
+        $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
+        $session = app(WorkflowStudioSessionService::class)->open($workflow, $admin, 'manual', 'ask_critical');
+        $run = WorkflowRun::query()->create([
+            'run_uuid' => (string) str()->uuid(),
+            'workflow_id' => $workflow->id,
+            'workflow_studio_session_id' => $session->id,
+            'workflow_revision' => 0,
+            'current_workflow_step_id' => $step->id,
+            'status' => 'running',
+            'requested_by' => 'workflow-studio',
+            'queued_at' => now(),
+            'started_at' => now(),
+            'context_json' => ['next_task_key' => 'first-task'],
+            'result_json' => [],
+        ]);
+        app(WorkflowStudioSessionService::class)->attachRun($session, $run);
+        $this->actingAs($admin);
+
+        Livewire::test(WorkflowStudio::class, [
+            'workflow' => $workflow,
+            'runId' => $run->id,
+        ])
+            ->call('pauseRunForTaskEdit', $session->id, $run->id, $step->id, 'first-task')
+            ->assertHasNoErrors()
+            ->assertDispatched('workflow-studio-run-status-changed', function (string $name, array $parameters) use ($session, $run): bool {
+                return (int) ($parameters['studioSessionId'] ?? 0) === (int) $session->id
+                    && (int) ($parameters['runId'] ?? 0) === (int) $run->id
+                    && ($parameters['status'] ?? null) === 'paused';
+            });
+
+        $this->assertSame('paused', $run->fresh()->status);
+        $this->assertDatabaseHas('workflow_studio_events', [
+            'workflow_studio_session_id' => $session->id,
+            'event_type' => 'run.pause_for_edit_requested',
+        ]);
+    }
+
+    public function test_autonomous_task_modal_is_read_only_and_cannot_request_an_edit_pause(): void
+    {
+        [$workflow, $step] = $this->workflow();
+        $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
+        $session = app(WorkflowStudioSessionService::class)->open($workflow, $admin, 'autonomous', 'ask_critical');
+        app(WorkflowStudioRevisionService::class)->ensureBaseline($session);
+        $this->actingAs($admin);
+
+        Livewire::test(WorkflowStudioTaskEditor::class, [
+            'workflow' => $workflow,
+            'studioSessionId' => $session->id,
+            'modalOnly' => true,
+        ])
+            ->call('openFromStudio', $step->id, 'first-task', $session->id)
+            ->assertSet('showEditTaskModal', true)
+            ->assertSet('taskEditReadOnly', true)
+            ->assertSet('taskEditCanRequestPause', false)
+            ->call('requestPauseForTaskEdit')
+            ->assertHasErrors('studioBuilder')
+            ->set('editingTaskTitle', 'Autonom nicht speichern')
+            ->call('saveEditTaskCard')
+            ->assertHasErrors('studioBuilder')
+            ->assertSet('showEditTaskModal', true);
+
+        $this->assertSame('Erster Task', data_get($step->fresh()->task_cards, '0.title'));
+        $this->assertSame(0, $workflow->fresh()->copilot_revision);
+        $this->assertSame(1, $workflow->studioRevisions()->count());
+    }
+
     public function test_studio_task_editor_rejects_invalid_selector_syntax_before_creating_a_revision(): void
     {
         [$workflow, $step] = $this->workflow();
@@ -876,10 +1114,11 @@ class WorkflowStudioTest extends TestCase
             ->assertSet('showEditTaskModal', false);
 
         $studioView = File::get(resource_path('views/livewire/admin/network/workflow-studio.blade.php'));
-        $this->assertStringNotContainsString('x-on:keydown.escape.window="$wire.closeStudioPanel()"', $studioView);
+        $this->assertStringNotContainsString('workflow-studio-builder-modal', $studioView);
+        $this->assertStringContainsString(':modal-only="true"', $studioView);
     }
 
-    public function test_paused_studio_builder_can_insert_a_catalog_task_and_records_a_revision(): void
+    public function test_paused_shared_editor_can_insert_a_catalog_task_and_records_a_revision(): void
     {
         [$workflow, $step] = $this->workflow();
         $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
@@ -904,7 +1143,7 @@ class WorkflowStudioTest extends TestCase
             'workflow' => $workflow,
             'studioSessionId' => $session->id,
         ])
-            ->assertSee('Task-Katalog')
+            ->assertSee('Task-Bibliothek')
             ->assertSee('Workflow aufbauen')
             ->call('prepareCatalogTask', 'wait.seconds')
             ->assertSet('showAddTaskModal', true)
@@ -1062,7 +1301,7 @@ class WorkflowStudioTest extends TestCase
         $this->assertSame(1, data_get($run->fresh()->result_json, 'process_termination.external_runs'));
     }
 
-    public function test_builder_renders_the_shared_static_minimap_with_three_zoom_levels_before_the_first_run(): void
+    public function test_shared_editor_renders_the_static_minimap_with_three_zoom_levels_before_the_first_run(): void
     {
         [$workflow, $step] = $this->workflow();
         $stepConfig = $step->config_json;
@@ -1084,14 +1323,14 @@ class WorkflowStudioTest extends TestCase
             ->assertSeeHtml('data-workflow-minimap-zoom-level="standard"')
             ->assertSeeHtml('data-workflow-minimap-zoom-level="detail"')
             ->assertSeeHtml('data-minimap-node="browser-tasks::first-task"')
-            ->assertSeeHtml('workflow-minimap-builder-'.$session->id.'-arrow-default')
+            ->assertSeeHtml('workflow-minimap-studio-'.$session->id.'-arrow-default')
             ->assertSee('Zeitüberschreitung')
             ->assertSee('Timeout beenden')
             ->assertSet('overviewSelectedStepId', $step->id)
             ->assertSet('overviewSelectedTaskKey', 'first-task');
     }
 
-    public function test_builder_static_minimap_hides_status_route_shadowed_by_on_error(): void
+    public function test_shared_route_map_keeps_shadowed_status_route_for_audit_but_marks_it_unreachable(): void
     {
         [$workflow, $step] = $this->workflow();
         $stepConfig = $step->config_json;
@@ -1113,10 +1352,12 @@ class WorkflowStudioTest extends TestCase
             'studioSessionId' => $session->id,
         ])
             ->assertSee('Alle Fehler beenden')
-            ->assertDontSee('Unerreichbare Timeout-Route');
+            ->assertSee('Unerreichbare Timeout-Route')
+            ->assertSeeHtml('"reachable":false')
+            ->assertSeeHtml('"shadowed_by":"on_error"');
     }
 
-    public function test_builder_overview_selection_rejects_foreign_tasks_and_focuses_a_real_task(): void
+    public function test_shared_editor_overview_selection_rejects_foreign_tasks_and_focuses_a_real_task(): void
     {
         [$workflow, $step] = $this->workflow();
         $secondStep = $workflow->steps()->create([
@@ -1150,7 +1391,7 @@ class WorkflowStudioTest extends TestCase
             ->assertSet('overviewSelectedTaskKey', 'return-result');
     }
 
-    public function test_builder_searches_across_library_groups_and_group_names(): void
+    public function test_shared_editor_searches_across_library_groups_and_group_names(): void
     {
         [$workflow] = $this->workflow();
         $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
@@ -1165,9 +1406,92 @@ class WorkflowStudioTest extends TestCase
             ->assertSeeHtml('data-task-library-key="browser.open"')
             ->assertDontSeeHtml('data-task-library-key="loop.for_each_element"')
             ->set('taskSearch', 'Schleifen')
-            ->assertSee('Suchergebnisse aus allen Aufgabengruppen')
+            ->assertSee('Treffer in allen Gruppen')
             ->assertSeeHtml('data-task-library-key="loop.for_each_element"')
             ->assertDontSeeHtml('data-task-library-key="browser.highlight"');
+    }
+
+    public function test_embedded_studio_routes_general_list_editing_back_to_the_focused_standard_editor(): void
+    {
+        [$workflow, $step] = $this->workflow();
+        $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
+        $this->actingAs($admin);
+
+        Livewire::test(WorkflowStudio::class, [
+            'workflow' => $workflow,
+            'embedded' => true,
+        ])
+            ->call('openStandardEditorForStep', $step->id)
+            ->assertDispatched('workflow-standard-editor-focus-requested', function (string $name, array $parameters) use ($step): bool {
+                return (int) ($parameters['stepId'] ?? 0) === (int) $step->id
+                    && ($parameters['taskKey'] ?? null) === ''
+                    && ($parameters['openTask'] ?? null) === false;
+            });
+    }
+
+    public function test_standard_editor_touch_actions_reorder_steps_and_move_a_task_to_another_list(): void
+    {
+        [$workflow, $firstStep] = $this->workflow();
+        $firstConfig = $firstStep->config_json;
+        $firstConfig['tasks'][] = [
+            'key' => 'second-task',
+            'task_key' => 'wait.seconds',
+            'title' => 'Zweite Task',
+            'value' => 0,
+        ];
+        $firstStep->update(['config_json' => $firstConfig]);
+        $targetStep = $workflow->steps()->create([
+            'name' => 'Abschluss',
+            'type' => WorkflowStep::TYPE_BROWSER_TASK,
+            'action_key' => 'abschluss',
+            'position' => 20,
+            'is_enabled' => true,
+            'config_json' => ['tasks' => [[
+                'key' => 'finish-task',
+                'task_key' => 'wait.seconds',
+                'title' => 'Abschluss-Task',
+                'value' => 0,
+            ]]],
+        ]);
+        $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
+        $this->actingAs($admin);
+
+        $manager = Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
+            ->call('moveTaskRelative', $firstStep->id, 'first-task', 'down')
+            ->assertHasNoErrors();
+
+        $this->assertSame(
+            ['second-task', 'first-task'],
+            collect($firstStep->fresh()->task_cards)->pluck('key')->all(),
+        );
+
+        $manager
+            ->call('moveStepRelative', $targetStep->id, 'left')
+            ->assertHasNoErrors();
+
+        $this->assertSame(
+            [$targetStep->id, $firstStep->id],
+            $workflow->steps()->ordered()->pluck('id')->all(),
+        );
+
+        $manager
+            ->call('prepareTaskMove', $firstStep->id, 'first-task')
+            ->assertSet('showMoveTaskModal', true)
+            ->set('movingTaskTargetStepId', (string) $targetStep->id)
+            ->call('confirmTaskMove')
+            ->assertHasNoErrors()
+            ->assertSet('showMoveTaskModal', false)
+            ->assertSet('overviewSelectedStepId', $targetStep->id)
+            ->assertSet('overviewSelectedTaskKey', 'first-task');
+
+        $this->assertSame(
+            ['second-task'],
+            collect($firstStep->fresh()->task_cards)->pluck('key')->all(),
+        );
+        $this->assertSame(
+            ['finish-task', 'first-task'],
+            collect($targetStep->fresh()->task_cards)->pluck('key')->all(),
+        );
     }
 
     public function test_static_minimap_instances_have_unique_svg_marker_ids(): void

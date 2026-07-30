@@ -484,6 +484,7 @@
                                         @include('livewire.admin.network.workflow-studio.dom-inspector', [
                                             'panel' => $panel,
                                             'interactive' => $selectableTasks,
+                                            'canProbe' => $selectableTasks && (string) $workflowRun->status === 'paused',
                                         ])
                                     </article>
                                 @endforeach

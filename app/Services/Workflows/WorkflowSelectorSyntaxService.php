@@ -106,6 +106,120 @@ class WorkflowSelectorSyntaxService
         return $this->validate((string) $value, $mode);
     }
 
+    /**
+     * Qualitaetshinweise zu einem syntaktisch gueltigen Selector.
+     *
+     * Baustein A aus dem Copilot-Konzept v2, statische Stufe. Die Syntaxpruefung
+     * beantwortet nur, ob ein Selector *formal* korrekt ist — die haeufigste
+     * Fehlerursache in den 31 ausgewerteten Produktionslaeufen waren aber
+     * Selektoren, die formal stimmen und trotzdem nicht zum Ziel fuehren. Aus dem
+     * Protokoll: der Klick auf `button:has-text("Decline")` war technisch
+     * erfolgreich, fachlich aber wirkungslos, weil der Ausdruck zu allgemein und
+     * sprachabhaengig ist.
+     *
+     * Bewusst Warnungen und keine Fehler: Ein Selector kann im Einzelfall genau so
+     * richtig sein. Die Entscheidung bleibt beim Menschen, aber sie wird vor dem
+     * Lauf getroffen statt nach vierzig Minuten Reparaturschleife.
+     *
+     * @return list<array{code: string, message: string}>
+     */
+    public function qualityWarningsFor(string $selector): array
+    {
+        $selector = trim($selector);
+
+        if ($selector === '') {
+            return [];
+        }
+
+        $warnings = [];
+
+        // 1) Sprachabhaengige Textreffer. Bricht, sobald die Seite in einer
+        //    anderen Sprache ausgeliefert wird — produktiv mehrfach passiert.
+        if (preg_match('/:has-text\(|(?:^|[\s,>+~])text\s*=|\[(?:title|placeholder|alt|aria-label)\s*[*^$~|]?=/i', $selector) === 1) {
+            $warnings[] = [
+                'code' => 'language_dependent',
+                'message' => 'Sprachabhaengiger Treffer: Der Selector haengt an sichtbarem Text oder einem uebersetzten Attribut und bricht, sobald die Seite in einer anderen Sprache erscheint. Stabiler sind Struktur, Rolle oder ein technisches Attribut, z. B. textarea[name="q"] statt textarea[title="Suche"].',
+            ];
+        }
+
+        // 2) Volatile, generierte Attribute und Klassen.
+        if (preg_match('/\[data-(?:rpos|ved|lpage|hveid|reactid|testid-[0-9])|\.(?:css|sc|jsx|emotion)-[a-z0-9]{4,}/i', $selector) === 1) {
+            $warnings[] = [
+                'code' => 'volatile_attribute',
+                'message' => 'Fluechtiges Attribut oder generierte Klasse: Solche Werte wechseln zwischen Seitenaufrufen oder Deployments. Besser ein bestaendiges Merkmal waehlen, z. B. #search a:has(h3) statt div#search a:has(div[data-rpos]).',
+            ];
+        }
+
+        // 3) Nur Elementtyp plus Textreffer, ohne eingrenzenden Container.
+        //    Genau dieses Muster war produktiv "technisch erfolgreich, fachlich
+        //    blocked": Der Klick landete auf irgendeinem passenden Element.
+        if (preg_match('/^\s*(?:button|a|div|span|input)\s*:has-text\(/i', $selector) === 1) {
+            $warnings[] = [
+                'code' => 'too_generic',
+                'message' => 'Zu allgemein: Elementtyp und Text allein treffen oft mehrere Stellen, und der Klick landet auf der falschen. Den Selector auf den umgebenden Bereich eingrenzen, z. B. #consent-banner button:has-text("Ablehnen").',
+            ];
+        }
+
+        return $warnings;
+    }
+
+    /**
+     * Prueft alle Selektorfelder bestehender Task-Karten auf Qualitaetsrisiken.
+     *
+     * Die Eingabewarnung greift nur bei neuen Eingaben — die problematischen
+     * Selektoren stecken aber in bereits gespeicherten Workflows. Diese Methode
+     * macht sie sichtbar, ohne dass ein Lauf gestartet werden muss.
+     *
+     * Erwartet die Task-Karten so, wie sie in `WorkflowStep.config_json['tasks']`
+     * liegen: Feldwerte direkt auf der Karte, Katalogzuordnung ueber `task_key`.
+     *
+     * @param  iterable<mixed>  $taskCards
+     * @return list<array{task_key: string, card_key: string, title: string, field: string, selector: string, warnings: list<array{code: string, message: string}>}>
+     */
+    public function auditTaskCards(iterable $taskCards): array
+    {
+        $findings = [];
+
+        foreach ($taskCards as $card) {
+            if (! is_array($card)) {
+                continue;
+            }
+
+            $taskKey = trim((string) ($card['task_key'] ?? ''));
+
+            foreach (self::FIELD_MODES[$taskKey] ?? [] as $fieldName => $mode) {
+                // Variablenpfade sind keine DOM-Selektoren — sie wuerden sonst
+                // faelschlich als sprachabhaengig oder zu allgemein gemeldet.
+                if ($mode === self::MODE_VARIABLE_PATH) {
+                    continue;
+                }
+
+                $value = trim((string) ($card[$fieldName] ?? ''));
+
+                if ($value === '') {
+                    continue;
+                }
+
+                $warnings = $this->qualityWarningsFor($value);
+
+                if ($warnings === []) {
+                    continue;
+                }
+
+                $findings[] = [
+                    'task_key' => $taskKey,
+                    'card_key' => (string) ($card['key'] ?? ''),
+                    'title' => (string) ($card['title'] ?? ''),
+                    'field' => (string) $fieldName,
+                    'selector' => $value,
+                    'warnings' => $warnings,
+                ];
+            }
+        }
+
+        return $findings;
+    }
+
     public function validate(string $value, string $mode): ?string
     {
         $value = trim($value);
