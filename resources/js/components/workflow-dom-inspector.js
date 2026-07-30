@@ -199,6 +199,7 @@ export function workflowDomInspector(config = {}) {
         cursor: null,
         cursorPoint: null,
         cursorClicked: false,
+        snapshotTruncated: false,
         windowKey: 'main',
         query: '',
         matchedRefs: [],
@@ -268,6 +269,8 @@ export function workflowDomInspector(config = {}) {
             }
             this.viewport = payload.viewport || null;
             this.cursor = payload.cursor || null;
+            this.snapshotTruncated = ['nodes', 'depth', 'bytes']
+                .some((key) => payload.truncated?.[key] === true);
             this.windowKey = normalizedString(payload.windowKey) || 'main';
             this.buildSearchFrames();
 
@@ -433,15 +436,49 @@ export function workflowDomInspector(config = {}) {
                 ? candidateRefs.map((ref) => this.nodeIndex[ref]).filter(Boolean)
                 : this.nodes;
 
-            return candidates
+            const matched = candidates
                 .filter((node) => {
                     const descendantText = normalizedString(this.searchElementByRef[node.nodeRef]?.textContent)
                         .toLocaleLowerCase('de');
-                    const actual = `${nodeSearchText(node)} ${descendantText}`.trim();
+                    const actual = descendantText || nodeSearchText(node);
 
                     return exact ? actual === expected : actual.includes(expected);
                 })
                 .map((node) => node.nodeRef);
+            const matchedSet = new Set(matched);
+            const hasMatchedDescendant = new Set();
+
+            for (const ref of matched) {
+                let parentRef = this.nodeIndex[ref]?.parentRef || null;
+                let guard = 0;
+
+                while (parentRef && guard < 80) {
+                    if (matchedSet.has(parentRef)) {
+                        hasMatchedDescendant.add(parentRef);
+                    }
+
+                    parentRef = this.nodeIndex[parentRef]?.parentRef || null;
+                    guard += 1;
+                }
+            }
+
+            const deepestMatches = matched.filter((ref) => !hasMatchedDescendant.has(ref));
+
+            return [...new Set(deepestMatches.map((ref) => {
+                let current = this.nodeIndex[ref] || null;
+                let guard = 0;
+
+                while (current && guard < 80) {
+                    if (matchedSet.has(current.nodeRef) && this.isControl(current)) {
+                        return current.nodeRef;
+                    }
+
+                    current = current.parentRef ? (this.nodeIndex[current.parentRef] || null) : null;
+                    guard += 1;
+                }
+
+                return ref;
+            }))];
         },
 
         matchQuery(query) {
@@ -895,12 +932,12 @@ export function workflowDomInspector(config = {}) {
                     return {
                         ...candidate,
                         count,
-                        unique: count === 1,
+                        unique: count === 1 && !this.snapshotTruncated,
                     };
                 })
                 .sort((left, right) => (
-                    right.score - left.score
-                    || Number(right.unique) - Number(left.unique)
+                    Number(right.unique) - Number(left.unique)
+                    || right.score - left.score
                     || Number(left.count ?? Number.MAX_SAFE_INTEGER) - Number(right.count ?? Number.MAX_SAFE_INTEGER)
                 ))
                 .slice(0, 8);

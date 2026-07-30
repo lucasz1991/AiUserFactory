@@ -75,6 +75,6 @@ class PwaIconFallbackTest extends TestCase
         $colors = imagecolorsforindex($image, $corner);
 
         $this->assertSame(0, $colors['alpha'], 'Das maskable Icon ist am Rand transparent.');
-        $this->assertSame([8, 27, 45], [$colors['red'], $colors['green'], $colors['blue']]);
+        $this->assertSame(PwaIcon::BACKGROUND, [$colors['red'], $colors['green'], $colors['blue']]);
     }
 }

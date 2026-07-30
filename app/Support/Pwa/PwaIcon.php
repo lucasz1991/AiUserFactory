@@ -12,8 +12,11 @@ use InvalidArgumentException;
  * gueltiges PNG aus dem Marken-Zeichen — sonst zeigt eine frisch installierte
  * App ein leeres Icon oder der Push gar keins.
  *
- * Das Zeichen ist an `public/favicon.svg` angelehnt: zwei aufsteigende Saeulen
- * ueber einer Grundlinie, auf dunklem Navy.
+ * Das Zeichen ist die kompakte Lesart der FollowFlow-Marke aus
+ * `public/favicon.svg`: eine leuchtende Sphaere auf dunklem Violett, umlaufen
+ * von einer Bahn mit zwei Partikeln. Die ausgelieferten Dateien entstehen aus
+ * `scripts/brand/generate-brand-assets.py`; dieser Notpfad bildet dieselbe
+ * Geometrie vereinfacht nach.
  */
 final class PwaIcon
 {
@@ -30,17 +33,41 @@ final class PwaIcon
         'push-badge-96.png' => 96,
     ];
 
-    /** Navy aus `public/favicon.svg` (#081b2d). */
-    private const BACKGROUND = [8, 27, 45];
+    /** Tiefes Violett des Badges (#1B0B3A). */
+    public const BACKGROUND = [27, 11, 58];
 
-    /** Teal (#5eead4). */
-    private const BAR_FRONT = [94, 234, 212];
+    /**
+     * Verlauf der Sphaere vom Lichtpunkt nach aussen.
+     *
+     * @var array<int, array{float, array{int, int, int}}>
+     */
+    private const CORE_STOPS = [
+        [0.00, [237, 233, 254]],
+        [0.18, [196, 181, 253]],
+        [0.45, [139, 92, 246]],
+        [0.75, [109, 40, 217]],
+        [1.00, [59, 15, 115]],
+    ];
 
-    /** Amber (#f59e0b). */
-    private const BAR_BACK = [245, 158, 11];
+    /** Helles Violett der Bahn (#D8B4FE). */
+    private const ORBIT = [216, 180, 254];
 
-    /** Helles Grau der Grundlinie (#e2e8f0). */
-    private const BASELINE = [226, 232, 240];
+    /** Partikel (#EDE9FE). */
+    private const PARTICLE = [237, 233, 254];
+
+    /** Normalisierte Geometrie, abgeleitet aus `public/favicon.svg` (64er Raster). */
+    private const SPHERE_RADIUS = 0.250;
+    private const ORBIT_RX = 0.422;
+    private const ORBIT_RY = 0.166;
+    private const ORBIT_ROTATION = -24.0;
+    private const ORBIT_HALF_WIDTH = 0.027;
+    private const ORBIT_OPACITY = 0.85;
+
+    /** Partikel als [Bahnphase, Radius]. */
+    private const PARTICLES = [
+        [0.06, 0.050],
+        [0.56, 0.053],
+    ];
 
     public static function supports(string $fileName): bool
     {
@@ -60,6 +87,7 @@ final class PwaIcon
         // muss deshalb in der inneren Sicherheitszone (~80 % Durchmesser)
         // liegen, nicht randfuellend.
         $scale = $fileName === 'pwa-maskable-512.png' ? 0.62 : 1.0;
+        $pixel = 1.0 / $size;
         $rawImage = '';
 
         for ($y = 0; $y < $size; $y++) {
@@ -67,10 +95,11 @@ final class PwaIcon
 
             for ($x = 0; $x < $size; $x++) {
                 [$red, $green, $blue, $alpha] = self::pixel(
-                    $x / $size,
-                    $y / $size,
+                    ($x + 0.5) / $size,
+                    ($y + 0.5) / $size,
                     $isBadge,
                     $scale,
+                    $pixel,
                 );
                 $rawImage .= pack('C4', $red, $green, $blue, $alpha);
             }
@@ -87,46 +116,154 @@ final class PwaIcon
     /**
      * @return array{int, int, int, int}
      */
-    private static function pixel(float $x, float $y, bool $isBadge, float $scale): array
+    private static function pixel(float $x, float $y, bool $isBadge, float $scale, float $pixel): array
     {
         // Zeichen um die Bildmitte skalieren, Hintergrund bleibt randfuellend.
         $markX = 0.5 + ($x - 0.5) / $scale;
         $markY = 0.5 + ($y - 0.5) / $scale;
-        $part = self::markPart($markX, $markY);
+        $unit = $pixel / $scale;
+
+        $sphere = self::sphereCoverage($markX, $markY, $unit);
+        $orbit = self::orbitCoverage($markX, $markY, $unit) * self::ORBIT_OPACITY;
+        $particle = self::particleCoverage($markX, $markY, $unit);
 
         if ($isBadge) {
             // Badges werden monochrom eingefaerbt: nur Deckkraft zaehlt.
-            return $part === null
-                ? [255, 255, 255, 0]
-                : [255, 255, 255, 255];
+            $alpha = max($sphere, $orbit, $particle);
+
+            return [255, 255, 255, (int) round(255 * $alpha)];
         }
 
-        return match ($part) {
-            'front' => [...self::BAR_FRONT, 255],
-            'back' => [...self::BAR_BACK, 255],
-            'baseline' => [...self::BASELINE, 255],
-            default => [...self::BACKGROUND, 255],
-        };
+        $color = self::BACKGROUND;
+        $color = self::blend($color, self::ORBIT, $orbit);
+        $color = self::blend($color, self::coreColor(self::coreDistance($markX, $markY)), $sphere);
+        $color = self::blend($color, self::PARTICLE, $particle);
+
+        return [$color[0], $color[1], $color[2], 255];
     }
 
     /**
-     * Normalisierte Geometrie aus `public/favicon.svg` (viewBox 64x64).
+     * Weiche Kante: innerhalb eines Pixels vom Rand wird anteilig gemischt,
+     * sonst saehe das Zeichen bei 96 px ausgefranst aus.
+     *
+     * @param  array{int, int, int}  $base
+     * @param  array{int, int, int}  $over
+     * @return array{int, int, int}
      */
-    private static function markPart(float $x, float $y): ?string
+    private static function blend(array $base, array $over, float $amount): array
     {
-        if ($x >= 0.22 && $x <= 0.81 && $y >= 0.800 && $y <= 0.845) {
-            return 'baseline';
+        if ($amount <= 0.0) {
+            return $base;
         }
 
-        if ($x >= 0.250 && $x < 0.547 && $y >= 0.420 && $y < 0.790) {
-            return 'front';
+        $amount = min(1.0, $amount);
+
+        return [
+            (int) round($base[0] + ($over[0] - $base[0]) * $amount),
+            (int) round($base[1] + ($over[1] - $base[1]) * $amount),
+            (int) round($base[2] + ($over[2] - $base[2]) * $amount),
+        ];
+    }
+
+    private static function coverage(float $distance, float $unit): float
+    {
+        if ($unit <= 0.0) {
+            return $distance <= 0.0 ? 1.0 : 0.0;
         }
 
-        if ($x >= 0.547 && $x <= 0.785 && $y >= 0.280 && $y < 0.790) {
-            return 'back';
+        return max(0.0, min(1.0, 0.5 - $distance / $unit));
+    }
+
+    private static function sphereCoverage(float $x, float $y, float $unit): float
+    {
+        $distance = hypot($x - 0.5, $y - 0.5) - self::SPHERE_RADIUS;
+
+        return self::coverage($distance, $unit);
+    }
+
+    /**
+     * Abstand zur gedrehten Ellipse, erster Ordnung ueber |F| / |grad F|.
+     */
+    private static function orbitCoverage(float $x, float $y, float $unit): float
+    {
+        [$localX, $localY] = self::toOrbitSpace($x, $y);
+
+        $rx2 = self::ORBIT_RX ** 2;
+        $ry2 = self::ORBIT_RY ** 2;
+        $value = ($localX ** 2) / $rx2 + ($localY ** 2) / $ry2 - 1.0;
+        $gradient = hypot(2 * $localX / $rx2, 2 * $localY / $ry2);
+
+        if ($gradient <= 0.0) {
+            return 0.0;
         }
 
-        return null;
+        $distance = abs($value / $gradient) - self::ORBIT_HALF_WIDTH;
+
+        return self::coverage($distance, $unit);
+    }
+
+    private static function particleCoverage(float $x, float $y, float $unit): float
+    {
+        $best = 0.0;
+
+        foreach (self::PARTICLES as [$phase, $radius]) {
+            $angle = 2 * M_PI * $phase;
+            $localX = self::ORBIT_RX * cos($angle);
+            $localY = self::ORBIT_RY * sin($angle);
+            $rotation = deg2rad(self::ORBIT_ROTATION);
+            $centerX = 0.5 + $localX * cos($rotation) - $localY * sin($rotation);
+            $centerY = 0.5 + $localX * sin($rotation) + $localY * cos($rotation);
+
+            $best = max($best, self::coverage(hypot($x - $centerX, $y - $centerY) - $radius, $unit));
+        }
+
+        return $best;
+    }
+
+    /**
+     * @return array{float, float}
+     */
+    private static function toOrbitSpace(float $x, float $y): array
+    {
+        $rotation = deg2rad(-self::ORBIT_ROTATION);
+        $dx = $x - 0.5;
+        $dy = $y - 0.5;
+
+        return [
+            $dx * cos($rotation) - $dy * sin($rotation),
+            $dx * sin($rotation) + $dy * cos($rotation),
+        ];
+    }
+
+    /** Normalisierter Abstand zum Lichtpunkt der Sphaere. */
+    private static function coreDistance(float $x, float $y): float
+    {
+        $focusX = 0.5 - self::SPHERE_RADIUS * 0.42;
+        $focusY = 0.5 - self::SPHERE_RADIUS * 0.50;
+
+        return hypot($x - $focusX, $y - $focusY) / (self::SPHERE_RADIUS * 1.55);
+    }
+
+    /**
+     * @return array{int, int, int}
+     */
+    private static function coreColor(float $position): array
+    {
+        $position = max(0.0, min(1.0, $position));
+        $stops = self::CORE_STOPS;
+
+        for ($i = 0, $last = count($stops) - 1; $i < $last; $i++) {
+            [$from, $fromColor] = $stops[$i];
+            [$to, $toColor] = $stops[$i + 1];
+
+            if ($position <= $to) {
+                $local = $to <= $from ? 0.0 : ($position - $from) / ($to - $from);
+
+                return self::blend($fromColor, $toColor, $local);
+            }
+        }
+
+        return $stops[count($stops) - 1][1];
     }
 
     private static function chunk(string $type, string $data): string

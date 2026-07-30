@@ -492,10 +492,6 @@ async function frameRecords(frame, options = {}) {
         'data-test',
         'data-cy',
         'data-qa',
-        'aria-label',
-        'name',
-        'placeholder',
-        'title',
       ]) {
         const value = attributes[attribute];
 
@@ -506,6 +502,14 @@ async function frameRecords(frame, options = {}) {
 
       if (attributes.role && attributes['aria-label']) {
         return `[role="${cssString(attributes.role)}"][aria-label="${cssString(attributes['aria-label'])}"]`;
+      }
+
+      for (const attribute of ['aria-label', 'name', 'placeholder', 'title']) {
+        const value = attributes[attribute];
+
+        if (value) {
+          return `${tag}[${attribute}="${cssString(value)}"]`;
+        }
       }
 
       if (element.id) {

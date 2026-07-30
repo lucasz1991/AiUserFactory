@@ -46,7 +46,7 @@ class PushDelivery
     ): void {
         $this->notify($recipient, new FactoryWebPushNotification(
             notificationId: $notificationId,
-            title: $this->previewText($title, 70) ?: config('app.name', 'Factory AI'),
+            title: $this->previewText($title, 70) ?: config('app.name', 'FollowFlow'),
             body: $this->previewText($body),
             url: $url,
             category: $category,

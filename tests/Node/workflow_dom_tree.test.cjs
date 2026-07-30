@@ -188,7 +188,9 @@ test('body nodes expose safe element data and ranked selector suggestions withou
       tag: 'input',
       attributes: {
         'aria-label': 'E-Mail',
+        checked: 'true',
         'data-testid': 'login-email',
+        required: 'true',
         onclick: 'steal()',
         value: 'secret@example.test',
       },
@@ -209,7 +211,9 @@ test('body nodes expose safe element data and ranked selector suggestions withou
 
   assert.deepEqual(node.attributes, {
     'aria-label': 'E-Mail',
+    checked: 'true',
     'data-testid': 'login-email',
+    required: 'true',
   });
   assert.deepEqual(node.selectorCandidates, [
     { selector: '[data-testid="login-email"]', kind: 'attribute', unique: true, matchCount: 1, score: 98 },

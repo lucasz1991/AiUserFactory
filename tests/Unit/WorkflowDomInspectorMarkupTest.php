@@ -21,6 +21,8 @@ class WorkflowDomInspectorMarkupTest extends TestCase
         $this->assertStringContainsString('data-workflow-dom-match-overlay', $view);
         $this->assertStringContainsString('data-workflow-dom-row', $view);
         $this->assertStringContainsString('data-workflow-selector-suggestions', $view);
+        $this->assertStringContainsString('x-show.important="query && !searchError && matchedRefs.length === 0"', $view);
+        $this->assertStringContainsString('x-bind:disabled="!selectedNodeProbeable()"', $view);
         $this->assertStringContainsString('Body-DOM', $view);
         $this->assertStringContainsString('Selektor-Vorschläge', $view);
         $this->assertStringNotContainsString('workflow-dom-node-highlight', $view.$javascript);
@@ -28,6 +30,9 @@ class WorkflowDomInspectorMarkupTest extends TestCase
         $this->assertStringContainsString('bodyOnlyNodes', $javascript);
         $this->assertStringContainsString('querySelectorAll', $javascript);
         $this->assertStringContainsString('matchedRefs', $javascript);
+        $this->assertStringContainsString('matchNumber(node)', $view);
+        $this->assertStringContainsString('childrenByParent', $javascript);
+        $this->assertStringContainsString('snapshotTruncated', $javascript);
         $this->assertStringContainsString('selectFromScreenshot', $javascript);
         $this->assertStringContainsString('scrollSelectedIntoView', $javascript);
         $this->assertStringContainsString('navigator.clipboard.writeText', $javascript);

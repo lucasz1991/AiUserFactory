@@ -1,6 +1,6 @@
 @php
     $viewportMode = ($contentMode ?? null) === 'viewport';
-    $documentTitle = trim($__env->yieldContent('title')) ?: 'Factory AI';
+    $documentTitle = trim($__env->yieldContent('title')) ?: 'FollowFlow';
 @endphp
 <!DOCTYPE html>
 <html lang="{{ str_replace('_', '-', app()->getLocale()) }}" dir="ltr">
@@ -13,7 +13,7 @@
     @include('layouts.pwa-head')
     @include('layouts.metahead')
     <meta name="csrf-token" content="{{ csrf_token() }}">
-    <title>{{ $documentTitle }} | Factory AI &middot; User Factory</title>
+    <title>{{ $documentTitle }} | FollowFlow &middot; AI User Factory</title>
     @include('layouts.head-css')
     @vite(['resources/css/app.css', 'resources/css/app-shell.css'])
     @livewireStyles

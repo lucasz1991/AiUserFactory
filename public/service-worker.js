@@ -15,7 +15,7 @@
 
 'use strict';
 
-const FALLBACK_TITLE = 'Factory AI';
+const FALLBACK_TITLE = 'FollowFlow';
 const FALLBACK_ICON = 'pwa-icons/pwa-192.png';
 const FALLBACK_BADGE = 'pwa-icons/push-badge-96.png';
 const FOREGROUND_ACK_TYPE = 'factory:push-received-ack';

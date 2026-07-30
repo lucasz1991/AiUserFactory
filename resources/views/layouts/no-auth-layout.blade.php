@@ -19,7 +19,7 @@
 
                 {{-- Fusszeile --}}
                 <div class="mt-10 flex items-center justify-between text-xs text-slate-400 dark:text-zinc-500">
-                    <p>&copy; <script>document.write(new Date().getFullYear())</script> Factory AI &middot; User Factory</p>
+                    <p>&copy; <script>document.write(new Date().getFullYear())</script> FollowFlow &middot; AI User Factory</p>
                     <p class="font-semibold uppercase tracking-wider">v0.1</p>
                 </div>
             </div>

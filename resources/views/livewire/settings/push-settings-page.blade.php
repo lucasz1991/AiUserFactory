@@ -15,10 +15,10 @@
     },
 })">
     <section class="rounded-xl border border-gray-200 bg-white p-5 shadow-sm sm:p-6">
-        <p class="text-11 font-semibold uppercase tracking-widest text-primary-base">Factory AI</p>
+        <p class="text-11 font-semibold uppercase tracking-widest text-primary-base">FollowFlow</p>
         <h1 class="mt-2 text-22 font-bold tracking-tight text-gray-900">App installieren und steuern</h1>
         <p class="mt-2 max-w-3xl text-base leading-7 text-gray-600">
-            Factory AI laesst sich wie eine native Anwendung installieren: eigenes Fenster ohne
+            FollowFlow laesst sich wie eine native Anwendung installieren: eigenes Fenster ohne
             Adressleiste, eigenes Symbol im Startmenue oder auf dem Home-Bildschirm und
             Benachrichtigungen, die auch ankommen, wenn kein Browser offen ist.
         </p>

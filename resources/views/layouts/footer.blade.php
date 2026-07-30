@@ -3,7 +3,7 @@
     <div class="grid grid-cols-2 text-gray-500 dark:text-zinc-100">
         <div class="grow">
             &copy;
-            {{ date('Y') }} Factory AI · User Factory
+            {{ date('Y') }} FollowFlow · AI User Factory
         </div>
 
     </div>

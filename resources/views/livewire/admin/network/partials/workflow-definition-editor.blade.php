@@ -18,7 +18,7 @@
 @endphp
 
 <div
-    class="{{ $modalOnly ? '' : 'h-full min-h-0 overflow-y-auto overscroll-contain xl:overflow-hidden' }}"
+    class="{{ $modalOnly ? '' : 'h-full w-full min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain xl:overflow-hidden' }}"
     data-studio-task-editor
     data-workflow-definition-editor
     data-workflow-editor-instance="{{ $editorInstance }}"
@@ -82,7 +82,7 @@
     x-on:workflow-minimap-zoom-changed.window="queueRouteRefresh()"
 >
     @unless($modalOnly)
-    <nav data-studio-mobile-switch class="sticky top-0 z-40 grid grid-cols-2 gap-1.5 border-b border-slate-200 bg-white/95 p-2 backdrop-blur xl:hidden" aria-label="Mobiler Editorbereich">
+    <nav data-studio-mobile-switch class="sticky top-0 z-40 grid w-full min-w-0 grid-cols-2 gap-1.5 border-b border-slate-200 bg-white/95 p-2 backdrop-blur xl:hidden" aria-label="Mobiler Editorbereich">
         <button type="button" x-on:click="mobilePanel = 'canvas'; $nextTick(() => queueRouteRefresh())" x-bind:aria-pressed="mobilePanel === 'canvas'" aria-controls="studio-task-canvas-panel" x-bind:class="mobilePanel === 'canvas' ? 'bg-slate-950 text-white shadow-sm' : 'bg-slate-100 text-slate-600'" class="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-3 text-xs font-bold transition">
             <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="7" height="6" rx="1"></rect><rect x="14" y="14" width="7" height="6" rx="1"></rect><path d="M10 7h3a4 4 0 0 1 4 4v3"></path></svg>
             Workflow <span class="font-mono opacity-70">{{ $steps->sum(fn ($step) => count($step->task_cards)) }}</span>
@@ -93,13 +93,13 @@
         </button>
     </nav>
 
-    <div data-studio-task-layout class="ff-canvas-shell grid min-h-full overflow-visible xl:h-full xl:min-h-0 xl:grid-cols-[350px_minmax(0,1fr)] xl:overflow-hidden">
+    <div data-studio-task-layout class="ff-canvas-shell grid min-h-full w-full min-w-0 grid-cols-[minmax(0,1fr)] overflow-visible xl:h-full xl:min-h-0 xl:grid-cols-[350px_minmax(0,1fr)] xl:overflow-hidden">
         <aside
             id="studio-task-catalog-panel"
             x-cloak
             x-bind:class="mobilePanel === 'catalog' ? 'flex' : 'hidden xl:flex'"
             data-studio-task-catalog
-            class="ff-task-drawer h-[calc(100dvh-10rem)] min-h-[480px] shrink-0 flex-col border-b bg-white text-slate-900 xl:h-auto xl:min-h-0 xl:border-b-0 xl:border-r"
+            class="ff-task-drawer h-[calc(100dvh-10rem)] w-full min-h-[480px] min-w-0 max-w-full shrink-0 flex-col border-b bg-white text-slate-900 xl:h-auto xl:min-h-0 xl:border-b-0 xl:border-r"
             aria-labelledby="studio-task-catalog-title"
         >
             <div class="ff-task-library-header relative overflow-hidden border-b border-slate-800 bg-slate-950 px-4 py-5 text-white">
@@ -230,7 +230,7 @@
             x-cloak
             x-bind:class="mobilePanel === 'canvas' ? 'flex' : 'hidden xl:flex'"
             data-studio-editor-canvas-panel
-            class="min-h-[560px] min-w-0 shrink-0 flex-col bg-slate-50 xl:min-h-0"
+            class="min-h-[560px] w-full min-w-0 max-w-full shrink-0 flex-col bg-slate-50 xl:min-h-0"
         >
             <div class="ff-canvas-toolbar flex shrink-0 flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
                 <div>

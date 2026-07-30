@@ -35,6 +35,7 @@
         'windowKey' => (string) ($panel['windowKey'] ?? $panel['name'] ?? $panel['title'] ?? 'main'),
         'targetId' => (string) ($panel['targetId'] ?? $panel['target_id'] ?? ''),
         'viewport' => is_array($inspectorTree['viewport'] ?? null) ? $inspectorTree['viewport'] : null,
+        'truncated' => is_array($inspectorTree['truncated'] ?? null) ? $inspectorTree['truncated'] : null,
         'nodes' => $inspectorNodes,
         'cursor' => is_array($panel['cursor'] ?? null) ? $panel['cursor'] : null,
     ];
@@ -113,7 +114,7 @@
                         x-bind:style="overlayStyle(node.rect)"
                         class="pointer-events-none absolute z-10 border-2 border-amber-300 bg-amber-300/20 shadow-[0_0_0_1px_rgba(120,53,15,.35)]"
                     >
-                        <span class="absolute -left-px -top-px rounded-br bg-amber-300 px-1.5 py-0.5 font-mono text-[8px] font-black text-amber-950" x-text="matchedRefs.indexOf(node.nodeRef) + 1"></span>
+                        <span class="absolute -left-px -top-px rounded-br bg-amber-300 px-1.5 py-0.5 font-mono text-[8px] font-black text-amber-950" x-text="matchNumber(node)"></span>
                     </div>
                 </template>
 
@@ -174,6 +175,7 @@
                     <p class="mt-1 text-[11px] text-slate-500" x-text="nodes.length ? `${nodes.length} Body-Knoten im Snapshot` : 'Kein Body-DOM in diesem Lauf erfasst'"></p>
                 </div>
                 <span x-show.important="selectedNode()?.inShadowDom" class="rounded-full bg-violet-100 px-2.5 py-1 text-[9px] font-black uppercase text-violet-700">Shadow DOM</span>
+                <span x-show.important="snapshotTruncated" class="rounded-full bg-amber-100 px-2.5 py-1 text-[9px] font-black uppercase text-amber-800">Snapshot gekürzt</span>
             </div>
 
             <div x-show.important="nodes.length" class="mt-3 grid gap-2 lg:grid-cols-[minmax(16rem,1fr)_auto]">
@@ -263,7 +265,7 @@
                             <span class="text-slate-500">&gt;</span>
                             <span class="min-w-0 truncate pl-1 font-sans text-[10px] text-slate-500" x-text="nodeSummary(node)"></span>
                         </button>
-                        <span x-show.important="isMatched(node)" class="my-auto ml-2 rounded bg-amber-300 px-1.5 py-0.5 font-sans text-[8px] font-black text-amber-950" x-text="matchedRefs.indexOf(node.nodeRef) + 1"></span>
+                        <span x-show.important="isMatched(node)" class="my-auto ml-2 rounded bg-amber-300 px-1.5 py-0.5 font-sans text-[8px] font-black text-amber-950" x-text="matchNumber(node)"></span>
                     </div>
                 </template>
 
@@ -335,12 +337,14 @@
                                         <div class="mt-2 flex flex-wrap items-center gap-1.5">
                                             <span class="rounded bg-slate-100 px-1.5 py-0.5 text-[8px] font-bold uppercase text-slate-500" x-text="candidate.kind"></span>
                                             <span x-show.important="candidate.unique" class="rounded bg-emerald-100 px-1.5 py-0.5 text-[8px] font-black uppercase text-emerald-700">eindeutig</span>
-                                            <span x-show.important="candidate.count !== null && !candidate.unique" class="rounded bg-amber-100 px-1.5 py-0.5 text-[8px] font-bold text-amber-800" x-text="`${candidate.count} Treffer`"></span>
+                                            <span x-show.important="candidate.count !== null && !candidate.unique" class="rounded bg-amber-100 px-1.5 py-0.5 text-[8px] font-bold text-amber-800" x-text="snapshotTruncated ? `${candidate.count} im Snapshot` : `${candidate.count} Treffer`"></span>
                                             <button
                                                 x-show.important="interactive"
                                                 type="button"
                                                 x-on:click="useSelector(candidate.selector)"
-                                                x-bind:disabled="!selectedNodeActionable()"
+                                                x-bind:disabled="!selectedNodeProbeable()"
+                                                x-bind:title="canProbe ? 'Selektor in die pausierte Live-Probe übernehmen' : 'Live-Proben sind nur in einem manuell pausierten Lauf verfügbar'"
+                                                x-text="canProbe ? 'In Live-Probe prüfen' : 'Live-Probe nur pausiert'"
                                                 class="ml-auto rounded-md bg-cyan-700 px-2 py-1 text-[8px] font-black uppercase text-white hover:bg-cyan-600 disabled:cursor-not-allowed disabled:opacity-35"
                                             >
                                                 Für Probe übernehmen

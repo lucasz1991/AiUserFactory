@@ -20,12 +20,12 @@
             href="{{ route('admin.index') }}"
             class="ff-topbar-brand__link"
             wire:navigate
-            aria-label="Factory AI Dashboard"
+            aria-label="FollowFlow Dashboard"
         >
-            <x-navigation.application-icon class="ff-topbar-brand__mark" />
+            <x-navigation.application-icon class="ff-topbar-brand__mark" animated />
             <span class="ff-topbar-brand__copy">
-                <strong>Factory AI</strong>
-                <small>User Factory</small>
+                <strong>FollowFlow</strong>
+                <small>AI User Factory</small>
             </span>
         </a>
 

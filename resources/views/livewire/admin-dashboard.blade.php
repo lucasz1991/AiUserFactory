@@ -1,7 +1,7 @@
 <div wire:loading.class="cursor-wait" class="space-y-6" data-ff-dashboard>
     <x-ui.page-header
         eyebrow="Control Center"
-        title="Factory AI"
+        title="FollowFlow"
         description="Personen, Automationen, Verbindungen und Workflow-Aktivitaet in einer klaren Arbeitsoberflaeche."
     >
         <x-slot:actions>

@@ -6,7 +6,7 @@
          layouts.metahead stehen. --}}
     @include('layouts.pwa-head')
     @include('layouts.metahead')
-    <title>@yield('title') | Factory AI · User Factory</title>
+    <title>@yield('title') | FollowFlow · AI User Factory</title>
     <!-- css -->
     @include('layouts.head-css')
     @livewireStyles

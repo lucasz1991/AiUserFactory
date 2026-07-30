@@ -196,7 +196,7 @@ class WorkflowRunPreviewDomInspectorTest extends TestCase
             ->assertSee('Elementdaten')
             ->assertSee('Selektor-Vorschläge')
             ->assertSee('Eingaben & Buttons', false)
-            ->assertSee('Für Probe übernehmen')
+            ->assertSee('In Live-Probe prüfen')
             ->assertSee('Kopieren')
             ->assertSee('#submit', false)
             ->assertSee('button[data-testid=\u0022save\u0022]', false)

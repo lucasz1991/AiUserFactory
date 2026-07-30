@@ -23,14 +23,14 @@
 
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="{{ config('app.name', 'Factory AI') }}">
+<meta name="apple-mobile-web-app-title" content="{{ config('app.name', 'FollowFlow') }}">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 
-<meta name="msapplication-TileColor" content="#081b2d">
+<meta name="msapplication-TileColor" content="#110626">
 <meta name="msapplication-TileImage" content="{{ route('pwa.icon', ['icon' => 'pwa-192.png']) }}">
 
-<meta name="theme-color" content="#2f5c9e" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#081b2d" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#7C3AED" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#110626" media="(prefers-color-scheme: dark)">
 
 {{-- Registrierungsquelle des Service Workers. resources/js/pwa.js liest sie und
      verweigert die Registrierung, wenn sie auf einen fremden Origin zeigt. --}}
