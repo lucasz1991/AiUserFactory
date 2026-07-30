@@ -6,6 +6,8 @@ use App\Http\Controllers\Admin\ClientController\NetworkTargetController as Clien
 use App\Http\Controllers\Admin\ClientController\NodeController as ClientControllerNodeController;
 use App\Http\Controllers\Ai\AssistantAudioInputTranscriptionController;
 use App\Http\Controllers\Ai\AssistantAudioOutputStreamController;
+use App\Http\Controllers\PushSubscriptionController;
+use App\Http\Controllers\PwaIconController;
 use App\Http\Controllers\Workflows\WorkflowRunArtifactController;
 use App\Livewire\Admin\ClientController\Dashboard as ClientControllerDashboard;
 use App\Livewire\Admin\ClientController\NodeDetail as ClientControllerNodeDetail;
@@ -19,6 +21,8 @@ use App\Livewire\Admin\Network\WorkflowStudio;
 use App\Livewire\Admin\Processes\ProcessMonitor;
 use App\Livewire\AdminConfig;
 use App\Livewire\AdminDashboard;
+use App\Livewire\Settings\PushSettingsPage;
+use App\Support\Pwa\PwaIcon;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -32,7 +36,37 @@ use Illuminate\Support\Facades\Route;
 |
 */
 
+/*
+| PWA-Icons (Spur W). Bewusst oeffentlich: Manifest, Service Worker und die
+| Push-Zustellung des Betriebssystems laden diese Grafiken ohne Session.
+| `whereIn` begrenzt auf die im Manifest deklarierten Namen; alles andere ist
+| 404, damit die Route kein Datei-Lesezugriff auf public/ wird.
+*/
+Route::get('/pwa-icons/{icon}', PwaIconController::class)
+    ->whereIn('icon', array_keys(PwaIcon::DIMENSIONS))
+    ->name('pwa.icon');
+
 Route::middleware(['auth:sanctum', config('jetstream.auth_session')])->group(function () {
+    /*
+    | Push-Verwaltung und App-Installation stehen jedem angemeldeten Benutzer
+    | offen, nicht nur der Rolle `admin` — es geht um das eigene Geraet.
+    */
+    Route::get('/app-installation', PushSettingsPage::class)->name('pwa.settings');
+
+    Route::prefix('settings/push')
+        ->name('push.')
+        ->middleware('throttle:push-subscriptions')
+        ->group(function (): void {
+            Route::get('/status', [PushSubscriptionController::class, 'status'])->name('status');
+            Route::post('/subscriptions', [PushSubscriptionController::class, 'store'])->name('subscriptions.store');
+            Route::delete('/subscriptions', [PushSubscriptionController::class, 'destroy'])->name('subscriptions.destroy');
+            Route::patch('/preferences', [PushSubscriptionController::class, 'updatePreferences'])->name('preferences.update');
+            Route::post('/test', [PushSubscriptionController::class, 'test'])
+                ->withoutMiddleware('throttle:push-subscriptions')
+                ->middleware('throttle:push-test')
+                ->name('test');
+        });
+
     Route::middleware(['role:admin'])->group(function () {
         Route::get('/', AdminDashboard::class)->name('admin.index');
         Route::get('/dashboard', AdminDashboard::class)->name('admin.dashboard');

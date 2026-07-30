@@ -1,6 +1,4 @@
-<div class="main-content group-data-[sidebar-size=sm]:ml-[70px]" wire:poll.5s>
-    <div class="page-content dark:bg-zinc-700">
-        <div class="container-fluid px-[0.625rem] space-y-6">
+<div class="space-y-6" wire:poll.5s data-ff-client-controller-page>
             @include('admin.client-controller._navigation')
             <div class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
                 <div>
@@ -98,6 +96,4 @@
                     @forelse($heartbeats as $heartbeat)<tr class="align-top"><td class="px-4 py-3 whitespace-nowrap">{{ $heartbeat->received_at?->timezone(config('app.timezone'))->format('d.m.Y H:i:s') }}</td><td class="px-4 py-3">{{ $heartbeat->status }}</td><td class="px-4 py-3"><pre class="max-h-32 overflow-auto whitespace-pre-wrap text-xs">{{ json_encode($heartbeat->payload_json, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) }}</pre></td></tr>@empty<tr><td colspan="3" class="px-4 py-6 text-center text-gray-500">Noch keine Heartbeats.</td></tr>@endforelse
                 </tbody></table>
             </section>
-        </div>
-    </div>
 </div>

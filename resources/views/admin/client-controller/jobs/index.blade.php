@@ -1,9 +1,7 @@
 @extends('layouts.master')
 
 @section('content')
-<div class="main-content group-data-[sidebar-size=sm]:ml-[70px]">
-    <div class="page-content dark:bg-zinc-700">
-        <div class="container-fluid px-[0.625rem] space-y-6">
+<div class="space-y-6" data-ff-client-controller-page>
             <div class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
                 <h1 class="text-2xl font-semibold text-gray-900">ClientController-Jobs</h1>
                 <p class="mt-1 text-sm text-gray-500">Workflows auf einem ClientController-Node oder technische Roh-Jobs einplanen.</p>
@@ -85,7 +83,5 @@
                 </table>
                 <div class="p-4">{{ $jobs->links() }}</div>
             </div>
-        </div>
-    </div>
 </div>
 @endsection

@@ -72,6 +72,10 @@
 }
 
 .workflow-experience {
+  isolation: auto;
+}
+
+[data-workflow-studio-shell] {
   isolation: isolate;
 }
 
@@ -944,6 +948,88 @@
   .ff-copilot-launcher {
     right: .85rem !important;
     bottom: .85rem !important;
+  }
+}
+
+/* Studio bleibt auch auf kleinen oder niedrigen Viewports bedienbar. */
+[data-workflow-studio-shell],
+[data-workflow-studio-shell] > *,
+[data-workflow-studio-shell] .ff-studio-header,
+[data-workflow-studio-shell] .ff-studio-commandbar,
+[data-workflow-studio-shell] .ff-canvas-shell {
+  min-width: 0;
+}
+
+[data-workflow-studio-shell] .ff-studio-commandbar {
+  overscroll-behavior-inline: contain;
+  scroll-padding-inline: .75rem;
+  -webkit-overflow-scrolling: touch;
+}
+
+[data-workflow-studio-shell] .ff-studio-commandbar > * {
+  scroll-snap-align: start;
+}
+
+@media (hover: none), (pointer: coarse) {
+  [data-workflow-studio-shell] .ff-action-trigger,
+  [data-workflow-studio-shell] .ff-tool-button,
+  [data-workflow-studio-shell] .ff-segmented-control > button,
+  [data-workflow-studio-shell] .ff-run-island > button {
+    min-height: 44px !important;
+  }
+}
+
+@media (max-width: 767px) {
+  [data-workflow-studio-shell] [data-studio-primary-bar] {
+    align-items: stretch;
+    padding-inline: .75rem !important;
+  }
+
+  [data-workflow-studio-shell] [data-studio-primary-bar] > .ff-segmented-control {
+    width: 100%;
+    overflow-x: auto;
+  }
+
+  [data-workflow-studio-shell] [data-studio-primary-bar] > .ff-segmented-control > button {
+    flex: 1 0 auto;
+  }
+}
+
+@media (max-width: 480px) {
+  [data-studio-browser-windows] .ff-browser-card {
+    width: calc(100vw - 2rem) !important;
+    min-width: calc(100vw - 2rem) !important;
+  }
+
+  [data-studio-browser-windows] .ff-browser-preview {
+    width: 6.5rem !important;
+    height: 3.75rem !important;
+  }
+}
+
+@media (max-height: 760px) {
+  [data-workflow-studio-shell] [data-studio-primary-bar] {
+    padding-block: .5rem !important;
+  }
+
+  [data-studio-browser-windows],
+  [data-workflow-studio-tool-bar] {
+    padding-block: .375rem !important;
+  }
+
+  [data-studio-browser-description] {
+    display: none;
+  }
+
+  [data-studio-browser-windows] .ff-browser-preview {
+    width: 6.5rem !important;
+    height: 3.5rem !important;
+  }
+}
+
+@media (max-height: 640px) {
+  [data-studio-browser-windows] .ff-browser-preview {
+    display: none !important;
   }
 }
 

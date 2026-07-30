@@ -28,6 +28,16 @@ class RouteServiceProvider extends ServiceProvider
             return Limit::perMinute(600)->by($request->user()?->id ?: $request->ip());
         });
 
+        // Web Push (Spur W). Der Testversand ist bewusst deutlich enger
+        // begrenzt als die Abo-Pflege: er erzeugt echte Zustellungen.
+        RateLimiter::for('push-subscriptions', function (Request $request) {
+            return Limit::perMinute(30)->by($request->user()?->id ?: $request->ip());
+        });
+
+        RateLimiter::for('push-test', function (Request $request) {
+            return Limit::perMinutes(10, 3)->by($request->user()?->id ?: $request->ip());
+        });
+
         $this->routes(function () {
             Route::middleware('api')
                 ->prefix('api')

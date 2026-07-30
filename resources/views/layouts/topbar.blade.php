@@ -75,6 +75,8 @@
                                 type="button"
                                 class="ff-profile-trigger"
                                 aria-label="Benutzermenue fuer {{ Auth::user()->name }}"
+                                aria-haspopup="menu"
+                                x-bind:aria-expanded="open.toString()"
                             >
                                 <img
                                     class="ff-profile-trigger__avatar"

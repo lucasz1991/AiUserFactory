@@ -1,6 +1,4 @@
-<div class="main-content group-data-[sidebar-size=sm]:ml-[70px]">
-    <div class="page-content min-h-screen bg-slate-50 dark:bg-zinc-700">
-        <div class="container-fluid space-y-6 px-[0.625rem]">
+<div class="space-y-6" data-ff-client-controller-page>
             @include('admin.client-controller._navigation')
 
             <header class="overflow-hidden rounded-2xl bg-slate-950 p-6 text-white shadow-lg">
@@ -69,6 +67,4 @@
                     </table>
                 </div>
             </section>
-        </div>
-    </div>
 </div>

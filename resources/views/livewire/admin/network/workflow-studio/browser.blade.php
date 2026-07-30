@@ -13,7 +13,7 @@
                 />
             </div>
         @else
-            <div class="flex h-full min-h-[24rem] items-center justify-center rounded-xl border border-dashed border-slate-300 bg-white/90 p-5 sm:p-8">
+            <div class="flex h-full min-h-0 items-center justify-center overflow-y-auto rounded-xl border border-dashed border-slate-300 bg-white/90 p-5 sm:p-8">
                 <div class="max-w-lg text-center">
                     <span class="mx-auto flex h-12 w-12 items-center justify-center rounded-xl border border-blue-200 bg-blue-50 text-blue-700 shadow-sm" aria-hidden="true">
                         <svg class="h-5 w-5 translate-x-px" viewBox="0 0 24 24" fill="currentColor">

@@ -29,7 +29,7 @@
                         {{ $connectedBrowserWindows }} verbunden
                     </span>
                 </div>
-                <p class="mt-0.5 truncate text-[10px] text-slate-500">Aktives Fenster im Blick, weitere Browser bei Bedarf einblenden.</p>
+                <p data-studio-browser-description class="mt-0.5 truncate text-[10px] text-slate-500">Aktives Fenster im Blick, weitere Browser bei Bedarf einblenden.</p>
             </div>
         </div>
 
@@ -96,7 +96,7 @@
                 <button
                     type="button"
                     wire:click="openToolModal('browser')"
-                    class="ml-auto h-20 w-36 shrink-0 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-inner transition duration-200 hover:-translate-y-0.5 hover:border-blue-300 focus:outline-none motion-reduce:transform-none motion-reduce:transition-none"
+                    class="ff-browser-preview ml-auto h-20 w-36 shrink-0 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-inner transition duration-200 hover:-translate-y-0.5 hover:border-blue-300 focus:outline-none motion-reduce:transform-none motion-reduce:transition-none"
                     aria-label="Browserfenster {{ $window['name'] }} vergrößern"
                 >
                     @if(filled($window['screenshot_url'] ?? null))

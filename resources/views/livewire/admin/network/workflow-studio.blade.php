@@ -77,7 +77,7 @@
     @endphp
 
     <header class="ff-studio-header relative z-30 shrink-0 border-b">
-        <div class="flex flex-wrap items-center gap-3 px-3 py-3 sm:px-4 lg:px-6">
+        <div data-studio-primary-bar class="flex flex-wrap items-center gap-3 px-3 py-3 sm:px-4 lg:px-6">
             @if($embedded)
                 <button type="button" x-on:click="$dispatch('workflow-studio-unpin-copilot')" wire:click="closeStudio" class="ff-action-trigger inline-flex h-9 items-center gap-2 px-3 text-xs font-semibold">
                     <span aria-hidden="true">←</span> Manager
