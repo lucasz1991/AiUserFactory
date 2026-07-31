@@ -737,8 +737,23 @@ body[data-sidebar-expanded='true'] .ff-sidebar-link__chevron {
     overflow: visible !important;
 }
 
-body[data-sidebar-expanded='false'] .ff-sidebar-nav [data-ff-sidebar-group-item] > ul {
-    display: none !important;
+/*
+ * Nur Desktop: Bei eingeklappter Schmalspur-Sidebar haetten aufgeklappte
+ * Untermenues keinen Platz.
+ *
+ * Die Begrenzung auf die Desktopbreite ist zwingend. `data-sidebar-expanded`
+ * wird ausschliesslich von setDesktopSidebarExpanded() gepflegt, und die
+ * Funktion steigt unterhalb von 1024px sofort aus — auf dem Handy bleibt der
+ * vom Server gerenderte Startwert 'false' also dauerhaft stehen. Ohne Media
+ * Query verdeckt diese Regel dort jedes Untermenue permanent: Sie ist
+ * spezifischer als `[data-ff-sidebar-group-item] > ul.mm-show` im
+ * Mobilblock, sodass ein Antippen zwar `mm-show` setzt, aber nichts sichtbar
+ * wird.
+ */
+@media (min-width: 1024px) {
+    body[data-sidebar-expanded='false'] .ff-sidebar-nav [data-ff-sidebar-group-item] > ul {
+        display: none !important;
+    }
 }
 
 .ff-sidebar-link--nested {

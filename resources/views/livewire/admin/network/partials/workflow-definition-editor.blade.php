@@ -15,6 +15,10 @@
     $taskEditPauseRequestedState = (bool) ($taskEditPauseRequested ?? false);
     $taskEditRunStatusState = (string) ($taskEditRunStatus ?? 'idle');
     $taskEditLockMessageState = (string) ($taskEditLockMessage ?? '');
+    // Im Studio wuerde ein dauerhaft sichtbarer Editor-Canvas die Vollbild-Testansicht
+    // verdraengen, deshalb erscheinen Bibliothek und Canvas dort nur als Overlay auf Abruf.
+    $definitionDrawerOpen = (bool) ($definitionDrawerOpen ?? false);
+    $showDefinitionSurface = ! $modalOnly || $definitionDrawerOpen;
 @endphp
 
 <div
@@ -89,7 +93,30 @@
     "
     x-on:workflow-minimap-zoom-changed.window="queueRouteRefresh()"
 >
-    @unless($modalOnly)
+    @if($showDefinitionSurface)
+    @if($modalOnly)
+    {{-- Overlay-Huelle nur fuer das Studio; die zugehoerigen schliessenden Tags stehen am Ende dieses Blocks.
+         Nur Klassen der Standard-z-Skala und aus dem bestehenden CSS-Build, damit die Huelle auch ohne
+         frischen Tailwind-Build ueber der Studio-Oberflaeche liegt. --}}
+    <div
+        wire:key="{{ $routeMarkerId }}-definition-drawer"
+        data-studio-definition-drawer
+        class="fixed inset-0 z-50 flex flex-col bg-slate-950/45 p-3 backdrop-blur-sm sm:p-6"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="{{ $routeMarkerId }}-definition-drawer-title"
+    >
+        <section class="flex min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-white/70 bg-slate-100 shadow-2xl">
+            <header class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3 sm:px-5">
+                <div class="min-w-0">
+                    <p class="text-[9px] font-black uppercase tracking-[0.18em] text-blue-700">Workflow aufbauen</p>
+                    <h2 id="{{ $routeMarkerId }}-definition-drawer-title" class="mt-1 truncate text-base font-bold text-slate-950">Listen und Tasks bearbeiten</h2>
+                    <p class="mt-1 text-xs text-slate-500">{{ $revisionMode ? 'Jede Änderung wird als neue Workflow-Revision gespeichert.' : 'Listen, Tasks und Routen dieses Workflows bearbeiten.' }}</p>
+                </div>
+                <button type="button" wire:click="closeDefinitionDrawer" data-studio-definition-drawer-close class="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 transition hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-cyan-500">Schließen <span aria-hidden="true">×</span></button>
+            </header>
+            <div class="min-h-0 w-full min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain bg-slate-100 xl:overflow-hidden">
+    @endif
     <nav data-studio-mobile-switch class="sticky top-0 z-40 grid w-full min-w-0 grid-cols-2 gap-1.5 border-b border-slate-200 bg-white/95 p-2 backdrop-blur xl:hidden" aria-label="Mobiler Editorbereich">
         <button type="button" x-on:click="mobilePanel = 'canvas'; $nextTick(() => queueRouteRefresh())" x-bind:aria-pressed="mobilePanel === 'canvas'" aria-controls="studio-task-canvas-panel" x-bind:class="mobilePanel === 'canvas' ? 'bg-slate-950 text-white shadow-sm' : 'bg-slate-100 text-slate-600'" class="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-3 text-xs font-bold transition">
             <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="7" height="6" rx="1"></rect><rect x="14" y="14" width="7" height="6" rx="1"></rect><path d="M10 7h3a4 4 0 0 1 4 4v3"></path></svg>
@@ -264,7 +291,8 @@
                     </div>
                     <button
                         type="button"
-                        x-show="compactRouteMode"
+                        {{-- inline-flex kommt aus Tailwind mit !important und wuerde ein nacktes x-show ueberstimmen --}}
+                        x-show.important="compactRouteMode"
                         x-on:click="toggleAllRoutes()"
                         x-bind:aria-pressed="showAllRoutes"
                         class="inline-flex min-h-11 items-center rounded-xl border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 transition hover:border-blue-300 hover:text-blue-700"
@@ -423,10 +451,15 @@
             </div>
         </section>
     </div>
-    @endunless
+    @if($modalOnly)
+            </div>
+        </section>
+    </div>
+    @endif
+    @endif
 
-    @unless($modalOnly)
-    <x-ui.dialog-modal wire:model="showAddStepModal" maxWidth="2xl">
+    @if($showDefinitionSurface)
+    <x-ui.dialog-modal wire:model="showAddStepModal" :id="$routeMarkerId.'-add-step-modal'" maxWidth="2xl">
         <x-slot name="title">
             <div><span class="text-base font-semibold text-slate-950">Neue Workflow-Liste</span><p class="mt-1 text-xs font-normal text-slate-500">Eine Liste gruppiert zusammengehörige Tasks und besitzt eigene Erfolgs- und Fehlerwege.</p></div>
         </x-slot>
@@ -456,7 +489,7 @@
         </x-slot>
     </x-ui.dialog-modal>
 
-    <x-ui.dialog-modal wire:model="showEditStepModal" maxWidth="2xl">
+    <x-ui.dialog-modal wire:model="showEditStepModal" :id="$routeMarkerId.'-edit-step-modal'" maxWidth="2xl">
         <x-slot name="title">
             <div><span class="text-base font-semibold text-slate-950">Liste bearbeiten</span><p class="mt-1 text-xs font-normal text-slate-500">Name, Status, Pause und Routing dieser Liste ändern.</p></div>
         </x-slot>
@@ -514,7 +547,7 @@
         </x-slot>
     </x-ui.dialog-modal>
 
-    <x-ui.dialog-modal wire:model="showAddTaskModal" maxWidth="3xl">
+    <x-ui.dialog-modal wire:model="showAddTaskModal" :id="$routeMarkerId.'-add-task-modal'" maxWidth="3xl">
         <x-slot name="title">
             <div><span class="text-base font-semibold text-slate-950">Task einsetzen</span><p class="mt-1 text-xs font-normal text-slate-500">Parameter, Browserfenster sowie Erfolgs- und Fehlerwege vor dem Einfügen festlegen.</p></div>
         </x-slot>
@@ -524,7 +557,7 @@
             <button type="button" x-on:click.prevent="const source = $el.closest('.jetstream-modal')?.querySelector('[data-workflow-task-mailbox-source=&quot;newTask&quot;]')?.value || 'person'; $wire.addTaskCard(source);" class="ml-2 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-cyan-500">Task einsetzen</button>
         </x-slot>
     </x-ui.dialog-modal>
-    @endunless
+    @endif
 
     <x-ui.dialog-modal :id="$routeMarkerId.'-edit-task-modal'" wire:model="showEditTaskModal" maxWidth="5xl">
         <x-slot name="title">
@@ -574,8 +607,8 @@
         </x-slot>
     </x-ui.dialog-modal>
 
-    @unless($modalOnly)
-    <x-ui.dialog-modal wire:model="showMoveTaskModal" maxWidth="lg">
+    @if($showDefinitionSurface)
+    <x-ui.dialog-modal wire:model="showMoveTaskModal" :id="$routeMarkerId.'-move-task-modal'" maxWidth="lg">
         <x-slot name="title">
             <div><span class="text-base font-semibold text-slate-950">Task in andere Liste verschieben</span><p class="mt-1 text-xs font-normal text-slate-500">Die Task wird ans Ende der gewählten Liste verschoben. Gekoppelte Loop-Blöcke bleiben zusammen.</p></div>
         </x-slot>
@@ -595,5 +628,5 @@
             <button type="button" wire:click="confirmTaskMove" class="ml-2 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-cyan-500">Task verschieben</button>
         </x-slot>
     </x-ui.dialog-modal>
-    @endunless
+    @endif
 </div>

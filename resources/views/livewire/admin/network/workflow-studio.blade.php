@@ -160,6 +160,16 @@
                 <button type="button" wire:click="restartRun" wire:confirm="Aktuellen Lauf beenden und neu starten?" class="h-9 rounded-lg border border-slate-300 bg-white px-3 text-[11px] font-bold text-slate-600 transition hover:bg-slate-100">Neu versuchen</button>
                 <button type="button" wire:click="stopRun" wire:confirm="Diesen Lauf wirklich stoppen?" @disabled(! $isActive && ! $isPaused) class="h-9 rounded-lg border border-rose-200 bg-white px-3 text-[11px] font-bold text-rose-700 transition hover:bg-rose-50 disabled:opacity-30">Stoppen</button>
 
+                <button
+                    type="button"
+                    wire:click="openDefinitionBuilder"
+                    data-workflow-studio-builder-trigger
+                    title="Task-Bibliothek und Listenverwaltung über dem Studio öffnen"
+                    class="ff-action-trigger ff-action-trigger--primary inline-flex h-9 shrink-0 items-center gap-2 px-3 text-[11px] font-bold"
+                >
+                    <span class="text-base leading-none" aria-hidden="true">+</span> Listen &amp; Tasks
+                </button>
+
                 @if($selectedTask)
                     <button type="button" wire:click="editSelectedTask" class="ff-selected-task ml-auto flex min-w-[13rem] max-w-sm shrink-0 items-center gap-2 rounded-xl border px-3 py-1.5 text-left transition hover:border-blue-400">
                         <span class="h-2.5 w-2.5 shrink-0 rounded-full bg-blue-600"></span>

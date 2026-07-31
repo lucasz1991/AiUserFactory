@@ -28,6 +28,7 @@ use App\Services\Workflows\WorkflowStudioSessionService;
 use App\Services\Workflows\WorkflowTaskCatalog;
 use App\Services\Workflows\WorkflowTaskOrderingService;
 use DomainException;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -705,6 +706,25 @@ class WorkflowStudio extends Component
         );
     }
 
+    public function openDefinitionBuilder(): void
+    {
+        try {
+            app(WorkflowStudioControlService::class)->assertUserControl($this->session());
+        } catch (DomainException $exception) {
+            $this->addError('studio', $exception->getMessage());
+            $this->dispatchStudioNotice($this->result('failed', $exception->getMessage()));
+
+            return;
+        }
+
+        $this->dispatch(
+            'open-workflow-studio-definition-drawer',
+            studioSessionId: $this->studioSessionId,
+            stepId: (int) $this->selectedStepId,
+            taskKey: $this->selectedTaskKey,
+        );
+    }
+
     public function openStandardEditor(int $stepId = 0, string $taskKey = '', bool $openTask = false): void
     {
         $stepId = max(0, $stepId);
@@ -1270,11 +1290,11 @@ class WorkflowStudio extends Component
                     'active' => $name === $activeWindow,
                     'runtime' => true,
                     'task_count' => 0,
-                'screenshot_url' => null,
-                'dom_url' => null,
-                'dom_tree' => null,
-                'cursor' => null,
-            ]];
+                    'screenshot_url' => null,
+                    'dom_url' => null,
+                    'dom_tree' => null,
+                    'cursor' => null,
+                ]];
             });
 
         foreach ($workflow->steps as $step) {
@@ -1495,7 +1515,7 @@ class WorkflowStudio extends Component
         return in_array($status, ['completed', 'failed', 'cancelled', 'timed_out', 'lost'], true);
     }
 
-    private function taskNavigation(?Workflow $workflow = null): \Illuminate\Support\Collection
+    private function taskNavigation(?Workflow $workflow = null): Collection
     {
         $workflow ??= $this->workflow()->load('steps');
         $steps = $workflow->relationLoaded('steps')

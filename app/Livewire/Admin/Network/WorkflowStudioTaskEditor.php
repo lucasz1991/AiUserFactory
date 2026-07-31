@@ -20,6 +20,8 @@ class WorkflowStudioTaskEditor extends WorkflowManager
 
     public bool $modalOnly = false;
 
+    public bool $showDefinitionDrawer = false;
+
     public bool $taskEditReadOnly = false;
 
     public bool $taskEditCanRequestPause = false;
@@ -54,6 +56,50 @@ class WorkflowStudioTaskEditor extends WorkflowManager
         $this->selectOverviewTask($stepId, $taskKey);
         $this->openEditTaskCard($stepId, $taskKey);
         $this->synchronizeTaskEditAccess();
+    }
+
+    #[On('open-workflow-studio-definition-drawer')]
+    public function openDefinitionDrawer(?int $studioSessionId = null, int $stepId = 0, string $taskKey = ''): void
+    {
+        if ($studioSessionId !== null && $studioSessionId !== $this->studioSessionId) {
+            return;
+        }
+
+        // Der Copilot besitzt im autonomen Modus die alleinige Kontrolle ueber die
+        // Definition; ein lesbarer, aber toter Editor wuerde das nur verschleiern.
+        if ($this->studioSession()->mode === 'autonomous') {
+            $this->dispatch(
+                'workflow-studio-notice',
+                type: 'error',
+                message: 'Im autonomen Modus steuert der Copilot den Workflow. Listen und Tasks sind gesperrt.',
+            );
+
+            return;
+        }
+
+        $this->resetValidation();
+
+        if ($stepId > 0) {
+            $taskKey = trim($taskKey);
+
+            if ($taskKey !== '') {
+                $this->selectOverviewTask($stepId, $taskKey);
+            } else {
+                $this->selectCatalogTarget($stepId);
+            }
+        }
+
+        $this->showDefinitionDrawer = true;
+    }
+
+    public function closeDefinitionDrawer(): void
+    {
+        $this->showDefinitionDrawer = false;
+        $this->showAddStepModal = false;
+        $this->showEditStepModal = false;
+        $this->showAddTaskModal = false;
+        $this->showMoveTaskModal = false;
+        $this->resetValidation();
     }
 
     public function requestPauseForTaskEdit(): void
@@ -479,7 +525,15 @@ class WorkflowStudioTaskEditor extends WorkflowManager
         $studioSession = $this->studioSession();
         $activeRun = $studioSession->activeRun;
         $this->synchronizeTaskEditAccess($studioSession, $activeRun);
-        $routeMap = $this->modalOnly
+        // Wechselt die Sitzung waehrend geoeffnetem Overlay in den autonomen Modus,
+        // verschwindet der Editor sofort statt als toter Lesemodus stehenzubleiben.
+        if ($this->showDefinitionDrawer && $studioSession->mode === 'autonomous') {
+            $this->closeDefinitionDrawer();
+        }
+
+        $definitionDrawerOpen = $this->modalOnly && $this->showDefinitionDrawer;
+        // Die Routenkarte ist teuer und wird nur gebraucht, wenn der Canvas wirklich sichtbar ist.
+        $routeMap = $this->modalOnly && ! $definitionDrawerOpen
             ? ['mode' => WorkflowRouteMapPresenter::MODE_DEFINITION, 'nodes' => [], 'edges' => [], 'meta' => []]
             : app(WorkflowRouteMapPresenter::class)->present(
                 $workflow,
@@ -515,6 +569,7 @@ class WorkflowStudioTaskEditor extends WorkflowManager
             'activeRun' => $activeRun,
             'routeMap' => $routeMap,
             'modalOnly' => $this->modalOnly,
+            'definitionDrawerOpen' => $definitionDrawerOpen,
             'taskEditReadOnly' => $this->taskEditReadOnly,
             'taskEditCanRequestPause' => $this->taskEditCanRequestPause,
             'taskEditPauseRequested' => $this->taskEditPauseRequested,
@@ -569,8 +624,7 @@ class WorkflowStudioTaskEditor extends WorkflowManager
     private function definitionIsEditable(
         mixed $activeRun = null,
         ?WorkflowStudioSession $session = null,
-    ): bool
-    {
+    ): bool {
         $session ??= $this->studioSession();
 
         if ($session->mode === 'autonomous') {

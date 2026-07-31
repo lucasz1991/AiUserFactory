@@ -144,4 +144,48 @@ class AppShellMarkupTest extends TestCase
             $studio,
         );
     }
+
+    /**
+     * Die Regel blendet Untermenues aus, solange die Desktop-Sidebar
+     * eingeklappt ist. `data-sidebar-expanded` wird aber nur von
+     * setDesktopSidebarExpanded() gepflegt, und die Funktion steigt unterhalb
+     * von 1024px sofort aus — auf dem Handy bleibt der gerenderte Startwert
+     * 'false' dauerhaft stehen. Ohne die Media Query verdeckt die Regel dort
+     * jedes Untermenue permanent, weil sie spezifischer ist als die
+     * mm-show-Regel im Mobilblock: Antippen setzt zwar `mm-show`, sichtbar
+     * wird trotzdem nichts.
+     */
+    public function test_collapsed_sidebar_rule_stays_desktop_only_so_mobile_submenus_can_open(): void
+    {
+        $root = dirname(__DIR__, 2);
+        $css = file_get_contents($root.'/resources/css/app-shell.css');
+
+        $rule = "body[data-sidebar-expanded='false'] .ff-sidebar-nav [data-ff-sidebar-group-item] > ul";
+        $position = strpos($css, $rule);
+
+        $this->assertNotFalse($position, 'Die Regel fuer die eingeklappte Sidebar fehlt.');
+
+        $before = substr($css, 0, $position);
+        $lastMediaOpen = strrpos($before, '@media');
+
+        $this->assertNotFalse($lastMediaOpen, 'Die Regel steht ausserhalb jeder Media Query.');
+
+        $mediaLine = substr($css, $lastMediaOpen, 40);
+
+        $this->assertStringContainsString(
+            'min-width: 1024px',
+            $mediaLine,
+            'Die Regel muss auf die Desktopbreite begrenzt bleiben, sonst oeffnen mobile Untermenues nie.',
+        );
+
+        // Gegenprobe: Zwischen Media-Query-Beginn und Regel darf kein Block
+        // geschlossen worden sein — sonst stuende die Regel wieder draussen.
+        $between = substr($css, $lastMediaOpen, $position - $lastMediaOpen);
+
+        $this->assertSame(
+            0,
+            substr_count($between, '}') - substr_count($between, '{') + 1,
+            'Die Regel liegt nicht mehr innerhalb der Desktop-Media-Query.',
+        );
+    }
 }

@@ -20,10 +20,13 @@ use App\Services\Workflows\WorkflowCopilotSessionService;
 use App\Services\Workflows\WorkflowExecutionService;
 use App\Services\Workflows\WorkflowStudioAuthorizationService;
 use App\Services\Workflows\WorkflowStudioCheckpointService;
+use App\Services\Workflows\WorkflowStudioControlService;
 use App\Services\Workflows\WorkflowStudioRevisionService;
 use App\Services\Workflows\WorkflowStudioSessionService;
 use App\Services\Workflows\WorkflowTaskRunner;
 use DomainException;
+use DOMDocument;
+use DOMXPath;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
@@ -1116,6 +1119,105 @@ class WorkflowStudioTest extends TestCase
         $studioView = File::get(resource_path('views/livewire/admin/network/workflow-studio.blade.php'));
         $this->assertStringNotContainsString('workflow-studio-builder-modal', $studioView);
         $this->assertStringContainsString(':modal-only="true"', $studioView);
+    }
+
+    public function test_studio_opens_the_definition_drawer_on_demand_and_edits_lists_and_tasks(): void
+    {
+        [$workflow, $step] = $this->workflow();
+        $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
+        $session = app(WorkflowStudioSessionService::class)->open($workflow, $admin, 'manual', 'ask_critical');
+        app(WorkflowStudioRevisionService::class)->ensureBaseline($session);
+        $this->actingAs($admin);
+
+        Livewire::test(WorkflowStudio::class, ['workflow' => $workflow])
+            ->assertSeeHtml('wire:click="openDefinitionBuilder"')
+            ->call('selectTask', $step->id, 'first-task')
+            ->call('openDefinitionBuilder')
+            ->assertHasNoErrors()
+            ->assertDispatched('open-workflow-studio-definition-drawer', function (string $name, array $parameters) use ($session, $step): bool {
+                return (int) ($parameters['studioSessionId'] ?? 0) === (int) $session->id
+                    && (int) ($parameters['stepId'] ?? 0) === (int) $step->id
+                    && ($parameters['taskKey'] ?? null) === 'first-task';
+            });
+
+        $editor = Livewire::test(WorkflowStudioTaskEditor::class, [
+            'workflow' => $workflow,
+            'studioSessionId' => $session->id,
+            'modalOnly' => true,
+        ])
+            ->assertSet('showDefinitionDrawer', false)
+            ->assertDontSee('Task-Bibliothek')
+            ->assertDontSeeHtml('data-studio-definition-drawer')
+            ->call('openDefinitionDrawer', $session->id, $step->id, 'first-task')
+            ->assertSet('showDefinitionDrawer', true)
+            ->assertSeeHtml('data-studio-definition-drawer')
+            ->assertSeeHtml('wire:click="closeDefinitionDrawer"')
+            ->assertSee('Task-Bibliothek')
+            ->assertSee('Neue Liste');
+
+        // Bibliothek und Canvas muessen wirklich innerhalb der Overlay-Huelle haengen,
+        // sonst laegen sie unsichtbar hinter der Studio-Oberflaeche.
+        $document = new DOMDocument;
+        libxml_use_internal_errors(true);
+        $document->loadHTML('<?xml encoding="utf-8" ?>'.$editor->html());
+        libxml_clear_errors();
+        $xpath = new DOMXPath($document);
+        $this->assertSame(1, $xpath->query('//*[@data-studio-definition-drawer]')->count());
+        $this->assertSame(1, $xpath->query('//*[@data-studio-definition-drawer]//*[@data-studio-task-catalog]')->count());
+        $this->assertSame(1, $xpath->query('//*[@data-studio-definition-drawer]//*[@data-studio-workflow-canvas]')->count());
+
+        $editor
+            ->set('newStepName', 'Overlay Liste')
+            ->call('addStep')
+            ->assertHasNoErrors()
+            ->assertDispatched('workflow-studio-definition-updated');
+
+        $addedStep = $workflow->fresh()->steps()->where('name', 'Overlay Liste')->firstOrFail();
+        $this->assertSame(2, $workflow->fresh()->steps()->count());
+
+        $editor
+            ->call('prepareCatalogTask', 'wait.seconds')
+            ->assertSet('showAddTaskModal', true)
+            ->set('newTaskTitle', 'Aus dem Studio-Overlay')
+            ->set('newTaskInputValue', '1')
+            ->call('addTaskCard')
+            ->assertHasNoErrors()
+            ->assertSet('showAddTaskModal', false)
+            ->assertSet('showDefinitionDrawer', true)
+            ->call('closeDefinitionDrawer')
+            ->assertSet('showDefinitionDrawer', false)
+            ->assertDontSeeHtml('data-studio-definition-drawer');
+
+        $insertedCards = collect($addedStep->fresh()->task_cards);
+        $this->assertSame('Aus dem Studio-Overlay', (string) data_get($insertedCards->last(), 'title'));
+        $this->assertSame(2, $workflow->fresh()->copilot_revision);
+    }
+
+    public function test_studio_definition_drawer_stays_closed_while_the_copilot_owns_the_session(): void
+    {
+        [$workflow, $step] = $this->workflow();
+        $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
+        $session = app(WorkflowStudioSessionService::class)->open($workflow, $admin, 'autonomous', 'ask_critical');
+        app(WorkflowStudioControlService::class)->lock($session, 'autonomous', $admin);
+        app(WorkflowStudioRevisionService::class)->ensureBaseline($session->fresh());
+        $this->actingAs($admin);
+
+        Livewire::test(WorkflowStudio::class, ['workflow' => $workflow, 'initialMode' => 'autonomous'])
+            ->call('openDefinitionBuilder')
+            ->assertHasErrors('studio')
+            ->assertNotDispatched('open-workflow-studio-definition-drawer');
+
+        Livewire::test(WorkflowStudioTaskEditor::class, [
+            'workflow' => $workflow,
+            'studioSessionId' => $session->id,
+            'modalOnly' => true,
+        ])
+            ->call('openDefinitionDrawer', $session->id, $step->id)
+            ->assertSet('showDefinitionDrawer', false)
+            ->assertDontSeeHtml('data-studio-definition-drawer')
+            ->assertDispatched('workflow-studio-notice');
+
+        $this->assertSame(1, $workflow->fresh()->steps()->count());
     }
 
     public function test_paused_shared_editor_can_insert_a_catalog_task_and_records_a_revision(): void
