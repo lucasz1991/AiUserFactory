@@ -4532,6 +4532,9 @@ class WorkflowExecutionService
         $accountUsername = trim((string) ($emailAccount['username'] ?? $accountEmail));
         $accountProvider = (string) ($emailAccount['provider'] ?? 'proton');
         $accountPassword = trim((string) ($emailAccount['password'] ?? ''));
+        $personLoginPassword = $person
+            ? trim((string) ($this->decryptString($person->login_password_encrypted) ?? ''))
+            : '';
 
         if ($accountPassword === '') {
             $accountPassword = (string) ($this->decryptString($emailAccount['password_encrypted'] ?? null) ?? '');
@@ -4578,6 +4581,8 @@ class WorkflowExecutionService
                 'city' => $person->person_city,
                 'timezone' => $person->person_timezone,
                 'loginUsername' => $person->login_username,
+                'loginPassword' => $personLoginPassword,
+                'hasLoginPassword' => $personLoginPassword !== '',
                 'emailAccount' => $effectiveAccount,
                 'browserSessions' => $browserSessions,
                 'browser_sessions' => $browserSessions,

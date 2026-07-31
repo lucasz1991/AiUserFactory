@@ -710,17 +710,17 @@ class WorkflowCompositionTest extends TestCase
             ->assertSet('editingTaskValueSource', 'workflow_variable')
             ->assertSet('editingTaskWorkflowVariable', 'google_search_url')
             ->assertSet('editingTaskValueFallback', 'fallback search')
-            ->set('editingTaskValueSource', 'fixed')
+            ->set('editingTaskValueSource', 'literal')
             ->set('editingTaskInputValue', 'literal search')
             ->call('saveEditTaskCard')
             ->assertHasNoErrors();
 
-        $fixedTask = $step->fresh()->task_cards[0];
-        $this->assertSame('fixed', $fixedTask['value_source']);
-        $this->assertSame('literal search', $fixedTask['value']);
-        $this->assertSame('literal search', $fixedTask['input']);
-        $this->assertArrayNotHasKey('workflow_variable', $fixedTask);
-        $this->assertArrayNotHasKey('value_fallback', $fixedTask);
+        $literalTask = $step->fresh()->task_cards[0];
+        $this->assertSame('literal', $literalTask['value_source']);
+        $this->assertSame('literal search', $literalTask['value']);
+        $this->assertSame('literal search', $literalTask['input']);
+        $this->assertArrayNotHasKey('workflow_variable', $literalTask);
+        $this->assertArrayNotHasKey('value_fallback', $literalTask);
     }
 
     public function test_validate_inputs_editor_persists_the_variable_menu_as_json_definitions(): void
@@ -773,6 +773,91 @@ class WorkflowCompositionTest extends TestCase
             ->set('newTaskValueSource', 'fixed')
             ->call('addTaskCard')
             ->assertHasErrors(['newTaskInputValue']);
+    }
+
+    public function test_fill_field_editor_only_persists_allowlisted_fixed_data_references(): void
+    {
+        $workflow = $this->workflow('fill-field-fixed-reference-validation');
+        $step = $this->step($workflow, 'Instagram login', []);
+        $invalidReference = 'person.socialmedia.instagram.username';
+
+        Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
+            ->call('prepareTaskFromCatalog', $step->id, 'input.fill_field', 0)
+            ->set('newTaskElementSelector', '#username')
+            ->set('newTaskBrowserWindow', 'main')
+            ->set('newTaskValueSource', 'fixed')
+            ->set('newTaskInputValue', $invalidReference)
+            ->call('addTaskCard')
+            ->assertHasErrors(['newTaskInputValue']);
+
+        Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
+            ->call('prepareTaskFromCatalog', $step->id, 'input.fill_field', 0)
+            ->set('newTaskElementSelector', '#username')
+            ->set('newTaskBrowserWindow', 'main')
+            ->set('newTaskValueSource', 'literal')
+            ->set('newTaskInputValue', $invalidReference)
+            ->call('addTaskCard')
+            ->assertHasErrors(['newTaskInputValue']);
+
+        Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
+            ->call('prepareTaskFromCatalog', $step->id, 'input.fill_field', 0)
+            ->set('newTaskElementSelector', '#username')
+            ->set('newTaskBrowserWindow', 'main')
+            ->set('newTaskValueSource', 'fixed')
+            ->set('newTaskInputValue', 'person.loginUsername')
+            ->call('addTaskCard')
+            ->assertHasNoErrors();
+
+        $task = $step->fresh()->task_cards[0];
+        $this->assertSame('fixed', $task['value_source']);
+        $this->assertSame('person.loginUsername', $task['value']);
+        $this->assertSame('person.loginUsername', $task['input']);
+    }
+
+    public function test_fill_field_editor_maps_legacy_literals_but_keeps_unknown_data_paths_invalid(): void
+    {
+        $workflow = $this->workflow('fill-field-legacy-value-source');
+        $step = $this->step($workflow, 'Legacy values', [
+            [
+                'key' => 'legacy-literal',
+                'task_key' => 'input.fill_field',
+                'title' => 'Legacy literal',
+                'kind' => 'input',
+                'selector' => '#search',
+                'value' => 'literal search',
+                'input' => 'literal search',
+            ],
+            [
+                'key' => 'legacy-allowed-reference',
+                'task_key' => 'input.fill_field',
+                'title' => 'Legacy allowed reference',
+                'kind' => 'input',
+                'selector' => '#username',
+                'value' => 'person.loginUsername',
+                'input' => 'person.loginUsername',
+            ],
+            [
+                'key' => 'legacy-invalid-reference',
+                'task_key' => 'input.fill_field',
+                'title' => 'Legacy invalid reference',
+                'kind' => 'input',
+                'selector' => '#legacy-username',
+                'value' => 'person.socialmedia.instagram.username',
+                'input' => 'person.socialmedia.instagram.username',
+            ],
+        ]);
+
+        Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
+            ->call('openEditTaskCard', $step->id, 'legacy-literal')
+            ->assertSet('editingTaskValueSource', 'literal')
+            ->assertSet('editingTaskInputValue', 'literal search')
+            ->call('openEditTaskCard', $step->id, 'legacy-allowed-reference')
+            ->assertSet('editingTaskValueSource', 'fixed')
+            ->assertSet('editingTaskInputValue', 'person.loginUsername')
+            ->call('openEditTaskCard', $step->id, 'legacy-invalid-reference')
+            ->assertSet('editingTaskValueSource', 'fixed')
+            ->assertSet('editingTaskInputValue', 'person.socialmedia.instagram.username')
+            ->assertSee('Dieser bisherige Datenpfad existiert nicht.');
     }
 
     protected function workflow(string $slug): Workflow

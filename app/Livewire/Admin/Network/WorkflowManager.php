@@ -1055,7 +1055,7 @@ class WorkflowManager extends Component
             'newTaskBrowserWindow' => ['nullable', 'string', 'max:80'],
             'newTaskSuccessPayload' => ['nullable', 'string', 'max:4000'],
             'newTaskFailurePayload' => ['nullable', 'string', 'max:4000'],
-            'newTaskValueSource' => ['required', 'string', 'in:fixed,workflow_variable'],
+            'newTaskValueSource' => ['required', 'string', 'in:fixed,workflow_variable,literal'],
             'newTaskWorkflowVariable' => ['nullable', 'string', 'max:4000'],
             'newTaskValueFallback' => ['nullable', 'string', 'max:4000'],
             'newTaskExtra' => ['array'],
@@ -1345,7 +1345,7 @@ class WorkflowManager extends Component
             'editingTaskBrowserWindow' => ['nullable', 'string', 'max:80'],
             'editingTaskSuccessPayload' => ['nullable', 'string', 'max:4000'],
             'editingTaskFailurePayload' => ['nullable', 'string', 'max:4000'],
-            'editingTaskValueSource' => ['required', 'string', 'in:fixed,workflow_variable'],
+            'editingTaskValueSource' => ['required', 'string', 'in:fixed,workflow_variable,literal'],
             'editingTaskWorkflowVariable' => ['nullable', 'string', 'max:4000'],
             'editingTaskValueFallback' => ['nullable', 'string', 'max:4000'],
             'editingTaskExtra' => ['array'],
@@ -3096,8 +3096,26 @@ class WorkflowManager extends Component
             return;
         }
 
-        $this->{$valueSourceProperty} = ($values['value_source'] ?? 'fixed') === 'workflow_variable'
-            ? 'workflow_variable'
+        $valueSource = trim((string) ($values['value_source'] ?? 'fixed'));
+        $inputValueProperty = $prefix.'InputValue';
+        $inputValue = trim((string) ($this->{$inputValueProperty} ?? ''));
+        $allowedFixedValues = $this->taskSelectableValueOptions($formConfig);
+
+        // Existing workflows did not distinguish between a literal and a
+        // context path. Keep genuine legacy text editable, but leave unknown
+        // person/account-looking paths on "fixed" so the grouped select marks
+        // them visibly invalid instead of silently treating them as text.
+        if ($valueSource === 'fixed'
+            && $inputValue !== ''
+            && $allowedFixedValues !== []
+            && ! in_array($inputValue, $allowedFixedValues, true)
+            && ! app(WorkflowTaskCatalog::class)->resemblesInputFillDataReference($inputValue)
+        ) {
+            $valueSource = 'literal';
+        }
+
+        $this->{$valueSourceProperty} = in_array($valueSource, ['fixed', 'workflow_variable', 'literal'], true)
+            ? $valueSource
             : 'fixed';
         $this->{$workflowVariableProperty} = trim((string) ($values['workflow_variable'] ?? ''));
         $this->{$valueFallbackProperty} = trim((string) ($values['value_fallback'] ?? ''));
@@ -3171,8 +3189,8 @@ class WorkflowManager extends Component
         }
 
         if (($task['task_key'] ?? null) === 'input.fill_field') {
-            $valueSource = ($task['value_source'] ?? 'fixed') === 'workflow_variable'
-                ? 'workflow_variable'
+            $valueSource = in_array(($task['value_source'] ?? 'fixed'), ['fixed', 'workflow_variable', 'literal'], true)
+                ? (string) $task['value_source']
                 : 'fixed';
             $task['value_source'] = $valueSource;
 
@@ -3523,14 +3541,28 @@ class WorkflowManager extends Component
             $valueSource = trim((string) ($extraValues['value_source'] ?? 'fixed'));
             $workflowVariable = trim((string) ($extraValues['workflow_variable'] ?? ''));
 
-            if (! in_array($valueSource, ['fixed', 'workflow_variable'], true)) {
+            if (! in_array($valueSource, ['fixed', 'workflow_variable', 'literal'], true)) {
                 $this->addError(
                     $this->taskExtraFieldErrorProperty($prefix, $formConfig, 'value_source'),
                     'Bitte eine gueltige Wertquelle auswaehlen.',
                 );
                 $valid = false;
             } elseif ($valueSource === 'fixed' && trim((string) $this->{$valueProperty}) === '') {
-                $this->addError($valueProperty, 'Bitte einen festen Wert angeben.');
+                $this->addError($valueProperty, 'Bitte ein Personen- oder Systemdatenfeld auswaehlen.');
+                $valid = false;
+            } elseif ($valueSource === 'fixed'
+                && $this->taskSelectableValueOptions($formConfig) !== []
+                && ! in_array(trim((string) $this->{$valueProperty}), $this->taskSelectableValueOptions($formConfig), true)
+            ) {
+                $this->addError($valueProperty, 'Dieser Datenpfad ist nicht verfuegbar. Bitte einen Eintrag aus der Liste auswaehlen.');
+                $valid = false;
+            } elseif ($valueSource === 'literal' && trim((string) $this->{$valueProperty}) === '') {
+                $this->addError($valueProperty, 'Bitte den freien Text angeben.');
+                $valid = false;
+            } elseif ($valueSource === 'literal'
+                && app(WorkflowTaskCatalog::class)->resemblesInputFillDataReference((string) $this->{$valueProperty})
+            ) {
+                $this->addError($valueProperty, 'Dieser Text sieht wie ein Daten- oder Variablenpfad aus. Bitte Personen-/Systemdaten oder Workflow-Variable als Wertquelle verwenden.');
                 $valid = false;
             } elseif ($valueSource === 'workflow_variable' && $workflowVariable === '') {
                 $this->addError(
@@ -3604,6 +3636,18 @@ class WorkflowManager extends Component
         }
 
         return $valid;
+    }
+
+    /**
+     * @return list<string>
+     */
+    protected function taskSelectableValueOptions(array $formConfig): array
+    {
+        if (($formConfig['value_type'] ?? 'text') !== 'select' || ! is_array($formConfig['value_options'] ?? null)) {
+            return [];
+        }
+
+        return array_map('strval', array_keys($formConfig['value_options']));
     }
 
     /**

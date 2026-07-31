@@ -56,7 +56,7 @@ class WorkflowCopilotPromptContextServiceTest extends TestCase
                     'task_key' => 'input.fill_field',
                     'title' => 'Suchfeld fuellen',
                     'selector' => 'textarea[title="Suche"]',
-                    'value_source' => 'fixed',
+                    'value_source' => 'literal',
                     'value' => 'never-leak-this-fixed-value',
                     'on_error' => [
                         'type' => 'card',
@@ -97,6 +97,23 @@ class WorkflowCopilotPromptContextServiceTest extends TestCase
         $this->assertArrayHasKey('defaults', $taskCatalog);
         $this->assertNotEmpty($taskCatalog['documentation']['purpose']);
         $this->assertArrayHasKey('failure_modes', $taskCatalog['documentation']);
+        $this->assertSame(
+            ['fixed', 'workflow_variable', 'literal'],
+            array_keys(collect($taskCatalog['parameters'])->firstWhere('name', 'value_source')['options']),
+        );
+        $this->assertContains('person.loginUsername', data_get($taskCatalog, 'configuration.value_options'));
+        $this->assertNotContains(
+            'person.socialmedia.instagram.username',
+            data_get($taskCatalog, 'configuration.value_options'),
+        );
+        $this->assertSame(
+            ['value', 'input'],
+            data_get($taskCatalog, 'configuration.value_source_contract.fixed.fields'),
+        );
+        $this->assertStringContainsString(
+            'nicht wie ein Personen-, System- oder Variablenpfad',
+            data_get($context, 'execution_contract.task_semantics')['input.fill_field'],
+        );
         $this->assertStringContainsString('Workflow-Step', data_get($context, 'workflow_structure.lists'));
         $this->assertCount(5, data_get($context, 'workflow_structure.loop_recipe'));
         $this->assertSame(

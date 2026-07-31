@@ -20,16 +20,26 @@ class WorkflowTaskFormMarkupTest extends TestCase
         $this->assertStringContainsString('wire:model="{{ $fieldModel }}"', $source);
     }
 
-    public function test_primary_task_value_can_be_rendered_as_catalog_backed_select(): void
+    public function test_primary_task_value_can_be_rendered_as_grouped_catalog_select_or_literal_input(): void
     {
         $root = dirname(__DIR__, 2);
         $source = file_get_contents($root.'/resources/views/livewire/admin/network/partials/workflow-task-form.blade.php');
 
         $this->assertStringContainsString("'value_type' => 'text'", $source);
         $this->assertStringContainsString("'value_options' => []", $source);
+        $this->assertStringContainsString("'value_option_groups' => []", $source);
+        $this->assertStringContainsString("'literal_value_label' => 'Freier Text'", $source);
         $this->assertStringContainsString("(\$form['value_type'] ?? 'text') === 'select'", $source);
-        $this->assertStringContainsString("@foreach((array) (\$form['value_options'] ?? []) as \$optionValue => \$optionLabel)", $source);
+        $this->assertStringContainsString('$usesGroupedFixedValue', $source);
+        $this->assertStringContainsString('$hasInvalidGroupedFixedValue', $source);
+        $this->assertStringContainsString('data-workflow-input-data-value="{{ $prefix }}"', $source);
+        $this->assertStringContainsString('@foreach($groupedValueOptions as $group)', $source);
+        $this->assertStringContainsString('<optgroup label="{{ $group[\'label\'] }}">', $source);
+        $this->assertStringContainsString('aria-invalid="{{ $hasInvalidGroupedFixedValue ? \'true\' : \'false\' }}"', $source);
+        $this->assertStringContainsString('data-workflow-input-literal-value="{{ $prefix }}"', $source);
+        $this->assertStringContainsString("String(valueSource || 'fixed') === 'literal'", $source);
         $this->assertStringContainsString('wire:model.defer="{{ $prefix }}InputValue"', $source);
+        $this->assertGreaterThanOrEqual(2, substr_count($source, 'min-h-11'));
     }
 
     public function test_selector_fields_use_live_syntax_feedback_and_accessible_help(): void
@@ -50,6 +60,7 @@ class WorkflowTaskFormMarkupTest extends TestCase
         $this->assertStringContainsString(':id-suffix="$formInstance"', $form);
         $this->assertStringContainsString('$formInstance', $form);
         $this->assertStringContainsString('data-workflow-selector-help-trigger', $field);
+        $this->assertGreaterThanOrEqual(2, substr_count($field, 'min-h-11'));
         $this->assertStringContainsString('overflow-x-auto', $tabs);
         $this->assertStringContainsString('@keydown.arrow-right', $tabs);
         $this->assertStringContainsString('@keydown.home', $tabs);

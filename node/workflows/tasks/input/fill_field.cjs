@@ -23,6 +23,21 @@ async function run(context = {}) {
   }
 
   if (value === '') {
+    if (input.valueResolutionStatus === 'missing_context_value' || input.value_resolution_status === 'missing_context_value') {
+      const contextValuePath = String(input.contextValuePath || input.context_value_path || '').trim();
+
+      return {
+        ok: false,
+        status: 'failed',
+        statusMessage: contextValuePath
+          ? `Datenpfad "${contextValuePath}" ist im aktuellen Workflow-Kontext nicht verfuegbar.`
+          : 'Der konfigurierte Datenpfad ist im aktuellen Workflow-Kontext nicht verfuegbar.',
+        valueSource: 'fixed',
+        contextValuePath: contextValuePath || null,
+        fallbackUsed: false,
+      };
+    }
+
     if (input.valueResolutionStatus === 'missing_workflow_variable' || input.value_resolution_status === 'missing_workflow_variable') {
       const variableName = String(input.workflowVariable || input.workflow_variable || '').trim();
 

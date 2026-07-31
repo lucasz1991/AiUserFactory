@@ -143,10 +143,115 @@ class WorkflowCopilotRepairServiceTest extends TestCase
         );
 
         $this->assertSame('input[type="email"]', $filled['selector']);
+        $this->assertSame('fixed', $filled['value_source']);
         $this->assertSame('person.email', $filled['value']);
         $this->assertSame('person.email', $filled['input']);
         $this->assertArrayNotHasKey('url', $filled);
         $this->assertArrayNotHasKey('browser_window', $filled);
+    }
+
+    public function test_fill_field_repairs_accept_only_catalogued_fixed_data_paths(): void
+    {
+        [, $step] = $this->workflowWithTasks([[
+            'key' => 'fill-instagram-username',
+            'task_key' => 'input.fill_field',
+            'title' => 'Instagram-Benutzername fuellen',
+            'selector' => 'input[name="username"]',
+        ]]);
+        $service = app(WorkflowCopilotRepairService::class);
+
+        $updated = $service->applyChangesToStep(
+            $step,
+            'fill-instagram-username',
+            [
+                'value_source' => 'fixed',
+                'value' => 'person.loginUsername',
+                'input' => 'person.loginUsername',
+            ],
+        );
+
+        $this->assertSame('fixed', $updated['value_source']);
+        $this->assertSame('person.loginUsername', $updated['value']);
+        $this->assertSame('person.loginUsername', $updated['input']);
+
+        foreach ([
+            'person.socialmedia.instagram.username',
+            'custom.search_query',
+        ] as $invalidFixedPath) {
+            try {
+                $service->applyChangesToStep(
+                    $step->fresh(),
+                    'fill-instagram-username',
+                    [
+                        'value_source' => 'fixed',
+                        'value' => $invalidFixedPath,
+                        'input' => $invalidFixedPath,
+                    ],
+                );
+                $this->fail('Ein nicht katalogisierter fester Datenpfad wurde gespeichert: '.$invalidFixedPath);
+            } catch (DomainException $exception) {
+                $this->assertStringContainsString('keine erlaubten Taskparameter', $exception->getMessage());
+            }
+        }
+    }
+
+    public function test_fill_field_repairs_keep_literal_and_workflow_variable_sources_separate(): void
+    {
+        [, $step] = $this->workflowWithTasks([[
+            'key' => 'fill-search-query',
+            'task_key' => 'input.fill_field',
+            'title' => 'Suchbegriff fuellen',
+            'selector' => 'input[name="q"]',
+        ]]);
+        $service = app(WorkflowCopilotRepairService::class);
+
+        $literal = $service->applyChangesToStep(
+            $step,
+            'fill-search-query',
+            [
+                'value_source' => 'literal',
+                'value' => 'Claude AI',
+                'input' => 'Claude AI',
+            ],
+        );
+
+        $this->assertSame('literal', $literal['value_source']);
+        $this->assertSame('Claude AI', $literal['value']);
+        $this->assertSame('Claude AI', $literal['input']);
+
+        foreach ([
+            'person.loginUsername',
+            '=== person.socialmedia.instagram.username',
+        ] as $referenceLookingLiteral) {
+            try {
+                $service->applyChangesToStep(
+                    $step->fresh(),
+                    'fill-search-query',
+                    [
+                        'value_source' => 'literal',
+                        'value' => $referenceLookingLiteral,
+                        'input' => $referenceLookingLiteral,
+                    ],
+                );
+                $this->fail('Eine Datenreferenz wurde als literal gespeichert: '.$referenceLookingLiteral);
+            } catch (DomainException $exception) {
+                $this->assertStringContainsString('keine erlaubten Taskparameter', $exception->getMessage());
+            }
+        }
+
+        $workflowVariable = $service->applyChangesToStep(
+            $step->fresh(),
+            'fill-search-query',
+            [
+                'value_source' => 'workflow_variable',
+                'workflow_variable' => 'custom.search_query',
+            ],
+        );
+
+        $this->assertSame('workflow_variable', $workflowVariable['value_source']);
+        $this->assertSame('custom.search_query', $workflowVariable['workflow_variable']);
+        $this->assertSame('', $workflowVariable['value']);
+        $this->assertSame('', $workflowVariable['input']);
     }
 
     public function test_route_mutations_require_legal_types_and_existing_step_and_card_targets(): void

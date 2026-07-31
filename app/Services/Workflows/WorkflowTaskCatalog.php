@@ -117,39 +117,54 @@ class WorkflowTaskCatalog
      * paths here unless WorkflowExecutionService actually exposes them.
      */
     private const INPUT_FILL_DATA_VALUE_GROUPS = [
-        'Instagram-Zugang der Bezugsperson' => [
-            'person.loginUsername' => 'Instagram-Benutzername',
-            'person.loginPassword' => 'Instagram-Passwort',
+        'person.instagram' => [
+            'label' => 'Instagram-Zugang der Bezugsperson',
+            'options' => [
+                'person.loginUsername' => 'Instagram-Benutzername',
+                'person.loginPassword' => 'Instagram-Passwort',
+            ],
         ],
-        'Personendaten' => [
-            'person.displayName' => 'Anzeigename',
-            'person.firstName' => 'Vorname',
-            'person.lastName' => 'Nachname',
-            'person.email' => 'E-Mail-Adresse',
-            'person.phone' => 'Telefonnummer',
-            'person.country' => 'Land',
-            'person.city' => 'Stadt',
-            'person.timezone' => 'Zeitzone',
+        'person.profile' => [
+            'label' => 'Personendaten',
+            'options' => [
+                'person.displayName' => 'Anzeigename',
+                'person.firstName' => 'Vorname',
+                'person.lastName' => 'Nachname',
+                'person.email' => 'E-Mail-Adresse',
+                'person.phone' => 'Telefonnummer',
+                'person.country' => 'Land',
+                'person.city' => 'Stadt',
+                'person.timezone' => 'Zeitzone',
+            ],
         ],
-        'E-Mail-Konto der Bezugsperson' => [
-            'account.email' => 'E-Mail-Adresse des Kontos',
-            'account.username' => 'Benutzername des Kontos',
-            'account.password' => 'Passwort des Kontos',
-            'account.provider' => 'E-Mail-Anbieter',
-            'account.webmailUrl' => 'Webmail-URL',
+        'account.active' => [
+            'label' => 'Aktives Mailkonto gemäß Script-Bezugsperson',
+            'options' => [
+                'account.email' => 'E-Mail-Adresse des Kontos',
+                'account.username' => 'Benutzername des Kontos',
+                'account.password' => 'Passwort des Kontos',
+                'account.provider' => 'E-Mail-Anbieter',
+                'account.webmailUrl' => 'Webmail-URL',
+            ],
         ],
-        'Haupt-Verifikationskonto' => [
-            'verificationMailbox.email' => 'E-Mail-Adresse',
-            'verificationMailbox.username' => 'Benutzername',
-            'verificationMailbox.password' => 'Passwort',
-            'verificationMailbox.provider' => 'E-Mail-Anbieter',
-            'verificationMailbox.webmailUrl' => 'Webmail-URL',
+        'account.verification' => [
+            'label' => 'Haupt-Verifikationskonto',
+            'options' => [
+                'verificationMailbox.email' => 'E-Mail-Adresse',
+                'verificationMailbox.username' => 'Benutzername',
+                'verificationMailbox.password' => 'Passwort',
+                'verificationMailbox.provider' => 'E-Mail-Anbieter',
+                'verificationMailbox.webmailUrl' => 'Webmail-URL',
+            ],
         ],
-        'Generierte Laufzeitdaten' => [
-            'new_mail_address' => 'Neu erzeugte E-Mail-Adresse',
-            'new_mail_username' => 'Neu erzeugter E-Mail-Benutzername',
-            'generated_password' => 'Neu erzeugtes Passwort',
-            'verification_code' => 'Ausgelesener Verifizierungscode',
+        'runtime.generated' => [
+            'label' => 'Generierte Laufzeitdaten',
+            'options' => [
+                'new_mail_address' => 'Neu erzeugte E-Mail-Adresse',
+                'new_mail_username' => 'Neu erzeugter E-Mail-Benutzername',
+                'generated_password' => 'Neu erzeugtes Passwort',
+                'verification_code' => 'Ausgelesener Verifizierungscode',
+            ],
         ],
     ];
 
@@ -1177,7 +1192,7 @@ class WorkflowTaskCatalog
                 'runner' => 'node',
                 'node_script' => 'node/workflows/tasks/input/fill_field.cjs',
                 'timeout_seconds' => 60,
-                'description' => 'Fuellt ein konkretes oder heuristisch gefundenes Eingabefeld mit einem festen Wert oder einer Workflow-Variable.',
+                'description' => 'Fuellt ein konkretes oder heuristisch gefundenes Eingabefeld mit einem katalogisierten Personen-/Systemdatenfeld, einer Workflow-Variable oder bewusst freiem Text.',
                 'form' => [
                     'selector' => true,
                     'selector_label' => 'Selector',
@@ -1188,7 +1203,7 @@ class WorkflowTaskCatalog
                     'value_label' => 'Datenfeld',
                     'value_type' => 'select',
                     'value_placeholder' => 'Personen- oder Systemdaten auswählen',
-                    'value_help' => 'Es können nur Datenpfade gewählt werden, die der Workflow zur Laufzeit tatsächlich bereitstellt. Für Instagram gelten person.loginUsername und person.loginPassword.',
+                    'value_help' => 'Es können nur Datenpfade gewählt werden, die der Workflow zur Laufzeit tatsächlich bereitstellt. Für Instagram gelten person.loginUsername und person.loginPassword; Personenpfade beziehen sich auf die gewählte Script-Bezugsperson.',
                     'value_options' => $this->inputFillDataValueOptions(),
                     'value_option_groups' => $this->inputFillDataValueGroups(),
                     'literal_value_label' => 'Freier Text',
@@ -1890,7 +1905,11 @@ class WorkflowTaskCatalog
                 'Das Variablenmenue speichert weiterhin kompatibles JSON unter input_definitions.',
             ],
             'data.workflow_return' => ['Das Sammeln in ein Array beendet den Workflow nicht. Fuer eingebettete Workflows muss das fertige Array anschliessend mit data.workflow_return zurueckgegeben werden.'],
-            'input.fill_field' => ['Bei value_source=workflow_variable wird der Variablenname aufgeloest; er darf nicht als sichtbarer Literaltext in das Formular geschrieben werden.'],
+            'input.fill_field' => [
+                'value_source=fixed verwendet ausschliesslich einen Datenpfad aus dem Personen-/Systemdaten-Katalog.',
+                'value_source=workflow_variable loest den Variablennamen auf; er darf nicht als sichtbarer Literaltext in das Formular geschrieben werden.',
+                'value_source=literal schreibt den angegebenen freien Text unveraendert in das Feld.',
+            ],
             'browser.click', 'input.submit' => ['Nach Navigation oder deutlicher DOM-Aenderung sollte eine Wait- oder Find-Task den neuen Seitenzustand bestaetigen.'],
             default => ['Verwende stabile Kartenschluessel und benannte Workflow-Variablen, damit Copilot, Routing und Laufdiagnose dieselben Referenzen benutzen.'],
         };
@@ -2057,7 +2076,7 @@ class WorkflowTaskCatalog
     }
 
     /**
-     * @return array<string, array<string, string>>
+     * @return array<string, array{label:string,options:array<string,string>}>
      */
     public function inputFillDataValueGroups(): array
     {
@@ -2071,8 +2090,8 @@ class WorkflowTaskCatalog
     {
         $options = [];
 
-        foreach (self::INPUT_FILL_DATA_VALUE_GROUPS as $groupOptions) {
-            $options = array_replace($options, $groupOptions);
+        foreach (self::INPUT_FILL_DATA_VALUE_GROUPS as $group) {
+            $options = array_replace($options, $group['options']);
         }
 
         return $options;

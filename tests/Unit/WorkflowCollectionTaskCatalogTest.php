@@ -3,6 +3,7 @@
 namespace Tests\Unit;
 
 use App\Services\Workflows\WorkflowTaskCatalog;
+use App\Services\Workflows\WorkflowTaskRunner;
 use PHPUnit\Framework\TestCase;
 
 class WorkflowCollectionTaskCatalogTest extends TestCase
@@ -161,7 +162,7 @@ class WorkflowCollectionTaskCatalogTest extends TestCase
 
     public function test_continuous_studio_runtime_is_not_segmented_like_single_task_or_copilot(): void
     {
-        $reflection = new \ReflectionClass(\App\Services\Workflows\WorkflowTaskRunner::class);
+        $reflection = new \ReflectionClass(WorkflowTaskRunner::class);
         $runner = $reflection->newInstanceWithoutConstructor();
         $segment = new \ReflectionMethod($runner, 'shouldSegmentTasks');
         $segment->setAccessible(true);
@@ -172,17 +173,39 @@ class WorkflowCollectionTaskCatalogTest extends TestCase
         $this->assertFalse($segment->invoke($runner, ['segment_tasks' => false, 'copilot_supervised' => true]));
     }
 
-    public function test_fill_field_exposes_explicit_fixed_or_workflow_variable_sources(): void
+    public function test_fill_field_exposes_grouped_fixed_literal_and_workflow_variable_sources(): void
     {
-        $definition = (new WorkflowTaskCatalog)->task('input.fill_field');
+        $catalog = new WorkflowTaskCatalog;
+        $definition = $catalog->task('input.fill_field');
         $fields = collect(data_get($definition, 'form.extra_fields'))->keyBy('name');
+        $groups = data_get($definition, 'form.value_option_groups');
+        $fixedOptions = data_get($definition, 'form.value_options');
 
         $this->assertTrue((bool) data_get($definition, 'form.value_source_control'));
         $this->assertFalse((bool) data_get($definition, 'form.value_required'));
+        $this->assertSame('select', data_get($definition, 'form.value_type'));
         $this->assertSame([
-            'fixed' => 'Fester Wert',
+            'fixed' => 'Personen-/Systemdaten',
             'workflow_variable' => 'Workflow-Variable',
+            'literal' => 'Freier Text',
         ], data_get($fields->get('value_source'), 'options'));
+        $this->assertSame(
+            'Instagram-Zugang der Bezugsperson',
+            $groups['person.instagram']['label'],
+        );
+        $this->assertSame([
+            'person.loginUsername' => 'Instagram-Benutzername',
+            'person.loginPassword' => 'Instagram-Passwort',
+        ], $groups['person.instagram']['options']);
+        $this->assertSame(
+            collect($groups)->flatMap(fn (array $group): array => $group['options'])->all(),
+            $fixedOptions,
+        );
+        $this->assertArrayHasKey('person.email', $fixedOptions);
+        $this->assertArrayHasKey('account.email', $fixedOptions);
+        $this->assertArrayNotHasKey('person.socialmedia.instagram.username', $fixedOptions);
+        $this->assertTrue($catalog->isAllowedInputFillDataValue('person.loginUsername'));
+        $this->assertFalse($catalog->isAllowedInputFillDataValue('person.socialmedia.instagram.username'));
         $this->assertSame(
             'workflow_variable',
             data_get($fields->get('workflow_variable'), 'required_when.equals'),

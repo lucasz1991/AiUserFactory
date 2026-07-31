@@ -222,10 +222,9 @@
     $currentValueSource = (string) ($isEdit ? ($editingTaskValueSource ?? 'fixed') : ($newTaskValueSource ?? 'fixed'));
     $currentInputValue = trim((string) ($isEdit ? ($editingTaskInputValue ?? '') : ($newTaskInputValue ?? '')));
     $groupedValueOptions = collect(is_array($form['value_option_groups'] ?? null) ? $form['value_option_groups'] : [])
-        ->map(fn ($options) => is_array($options) ? $options : [])
-        ->filter();
+        ->filter(fn ($group) => is_array($group) && is_array($group['options'] ?? null) && ($group['options'] ?? []) !== []);
     $flatGroupedValueOptions = $groupedValueOptions
-        ->flatMap(fn (array $options) => $options)
+        ->flatMap(fn (array $group) => $group['options'])
         ->all();
     $usesGroupedFixedValue = ($form['value_source_control'] ?? false)
         && ($form['value_type'] ?? 'text') === 'select'
@@ -436,9 +435,9 @@
                                         aria-invalid="{{ $hasInvalidGroupedFixedValue ? 'true' : 'false' }}"
                                     >
                                         <option value="">{{ $form['value_placeholder'] ?: 'Bitte auswählen' }}</option>
-                                        @foreach($groupedValueOptions as $groupLabel => $groupOptions)
-                                            <optgroup label="{{ $groupLabel }}">
-                                                @foreach($groupOptions as $optionValue => $optionLabel)
+                                        @foreach($groupedValueOptions as $group)
+                                            <optgroup label="{{ $group['label'] }}">
+                                                @foreach($group['options'] as $optionValue => $optionLabel)
                                                     <option value="{{ $optionValue }}">{{ $optionLabel }} — {{ $optionValue }}</option>
                                                 @endforeach
                                             </optgroup>

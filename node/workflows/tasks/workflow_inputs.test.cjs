@@ -198,3 +198,21 @@ test('input fill reports a missing configured workflow variable without typing i
   assert.equal(result.workflowVariable, 'google_search_url');
   assert.match(result.statusMessage, /kein Fallback-Wert/);
 });
+
+test('input fill reports the exact missing person data path', async () => {
+  const result = await fillField.run({
+    page: {},
+    input: {
+      value: '',
+      value_source: 'fixed',
+      value_resolution_status: 'missing_context_value',
+      context_value_path: 'person.socialmedia.instagram.username',
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 'failed');
+  assert.equal(result.valueSource, 'fixed');
+  assert.equal(result.contextValuePath, 'person.socialmedia.instagram.username');
+  assert.match(result.statusMessage, /person\.socialmedia\.instagram\.username/);
+});

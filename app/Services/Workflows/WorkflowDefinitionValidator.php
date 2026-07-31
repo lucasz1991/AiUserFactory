@@ -85,6 +85,42 @@ class WorkflowDefinitionValidator
                 foreach ($this->selectFieldOptions($definition) as $fieldName => $allowedValues) {
                     $configuredValue = $this->taskConfigurationValue($task, $fieldName);
 
+                    if ($fieldName === 'value'
+                        && (bool) data_get($definition, 'form.value_source_control', false)
+                    ) {
+                        $valueSource = trim((string) ($task['value_source'] ?? ''));
+
+                        // Cards created before explicit value sources remain a
+                        // runtime-compatible legacy case. For current cards the
+                        // closed data-path list applies only to source=fixed.
+                        if ($valueSource === '' || $valueSource !== 'fixed') {
+                            continue;
+                        }
+
+                        // Before "Freier Text" became an explicit source, the
+                        // editor stored intentional literals as fixed values.
+                        // Keep those definitions runnable and migrate them when
+                        // they are next opened. Unknown person/account-looking
+                        // paths remain blocking errors because they otherwise
+                        // resolve to an empty browser input.
+                        if ($configuredValue !== ''
+                            && ! in_array($configuredValue, $allowedValues, true)
+                            && ! $this->catalog->resemblesInputFillDataReference($configuredValue)
+                        ) {
+                            $diagnostics[] = $this->diagnostic(
+                                'warning',
+                                'legacy_input_fixed_literal',
+                                $step,
+                                $cardKey,
+                                $fieldName,
+                                'Der bisherige feste Wert `'.$configuredValue.'` wird als freier Text ausgefuehrt.',
+                                'Die Task einmal oeffnen und als Wertquelle `Freier Text` speichern.',
+                            );
+
+                            continue;
+                        }
+                    }
+
                     if ($configuredValue !== '' && ! in_array($configuredValue, $allowedValues, true)) {
                         $diagnostics[] = $this->diagnostic(
                             'error',
@@ -94,6 +130,63 @@ class WorkflowDefinitionValidator
                             $fieldName,
                             'Die Task-Konfiguration `'.$fieldName.'` enthaelt den nicht erlaubten Wert `'.$configuredValue.'`.',
                             'Einen der Katalogwerte verwenden: '.implode(', ', $allowedValues).'.',
+                        );
+                    }
+                }
+
+                if ($catalogKey === 'input.fill_field' && array_key_exists('value_source', $task)) {
+                    $valueSource = trim((string) $task['value_source']);
+                    $configuredValue = trim((string) ($task['value'] ?? $task['input'] ?? ''));
+
+                    if (! in_array($valueSource, ['fixed', 'workflow_variable', 'literal'], true)) {
+                        $diagnostics[] = $this->diagnostic(
+                            'error',
+                            'invalid_input_value_source',
+                            $step,
+                            $cardKey,
+                            'value_source',
+                            'Die Wertquelle `'.$valueSource.'` ist fuer Input-Feld fuellen nicht erlaubt.',
+                            'Personen-/Systemdaten, Workflow-Variable oder Freier Text auswaehlen.',
+                        );
+                    } elseif ($valueSource === 'fixed' && $configuredValue === '') {
+                        $diagnostics[] = $this->diagnostic(
+                            'error',
+                            'input_data_value_missing',
+                            $step,
+                            $cardKey,
+                            'value',
+                            'Fuer die gewaehlte Wertquelle fehlt das Personen- oder Systemdatenfeld.',
+                            'Einen erlaubten Datenpfad aus dem Katalog auswaehlen.',
+                        );
+                    } elseif ($valueSource === 'literal' && $configuredValue === '') {
+                        $diagnostics[] = $this->diagnostic(
+                            'error',
+                            'input_literal_value_missing',
+                            $step,
+                            $cardKey,
+                            'value',
+                            'Fuer die gewaehlte Wertquelle fehlt der freie Text.',
+                            'Einen bewussten festen Text angeben.',
+                        );
+                    } elseif ($valueSource === 'literal' && $this->catalog->resemblesInputFillDataReference($configuredValue)) {
+                        $diagnostics[] = $this->diagnostic(
+                            'error',
+                            'input_literal_looks_like_data_reference',
+                            $step,
+                            $cardKey,
+                            'value',
+                            'Der freie Text `'.$configuredValue.'` sieht wie ein Daten- oder Variablenpfad aus.',
+                            'Den Pfad ueber Personen-/Systemdaten oder Workflow-Variable konfigurieren.',
+                        );
+                    } elseif ($valueSource === 'workflow_variable' && blank($task['workflow_variable'] ?? null)) {
+                        $diagnostics[] = $this->diagnostic(
+                            'error',
+                            'workflow_variable_name_missing',
+                            $step,
+                            $cardKey,
+                            'workflow_variable',
+                            'Workflow-Variable ist als Wertquelle gewaehlt, aber der Variablenname fehlt.',
+                            'Eine vorhandene skalare Workflow-Variable angeben.',
                         );
                     }
                 }

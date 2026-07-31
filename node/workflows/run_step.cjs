@@ -266,6 +266,10 @@ function publicWorkflow(workflow = null) {
     delete copy.person.password;
     delete copy.person.passwordEncrypted;
     delete copy.person.password_encrypted;
+    delete copy.person.loginPassword;
+    delete copy.person.login_password;
+    delete copy.person.loginPasswordEncrypted;
+    delete copy.person.login_password_encrypted;
   }
 
   return copy;
@@ -689,6 +693,8 @@ function scopedWorkflowContext(context = {}, mailboxSource = 'person') {
     webmail_url: verificationAccount.webmail_url || verificationAccount.webmailUrl || '',
     hasPassword: verificationAccount.hasPassword ?? Boolean(verificationAccount.password),
     loginUsername: verificationAccount.username || verificationAccount.email || '',
+    loginPassword: verificationAccount.password || '',
+    hasLoginPassword: verificationAccount.hasPassword ?? Boolean(verificationAccount.password),
     emailAccount: verificationAccount,
     email_account: verificationAccount,
     isVerificationMailbox: true,
@@ -711,7 +717,7 @@ function scopedWorkflowContext(context = {}, mailboxSource = 'person') {
   };
 }
 
-function resolveString(value, context = {}) {
+function resolveString(value, context = {}, resolveExactWorkflowVariable = true) {
   const normalized = String(value ?? '').trim();
   const workflow = runtime.workflow || {};
   const workflowVariables = workflowVariablesFromContext({
@@ -733,7 +739,7 @@ function resolveString(value, context = {}) {
     'workflow_return_ok',
   ];
 
-  if (exactWorkflowVariable !== undefined) {
+  if (resolveExactWorkflowVariable && exactWorkflowVariable !== undefined) {
     return exactWorkflowVariable ?? '';
   }
 
@@ -850,7 +856,7 @@ function isContextPathValue(value) {
 function configuredInputValue(task, context, rawValue) {
   const configuredSource = String(task.value_source || task.valueSource || '').trim().toLowerCase();
 
-  if (!['fixed', 'workflow_variable'].includes(configuredSource)) {
+  if (!['fixed', 'workflow_variable', 'literal'].includes(configuredSource)) {
     return {
       value: resolveString(rawValue, context),
       source: 'legacy_auto',
@@ -861,20 +867,24 @@ function configuredInputValue(task, context, rawValue) {
   }
 
   if (configuredSource === 'fixed') {
-    // Ein fester Wert bleibt grundsaetzlich woertlich. Ausnahme: ein
-    // Person-/Kontextpfad wie `person.email`, `person.password`, `account.email`
-    // oder das Haupt-Verifikationskonto wird aufgeloest — so wie es vor der
-    // Einfuehrung expliziter Wertquellen war. Reine Suchtexte und auch reine
-    // Workflow-Variablennamen (z. B. `google_search_url`) bleiben unangetastet,
-    // weil isContextPathValue() nur an den bekannten Kontext-Wurzeln greift.
+    // Der aktuelle Editor erlaubt hier nur katalogisierte Kontextpfade.
+    // Bewusste Freitexte verwenden source=literal. Fuer bereits gespeicherte
+    // Workflows bleiben historische fixed-Literale dennoch lauffaehig; nur
+    // erkennbare Person-/Systempfade werden aufgeloest.
     if (isContextPathValue(rawValue)) {
-      const resolved = resolveString(rawValue, context);
+      // A catalogued context value must not be shadowed by a workflow
+      // variable with the same textual key. Workflow variables have their
+      // own explicit source and are resolved in the branch below.
+      const resolved = resolveString(rawValue, context, false);
+      const contextValuePath = String(rawValue ?? '').trim();
+      const missingContextValue = resolved === undefined || resolved === null || resolved === '';
 
       return {
-        value: resolved,
+        value: missingContextValue ? '' : resolved,
         source: 'fixed',
         workflowVariable: '',
-        status: resolved === rawValue ? 'fixed' : 'fixed_context_resolved',
+        contextValuePath,
+        status: missingContextValue ? 'missing_context_value' : 'fixed_context_resolved',
         fallbackUsed: false,
       };
     }
@@ -884,6 +894,17 @@ function configuredInputValue(task, context, rawValue) {
       source: 'fixed',
       workflowVariable: '',
       status: 'fixed',
+      fallbackUsed: false,
+    };
+  }
+
+  if (configuredSource === 'literal') {
+    return {
+      value: rawValue,
+      source: 'literal',
+      workflowVariable: '',
+      contextValuePath: '',
+      status: 'literal',
       fallbackUsed: false,
     };
   }
@@ -966,16 +987,18 @@ function taskInput(task, context = {}) {
     scriptPersonSource: mailboxSource,
     script_person_source: mailboxSource,
     value: configuredValue.value,
-    inputValue: ['fixed', 'workflow_variable'].includes(configuredValue.source)
+    inputValue: ['fixed', 'workflow_variable', 'literal'].includes(configuredValue.source)
       ? configuredValue.value
       : resolveString(rawInput, valueContext),
-    input_value: ['fixed', 'workflow_variable'].includes(configuredValue.source)
+    input_value: ['fixed', 'workflow_variable', 'literal'].includes(configuredValue.source)
       ? configuredValue.value
       : resolveString(rawInput, valueContext),
     valueSource: configuredValue.source,
     value_source: configuredValue.source,
     workflowVariable: configuredValue.workflowVariable,
     workflow_variable: configuredValue.workflowVariable,
+    contextValuePath: configuredValue.contextValuePath || '',
+    context_value_path: configuredValue.contextValuePath || '',
     valueResolutionStatus: configuredValue.status,
     value_resolution_status: configuredValue.status,
     valueFallbackUsed: configuredValue.fallbackUsed,

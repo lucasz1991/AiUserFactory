@@ -167,7 +167,7 @@ class WorkflowCopilotPromptContextService
             ],
             'task_semantics' => [
                 'decision.element_exists' => 'Element gefunden ergibt condition_true, nicht gefunden condition_false. Beide Ergebnisse sind technisch erfolgreich. next und on_error bilden fachliche Verzweigungen; nur type=fail ist ein Workflowfehler.',
-                'input.fill_field' => 'value_source=fixed nutzt value/input. value_source=workflow_variable nutzt workflow_variable; value_fallback ist nur der optionale Ersatzwert. Ein Variablenname darf nie als Literal in das Feld geschrieben werden.',
+                'input.fill_field' => 'Drei getrennte Wertquellen sind verbindlich: value_source=fixed nutzt value/input ausschliesslich fuer einen katalogisierten Personen-/Systemdatenpfad aus configuration.value_options; value_source=workflow_variable nutzt einen dynamischen Pfad in workflow_variable und value_fallback nur als optionalen Ersatzwert; value_source=literal nutzt value/input fuer freien Text, der nicht wie ein Personen-, System- oder Variablenpfad aussehen darf. Quellen niemals stillschweigend ineinander umdeuten.',
                 'loop.for_each_element' => 'Reiner Loop-Start ohne DOM-Zugriff: iteration_count oder source_array bestimmen die Durchlaeufe, eine optionale Bedingung kann vor jeder Iteration abbrechen. Alle Body-Tasks stehen bis zum einstellungslosen loop.end; Index und aktuelles Array-Element werden zwischen Studio-Schritten persistiert.',
                 'data.append_to_array' => 'Haengt den Wert aus value_from_variable dauerhaft an workflow_variables[array_name] an. Der Producer der Variable muss vor dem Consumer liegen.',
                 'data.validate_inputs' => 'Nur ein fehlender Wert mit required=true fuehrt zum failed-Zweig. Fehlen ausschliesslich optionale Werte oder existieren keine Definitionen, ist die Task erfolgreich. Die Ausgabegruppe enthaelt Direktwerte, _inputs mit set/present/used_default und _summary.',
@@ -435,6 +435,22 @@ class WorkflowCopilotPromptContextService
     protected function catalogConfiguration(array $definition): array
     {
         $form = is_array($definition['form'] ?? null) ? $definition['form'] : [];
+        $valueSourceContract = (bool) ($form['value_source_control'] ?? false)
+            ? [
+                'fixed' => [
+                    'fields' => ['value', 'input'],
+                    'constraint' => 'Nur ein Pfad aus configuration.value_options ist erlaubt.',
+                ],
+                'workflow_variable' => [
+                    'fields' => ['workflow_variable', 'value_fallback'],
+                    'constraint' => 'workflow_variable ist ein dynamischer Variablenpfad; value_fallback ist optionaler Ersatztext.',
+                ],
+                'literal' => [
+                    'fields' => ['value', 'input'],
+                    'constraint' => 'Freier Text ist erlaubt, darf aber nicht wie ein Personen-, System- oder Variablenpfad aussehen.',
+                ],
+            ]
+            : null;
 
         return array_filter([
             'uses_selector' => (bool) ($form['selector'] ?? false),
@@ -443,6 +459,7 @@ class WorkflowCopilotPromptContextService
             'value_required' => (bool) ($form['value_required'] ?? false),
             'value_type' => trim((string) ($form['value_type'] ?? '')) ?: null,
             'value_options' => is_array($form['value_options'] ?? null) ? array_keys($form['value_options']) : null,
+            'value_source_contract' => $valueSourceContract,
             'uses_url' => (bool) ($form['url'] ?? false),
             'url_required' => (bool) ($form['url_required'] ?? false),
             'uses_browser_window' => (bool) ($form['browser_window'] ?? false),
@@ -838,15 +855,48 @@ class WorkflowCopilotPromptContextService
                 }
 
                 if ($catalogKey === 'input.fill_field') {
-                    $valueSource = trim((string) ($task['value_source'] ?? 'fixed'));
+                    $valueSource = Str::lower(trim((string) ($task['value_source'] ?? 'fixed')));
+                    $configuredValue = collect([$task['value'] ?? null, $task['input'] ?? null])
+                        ->first(fn (mixed $value): bool => is_scalar($value) && trim((string) $value) !== '');
 
-                    if ($valueSource === 'workflow_variable' && blank($task['workflow_variable'] ?? null)) {
+                    if (! in_array($valueSource, ['fixed', 'workflow_variable', 'literal'], true)) {
+                        $diagnostics[] = [
+                            'severity' => 'error',
+                            'code' => 'input_value_source_invalid',
+                            'step_action_key' => (string) $step->action_key,
+                            'task_key' => $taskKey,
+                            'message' => 'Die Wertquelle muss fixed, workflow_variable oder literal sein.',
+                        ];
+                    } elseif ($valueSource === 'fixed'
+                        && (! is_scalar($configuredValue)
+                            || ! $this->catalog->isAllowedInputFillDataValue((string) $configuredValue))) {
+                        $diagnostics[] = [
+                            'severity' => 'error',
+                            'code' => 'fixed_data_value_not_catalogued',
+                            'step_action_key' => (string) $step->action_key,
+                            'task_key' => $taskKey,
+                            'message' => 'Die feste Datenquelle ist kein katalogisierter Personen-/Systemdatenpfad.',
+                        ];
+                    } elseif ($valueSource === 'workflow_variable'
+                        && (! is_scalar($task['workflow_variable'] ?? null)
+                            || preg_match('/^[A-Za-z0-9_.-]+$/', trim((string) ($task['workflow_variable'] ?? ''))) !== 1)) {
                         $diagnostics[] = [
                             'severity' => 'error',
                             'code' => 'workflow_variable_name_missing',
                             'step_action_key' => (string) $step->action_key,
                             'task_key' => $taskKey,
                             'message' => 'Workflow-Variable ist als Wertquelle gewaehlt, aber der Variablenname fehlt.',
+                        ];
+                    } elseif ($valueSource === 'literal'
+                        && (! is_scalar($configuredValue)
+                            || trim((string) $configuredValue) === ''
+                            || $this->catalog->resemblesInputFillDataReference((string) $configuredValue))) {
+                        $diagnostics[] = [
+                            'severity' => 'error',
+                            'code' => 'literal_value_looks_like_data_reference',
+                            'step_action_key' => (string) $step->action_key,
+                            'task_key' => $taskKey,
+                            'message' => 'Der freie Text fehlt oder sieht wie ein Daten- bzw. Variablenpfad aus.',
                         ];
                     }
                 }

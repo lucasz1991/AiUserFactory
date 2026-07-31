@@ -317,7 +317,7 @@ class WorkflowStudioTest extends TestCase
         app(WorkflowStudioSessionService::class)->attachRun($session, $run);
         $this->actingAs($admin);
 
-        Livewire::test(WorkflowStudio::class, ['workflow' => $workflow])
+        $studio = Livewire::test(WorkflowStudio::class, ['workflow' => $workflow])
             ->set('probeAction', 'selector.search')
             ->set('probeBrowserWindow', 'main')
             ->set('probeSelector', 'button[data-testid="save"]')
@@ -331,6 +331,15 @@ class WorkflowStudioTest extends TestCase
             data_get($run->context_json, 'studio_probe.task.selector'),
         );
         Queue::assertPushed(RunWorkflowJob::class, 1);
+
+        $studio
+            ->set('probeAction', 'probe.fill')
+            ->set('probeValue', 'Probe value');
+        $probeTaskMethod = (new ReflectionClass(WorkflowStudio::class))->getMethod('probeTask');
+        $probeTask = $probeTaskMethod->invoke($studio->instance());
+
+        $this->assertSame('literal', $probeTask['value_source']);
+        $this->assertSame('Probe value', $probeTask['value']);
     }
 
     public function test_live_selector_probe_is_rejected_while_waiting_or_under_autonomous_control(): void

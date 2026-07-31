@@ -274,6 +274,63 @@ class WorkflowDefinitionValidatorTest extends TestCase
         $this->assertTrue($valid['valid'], json_encode($valid['diagnostics'], JSON_PRETTY_PRINT));
     }
 
+    public function test_input_fill_accepts_login_data_and_literals_but_rejects_unknown_data_paths(): void
+    {
+        $workflow = $this->workflow();
+        $step = $workflow->steps()->create([
+            'name' => 'Login',
+            'type' => WorkflowStep::TYPE_BROWSER_TASK,
+            'action_key' => 'login',
+            'position' => 10,
+            'is_enabled' => true,
+            'config_json' => ['tasks' => [[
+                'key' => 'instagram-username',
+                'task_key' => 'input.fill_field',
+                'selector' => 'input[name="username"]',
+                'value_source' => 'fixed',
+                'value' => 'person.loginUsername',
+            ], [
+                'key' => 'instagram-password',
+                'task_key' => 'input.fill_field',
+                'selector' => 'input[type="password"]',
+                'value_source' => 'fixed',
+                'value' => 'person.loginPassword',
+            ], [
+                'key' => 'legacy-literal',
+                'task_key' => 'input.fill_field',
+                'selector' => 'input[name="search"]',
+                'value_source' => 'fixed',
+                'value' => 'literal search',
+            ], [
+                'key' => 'explicit-literal',
+                'task_key' => 'input.fill_field',
+                'selector' => 'input[name="search"]',
+                'value_source' => 'literal',
+                'value' => 'another literal search',
+            ]]],
+        ]);
+
+        $valid = app(WorkflowDefinitionValidator::class)->validate($workflow->fresh('steps'));
+        $validCodes = collect($valid['diagnostics'])->pluck('code');
+
+        $this->assertTrue($valid['valid'], json_encode($valid['diagnostics'], JSON_PRETTY_PRINT));
+        $this->assertContains('legacy_input_fixed_literal', $validCodes);
+        $this->assertNotContains('invalid_configuration_option', $validCodes);
+
+        $config = $step->config_json;
+        $config['tasks'][0]['value'] = 'person.socialmedia.instagram.username';
+        $step->forceFill(['config_json' => $config])->save();
+
+        $invalid = app(WorkflowDefinitionValidator::class)->validate($workflow->fresh('steps'));
+        $diagnostic = collect($invalid['diagnostics'])->firstWhere('code', 'invalid_configuration_option');
+
+        $this->assertFalse($invalid['valid']);
+        $this->assertSame('instagram-username', $diagnostic['task_key']);
+        $this->assertSame('value', $diagnostic['field']);
+        $this->assertStringContainsString('person.loginUsername', $diagnostic['repair_hint']);
+        $this->assertStringContainsString('person.loginPassword', $diagnostic['repair_hint']);
+    }
+
     private function workflow(): Workflow
     {
         return Workflow::query()->create([

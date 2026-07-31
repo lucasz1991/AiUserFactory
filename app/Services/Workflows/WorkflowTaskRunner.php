@@ -1490,7 +1490,17 @@ class WorkflowTaskRunner
         }
 
         if (isset($public['person']) && is_array($public['person'])) {
-            unset($public['person']['password'], $public['person']['passwordEncrypted'], $public['person']['password_encrypted'], $public['person']['browserSessions'], $public['person']['browser_sessions']);
+            unset(
+                $public['person']['password'],
+                $public['person']['passwordEncrypted'],
+                $public['person']['password_encrypted'],
+                $public['person']['loginPassword'],
+                $public['person']['login_password'],
+                $public['person']['loginPasswordEncrypted'],
+                $public['person']['login_password_encrypted'],
+                $public['person']['browserSessions'],
+                $public['person']['browser_sessions'],
+            );
 
             if (isset($public['person']['metadata']) && is_array($public['person']['metadata'])) {
                 unset($public['person']['metadata']['browser_sessions']);

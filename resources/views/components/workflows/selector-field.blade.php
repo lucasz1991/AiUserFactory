@@ -146,7 +146,7 @@
                     : state === 'valid'
                         ? '!border-emerald-500 !bg-emerald-50/40 !pr-10 focus:!border-emerald-500 focus:!ring-emerald-200'
                         : ''"
-                class="block w-full rounded-lg border border-gray-300 p-2 text-sm shadow-sm transition focus:border-blue-500 focus:ring-blue-500"
+                class="block min-h-11 w-full rounded-lg border border-gray-300 p-2 text-sm shadow-sm transition focus:border-blue-500 focus:ring-blue-500"
             ></textarea>
         @else
             <input
@@ -164,7 +164,7 @@
                     : state === 'valid'
                         ? '!border-emerald-500 !bg-emerald-50/40 !pr-10 focus:!border-emerald-500 focus:!ring-emerald-200'
                         : ''"
-                class="block w-full rounded-lg border border-gray-300 p-2 text-sm shadow-sm transition focus:border-blue-500 focus:ring-blue-500"
+                class="block min-h-11 w-full rounded-lg border border-gray-300 p-2 text-sm shadow-sm transition focus:border-blue-500 focus:ring-blue-500"
             >
         @endif
 

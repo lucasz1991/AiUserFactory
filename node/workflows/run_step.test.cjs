@@ -91,7 +91,7 @@ function executeEmbeddedWorkflow(workflowReturn, workflow = {}) {
   ], workflow);
 }
 
-function executeTasks(tasks, workflow = {}) {
+function executeTasks(tasks, workflow = {}, includeStatus = false) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workflow-boundary-'));
   const runtimePath = path.join(directory, 'runtime.json');
   const resultPath = path.join(directory, 'result.json');
@@ -120,7 +120,16 @@ function executeTasks(tasks, workflow = {}) {
   try {
     assert.equal(processResult.status, 0, processResult.stderr || processResult.stdout);
 
-    return JSON.parse(fs.readFileSync(resultPath, 'utf8'));
+    const result = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
+
+    if (includeStatus) {
+      return {
+        result,
+        status: JSON.parse(fs.readFileSync(statusPath, 'utf8')),
+      };
+    }
+
+    return result;
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
@@ -214,10 +223,16 @@ test('explicit task value sources resolve variables, fallbacks and fixed values 
   assert.equal(legacyDeclaredMissingResult.tasks[0].capturedInput.valueSource, 'legacy_auto');
 });
 
-test('a fixed value resolves person/context paths but leaves plain text literal', () => {
+test('fixed person login paths resolve from context while missing paths and literals stay deterministic', () => {
   const personWorkflow = {
+    workflow_variables: {
+      'person.loginUsername': 'shadowed-by-workflow-variable',
+      google_search_url: 'https://example.test/search',
+    },
     person: {
       email: 'bezug@example.test',
+      loginUsername: 'instagram-user',
+      loginPassword: 'instagram-secret',
       emailAccount: { email: 'bezug@example.test', password: 'bezug-secret' },
     },
   };
@@ -230,17 +245,61 @@ test('a fixed value resolves person/context paths but leaves plain text literal'
     value_source: 'fixed',
     value: 'person.password',
   })], personWorkflow);
-  const plainText = executeTasks([captureInputTask('fixed-plain', {
+  const loginUsername = executeTasks([captureInputTask('fixed-login-username', {
+    value_source: 'fixed',
+    value: 'person.loginUsername',
+  })], personWorkflow);
+  const loginPassword = executeTasks([captureInputTask('fixed-login-password', {
+    value_source: 'fixed',
+    value: 'person.loginPassword',
+  })], personWorkflow);
+  const missingSocialMediaPath = executeTasks([captureInputTask('fixed-missing-social-media-path', {
+    value_source: 'fixed',
+    value: 'person.socialmedia.instagram.username',
+  })], personWorkflow);
+  const legacyPlainText = executeTasks([captureInputTask('legacy-fixed-plain', {
     value_source: 'fixed',
     value: 'Claude AI',
   })], personWorkflow);
+  const explicitLiteral = executeTasks([captureInputTask('explicit-literal', {
+    value_source: 'literal',
+    value: 'google_search_url',
+  })], personWorkflow);
 
-  // person.email / person.password werden aus der Bezugsperson aufgeloest.
+  // Mailkonto und Instagram-Zugang sind getrennte Datenbereiche.
   assert.equal(personEmail.tasks[0].capturedInput.value, 'bezug@example.test');
   assert.equal(personEmail.tasks[0].capturedInput.valueSource, 'fixed');
   assert.equal(personPassword.tasks[0].capturedInput.value, 'bezug-secret');
-  // Ein normaler Suchtext bleibt unveraendert.
-  assert.equal(plainText.tasks[0].capturedInput.value, 'Claude AI');
+  assert.equal(loginUsername.tasks[0].capturedInput.value, 'instagram-user');
+  assert.equal(loginPassword.tasks[0].capturedInput.value, 'instagram-secret');
+  // Ein gleichnamiger Workflow-Variablen-Key darf den festen Personenpfad
+  // nicht ueberschreiben.
+  assert.notEqual(loginUsername.tasks[0].capturedInput.value, 'shadowed-by-workflow-variable');
+  assert.equal(missingSocialMediaPath.tasks[0].capturedInput.value, '');
+  assert.equal(missingSocialMediaPath.tasks[0].capturedInput.valueResolutionStatus, 'missing_context_value');
+  // Bestehende fixed-Literale bleiben kompatibel; die neue explizite Quelle
+  // loest auch gleichnamige Workflow-Variablen bewusst nicht auf.
+  assert.equal(legacyPlainText.tasks[0].capturedInput.value, 'Claude AI');
+  assert.equal(explicitLiteral.tasks[0].capturedInput.value, 'google_search_url');
+  assert.equal(explicitLiteral.tasks[0].capturedInput.valueSource, 'literal');
+  assert.equal(explicitLiteral.tasks[0].capturedInput.valueResolutionStatus, 'literal');
+});
+
+test('public workflow status redacts the Instagram login password', () => {
+  const loginPassword = 'instagram-secret-must-not-be-public';
+  const run = executeTasks([returnTask('public-redaction', true)], {
+    person: {
+      loginUsername: 'instagram-user',
+      loginPassword,
+      hasLoginPassword: true,
+    },
+  }, true);
+  const publicPerson = run.status.workflow.person;
+
+  assert.equal(publicPerson.loginUsername, 'instagram-user');
+  assert.equal(publicPerson.hasLoginPassword, true);
+  assert.equal(Object.prototype.hasOwnProperty.call(publicPerson, 'loginPassword'), false);
+  assert.equal(JSON.stringify(run.status.workflow).includes(loginPassword), false);
 });
 
 test('a fixed person.email falls back to the main verification account without a reference person', () => {

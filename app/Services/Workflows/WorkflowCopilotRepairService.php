@@ -1841,15 +1841,20 @@ class WorkflowCopilotRepairService
 
         if ($taskCatalogKey === 'input.fill_field') {
             $valueReference = $parameters['value_reference'] ?? null;
+            $explicitValueSource = Str::lower(trim((string) ($parameters['value_source'] ?? '')));
 
-            if (is_scalar($valueReference) && trim((string) $valueReference) !== '') {
+            if (is_scalar($valueReference)
+                && trim((string) $valueReference) !== ''
+                && in_array($explicitValueSource, ['', 'workflow_variable'], true)) {
                 $parameters['value_source'] = 'workflow_variable';
                 $parameters['workflow_variable'] = trim((string) $valueReference);
             }
 
             $fallbackValue = $parameters['fallback_value'] ?? null;
 
-            if (is_scalar($fallbackValue) && trim((string) $fallbackValue) !== '') {
+            if (($parameters['value_source'] ?? null) === 'workflow_variable'
+                && is_scalar($fallbackValue)
+                && trim((string) $fallbackValue) !== '') {
                 $parameters['value_fallback'] = trim((string) $fallbackValue);
             }
 
@@ -1874,6 +1879,11 @@ class WorkflowCopilotRepairService
         }
 
         $changes = Arr::only($changes, $this->mutableFieldsForDefinition($definition));
+
+        if ($catalogKey === 'input.fill_field') {
+            $changes = $this->normalizeInputFillFieldChangeSet($task, $changes);
+        }
+
         $trustedDomains = $this->trustedWorkflowDomains($step, $task, $contextDomains);
         $proposedTargetDomain = $this->normalizeHost((string) ($changes['target_domain'] ?? ''));
 
@@ -1887,7 +1897,7 @@ class WorkflowCopilotRepairService
             if ($key === 'value_source') {
                 $value = Str::lower(trim((string) $value));
 
-                if (! in_array($value, ['fixed', 'workflow_variable'], true)) {
+                if (! in_array($value, ['fixed', 'workflow_variable', 'literal'], true)) {
                     continue;
                 }
             }
@@ -1952,6 +1962,135 @@ class WorkflowCopilotRepairService
         }
 
         return $normalized;
+    }
+
+    /**
+     * Keep the three input.fill_field value sources mutually exclusive:
+     * catalog-backed runtime data, a dynamic workflow variable, or literal text.
+     *
+     * @param  array<string, mixed>  $task
+     * @param  array<string, mixed>  $changes
+     * @return array<string, mixed>
+     */
+    protected function normalizeInputFillFieldChangeSet(array $task, array $changes): array
+    {
+        $sourceFields = ['value_source', 'value', 'input', 'workflow_variable', 'value_fallback'];
+
+        if (array_intersect(array_keys($changes), $sourceFields) === []) {
+            return $changes;
+        }
+
+        $unrelatedChanges = Arr::except($changes, $sourceFields);
+        $sourceWasProvided = array_key_exists('value_source', $changes);
+        $currentSource = Str::lower(trim((string) ($task['value_source'] ?? 'fixed'))) ?: 'fixed';
+        $valueSource = $sourceWasProvided
+            ? Str::lower(trim((string) $changes['value_source']))
+            : $currentSource;
+
+        if (! in_array($valueSource, ['fixed', 'workflow_variable', 'literal'], true)) {
+            return $unrelatedChanges;
+        }
+
+        if ($valueSource === 'workflow_variable') {
+            if (! $sourceWasProvided && $currentSource !== 'workflow_variable') {
+                return $unrelatedChanges;
+            }
+
+            foreach (['value', 'input'] as $field) {
+                if (array_key_exists($field, $changes)
+                    && (! is_scalar($changes[$field]) || trim((string) $changes[$field]) !== '')) {
+                    return $unrelatedChanges;
+                }
+            }
+
+            $workflowVariable = array_key_exists('workflow_variable', $changes)
+                ? $changes['workflow_variable']
+                : ($task['workflow_variable'] ?? null);
+
+            if (! is_scalar($workflowVariable)) {
+                return $unrelatedChanges;
+            }
+
+            $workflowVariable = trim((string) $workflowVariable);
+
+            if ($workflowVariable === '' || preg_match('/^[A-Za-z0-9_.-]+$/', $workflowVariable) !== 1) {
+                return $unrelatedChanges;
+            }
+
+            $normalized = [
+                'value_source' => 'workflow_variable',
+                'workflow_variable' => $workflowVariable,
+            ];
+
+            foreach (['value', 'input'] as $field) {
+                if (array_key_exists($field, $task) || array_key_exists($field, $changes)) {
+                    $normalized[$field] = '';
+                }
+            }
+
+            if (array_key_exists('value_fallback', $changes)) {
+                if (! is_scalar($changes['value_fallback'])) {
+                    return $unrelatedChanges;
+                }
+
+                $normalized['value_fallback'] = (string) $changes['value_fallback'];
+            } elseif ($currentSource !== 'workflow_variable' && array_key_exists('value_fallback', $task)) {
+                $normalized['value_fallback'] = '';
+            }
+
+            return array_replace($unrelatedChanges, $normalized);
+        }
+
+        $providedValues = [];
+
+        foreach (['value', 'input'] as $field) {
+            if (! array_key_exists($field, $changes)) {
+                continue;
+            }
+
+            if (! is_scalar($changes[$field])) {
+                return $unrelatedChanges;
+            }
+
+            $providedValues[] = (string) $changes[$field];
+        }
+
+        if (count(array_unique($providedValues, SORT_STRING)) > 1) {
+            return $unrelatedChanges;
+        }
+
+        $configuredValue = $providedValues[0] ?? collect([$task['value'] ?? null, $task['input'] ?? null])
+            ->first(fn (mixed $value): bool => is_scalar($value) && trim((string) $value) !== '');
+
+        if (! is_scalar($configuredValue) || trim((string) $configuredValue) === '') {
+            return $unrelatedChanges;
+        }
+
+        $configuredValue = (string) $configuredValue;
+
+        if ($valueSource === 'fixed') {
+            $configuredValue = trim($configuredValue);
+
+            if (! $this->catalog->isAllowedInputFillDataValue($configuredValue)) {
+                return $unrelatedChanges;
+            }
+        } elseif ($this->catalog->resemblesInputFillDataReference($configuredValue)) {
+            return $unrelatedChanges;
+        }
+
+        $normalized = [
+            'value_source' => $valueSource,
+            'value' => $configuredValue,
+            'input' => $configuredValue,
+        ];
+
+        foreach (['workflow_variable', 'value_fallback'] as $field) {
+            if (array_key_exists($field, $task) || array_key_exists($field, $changes)) {
+                $normalized[$field] = '';
+            }
+        }
+
+        return array_replace($unrelatedChanges, $normalized);
     }
 
     protected function taskSupportsSelector(array $definition): bool
@@ -2470,7 +2609,7 @@ class WorkflowCopilotRepairService
             'structural_operations' => [
                 'insert_task' => [
                     'fields' => ['type', 'step_action_key', 'task_catalog_key', 'title', 'description', 'parameters', 'insert_position', 'element_ref'],
-                    'constraint' => 'Kataloggebundene Tasks nicht duplizieren. Fuer Tasks mit sichtbarem Ziel ist eine von Vision vorgeschlagene trusted element_ref Pflicht; Selector und Browserfenster werden serverseitig aus DOM-Evidenz abgeleitet. loop.for_each_element erzeugt sein Loop-Ende automatisch und kann Reader-Ausgaben mit collect_to_array sammeln. Fuer input.fill_field setzt parameters.value_reference eine Workflow-Variable; optional definiert parameters.fallback_value den festen Ersatzwert.',
+                    'constraint' => 'Kataloggebundene Tasks nicht duplizieren. Fuer Tasks mit sichtbarem Ziel ist eine von Vision vorgeschlagene trusted element_ref Pflicht; Selector und Browserfenster werden serverseitig aus DOM-Evidenz abgeleitet. loop.for_each_element erzeugt sein Loop-Ende automatisch und kann Reader-Ausgaben mit collect_to_array sammeln. Fuer input.fill_field steht parameters.value_reference ausschliesslich fuer value_source=workflow_variable; parameters.fallback_value ist dessen optionaler Ersatzwert. value_source=fixed darf in value/input nur einen Katalogpfad aus configuration.value_options verwenden. value_source=literal darf in value/input nur freien Text enthalten, der nicht wie ein Datenpfad aussieht.',
                 ],
                 'move_task' => [
                     'fields' => ['type', 'step_action_key', 'task_key', 'insert_position'],
@@ -2498,7 +2637,7 @@ class WorkflowCopilotRepairService
             .'Wenn der aktuelle Bildschirm Folge fehlender oder falsch gerouteter Workflow-Logik ist, verwende structural_update statt pause. '
             .'Eine optionale IF-Pruefung braucht getrennte Found-/Not-Found-Routen; ein Handler darf bei bereits verschwundenem Hindernis nicht zur IF-Pruefung zurueckspringen. '
             .'Verwende type=fail nur, wenn der gesamte Workflow bewusst terminal scheitern soll. Behebbare Fehler routen zu einer vorhandenen card oder einem step. '
-            .'Fuer input.fill_field setzt eine Workflow-Variable immer gemeinsam changes.value_source=workflow_variable und changes.workflow_variable; ein fester Wert setzt changes.value_source=fixed sowie changes.value und changes.input. '
+            .'Fuer input.fill_field gelten drei getrennte Quellen: Personen-/Systemdaten setzen changes.value_source=fixed und denselben katalogisierten Pfad aus configuration.value_options in changes.value sowie changes.input; dynamische Workflow-Variablen setzen gemeinsam changes.value_source=workflow_variable und changes.workflow_variable; freier Text setzt changes.value_source=literal und denselben Text in changes.value sowie changes.input. literal darf nicht wie ein Datenpfad aussehen. Quellen nie stillschweigend umdeuten. '
             .'loop.for_each_element ist ausschliesslich ein nicht-visueller Kontroll-Loop mit iteration_count oder source_array. Er darf niemals Selector-, DOM-, Limit- oder Sammelparameter erhalten. Suchtrefferlisten werden direkt mit browser.read_searchengine_result, list_container_selector, list_item_selector und output_array_name gelesen. '
             .'Schema: {"action":"retry|update_task|continue_route|structural_update|pause","element_ref":"el_... oder leer","changes":{},"operations":[],"reason":"konkreter Befund"}. '
             .'Nach structural_update wird der Workflow revisioniert von Anfang an getestet. Die Aenderung muss danach auch im unveraenderlichen Kontrolllauf ohne Copilot-Skip funktionieren. '
@@ -2808,10 +2947,16 @@ class WorkflowCopilotRepairService
                 $parameters['input_selector'] = $visualTarget['selector'];
 
                 if ($catalogKey === 'input.fill_field') {
-                    $valueReference = data_get($parameters, 'value_reference')
-                        ?? data_get($visualTarget, 'suggested_parameters.value_reference');
+                    $explicitValueSource = Str::lower(trim((string) ($parameters['value_source'] ?? '')));
+                    $valueReference = data_get($parameters, 'value_reference');
 
-                    if (is_scalar($valueReference) && trim((string) $valueReference) !== '') {
+                    if ($valueReference === null && $explicitValueSource === '') {
+                        $valueReference = data_get($visualTarget, 'suggested_parameters.value_reference');
+                    }
+
+                    if (is_scalar($valueReference)
+                        && trim((string) $valueReference) !== ''
+                        && in_array($explicitValueSource, ['', 'workflow_variable'], true)) {
                         $parameters['value_source'] = 'workflow_variable';
                         $parameters['workflow_variable'] = trim((string) $valueReference);
                     }
@@ -2819,7 +2964,9 @@ class WorkflowCopilotRepairService
                     $fallbackValue = data_get($parameters, 'fallback_value')
                         ?? data_get($visualTarget, 'suggested_parameters.fallback_value');
 
-                    if (is_scalar($fallbackValue) && trim((string) $fallbackValue) !== '') {
+                    if (($parameters['value_source'] ?? null) === 'workflow_variable'
+                        && is_scalar($fallbackValue)
+                        && trim((string) $fallbackValue) !== '') {
                         $parameters['value_fallback'] = trim((string) $fallbackValue);
                     }
 

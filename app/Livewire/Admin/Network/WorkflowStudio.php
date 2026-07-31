@@ -1133,7 +1133,7 @@ class WorkflowStudio extends Component
             'selector.search', 'selector.read' => ['browser.find_element', ['selector' => trim($this->probeSelector)]],
             'selector.highlight' => ['browser.highlight', ['selector' => trim($this->probeSelector)]],
             'probe.click' => ['browser.click', ['selector' => trim($this->probeSelector)]],
-            'probe.fill' => ['input.fill_field', ['selector' => trim($this->probeSelector), 'value' => $this->probeValue, 'value_source' => 'fixed']],
+            'probe.fill' => ['input.fill_field', ['selector' => trim($this->probeSelector), 'value' => $this->probeValue, 'value_source' => 'literal']],
             'probe.keypress' => ['browser.press_key', ['value' => trim($this->probeValue)]],
             'probe.submit' => ['input.submit', ['selector' => trim($this->probeSelector)]],
             'probe.wait' => ['wait.seconds', ['value' => max(1, (int) $this->probeValue)]],

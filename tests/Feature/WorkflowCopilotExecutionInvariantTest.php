@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Jobs\RunWorkflowJob;
+use App\Models\Person;
 use App\Models\Workflow;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowStep;
@@ -11,6 +12,7 @@ use App\Services\Workflows\WorkflowCopilotSessionService;
 use App\Services\Workflows\WorkflowExecutionService;
 use App\Services\Workflows\WorkflowTaskRunner;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Str;
 use Mockery;
@@ -204,6 +206,74 @@ class WorkflowCopilotExecutionInvariantTest extends TestCase
         $this->assertFalse($single['copilotSupervised']);
         $this->assertTrue($single['studioSingleTask']);
         $this->assertTrue($single['segmentTasks']);
+    }
+
+    public function test_person_login_credentials_are_available_only_in_the_private_runtime_context(): void
+    {
+        [$workflow, $step] = $this->workflow();
+        $instagramPassword = 'instagram-runtime-secret';
+        $mailPassword = 'mail-runtime-secret';
+        $person = Person::query()->create([
+            'platform' => 'instagram',
+            'profile_key' => 'runtime-person-'.str()->random(8),
+            'profile_label' => 'Runtime person',
+            'person_email' => 'person@example.test',
+            'login_username' => 'instagram-user',
+            'login_password_encrypted' => Crypt::encryptString($instagramPassword),
+            'metadata' => [
+                'email_account' => [
+                    'provider' => 'proton',
+                    'email' => 'mailbox@example.test',
+                    'username' => 'mailbox-user',
+                    'password_encrypted' => Crypt::encryptString($mailPassword),
+                    'webmail_url' => 'https://mail.example.test',
+                ],
+            ],
+        ]);
+        $run = WorkflowRun::query()->create([
+            'run_uuid' => (string) str()->uuid(),
+            'workflow_id' => $workflow->id,
+            'status' => 'running',
+            'context_json' => [
+                'execution_target' => 'system',
+                'person_id' => $person->id,
+            ],
+            'result_json' => [],
+        ]);
+        $stepRun = WorkflowStepRun::query()->create([
+            'workflow_run_id' => $run->id,
+            'workflow_step_id' => $step->id,
+            'status' => 'running',
+            'result_json' => [],
+        ]);
+        $runtimeMethod = new ReflectionMethod(WorkflowExecutionService::class, 'workflowRuntimeContext');
+        $runtimeMethod->setAccessible(true);
+        $runtime = $runtimeMethod->invoke(
+            app(WorkflowExecutionService::class),
+            $run->fresh(),
+            $step,
+            $stepRun,
+        );
+
+        $this->assertSame('instagram-user', data_get($runtime, 'person.loginUsername'));
+        $this->assertSame($instagramPassword, data_get($runtime, 'person.loginPassword'));
+        $this->assertTrue(data_get($runtime, 'person.hasLoginPassword'));
+        $this->assertSame('mailbox-user', data_get($runtime, 'person.username'));
+        $this->assertSame($mailPassword, data_get($runtime, 'person.password'));
+
+        $publicMethod = new ReflectionMethod(WorkflowTaskRunner::class, 'publicRuntimeContext');
+        $publicMethod->setAccessible(true);
+        $public = $publicMethod->invoke(app(WorkflowTaskRunner::class), $runtime);
+        $publicJson = json_encode($public, JSON_THROW_ON_ERROR);
+
+        $this->assertSame('instagram-user', data_get($public, 'person.loginUsername'));
+        $this->assertTrue(data_get($public, 'person.hasLoginPassword'));
+        $this->assertArrayNotHasKey('loginPassword', $public['person']);
+        $this->assertArrayNotHasKey('password', $public['person']);
+        $this->assertArrayNotHasKey('password', $public['person']['emailAccount']);
+        $this->assertArrayNotHasKey('password', $public['account']);
+        $this->assertStringNotContainsString($instagramPassword, $publicJson);
+        $this->assertStringNotContainsString($mailPassword, $publicJson);
     }
 
     public function test_normal_dev_run_respects_explicit_capture_flags_even_for_single_task_execution(): void
