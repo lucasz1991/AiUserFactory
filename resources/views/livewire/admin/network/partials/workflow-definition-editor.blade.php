@@ -10,6 +10,12 @@
         ? $initialOverviewStep->id.'::'.$overviewSelectedTaskKey
         : '';
     $routeMarkerId = 'workflow-route-'.(\Illuminate\Support\Str::slug($editorInstance) ?: 'editor');
+
+    // Manager und eingebettetes Studio rendern dieselbe Partial gleichzeitig in
+    // ein Dokument. Statische Element-IDs waeren dann doppelt vergeben: Ein
+    // Klick auf ein Label im Studio wuerde das gleichnamige Feld im Manager
+    // fokussieren. Der Instanz-Praefix haelt beide Kopien auseinander.
+    $fieldIdPrefix = \Illuminate\Support\Str::slug($editorInstance) ?: 'editor';
     $taskEditReadOnlyState = (bool) ($taskEditReadOnly ?? false);
     $taskEditCanRequestPauseState = (bool) ($taskEditCanRequestPause ?? false);
     $taskEditPauseRequestedState = (bool) ($taskEditPauseRequested ?? false);
@@ -118,11 +124,11 @@
             <div class="min-h-0 w-full min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain bg-slate-100 xl:overflow-hidden">
     @endif
     <nav data-studio-mobile-switch class="sticky top-0 z-40 grid w-full min-w-0 grid-cols-2 gap-1.5 border-b border-slate-200 bg-white/95 p-2 backdrop-blur xl:hidden" aria-label="Mobiler Editorbereich">
-        <button type="button" x-on:click="mobilePanel = 'canvas'; $nextTick(() => queueRouteRefresh())" x-bind:aria-pressed="mobilePanel === 'canvas'" aria-controls="studio-task-canvas-panel" x-bind:class="mobilePanel === 'canvas' ? 'bg-slate-950 text-white shadow-sm' : 'bg-slate-100 text-slate-600'" class="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-3 text-xs font-bold transition">
+        <button type="button" x-on:click="mobilePanel = 'canvas'; $nextTick(() => queueRouteRefresh())" x-bind:aria-pressed="mobilePanel === 'canvas'" aria-controls="{{ $fieldIdPrefix }}-studio-task-canvas-panel" x-bind:class="mobilePanel === 'canvas' ? 'bg-slate-950 text-white shadow-sm' : 'bg-slate-100 text-slate-600'" class="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-3 text-xs font-bold transition">
             <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="7" height="6" rx="1"></rect><rect x="14" y="14" width="7" height="6" rx="1"></rect><path d="M10 7h3a4 4 0 0 1 4 4v3"></path></svg>
             Workflow <span class="font-mono opacity-70">{{ $steps->sum(fn ($step) => count($step->task_cards)) }}</span>
         </button>
-        <button type="button" x-on:click="mobilePanel = 'catalog'; $nextTick(() => queueRouteRefresh())" x-bind:aria-pressed="mobilePanel === 'catalog'" aria-controls="studio-task-catalog-panel" x-bind:class="mobilePanel === 'catalog' ? 'bg-slate-950 text-white shadow-sm' : 'bg-slate-100 text-slate-600'" class="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-3 text-xs font-bold transition">
+        <button type="button" x-on:click="mobilePanel = 'catalog'; $nextTick(() => queueRouteRefresh())" x-bind:aria-pressed="mobilePanel === 'catalog'" aria-controls="{{ $fieldIdPrefix }}-studio-task-catalog-panel" x-bind:class="mobilePanel === 'catalog' ? 'bg-slate-950 text-white shadow-sm' : 'bg-slate-100 text-slate-600'" class="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-3 text-xs font-bold transition">
             <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="2"></rect><rect x="14" y="3" width="7" height="7" rx="2"></rect><rect x="3" y="14" width="7" height="7" rx="2"></rect><path d="M17.5 14v7M14 17.5h7"></path></svg>
             Bibliothek <span class="font-mono opacity-70">{{ $taskDefinitions->count() }}</span>
         </button>
@@ -130,12 +136,12 @@
 
     <div data-studio-task-layout class="ff-canvas-shell grid min-h-full w-full min-w-0 grid-cols-[minmax(0,1fr)] overflow-visible xl:h-full xl:min-h-0 xl:grid-cols-[350px_minmax(0,1fr)] xl:overflow-hidden">
         <aside
-            id="studio-task-catalog-panel"
+            id="{{ $fieldIdPrefix }}-studio-task-catalog-panel"
             x-cloak
             x-bind:class="mobilePanel === 'catalog' ? 'flex' : 'hidden xl:flex'"
             data-studio-task-catalog
             class="ff-task-drawer h-[calc(100dvh-10rem)] w-full min-h-[480px] min-w-0 max-w-full shrink-0 flex-col border-b bg-white text-slate-900 xl:h-auto xl:min-h-0 xl:border-b-0 xl:border-r"
-            aria-labelledby="studio-task-catalog-title"
+            aria-labelledby="{{ $fieldIdPrefix }}-studio-task-catalog-title"
         >
             <div class="ff-task-library-header relative overflow-hidden border-b border-slate-800 bg-slate-950 px-4 py-5 text-white">
                 <div class="pointer-events-none absolute -right-12 -top-16 h-40 w-40 rounded-full bg-blue-500/20 blur-3xl" aria-hidden="true"></div>
@@ -146,7 +152,7 @@
                         </span>
                         <div class="min-w-0">
                             <p class="text-[10px] font-bold uppercase tracking-[0.18em] text-blue-200">Workflow-Bausteine</p>
-                            <h2 id="studio-task-catalog-title" class="mt-1 text-lg font-bold tracking-tight text-white">Task-Bibliothek</h2>
+                            <h2 id="{{ $fieldIdPrefix }}-studio-task-catalog-title" class="mt-1 text-lg font-bold tracking-tight text-white">Task-Bibliothek</h2>
                         </div>
                     </div>
                     <span class="rounded-full border border-white/10 bg-white/10 px-2.5 py-1 font-mono text-[11px] font-bold text-white">{{ $taskDefinitions->count() }}</span>
@@ -156,8 +162,8 @@
 
             <div class="space-y-3 border-b border-slate-200 bg-white p-4">
                 <div>
-                    <label for="studio-catalog-target" class="text-[10px] font-bold uppercase tracking-wide text-slate-500">Zielliste</label>
-                    <select id="studio-catalog-target" wire:model.live="catalogTargetStepId" class="ff-search-field mt-1.5 w-full px-3 text-xs font-semibold" @disabled(! $canEdit)>
+                    <label for="{{ $fieldIdPrefix }}-studio-catalog-target" class="text-[10px] font-bold uppercase tracking-wide text-slate-500">Zielliste</label>
+                    <select id="{{ $fieldIdPrefix }}-studio-catalog-target" wire:model.live="catalogTargetStepId" class="ff-search-field mt-1.5 w-full px-3 text-xs font-semibold" @disabled(! $canEdit)>
                         @forelse($steps as $step)
                             <option value="{{ $step->id }}">{{ $step->name }}</option>
                         @empty
@@ -261,7 +267,7 @@
         </aside>
 
         <section
-            id="studio-task-canvas-panel"
+            id="{{ $fieldIdPrefix }}-studio-task-canvas-panel"
             x-cloak
             x-bind:class="mobilePanel === 'canvas' ? 'flex' : 'hidden xl:flex'"
             data-studio-editor-canvas-panel
@@ -466,8 +472,8 @@
         <x-slot name="content">
             <div class="grid gap-4 md:grid-cols-2">
                 <div>
-                    <label for="studio-new-step-type" class="block text-sm font-medium text-slate-700">Aufgabentyp</label>
-                    <select id="studio-new-step-type" wire:model.live="newStepType" class="mt-1 block w-full rounded-lg border-slate-300 text-sm shadow-sm focus:border-cyan-500 focus:ring-cyan-500">
+                    <label for="{{ $fieldIdPrefix }}-studio-new-step-type" class="block text-sm font-medium text-slate-700">Aufgabentyp</label>
+                    <select id="{{ $fieldIdPrefix }}-studio-new-step-type" wire:model.live="newStepType" class="mt-1 block w-full rounded-lg border-slate-300 text-sm shadow-sm focus:border-cyan-500 focus:ring-cyan-500">
                         <option value="preparation">Vorbereitung</option>
                         <option value="data_processing">Daten verarbeiten</option>
                         <option value="browser_control">Browsersteuerung</option>
@@ -477,8 +483,8 @@
                     </select>
                 </div>
                 <div>
-                    <label for="studio-new-step-name" class="block text-sm font-medium text-slate-700">Listenname</label>
-                    <input id="studio-new-step-name" type="text" wire:model.defer="newStepName" class="mt-1 block w-full rounded-lg border-slate-300 text-sm shadow-sm focus:border-cyan-500 focus:ring-cyan-500" placeholder="z. B. Login vorbereiten">
+                    <label for="{{ $fieldIdPrefix }}-studio-new-step-name" class="block text-sm font-medium text-slate-700">Listenname</label>
+                    <input id="{{ $fieldIdPrefix }}-studio-new-step-name" type="text" wire:model.defer="newStepName" class="mt-1 block w-full rounded-lg border-slate-300 text-sm shadow-sm focus:border-cyan-500 focus:ring-cyan-500" placeholder="z. B. Login vorbereiten">
                     @error('newStepName') <p class="mt-2 text-sm text-rose-600">{{ $message }}</p> @enderror
                 </div>
             </div>
@@ -496,21 +502,21 @@
         <x-slot name="content">
             <div class="space-y-4">
                 <div>
-                    <label for="studio-edit-step-name" class="block text-sm font-medium text-slate-700">Name</label>
-                    <input id="studio-edit-step-name" type="text" wire:model.defer="editingStepName" class="mt-1 block w-full rounded-lg border-slate-300 text-sm shadow-sm focus:border-cyan-500 focus:ring-cyan-500">
+                    <label for="{{ $fieldIdPrefix }}-studio-edit-step-name" class="block text-sm font-medium text-slate-700">Name</label>
+                    <input id="{{ $fieldIdPrefix }}-studio-edit-step-name" type="text" wire:model.defer="editingStepName" class="mt-1 block w-full rounded-lg border-slate-300 text-sm shadow-sm focus:border-cyan-500 focus:ring-cyan-500">
                     @error('editingStepName') <p class="mt-2 text-sm text-rose-600">{{ $message }}</p> @enderror
                 </div>
                 <div>
-                    <label for="studio-edit-step-description" class="block text-sm font-medium text-slate-700">Beschreibung</label>
-                    <textarea id="studio-edit-step-description" rows="3" wire:model.defer="editingStepDescription" class="mt-1 block w-full rounded-lg border-slate-300 text-sm shadow-sm focus:border-cyan-500 focus:ring-cyan-500"></textarea>
+                    <label for="{{ $fieldIdPrefix }}-studio-edit-step-description" class="block text-sm font-medium text-slate-700">Beschreibung</label>
+                    <textarea id="{{ $fieldIdPrefix }}-studio-edit-step-description" rows="3" wire:model.defer="editingStepDescription" class="mt-1 block w-full rounded-lg border-slate-300 text-sm shadow-sm focus:border-cyan-500 focus:ring-cyan-500"></textarea>
                 </div>
                 <div class="grid gap-4 md:grid-cols-2">
                     <label class="flex items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm font-medium text-slate-700">
                         <input type="checkbox" wire:model.defer="editingStepEnabled" class="rounded border-slate-300 text-cyan-600 shadow-sm focus:ring-cyan-500"> Aktiv
                     </label>
                     <div>
-                        <label for="studio-edit-step-wait" class="block text-sm font-medium text-slate-700">Pause danach (Sekunden)</label>
-                        <input id="studio-edit-step-wait" type="number" min="0" max="3600" wire:model.defer="editingStepWaitAfterSeconds" class="mt-1 block w-full rounded-lg border-slate-300 text-sm shadow-sm focus:border-cyan-500 focus:ring-cyan-500">
+                        <label for="{{ $fieldIdPrefix }}-studio-edit-step-wait" class="block text-sm font-medium text-slate-700">Pause danach (Sekunden)</label>
+                        <input id="{{ $fieldIdPrefix }}-studio-edit-step-wait" type="number" min="0" max="3600" wire:model.defer="editingStepWaitAfterSeconds" class="mt-1 block w-full rounded-lg border-slate-300 text-sm shadow-sm focus:border-cyan-500 focus:ring-cyan-500">
                     </div>
                 </div>
                 <div class="grid gap-4 md:grid-cols-2">

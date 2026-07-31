@@ -26,6 +26,10 @@
         'value_placeholder' => 'person.email oder fester Wert',
         'value_help' => '',
         'value_options' => [],
+        'value_option_groups' => [],
+        'literal_value_label' => 'Freier Text',
+        'literal_value_placeholder' => 'Textwert',
+        'literal_value_help' => '',
         'url' => false,
         'url_label' => 'URL',
         'url_placeholder' => 'https://example.test',
@@ -215,6 +219,21 @@
     $browserWindowDatalistId = 'workflow-'.$formInstance.'-'.$prefix.'-browser-windows';
     $newTaskListId = 'workflow-'.$formInstance.'-new-task-list';
     $valueSourceProperty = $prefix.'ValueSource';
+    $currentValueSource = (string) ($isEdit ? ($editingTaskValueSource ?? 'fixed') : ($newTaskValueSource ?? 'fixed'));
+    $currentInputValue = trim((string) ($isEdit ? ($editingTaskInputValue ?? '') : ($newTaskInputValue ?? '')));
+    $groupedValueOptions = collect(is_array($form['value_option_groups'] ?? null) ? $form['value_option_groups'] : [])
+        ->map(fn ($options) => is_array($options) ? $options : [])
+        ->filter();
+    $flatGroupedValueOptions = $groupedValueOptions
+        ->flatMap(fn (array $options) => $options)
+        ->all();
+    $usesGroupedFixedValue = ($form['value_source_control'] ?? false)
+        && ($form['value_type'] ?? 'text') === 'select'
+        && $groupedValueOptions->isNotEmpty();
+    $hasInvalidGroupedFixedValue = $usesGroupedFixedValue
+        && $currentValueSource === 'fixed'
+        && $currentInputValue !== ''
+        && ! array_key_exists($currentInputValue, $flatGroupedValueOptions);
 @endphp
 
 <div
@@ -403,7 +422,58 @@
                                 </div>
                             @endif
 
-                            @if($form['url'] || $form['value'])
+                            @if(($form['url'] || $form['value']) && $usesGroupedFixedValue)
+                                <div x-cloak x-show="String(valueSource || 'fixed') === 'fixed'">
+                                    <label class="block text-sm font-medium text-gray-700">{{ $form['value_label'] }}</label>
+                                    <select
+                                        data-workflow-input-data-value="{{ $prefix }}"
+                                        wire:model.defer="{{ $prefix }}InputValue"
+                                        @class([
+                                            'mt-1 block min-h-11 w-full rounded-md border bg-white p-2 text-sm shadow-sm focus:ring-2',
+                                            'border-red-400 text-red-900 focus:border-red-500 focus:ring-red-200' => $hasInvalidGroupedFixedValue,
+                                            'border-gray-300 focus:border-blue-500 focus:ring-blue-500' => ! $hasInvalidGroupedFixedValue,
+                                        ])
+                                        aria-invalid="{{ $hasInvalidGroupedFixedValue ? 'true' : 'false' }}"
+                                    >
+                                        <option value="">{{ $form['value_placeholder'] ?: 'Bitte auswählen' }}</option>
+                                        @foreach($groupedValueOptions as $groupLabel => $groupOptions)
+                                            <optgroup label="{{ $groupLabel }}">
+                                                @foreach($groupOptions as $optionValue => $optionLabel)
+                                                    <option value="{{ $optionValue }}">{{ $optionLabel }} — {{ $optionValue }}</option>
+                                                @endforeach
+                                            </optgroup>
+                                        @endforeach
+                                        @if($hasInvalidGroupedFixedValue)
+                                            <optgroup label="Ungültiger bisheriger Wert">
+                                                <option value="{{ $currentInputValue }}">⚠ {{ $currentInputValue }}</option>
+                                            </optgroup>
+                                        @endif
+                                    </select>
+                                    @if($hasInvalidGroupedFixedValue)
+                                        <p class="mt-2 rounded-md border border-red-200 bg-red-50 px-2.5 py-2 text-xs leading-5 text-red-800" role="alert">
+                                            Dieser bisherige Datenpfad existiert nicht. Bitte einen Eintrag aus der Liste auswählen.
+                                        </p>
+                                    @elseif(($form['value_help'] ?? '') !== '')
+                                        <p class="mt-1 text-xs leading-5 text-slate-500">{{ $form['value_help'] }}</p>
+                                    @endif
+                                    @error($prefix.'InputValue') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                                </div>
+
+                                <div x-cloak x-show="String(valueSource || 'fixed') === 'literal'">
+                                    <label class="block text-sm font-medium text-gray-700">{{ $form['literal_value_label'] }}</label>
+                                    <input
+                                        type="text"
+                                        data-workflow-input-literal-value="{{ $prefix }}"
+                                        wire:model.defer="{{ $prefix }}InputValue"
+                                        placeholder="{{ $form['literal_value_placeholder'] }}"
+                                        class="mt-1 block min-h-11 w-full rounded-md border border-gray-300 p-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                                    >
+                                    @if(($form['literal_value_help'] ?? '') !== '')
+                                        <p class="mt-1 text-xs leading-5 text-slate-500">{{ $form['literal_value_help'] }}</p>
+                                    @endif
+                                    @error($prefix.'InputValue') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                                </div>
+                            @elseif($form['url'] || $form['value'])
                                 <div
                                     @if($form['value_source_control'] ?? false)
                                         x-cloak

@@ -109,6 +109,50 @@ class WorkflowTaskCatalog
         'data.workflow_return' => 50,
     ];
 
+    /**
+     * Runtime paths which may be selected as a value for input.fill_field.
+     *
+     * The labels are presentation-only. The keys are the canonical, case-sensitive
+     * paths understood by node/workflows/run_step.cjs. Do not add storage-only
+     * paths here unless WorkflowExecutionService actually exposes them.
+     */
+    private const INPUT_FILL_DATA_VALUE_GROUPS = [
+        'Instagram-Zugang der Bezugsperson' => [
+            'person.loginUsername' => 'Instagram-Benutzername',
+            'person.loginPassword' => 'Instagram-Passwort',
+        ],
+        'Personendaten' => [
+            'person.displayName' => 'Anzeigename',
+            'person.firstName' => 'Vorname',
+            'person.lastName' => 'Nachname',
+            'person.email' => 'E-Mail-Adresse',
+            'person.phone' => 'Telefonnummer',
+            'person.country' => 'Land',
+            'person.city' => 'Stadt',
+            'person.timezone' => 'Zeitzone',
+        ],
+        'E-Mail-Konto der Bezugsperson' => [
+            'account.email' => 'E-Mail-Adresse des Kontos',
+            'account.username' => 'Benutzername des Kontos',
+            'account.password' => 'Passwort des Kontos',
+            'account.provider' => 'E-Mail-Anbieter',
+            'account.webmailUrl' => 'Webmail-URL',
+        ],
+        'Haupt-Verifikationskonto' => [
+            'verificationMailbox.email' => 'E-Mail-Adresse',
+            'verificationMailbox.username' => 'Benutzername',
+            'verificationMailbox.password' => 'Passwort',
+            'verificationMailbox.provider' => 'E-Mail-Anbieter',
+            'verificationMailbox.webmailUrl' => 'Webmail-URL',
+        ],
+        'Generierte Laufzeitdaten' => [
+            'new_mail_address' => 'Neu erzeugte E-Mail-Adresse',
+            'new_mail_username' => 'Neu erzeugter E-Mail-Benutzername',
+            'generated_password' => 'Neu erzeugtes Passwort',
+            'verification_code' => 'Ausgelesener Verifizierungscode',
+        ],
+    ];
+
     private ?array $definitions = null;
 
     private ?array $taskKeysByNodeScript = null;
@@ -1141,9 +1185,15 @@ class WorkflowTaskCatalog
                     'value' => true,
                     'value_required' => false,
                     'value_source_control' => true,
-                    'value_label' => 'Fester Wert',
-                    'value_placeholder' => 'Suchtext, E-Mail-Adresse oder z. B. person.email',
-                    'value_help' => 'Wird nur verwendet, wenn als Wertquelle "Fester Wert" gewaehlt ist. Person-/Kontextpfade wie person.email oder person.password werden dabei aus der Bezugsperson (ohne Bezugsperson aus dem Haupt-Verifikationskonto) aufgeloest; jeder andere Text wird woertlich eingesetzt.',
+                    'value_label' => 'Datenfeld',
+                    'value_type' => 'select',
+                    'value_placeholder' => 'Personen- oder Systemdaten auswählen',
+                    'value_help' => 'Es können nur Datenpfade gewählt werden, die der Workflow zur Laufzeit tatsächlich bereitstellt. Für Instagram gelten person.loginUsername und person.loginPassword.',
+                    'value_options' => $this->inputFillDataValueOptions(),
+                    'value_option_groups' => $this->inputFillDataValueGroups(),
+                    'literal_value_label' => 'Freier Text',
+                    'literal_value_placeholder' => 'Text, der genau so in das Eingabefeld geschrieben wird',
+                    'literal_value_help' => 'Für Suchbegriffe oder bewusst feste Texte. Werte, die wie ein Personen-, Konto- oder Variablenpfad aussehen, sind hier nicht erlaubt.',
                     'url' => false,
                     'success_payload' => true,
                     'failure_payload' => true,
@@ -1153,8 +1203,9 @@ class WorkflowTaskCatalog
                             'label' => 'Wertquelle',
                             'type' => 'select',
                             'options' => [
-                                'fixed' => 'Fester Wert',
+                                'fixed' => 'Personen-/Systemdaten',
                                 'workflow_variable' => 'Workflow-Variable',
+                                'literal' => 'Freier Text',
                             ],
                             'tab' => 'Eingabe',
                             'span' => 'full',
@@ -2003,6 +2054,58 @@ class WorkflowTaskCatalog
             ])
             ->values()
             ->toArray();
+    }
+
+    /**
+     * @return array<string, array<string, string>>
+     */
+    public function inputFillDataValueGroups(): array
+    {
+        return self::INPUT_FILL_DATA_VALUE_GROUPS;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public function inputFillDataValueOptions(): array
+    {
+        $options = [];
+
+        foreach (self::INPUT_FILL_DATA_VALUE_GROUPS as $groupOptions) {
+            $options = array_replace($options, $groupOptions);
+        }
+
+        return $options;
+    }
+
+    public function isAllowedInputFillDataValue(string $value): bool
+    {
+        return array_key_exists(trim($value), $this->inputFillDataValueOptions());
+    }
+
+    public function resemblesInputFillDataReference(string $value): bool
+    {
+        $normalized = preg_replace('/^[=!<>]+\s*/', '', trim($value)) ?: trim($value);
+
+        if ($normalized === '') {
+            return false;
+        }
+
+        if (preg_match('/^(?:person|account|email_account|verificationMailbox|verification_mailbox|veri_account|veri-account|workflow|workflowVariables|workflow_variables)\.[A-Za-z0-9_.-]+$/i', $normalized) === 1) {
+            return true;
+        }
+
+        return in_array($normalized, [
+            'new_password',
+            'generated_password',
+            'generated-password',
+            'new_mail_username',
+            'new_mail_address',
+            'verification_code',
+            'verificationCode',
+            'workflow_return',
+            'workflowReturn',
+        ], true);
     }
 
     public function libraryGroups(): array

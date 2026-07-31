@@ -17,18 +17,18 @@ class WorkflowTaskLibraryMarkupTest extends TestCase
         $this->assertStringContainsString("mobilePanel: 'canvas'", $source);
         $this->assertStringContainsString('data-studio-mobile-switch', $source);
         $this->assertStringContainsString('class="ff-task-group-rail', $source);
-        $this->assertStringContainsString('aria-controls="studio-task-catalog-panel"', $source);
-        $this->assertStringContainsString('aria-controls="studio-task-canvas-panel"', $source);
+        $this->assertStringContainsString('aria-controls="{{ $fieldIdPrefix }}-studio-task-catalog-panel"', $source);
+        $this->assertStringContainsString('aria-controls="{{ $fieldIdPrefix }}-studio-task-canvas-panel"', $source);
         $this->assertStringContainsString('data-studio-editor-overview', $source);
         $this->assertStringContainsString('<x-workflows.minimap', $source);
         $this->assertStringContainsString(':workflow="$workflow"', $source);
         $this->assertStringContainsString(':zoomable="true"', $source);
-        $this->assertStringContainsString("initial-zoom=\"overview\"", $source);
+        $this->assertStringContainsString('initial-zoom="overview"', $source);
         $this->assertStringContainsString("window.matchMedia('(pointer: fine)').matches", $source);
         $this->assertStringContainsString('x-on:workflow-preview-task-selected.stop', $source);
         $this->assertStringContainsString('const taskTarget = taskKey', $source);
         $this->assertStringContainsString('const target = taskTarget || stepTarget', $source);
-        $this->assertStringContainsString("target?.focus({ preventScroll: true })", $source);
+        $this->assertStringContainsString('target?.focus({ preventScroll: true })', $source);
         $this->assertStringContainsString("@include('livewire.admin.network.partials.workflow-definition-editor'", $studioWrapper);
         $this->assertStringContainsString("@include('livewire.admin.network.partials.workflow-definition-editor'", $manager);
     }
@@ -38,9 +38,9 @@ class WorkflowTaskLibraryMarkupTest extends TestCase
         $root = dirname(__DIR__, 2);
         $source = file_get_contents($root.'/resources/views/livewire/admin/network/partials/workflow-definition-editor.blade.php');
 
-        $this->assertStringContainsString("grid-cols-[minmax(0,1fr)]", $source);
-        $this->assertStringContainsString("xl:grid-cols-[350px_minmax(0,1fr)]", $source);
-        $this->assertStringContainsString('id="studio-task-catalog-panel"', $source);
+        $this->assertStringContainsString('grid-cols-[minmax(0,1fr)]', $source);
+        $this->assertStringContainsString('xl:grid-cols-[350px_minmax(0,1fr)]', $source);
+        $this->assertStringContainsString('id="{{ $fieldIdPrefix }}-studio-task-catalog-panel"', $source);
         $this->assertStringContainsString('w-full min-h-[480px] min-w-0 max-w-full', $source);
         $this->assertStringContainsString('w-full min-w-0 max-w-full shrink-0 flex-col', $source);
         $this->assertStringContainsString('wire:model.live.debounce.250ms="taskSearch"', $source);

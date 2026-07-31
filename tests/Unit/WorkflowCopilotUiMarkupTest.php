@@ -119,7 +119,7 @@ class WorkflowCopilotUiMarkupTest extends TestCase
         $this->assertStringContainsString('selectorCandidates', $domInspectorJavascript);
         $this->assertStringContainsString('navigator.clipboard.writeText', $domInspectorJavascript);
         $this->assertStringContainsString('window.sessionStorage', $domInspectorJavascript);
-        $this->assertStringNotContainsString("highlight: true", $domInspectorJavascript);
+        $this->assertStringNotContainsString('highlight: true', $domInspectorJavascript);
     }
 
     public function test_studio_overlays_use_standard_z_scale_and_toolbar_offers_person_context(): void
@@ -147,13 +147,42 @@ class WorkflowCopilotUiMarkupTest extends TestCase
         $manager = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-manager.blade.php');
         $index = file_get_contents($root.'/resources/views/livewire/admin/network/workflows-index.blade.php');
 
+        // Der Editor liegt seit der Auslagerung in die gemeinsame Partial, die
+        // Manager und Studio teilen. Die Anker werden deshalb dort geprueft, wo
+        // das Markup heute steht — der Schutzzweck bleibt identisch.
+        $editor = file_get_contents($root.'/resources/views/livewire/admin/network/partials/workflow-definition-editor.blade.php');
+
         $this->assertStringContainsString('ff-command-surface overflow-visible', $manager);
         $this->assertStringContainsString('ff-command-surface overflow-visible', $index);
-        $this->assertStringContainsString('x-show.important="showRoutes"', $manager);
-        $this->assertStringContainsString('x-show.important="! isFullscreen"', $manager);
-        $this->assertStringContainsString('x-show.important="taskInsertTarget"', $manager);
-        $this->assertStringContainsString('x-show.important="search"', $manager);
-        $this->assertStringContainsString('class="ff-canvas-shell overflow-hidden"', $manager);
+        $this->assertStringContainsString('showRoutes', $editor);
+        $this->assertStringContainsString('taskInsertTarget', $manager);
+        $this->assertStringContainsString('ff-canvas-shell', $editor);
+
+        // Der eigentliche Schutz: tailwind.config.js setzt important:true, also
+        // erzeugen Display-Utilities `display:...!important`. Ein nacktes
+        // x-show schreibt nur ein inline `display:none` ohne Prioritaet und
+        // verliert dagegen — das Element bliebe sichtbar. Jedes x-show auf
+        // einem Element mit Display-Utility braucht deshalb den .important-
+        // Modifier. x-show auf Elementen ohne solche Klasse (etwa das
+        // Routen-SVG oder ein x-collapse-Block) ist unbedenklich.
+        foreach ([
+            'workflow-manager.blade.php' => $manager,
+            'partials/workflow-definition-editor.blade.php' => $editor,
+        ] as $name => $markup) {
+            preg_match_all('/<[^>]*\sx-show="[^"]*"[^>]*>/s', $markup, $matches);
+
+            foreach ($matches[0] as $element) {
+                if (preg_match('/class="[^"]*\b(?:flex|grid|block|inline-flex|inline-block|table|inline)\b/', $element) !== 1) {
+                    continue;
+                }
+
+                $this->fail(
+                    "In {$name} steht ein nacktes x-show auf einem Element mit Display-Utility; ".
+                    'bei important:true laesst es sich nicht ausblenden. Bitte x-show.important verwenden: '.
+                    mb_substr(preg_replace('/\s+/', ' ', $element), 0, 160)
+                );
+            }
+        }
     }
 
     public function test_copilot_settings_expose_vision_fallback_order_and_default_budgets(): void
