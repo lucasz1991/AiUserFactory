@@ -32,6 +32,7 @@
         sttAbortController: null,
         ttsEndpoint: @js(\Illuminate\Support\Facades\Route::has('assistant.audio-output.stream') ? route('assistant.audio-output.stream', [], false) : null),
         sttEndpoint: @js(\Illuminate\Support\Facades\Route::has('assistant.audio-input.transcribe') ? route('assistant.audio-input.transcribe', [], false) : null),
+        sharedSpeechServiceEnabled: @js((bool) config('services.speech_service.enabled', false)),
         csrfToken: @js(csrf_token()),
         speechInputProvider: @js($assistantSpeechInputProvider),
         speechOutputProvider: @js($assistantSpeechOutputProvider),
@@ -917,9 +918,10 @@
             return window.SpeechRecognition || window.webkitSpeechRecognition || null;
         },
         usesRecordedSpeechInput() {
-            return ['whisper_local', 'vosk'].includes(this.speechInputProvider);
+            return this.sharedSpeechServiceEnabled || ['whisper_local', 'vosk'].includes(this.speechInputProvider);
         },
         speechInputName() {
+            if (this.sharedSpeechServiceEnabled) return 'Gemeinsame Whisper-Spracheingabe';
             if (this.speechInputProvider === 'whisper_local') return 'Serverlokale Whisper-Spracheingabe';
             if (this.speechInputProvider === 'vosk') return 'Vosk-Spracheingabe';
 

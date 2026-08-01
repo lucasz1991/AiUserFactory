@@ -68,6 +68,17 @@ return [
         'stream_enabled' => env('OPENROUTER_STREAM_ENABLED', true),
     ],
 
+    'speech_service' => [
+        'enabled' => env('SPEECH_SERVICE_ENABLED', false),
+        'url' => env('SPEECH_SERVICE_URL', 'http://127.0.0.1:8092'),
+        'client_id' => env('SPEECH_SERVICE_CLIENT_ID', 'followflow'),
+        'token' => env('SPEECH_SERVICE_TOKEN'),
+        'token_file' => env('SPEECH_SERVICE_TOKEN_FILE'),
+        'connect_timeout' => env('SPEECH_SERVICE_CONNECT_TIMEOUT', 5),
+        'stt_timeout' => env('SPEECH_SERVICE_STT_TIMEOUT', 300),
+        'tts_timeout' => env('SPEECH_SERVICE_TTS_TIMEOUT', 180),
+    ],
+
     'local_assistant_voice' => [
         'enabled' => env('LOCAL_ASSISTANT_VOICE_ENABLED', false),
         'temp_path' => env('LOCAL_ASSISTANT_VOICE_TEMP_PATH', storage_path('app/private/assistant-voice')),

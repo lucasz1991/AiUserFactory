@@ -6,6 +6,8 @@ use App\Http\Controllers\Controller;
 use App\Models\Setting;
 use App\Services\Ai\LocalAssistantVoiceException;
 use App\Services\Ai\LocalAssistantVoiceService;
+use App\Services\Ai\SpeechServiceClient;
+use App\Services\Ai\SpeechServiceException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -15,8 +17,11 @@ class AssistantAudioOutputStreamController extends Controller
 {
     private const OPENROUTER_AUDIO_SPEECH_URL = 'https://openrouter.ai/api/v1/audio/speech';
 
-    public function __invoke(Request $request, LocalAssistantVoiceService $localVoice)
-    {
+    public function __invoke(
+        Request $request,
+        LocalAssistantVoiceService $localVoice,
+        SpeechServiceClient $speechService,
+    ) {
         $connectionId = (string) Str::uuid();
         $startedAt = microtime(true);
 
@@ -26,6 +31,10 @@ class AssistantAudioOutputStreamController extends Controller
             'format' => ['nullable', 'string', 'in:mp3,wav,opus,pcm'],
             'speed' => ['nullable', 'numeric', 'min:0.5', 'max:2'],
         ]);
+
+        if ($speechService->enabled()) {
+            return $this->streamSharedSpeechAudio($validated, $speechService, $connectionId, $startedAt);
+        }
 
         $speechOutputProvider = $this->assistantSetting('speech_output_provider', 'ai');
 
@@ -178,6 +187,59 @@ class AssistantAudioOutputStreamController extends Controller
             'X-Accel-Buffering' => 'no',
             'X-Content-Type-Options' => 'nosniff',
             'X-AI-Connection-ID' => $connectionId,
+        ]);
+    }
+
+    private function streamSharedSpeechAudio(
+        array $validated,
+        SpeechServiceClient $speechService,
+        string $connectionId,
+        float $startedAt,
+    ) {
+        try {
+            $audio = $speechService->synthesize(
+                trim((string) $validated['text']),
+                (float) ($validated['speed'] ?? 1),
+            );
+        } catch (SpeechServiceException $exception) {
+            Log::warning('Assistant shared Speech TTS failed.', [
+                'connection_id' => $connectionId,
+                'reason_code' => $exception->reasonCode,
+                'provider_status' => $exception->providerStatus,
+                'duration_ms' => (int) round((microtime(true) - $startedAt) * 1000),
+            ]);
+
+            return response()->json([
+                'message' => 'Die gemeinsame Sprachausgabe ist derzeit nicht verfuegbar.',
+                'reason_code' => $exception->reasonCode,
+                'connection_id' => $connectionId,
+            ], 503, [
+                'X-AI-Connection-ID' => $connectionId,
+            ]);
+        } catch (\Throwable $exception) {
+            Log::error('Assistant shared Speech TTS failed unexpectedly.', [
+                'connection_id' => $connectionId,
+                'exception' => $exception::class,
+                'duration_ms' => (int) round((microtime(true) - $startedAt) * 1000),
+            ]);
+
+            return response()->json([
+                'message' => 'Die gemeinsame Sprachausgabe ist unerwartet fehlgeschlagen.',
+                'reason_code' => 'speech_service_unexpected_error',
+                'connection_id' => $connectionId,
+            ], 503, [
+                'X-AI-Connection-ID' => $connectionId,
+            ]);
+        }
+
+        return response($audio, 200, [
+            'Content-Type' => 'audio/wav',
+            'Content-Length' => (string) strlen($audio),
+            'Cache-Control' => 'no-store, no-cache, must-revalidate, max-age=0',
+            'Pragma' => 'no-cache',
+            'X-Content-Type-Options' => 'nosniff',
+            'X-AI-Connection-ID' => $connectionId,
+            'X-AI-Speech-Provider' => 'shared_speech_service',
         ]);
     }
 

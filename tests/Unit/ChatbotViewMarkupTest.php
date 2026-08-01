@@ -33,11 +33,18 @@ class ChatbotViewMarkupTest extends TestCase
         $this->assertStringContainsString('new ResizeObserver(() => {', $definition);
         $this->assertStringContainsString('messagesNearBottom(threshold = 96)', $definition);
         $this->assertStringContainsString('jumpToLatest(smooth = true)', $definition);
-        $this->assertStringContainsString("scrollBehavior(smooth = true)", $definition);
+        $this->assertStringContainsString('scrollBehavior(smooth = true)', $definition);
         $this->assertStringContainsString("window.matchMedia('(prefers-reduced-motion: reduce)')", $definition);
         $this->assertStringContainsString('if (!force && !this.messagesPinned)', $definition);
         $this->assertStringContainsString('transcribeRecordedBlob(blob)', $definition);
-        $this->assertStringContainsString("['whisper_local', 'vosk'].includes(this.speechInputProvider)", $definition);
+        $this->assertStringContainsString(
+            'return this.sharedSpeechServiceEnabled || [\'whisper_local\', \'vosk\'].includes(this.speechInputProvider);',
+            $definition,
+        );
+        $this->assertStringContainsString(
+            'if (this.sharedSpeechServiceEnabled) return \'Gemeinsame Whisper-Spracheingabe\';',
+            $definition,
+        );
         $this->assertStringContainsString('[40, 100, 250, 500, 1000].map((delay)', $definition);
         $this->assertStringContainsString('handleNewAssistantMessages(history)', $definition);
         $this->assertStringContainsString('this.queueTtsSentence(item.content, index)', $definition);
@@ -70,6 +77,10 @@ class ChatbotViewMarkupTest extends TestCase
         $this->assertStringNotContainsString('x-show="speaking"', $source);
         $this->assertStringNotContainsString('workflow-assistant-speech-rate', $source);
         $this->assertStringContainsString("route('assistant.audio-input.transcribe'", $source);
+        $this->assertStringContainsString(
+            'sharedSpeechServiceEnabled: @js((bool) config(\'services.speech_service.enabled\', false))',
+            $source,
+        );
         $this->assertStringContainsString('speechInputProvider: @js($assistantSpeechInputProvider)', $source);
         $this->assertStringContainsString('speechOutputProvider: @js($assistantSpeechOutputProvider)', $source);
         $this->assertStringContainsString("speechOutputProvider === 'piper_local'", $source);

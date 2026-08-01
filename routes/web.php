@@ -78,8 +78,12 @@ Route::middleware(['auth:sanctum', config('jetstream.auth_session')])->group(fun
         Route::get('/netzwerk/workflows/{workflow}', WorkflowManager::class)->name('network.workflows.manage');
         Route::get('/workflow-runs/{run}/artifacts/{artifact}', [WorkflowRunArtifactController::class, 'show'])->name('workflow-run-artifacts.show');
         Route::get('/workflow-runs/{run}/artifacts/{artifact}/download', [WorkflowRunArtifactController::class, 'download'])->name('workflow-run-artifacts.download');
-        Route::post('/assistant/audio-input/transcribe', AssistantAudioInputTranscriptionController::class)->name('assistant.audio-input.transcribe');
-        Route::post('/assistant/audio-output/stream', AssistantAudioOutputStreamController::class)->name('assistant.audio-output.stream');
+        Route::post('/assistant/audio-input/transcribe', AssistantAudioInputTranscriptionController::class)
+            ->middleware('throttle:assistant-stt')
+            ->name('assistant.audio-input.transcribe');
+        Route::post('/assistant/audio-output/stream', AssistantAudioOutputStreamController::class)
+            ->middleware('throttle:assistant-tts')
+            ->name('assistant.audio-output.stream');
         Route::get('/prozesse', ProcessMonitor::class)->name('processes.index');
         Route::get('/einstellungen/{tab?}', SettingsPage::class)->name('admin.settings');
 

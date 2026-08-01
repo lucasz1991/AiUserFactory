@@ -6,6 +6,8 @@ use App\Http\Controllers\Controller;
 use App\Models\Setting;
 use App\Services\Ai\LocalAssistantVoiceException;
 use App\Services\Ai\LocalAssistantVoiceService;
+use App\Services\Ai\SpeechServiceClient;
+use App\Services\Ai\SpeechServiceException;
 use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Http;
@@ -14,14 +16,28 @@ use Illuminate\Support\Str;
 
 class AssistantAudioInputTranscriptionController extends Controller
 {
-    public function __invoke(Request $request, LocalAssistantVoiceService $localVoice)
-    {
+    public function __invoke(
+        Request $request,
+        LocalAssistantVoiceService $localVoice,
+        SpeechServiceClient $speechService,
+    ) {
         $connectionId = (string) Str::uuid();
         $startedAt = microtime(true);
 
         $validated = $request->validate([
-            'audio' => ['required', 'file', 'max:20480'],
+            // 45 Sekunden Browseraudio bleiben deutlich darunter; die kleinere
+            // Grenze schuetzt PHP-FPM vor Base64-/JSON-Mehrfachkopien.
+            'audio' => ['required', 'file', 'max:8192'],
         ]);
+
+        if ($speechService->enabled()) {
+            return $this->transcribeWithSharedService(
+                $validated['audio'],
+                $speechService,
+                $connectionId,
+                $startedAt,
+            );
+        }
 
         if ($this->assistantSetting('speech_input_provider', 'browser') === 'whisper_local') {
             return $this->transcribeWithLocalWhisper(
@@ -118,6 +134,55 @@ class AssistantAudioInputTranscriptionController extends Controller
             'text' => Str::limit($text, 8000, ''),
         ], 200, [
             'X-AI-Connection-ID' => $connectionId,
+        ]);
+    }
+
+    private function transcribeWithSharedService(
+        UploadedFile $audio,
+        SpeechServiceClient $speechService,
+        string $connectionId,
+        float $startedAt,
+    ) {
+        try {
+            $text = $speechService->transcribe($audio);
+        } catch (SpeechServiceException $exception) {
+            Log::warning('Assistant shared Speech STT failed.', [
+                'connection_id' => $connectionId,
+                'reason_code' => $exception->reasonCode,
+                'provider_status' => $exception->providerStatus,
+                'duration_ms' => (int) round((microtime(true) - $startedAt) * 1000),
+            ]);
+
+            return response()->json([
+                'message' => 'Die gemeinsame Spracheingabe ist derzeit nicht verfuegbar.',
+                'reason_code' => $exception->reasonCode,
+                'connection_id' => $connectionId,
+            ], 503, [
+                'X-AI-Connection-ID' => $connectionId,
+            ]);
+        } catch (\Throwable $exception) {
+            Log::error('Assistant shared Speech STT failed unexpectedly.', [
+                'connection_id' => $connectionId,
+                'exception' => $exception::class,
+                'duration_ms' => (int) round((microtime(true) - $startedAt) * 1000),
+            ]);
+
+            return response()->json([
+                'message' => 'Die gemeinsame Spracheingabe ist unerwartet fehlgeschlagen.',
+                'reason_code' => 'speech_service_unexpected_error',
+                'connection_id' => $connectionId,
+            ], 503, [
+                'X-AI-Connection-ID' => $connectionId,
+            ]);
+        }
+
+        return response()->json([
+            'text' => Str::limit($text, 8000, ''),
+        ], 200, [
+            'Cache-Control' => 'no-store, no-cache, must-revalidate, max-age=0',
+            'X-AI-Connection-ID' => $connectionId,
+            'X-AI-Speech-Provider' => 'shared_speech_service',
+            'X-Content-Type-Options' => 'nosniff',
         ]);
     }
 

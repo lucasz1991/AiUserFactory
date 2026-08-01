@@ -38,6 +38,26 @@ class RouteServiceProvider extends ServiceProvider
             return Limit::perMinutes(10, 3)->by($request->user()?->id ?: $request->ip());
         });
 
+        RateLimiter::for('assistant-stt', function (Request $request) {
+            $actor = $request->user()?->id ?: $request->ip();
+
+            return [
+                Limit::perMinute(4)->by('assistant-stt-minute:'.$actor),
+                Limit::perHour(30)->by('assistant-stt-hour:'.$actor),
+                Limit::perMinute(12)->by('assistant-stt-global'),
+            ];
+        });
+
+        RateLimiter::for('assistant-tts', function (Request $request) {
+            $actor = $request->user()?->id ?: $request->ip();
+
+            return [
+                Limit::perMinute(12)->by('assistant-tts-minute:'.$actor),
+                Limit::perHour(180)->by('assistant-tts-hour:'.$actor),
+                Limit::perMinute(40)->by('assistant-tts-global'),
+            ];
+        });
+
         $this->routes(function () {
             Route::middleware('api')
                 ->prefix('api')
