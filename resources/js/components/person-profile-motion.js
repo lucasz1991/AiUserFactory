@@ -148,15 +148,19 @@ function animatePanelSwitch(root) {
         continue;
       }
 
+      /* Bewusst NUR transform, kein opacity/visibility: dieser Tween haengt an
+         einem Klick des Nutzers. Laeuft der GSAP-Ticker gerade nicht (Tab im
+         Hintergrund, gedrosseltes Rendering), bliebe ein Startzustand mit
+         opacity 0 stehen und der gerade geoeffnete Tab waere leer. Ein
+         steckengebliebener 12px-Versatz faellt dagegen nicht auf. */
       gsap.fromTo(
         panel,
-        { autoAlpha: 0, y: 12 },
+        { y: 12 },
         {
-          autoAlpha: 1,
           y: 0,
           duration: 0.45,
           ease: 'power2.out',
-          clearProps: 'transform,opacity,visibility',
+          clearProps: 'transform',
           overwrite: 'auto',
         },
       );

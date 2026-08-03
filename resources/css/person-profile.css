@@ -354,15 +354,34 @@
 
 .ff-profile-tab:hover { color: var(--ff-shell-text, #182435); background: rgba(148, 163, 184, 0.16); }
 
-.ff-profile-tab--active {
+/* Bewusst eine Stufe spezifischer als `.ff-profile-tab`: die Klasse wird von
+   Alpine per `:class` gesetzt, und in diesem Projekt (Tailwind mit
+   `important: true`, mehrere gebuendelte Fremd-Stylesheets) darf der aktive
+   Zustand nicht von der Regelreihenfolge abhaengen. */
+.ff-profile-tabs .ff-profile-tab--active {
   background: var(--ff-profile-brand);
   color: #fff;
   box-shadow: 0 10px 18px -14px rgba(47, 92, 158, 0.9);
 }
 
-.ff-profile-tab--active:hover { background: var(--ff-profile-brand-deep); color: #fff; }
+.ff-profile-tabs .ff-profile-tab--active:hover { background: var(--ff-profile-brand-deep); color: #fff; }
 
 .ff-profile-panels { min-height: 12rem; }
+
+/* Ausfallsicherung fuer die Tabs.
+ *
+ * Die Panels werden serverseitig alle gerendert und erst von Alpines `x-show`
+ * ausgeblendet. Startet Alpine nicht — im Projekt kommt es mit `livewire.js`,
+ * das unter einer Unterverzeichnis-Installation schon einmal 404 geliefert hat
+ * — stuenden sonst alle sieben Panels untereinander auf einer endlos langen
+ * Seite. Das Bereitschaftsflag setzt `x-init` am Tabstreifen; bis dahin ist nur
+ * das erste Panel sichtbar.
+ *
+ * Bewusst am Elternknoten und nicht per `[x-cloak]`: so bleibt ohne
+ * JavaScript etwas Sinnvolles stehen statt gar nichts. */
+.ff-person-profile:not([data-tabs-ready]) .ff-profile-panel:not(:first-child) {
+  display: none;
+}
 
 /* --------------------------------------------------------------- Surfaces */
 
@@ -626,7 +645,7 @@
 
 .ff-account-chip:hover { background: var(--ff-shell-surface-muted, #f7f9fc); transform: translateX(2px); }
 
-.ff-account-chip--active {
+.ff-accounts__rail .ff-account-chip--active {
   border-color: rgba(47, 92, 158, 0.35);
   background: var(--ff-profile-brand-soft);
 }

@@ -6,7 +6,7 @@ use PHPUnit\Framework\TestCase;
 
 class WorkflowTaskLibraryMarkupTest extends TestCase
 {
-    public function test_shared_definition_editor_has_mobile_panel_switch_group_selector_and_overview(): void
+    public function test_shared_definition_editor_uses_right_library_drawer_without_mobile_tabs(): void
     {
         $root = dirname(__DIR__, 2);
         $source = file_get_contents($root.'/resources/views/livewire/admin/network/partials/workflow-definition-editor.blade.php');
@@ -14,11 +14,15 @@ class WorkflowTaskLibraryMarkupTest extends TestCase
         $manager = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-manager.blade.php');
 
         $this->assertStringContainsString('data-workflow-definition-editor', $source);
-        $this->assertStringContainsString("mobilePanel: 'canvas'", $source);
-        $this->assertStringContainsString('data-studio-mobile-switch', $source);
+        $this->assertStringNotContainsString('mobilePanel', $source);
+        $this->assertStringNotContainsString('data-studio-mobile-switch', $source);
+        $this->assertStringContainsString('mobileLibraryOpen: false', $source);
+        $this->assertStringContainsString('isLibraryVisible()', $source);
+        $this->assertStringContainsString('data-studio-library-backdrop', $source);
+        $this->assertStringContainsString('x-on:keydown.escape.window', $source);
         $this->assertStringContainsString('class="ff-task-group-rail', $source);
         $this->assertStringContainsString('aria-controls="{{ $fieldIdPrefix }}-studio-task-catalog-panel"', $source);
-        $this->assertStringContainsString('aria-controls="{{ $fieldIdPrefix }}-studio-task-canvas-panel"', $source);
+        $this->assertStringContainsString('data-studio-editor-canvas-panel', $source);
         $this->assertStringContainsString('data-studio-editor-overview', $source);
         $this->assertStringContainsString('<x-workflows.minimap', $source);
         $this->assertStringContainsString(':workflow="$workflow"', $source);
@@ -33,7 +37,7 @@ class WorkflowTaskLibraryMarkupTest extends TestCase
         $this->assertStringContainsString("@include('livewire.admin.network.partials.workflow-definition-editor'", $manager);
     }
 
-    public function test_shared_left_library_searches_all_groups_without_changing_runtime_kind(): void
+    public function test_shared_right_library_searches_all_groups_without_changing_runtime_kind(): void
     {
         $root = dirname(__DIR__, 2);
         $source = file_get_contents($root.'/resources/views/livewire/admin/network/partials/workflow-definition-editor.blade.php');
@@ -41,40 +45,48 @@ class WorkflowTaskLibraryMarkupTest extends TestCase
         $manager = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-manager.blade.php');
 
         $this->assertStringContainsString('grid-cols-[minmax(0,1fr)]', $source);
-        $this->assertStringContainsString('lg:grid-cols-[330px_minmax(0,1fr)]', $source);
+        $this->assertStringContainsString('md:grid-cols-[minmax(0,1fr)_350px]', $source);
         $this->assertStringContainsString('x-on:transitionend.self="if ($event.propertyName === \'grid-template-columns\') queueRouteRefresh()"', $source);
-        $this->assertStringContainsString("mobilePanel === 'catalog' ? 'flex' : 'hidden lg:flex'", $source);
-        $this->assertStringContainsString("mobilePanel === 'canvas' ? 'flex' : 'hidden lg:flex'", $source);
-        $this->assertStringContainsString("desktopSidebar: window.matchMedia('(min-width: 960px)').matches", $source);
-        $this->assertStringContainsString('x-bind:inert="! libraryExpanded && desktopSidebar"', $source);
+        $this->assertStringContainsString('class="ff-task-drawer absolute inset-y-0 right-0 z-40 order-2 flex', $source);
+        $this->assertStringContainsString('md:col-start-2 md:row-start-1', $source);
+        $this->assertStringContainsString('class="order-1 flex min-h-[560px]', $source);
+        $this->assertStringContainsString('md:col-start-1 md:row-start-1', $source);
+        $this->assertStringContainsString("desktopSidebar: window.matchMedia('(min-width: 720px)').matches", $source);
+        $this->assertStringContainsString('x-bind:inert="! isLibraryVisible()"', $source);
+        $this->assertStringContainsString('x-trap.noscroll="! desktopSidebar && mobileLibraryOpen"', $source);
+        $this->assertStringContainsString('x-bind:aria-hidden="(! isLibraryVisible()).toString()"', $source);
+        $this->assertStringContainsString('x-bind:inert="! desktopSidebar && mobileLibraryOpen"', $source);
+        $this->assertStringContainsString('this.setLibraryExpanded(true, ! this.desktopSidebar);', $source);
         $this->assertStringNotContainsString('hidden xl:flex', $source);
-        $this->assertStringContainsString('x-bind:data-library-expanded="libraryExpanded', $source);
-        $this->assertStringContainsString('@media (min-width: 960px)', $styles);
+        $this->assertStringContainsString('x-bind:data-library-expanded="isLibraryVisible()', $source);
+        $this->assertStringContainsString('@media (min-width: 720px)', $styles);
         $this->assertStringContainsString('[data-studio-task-layout][data-library-expanded] {', $styles);
-        $this->assertStringContainsString('grid-template-columns: 350px minmax(0, 1fr) !important;', $styles);
+        $this->assertStringContainsString('grid-template-columns: minmax(0, 1fr) 350px !important;', $styles);
         $this->assertStringContainsString('transition: grid-template-columns 280ms var(--ff-ease) !important;', $styles);
         $this->assertStringContainsString("[data-studio-task-layout][data-library-expanded='false']", $styles);
-        $this->assertStringContainsString('grid-template-columns: 0 minmax(0, 1fr) !important;', $styles);
+        $this->assertStringContainsString('grid-template-columns: minmax(0, 1fr) 0 !important;', $styles);
         $this->assertStringContainsString('visibility: hidden;', $styles);
-        $this->assertStringContainsString('transform: translateX(-1rem);', $styles);
+        $this->assertStringContainsString('transform: translateX(1rem);', $styles);
+        $this->assertStringContainsString('transform: translateX(100%);', $styles);
         $this->assertStringContainsString('pointer-events: none;', $styles);
-        $this->assertStringContainsString('@media (min-width: 960px) and (prefers-reduced-motion: reduce)', $styles);
+        $this->assertStringContainsString('@media (min-width: 720px) and (prefers-reduced-motion: reduce)', $styles);
         $this->assertStringContainsString('transition: none !important;', $styles);
-        $this->assertStringContainsString('@media (max-width: 959px)', $styles);
+        $this->assertStringContainsString('@media (max-width: 719px)', $styles);
         $this->assertStringNotContainsString('@media (max-width: 1279px)', $styles);
         $this->assertStringContainsString("window.localStorage.getItem('followflow.workflow-library-expanded')", $source);
         $this->assertStringContainsString('x-on:click="toggleLibrary()"', $source);
+        $this->assertSame(2, substr_count($source, 'aria-controls="{{ $fieldIdPrefix }}-studio-task-catalog-panel"'));
         $this->assertStringContainsString('Task-Bibliothek einklappen', $source);
         $this->assertStringContainsString('Bibliothek öffnen', $source);
         $this->assertStringContainsString('x-ref="libraryCollapseButton"', $source);
         $this->assertStringContainsString('x-ref="libraryOpenButton"', $source);
         $this->assertStringContainsString('target?.focus({ preventScroll: true });', $source);
-        $this->assertStringContainsString('x-show.important="! libraryExpanded"', $source);
-        $this->assertStringContainsString('this.setLibraryExpanded(true);', $source);
+        $this->assertStringContainsString('x-show.important="! isLibraryVisible()"', $source);
         $this->assertStringNotContainsString('xl:grid-cols-[72px_minmax(0,1fr)]', $source);
         $this->assertStringNotContainsString('[writing-mode:vertical-rl]', $source);
+        $this->assertStringNotContainsString('mobilePanel', $source);
         $this->assertStringContainsString('id="{{ $fieldIdPrefix }}-studio-task-catalog-panel"', $source);
-        $this->assertStringContainsString('w-full min-h-[480px] min-w-0 max-w-full', $source);
+        $this->assertStringContainsString('w-[min(22rem,100%)] min-h-0 min-w-0 max-w-full', $source);
         $this->assertStringContainsString('w-full min-w-0 max-w-full shrink-0 flex-col', $source);
         $this->assertStringContainsString('wire:model.live.debounce.250ms="taskSearch"', $source);
         $this->assertStringContainsString('aria-label="Task-Suche leeren"', $source);
@@ -84,7 +96,7 @@ class WorkflowTaskLibraryMarkupTest extends TestCase
         $this->assertStringContainsString('min-h-[64px]', $source);
         $this->assertStringContainsString('wire:key="{{ $fieldIdPrefix }}-task-library-', $source);
         $this->assertStringContainsString('wire:target.except="taskSearch,selectTaskGroup,catalogTargetStepId"', $manager);
-        $this->assertStringContainsString('lg:h-[calc(100dvh-8.5rem)]', $manager);
+        $this->assertStringContainsString('md:h-[calc(100dvh-8.5rem)]', $manager);
         $this->assertStringContainsString('data-task-library-group="{{ $taskDefinition[\'library_group\'] }}"', $source);
         $this->assertStringNotContainsString("collect(\$taskDefinitions)->where('kind', \$taskGroup)", $source);
         $this->assertStringContainsString("\$el.closest('.jetstream-modal')?.querySelector", $source);

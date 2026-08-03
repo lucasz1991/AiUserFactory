@@ -196,7 +196,12 @@
             @endforeach
         </section>
 
-        <div class="ff-profile-tabs" role="tablist" aria-label="Profilbereiche">
+        {{-- `x-init` setzt das Bereitschaftsflag erst, wenn Alpine wirklich
+             laeuft. Ohne dieses Flag blendet `person-profile.css` alle Panels
+             ausser dem ersten aus — faellt das JavaScript aus (z. B. wenn
+             `livewire.js` nicht laedt), zeigt die Seite dann eine saubere
+             Uebersicht statt aller sieben Panels uebereinander. --}}
+        <div class="ff-profile-tabs" role="tablist" aria-label="Profilbereiche" x-init="$root.dataset.tabsReady = '1'">
             <div class="ff-profile-tabs__track">
                 @foreach($tabs as $key => $label)
                     <button

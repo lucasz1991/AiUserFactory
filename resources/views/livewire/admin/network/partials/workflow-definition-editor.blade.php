@@ -28,7 +28,7 @@
 @endphp
 
 <div
-    class="{{ $modalOnly ? '' : 'h-full w-full min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain lg:overflow-hidden' }}"
+    class="relative {{ $modalOnly ? '' : 'h-full w-full min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain md:overflow-hidden' }}"
     data-studio-task-editor
     data-workflow-definition-editor
     data-workflow-editor-instance="{{ $editorInstance }}"
@@ -37,8 +37,8 @@
             instance: @js($routeMarkerId),
             initialNode: @js($initialRouteNode),
         }),
-        mobilePanel: 'canvas',
-        desktopSidebar: window.matchMedia('(min-width: 960px)').matches,
+        desktopSidebar: window.matchMedia('(min-width: 720px)').matches,
+        mobileLibraryOpen: false,
         libraryExpanded: (() => {
             try {
                 return window.localStorage.getItem('followflow.workflow-library-expanded') !== 'false';
@@ -47,17 +47,25 @@
             }
         })(),
         focusedTask: @js($initialFocusedTask),
+        isLibraryVisible() {
+            return this.desktopSidebar ? this.libraryExpanded : this.mobileLibraryOpen;
+        },
         setLibraryExpanded(expanded, focusToggle = false) {
-            this.libraryExpanded = Boolean(expanded);
-            try {
-                window.localStorage.setItem('followflow.workflow-library-expanded', String(this.libraryExpanded));
-            } catch (error) {
-                // Die Sidebar bleibt auch ohne verfuegbaren Browser-Speicher bedienbar.
+            const nextState = Boolean(expanded);
+            if (this.desktopSidebar) {
+                this.libraryExpanded = nextState;
+                try {
+                    window.localStorage.setItem('followflow.workflow-library-expanded', String(this.libraryExpanded));
+                } catch (error) {
+                    // Die Sidebar bleibt auch ohne verfuegbaren Browser-Speicher bedienbar.
+                }
+            } else {
+                this.mobileLibraryOpen = nextState;
             }
             this.$nextTick(() => {
                 this.queueRouteRefresh();
                 if (focusToggle) {
-                    const target = this.libraryExpanded
+                    const target = this.isLibraryVisible()
                         ? this.$refs.libraryCollapseButton
                         : this.$refs.libraryOpenButton;
                     target?.focus({ preventScroll: true });
@@ -65,14 +73,13 @@
             });
         },
         toggleLibrary() {
-            this.setLibraryExpanded(! this.libraryExpanded, true);
+            this.setLibraryExpanded(! this.isLibraryVisible(), true);
         },
         scrollBehavior() {
             return window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
         },
         armTaskInsert(stepId) {
-            this.setLibraryExpanded(true);
-            this.mobilePanel = 'catalog';
+            this.setLibraryExpanded(true, ! this.desktopSidebar);
             $wire.selectCatalogTarget(stepId);
             this.$nextTick(() => {
                 this.$root.querySelector('[data-studio-task-catalog]')?.scrollIntoView({ behavior: this.scrollBehavior(), block: 'nearest' });
@@ -86,7 +93,7 @@
             if (!stepId) return;
 
             await $wire.selectOverviewTask(stepId, taskKey);
-            this.mobilePanel = 'canvas';
+            if (! this.desktopSidebar) this.mobileLibraryOpen = false;
             this.focusedTask = taskKey ? `${stepId}::${taskKey}` : '';
             this.$nextTick(() => {
                 const stepTarget = Array.from(this.$root.querySelectorAll('[data-workflow-step-id]'))
@@ -127,7 +134,8 @@
         $wire.moveStepRelative(Number(detail.stepId || 0), String(detail.direction || ''));
     "
     x-on:workflow-minimap-zoom-changed.window="queueRouteRefresh()"
-    x-on:resize.window="desktopSidebar = window.matchMedia('(min-width: 960px)').matches; queueRouteRefresh()"
+    x-on:resize.window="desktopSidebar = window.matchMedia('(min-width: 720px)').matches; if (desktopSidebar) mobileLibraryOpen = false; queueRouteRefresh()"
+    x-on:keydown.escape.window="if (! desktopSidebar && mobileLibraryOpen) setLibraryExpanded(false, true)"
 >
     @if($showDefinitionSurface)
     @if($modalOnly)
@@ -151,231 +159,36 @@
                 </div>
                 <button type="button" wire:click="closeDefinitionDrawer" data-studio-definition-drawer-close class="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 transition hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-cyan-500">Schließen <span aria-hidden="true">×</span></button>
             </header>
-            <div class="min-h-0 w-full min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain bg-slate-100 lg:overflow-hidden">
+            <div class="min-h-0 w-full min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain bg-slate-100 md:overflow-hidden">
     @endif
-    <nav data-studio-mobile-switch class="sticky top-0 z-40 grid w-full min-w-0 grid-cols-2 gap-1.5 border-b border-slate-200 bg-white/95 p-2 backdrop-blur lg:hidden" aria-label="Mobiler Editorbereich">
-        <button type="button" x-on:click="mobilePanel = 'canvas'; $nextTick(() => queueRouteRefresh())" x-bind:aria-pressed="mobilePanel === 'canvas'" aria-controls="{{ $fieldIdPrefix }}-studio-task-canvas-panel" x-bind:class="mobilePanel === 'canvas' ? 'bg-slate-950 text-white shadow-sm' : 'bg-slate-100 text-slate-600'" class="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-3 text-xs font-bold transition">
-            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="7" height="6" rx="1"></rect><rect x="14" y="14" width="7" height="6" rx="1"></rect><path d="M10 7h3a4 4 0 0 1 4 4v3"></path></svg>
-            Workflow <span class="font-mono opacity-70">{{ $steps->sum(fn ($step) => count($step->task_cards)) }}</span>
-        </button>
-        <button type="button" x-on:click="mobilePanel = 'catalog'; $nextTick(() => queueRouteRefresh())" x-bind:aria-pressed="mobilePanel === 'catalog'" aria-controls="{{ $fieldIdPrefix }}-studio-task-catalog-panel" x-bind:class="mobilePanel === 'catalog' ? 'bg-slate-950 text-white shadow-sm' : 'bg-slate-100 text-slate-600'" class="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-3 text-xs font-bold transition">
-            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="2"></rect><rect x="14" y="3" width="7" height="7" rx="2"></rect><rect x="3" y="14" width="7" height="7" rx="2"></rect><path d="M17.5 14v7M14 17.5h7"></path></svg>
-            Bibliothek <span class="font-mono opacity-70">{{ $taskDefinitions->count() }}</span>
-        </button>
-    </nav>
+    <button
+        type="button"
+        x-cloak
+        x-show.important="! desktopSidebar && mobileLibraryOpen"
+        x-transition.opacity.duration.200ms
+        x-on:click="setLibraryExpanded(false, true)"
+        data-studio-library-backdrop
+        class="absolute inset-0 z-30 bg-slate-950/35 backdrop-blur-[1px] motion-reduce:transition-none md:hidden"
+        aria-label="Task-Bibliothek schließen"
+        tabindex="-1"
+    ></button>
 
     <div
         data-studio-task-layout
-        x-bind:data-library-expanded="libraryExpanded ? 'true' : 'false'"
+        x-bind:data-library-expanded="isLibraryVisible() ? 'true' : 'false'"
         x-on:transitionend.self="if ($event.propertyName === 'grid-template-columns') queueRouteRefresh()"
         x-on:transitioncancel.self="queueRouteRefresh()"
-        class="ff-canvas-shell grid min-h-full w-full min-w-0 grid-cols-[minmax(0,1fr)] overflow-visible transition-[grid-template-columns] duration-300 ease-out lg:h-full lg:min-h-0 lg:grid-cols-[330px_minmax(0,1fr)] lg:overflow-hidden motion-reduce:transition-none"
+        class="ff-canvas-shell relative grid min-h-full w-full min-w-0 grid-cols-[minmax(0,1fr)] overflow-hidden transition-[grid-template-columns] duration-300 ease-out md:h-full md:min-h-0 md:grid-cols-[minmax(0,1fr)_350px] motion-reduce:transition-none"
     >
-        <aside
-            id="{{ $fieldIdPrefix }}-studio-task-catalog-panel"
-            x-cloak
-            x-bind:class="mobilePanel === 'catalog' ? 'flex' : 'hidden lg:flex'"
-            x-bind:inert="! libraryExpanded && desktopSidebar"
-            data-studio-task-catalog
-            class="ff-task-drawer h-[calc(100dvh-10rem)] w-full min-h-[480px] min-w-0 max-w-full shrink-0 flex-col overflow-hidden border-b bg-white text-slate-900 lg:h-auto lg:min-h-0 lg:border-b-0 lg:border-r"
-            aria-labelledby="{{ $fieldIdPrefix }}-studio-task-catalog-title"
-        >
-            <div
-                id="{{ $fieldIdPrefix }}-studio-task-library-content"
-                class="contents"
-            >
-            <div class="ff-task-library-header relative overflow-hidden border-b border-slate-800 bg-slate-950 px-4 py-4 text-white">
-                <div class="pointer-events-none absolute -right-12 -top-16 h-40 w-40 rounded-full bg-blue-500/20 blur-3xl" aria-hidden="true"></div>
-                <div class="relative flex items-start justify-between gap-3">
-                    <div class="flex min-w-0 items-start gap-3">
-                        <span class="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/10 text-blue-200 shadow-inner">
-                            <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="2"></rect><rect x="14" y="3" width="7" height="7" rx="2"></rect><rect x="3" y="14" width="7" height="7" rx="2"></rect><path d="M17.5 14v7M14 17.5h7"></path></svg>
-                        </span>
-                        <div class="min-w-0">
-                            <p class="text-[10px] font-bold uppercase tracking-[0.18em] text-blue-200">Workflow-Bausteine</p>
-                            <h2 id="{{ $fieldIdPrefix }}-studio-task-catalog-title" class="mt-1 text-lg font-bold tracking-tight text-white">Task-Bibliothek</h2>
-                        </div>
-                    </div>
-                    <div class="flex shrink-0 items-center gap-2">
-                        <span class="rounded-full border border-white/10 bg-white/10 px-2.5 py-1 font-mono text-[11px] font-bold text-white">{{ $taskDefinitions->count() }}</span>
-                        <button
-                            type="button"
-                            x-ref="libraryCollapseButton"
-                            x-on:click="toggleLibrary()"
-                            x-bind:aria-expanded="libraryExpanded"
-                            aria-controls="{{ $fieldIdPrefix }}-studio-task-library-content"
-                            title="Task-Bibliothek einklappen"
-                            class="hidden h-9 w-9 items-center justify-center rounded-xl border border-white/15 bg-white/10 text-blue-100 transition hover:border-blue-300/60 hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 lg:inline-flex"
-                        >
-                            <span class="sr-only">Task-Bibliothek einklappen</span>
-                            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m15 19-7-7 7-7"></path></svg>
-                        </button>
-                    </div>
-                </div>
-            </div>
-
-            <div class="space-y-2.5 border-b border-slate-200 bg-white p-3">
-                <div class="grid gap-2 xl:grid-cols-2">
-                    <div>
-                        <label for="{{ $fieldIdPrefix }}-studio-catalog-target" class="text-[10px] font-bold uppercase tracking-wide text-slate-500">Einfügen in</label>
-                        <select id="{{ $fieldIdPrefix }}-studio-catalog-target" wire:model.live="catalogTargetStepId" class="ff-search-field mt-1.5 w-full px-3 text-xs font-semibold" @disabled(! $canEdit)>
-                            @forelse($steps as $step)
-                                <option value="{{ $step->id }}">{{ $step->name }}</option>
-                            @empty
-                                <option value="">Zuerst eine Liste anlegen</option>
-                            @endforelse
-                        </select>
-                    </div>
-                    <div class="hidden lg:block">
-                        <label for="{{ $fieldIdPrefix }}-studio-catalog-group" class="text-[10px] font-bold uppercase tracking-wide text-slate-500">Kategorie</label>
-                        <select id="{{ $fieldIdPrefix }}-studio-catalog-group" wire:change="selectTaskGroup($event.target.value)" class="ff-search-field mt-1.5 w-full px-3 text-xs font-semibold">
-                            @if($searchActive)
-                                <option value="" selected>Alle Treffer ({{ $visibleTaskDefinitions->count() }})</option>
-                            @endif
-                            @foreach($taskGroups as $taskGroup)
-                                <option value="{{ $taskGroup }}" @selected(! $searchActive && $activeTaskGroup === $taskGroup)>
-                                    {{ data_get($taskGroupMeta, $taskGroup.'.short_label', $taskGroupLabels[$taskGroup] ?? $taskGroup) }} ({{ $taskGroupCounts->get($taskGroup, 0) }})
-                                </option>
-                            @endforeach
-                        </select>
-                    </div>
-                </div>
-                <div class="relative">
-                    <svg class="pointer-events-none absolute left-3 top-3 h-4 w-4 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
-                    <input type="search" wire:model.live.debounce.250ms="taskSearch" class="ff-search-field w-full py-2 pl-9 pr-10 text-xs placeholder:text-slate-400" placeholder="Task suchen …" aria-label="Tasks im Katalog suchen">
-                    @if($searchActive)
-                        <button
-                            type="button"
-                            wire:click="$set('taskSearch', '')"
-                            class="absolute right-1.5 top-1.5 inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-200 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
-                            aria-label="Task-Suche leeren"
-                            title="Suche leeren"
-                        >
-                            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"></path></svg>
-                        </button>
-                    @endif
-                </div>
-            </div>
-
-            <nav class="ff-task-group-rail shrink-0 overflow-x-auto overscroll-x-contain border-b border-slate-200 bg-slate-50 px-3 py-2 [scrollbar-width:none] lg:hidden" aria-label="Task-Gruppen">
-                <div class="flex min-w-max items-center gap-1.5" role="group" aria-label="Bibliothek filtern">
-                    @if($searchActive)
-                        <span class="inline-flex min-h-11 items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3 text-[11px] font-bold text-blue-800">
-                            Alle Treffer
-                            <span class="rounded-md bg-white px-1.5 py-0.5 font-mono text-[10px]">{{ $visibleTaskDefinitions->count() }}</span>
-                        </span>
-                    @endif
-                    @foreach($taskGroups as $taskGroup)
-                        <button
-                            type="button"
-                            wire:click="selectTaskGroup(@js($taskGroup))"
-                            x-on:click="$el.scrollIntoView({ block: 'nearest', inline: 'center', behavior: scrollBehavior() })"
-                            aria-pressed="{{ ! $searchActive && $activeTaskGroup === $taskGroup ? 'true' : 'false' }}"
-                            class="inline-flex min-h-11 items-center gap-2 whitespace-nowrap rounded-xl border px-3 text-[11px] font-bold transition {{ ! $searchActive && $activeTaskGroup === $taskGroup ? 'border-blue-200 bg-blue-50 text-blue-800 shadow-sm' : 'border-transparent bg-white text-slate-600 hover:border-slate-200 hover:text-slate-950' }}"
-                        >
-                            {{ data_get($taskGroupMeta, $taskGroup.'.short_label', $taskGroupLabels[$taskGroup] ?? $taskGroup) }}
-                            <span class="rounded-md bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-500">{{ $taskGroupCounts->get($taskGroup, 0) }}</span>
-                        </button>
-                    @endforeach
-                </div>
-            </nav>
-
-            <div class="border-b border-slate-200 bg-white px-3 py-2" role="status" aria-live="polite">
-                @if($searchActive)
-                    <div class="flex items-center justify-between gap-2">
-                        <p class="truncate text-xs font-bold text-slate-900">Gruppenübergreifende Suche</p>
-                        <span class="shrink-0 rounded-md bg-blue-50 px-2 py-1 font-mono text-[10px] font-bold text-blue-700">{{ $visibleTaskDefinitions->count() }} Treffer</span>
-                    </div>
-                @else
-                    <div class="flex items-center justify-between gap-2">
-                        <p class="truncate text-xs font-bold text-slate-900">{{ $taskGroupLabels[$activeTaskGroup] ?? $activeTaskGroup }}</p>
-                        <span class="shrink-0 rounded-md bg-slate-100 px-2 py-1 font-mono text-[10px] font-bold text-slate-600">{{ $visibleTaskDefinitions->count() }}</span>
-                    </div>
-                    <p class="mt-0.5 truncate text-[11px] leading-4 text-slate-500" title="{{ data_get($taskGroupMeta, $activeTaskGroup.'.description', '') }}">{{ data_get($taskGroupMeta, $activeTaskGroup.'.description', '') }}</p>
-                @endif
-            </div>
-
-            <div class="ff-task-library-list min-h-0 flex-1 space-y-1.5 overflow-y-auto bg-slate-50/70 p-2">
-                @forelse($visibleTaskDefinitions as $taskDefinition)
-                    <button
-                        type="button"
-                        wire:key="{{ $fieldIdPrefix }}-task-library-{{ $taskDefinition['key'] }}"
-                        wire:click="prepareCatalogTask(@js($taskDefinition['key']))"
-                        x-on:click="mobilePanel = 'canvas'"
-                        x-bind:draggable="window.matchMedia('(pointer: fine)').matches && @js($canEdit)"
-                        x-on:dragstart.stop="$event.dataTransfer.setData('application/x-workflow-task-catalog', @js($taskDefinition['key'])); $event.dataTransfer.setData('text/plain', @js($taskDefinition['key'])); $event.dataTransfer.effectAllowed = 'copy'"
-                        @disabled(! $canEdit || $steps->isEmpty())
-                        data-task-library-key="{{ $taskDefinition['key'] }}"
-                        data-task-library-group="{{ $taskDefinition['library_group'] }}"
-                        class="ff-catalog-card group block min-h-[64px] w-full border bg-white p-2.5 text-left disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                        <span class="flex items-center gap-2.5">
-                            <span class="ff-catalog-icon inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-500 transition group-hover:border-blue-200 group-hover:bg-blue-100 group-hover:text-blue-700">
-                                @switch($taskDefinition['kind'])
-                                    @case('browser')
-                                        <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"></rect><path d="M3 9h18M7 6.5h.01M10 6.5h.01"></path></svg>
-                                        @break
-                                    @case('input')
-                                        <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="3"></rect><path d="M7 10h.01M11 10h.01M15 10h.01M7 14h7"></path></svg>
-                                        @break
-                                    @case('wait')
-                                        <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>
-                                        @break
-                                    @case('workflow')
-                                        <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="4" width="6" height="5" rx="1"></rect><rect x="15" y="15" width="6" height="5" rx="1"></rect><path d="M9 6.5h3a5 5 0 0 1 5 5V15"></path></svg>
-                                        @break
-                                    @default
-                                        <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h10"></path><circle cx="18" cy="17" r="2"></circle></svg>
-                                @endswitch
-                            </span>
-                            <span class="min-w-0 flex-1">
-                                <span class="flex items-center gap-2">
-                                    <span class="min-w-0 flex-1 truncate text-[13px] font-bold text-slate-950">{{ $taskDefinition['label'] }}</span>
-                                    @if($searchActive)
-                                        <span class="shrink-0 rounded-md bg-slate-100 px-1.5 py-0.5 text-[9px] font-bold text-slate-500">{{ data_get($taskGroupMeta, $taskDefinition['library_group'].'.short_label', $taskDefinition['library_group']) }}</span>
-                                    @endif
-                                </span>
-                                <span class="mt-0.5 block truncate text-[11px] leading-4 text-slate-500" title="{{ $taskDefinition['description'] }}">{{ $taskDefinition['description'] }}</span>
-                            </span>
-                            <span class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-blue-200 bg-blue-50 text-lg font-medium leading-none text-blue-700 transition group-hover:border-blue-600 group-hover:bg-blue-600 group-hover:text-white" aria-hidden="true">+</span>
-                        </span>
-                    </button>
-                @empty
-                    <div class="rounded-2xl border border-dashed border-slate-300 bg-white px-5 py-10 text-center">
-                        <span class="mx-auto inline-flex h-11 w-11 items-center justify-center rounded-full bg-slate-100 text-slate-400">
-                            <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
-                        </span>
-                        <p class="mt-3 text-xs font-bold text-slate-700">Keine passenden Tasks</p>
-                        <p class="mt-1 text-[11px] leading-4 text-slate-500">Suchbegriff anpassen oder eine andere Gruppe wählen.</p>
-                    </div>
-                @endforelse
-            </div>
-            </div>
-        </aside>
-
         <section
             id="{{ $fieldIdPrefix }}-studio-task-canvas-panel"
-            x-cloak
-            x-bind:class="mobilePanel === 'canvas' ? 'flex' : 'hidden lg:flex'"
+            x-bind:inert="! desktopSidebar && mobileLibraryOpen"
+            x-bind:aria-hidden="(! desktopSidebar && mobileLibraryOpen).toString()"
             data-studio-editor-canvas-panel
-            class="min-h-[560px] w-full min-w-0 max-w-full shrink-0 flex-col bg-slate-50 lg:min-h-0"
+            class="order-1 flex min-h-[560px] w-full min-w-0 max-w-full shrink-0 flex-col bg-slate-50 md:col-start-1 md:row-start-1 md:min-h-0"
         >
             <div class="ff-canvas-toolbar flex shrink-0 flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
                 <div class="flex min-w-0 items-start gap-3">
-                    <button
-                        type="button"
-                        x-ref="libraryOpenButton"
-                        x-cloak
-                        x-show.important="! libraryExpanded"
-                        x-on:click="toggleLibrary()"
-                        x-bind:aria-expanded="libraryExpanded"
-                        aria-controls="{{ $fieldIdPrefix }}-studio-task-catalog-panel"
-                        class="hidden h-11 shrink-0 items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3 text-xs font-bold text-blue-800 transition hover:border-blue-300 hover:bg-blue-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 lg:inline-flex"
-                        title="Task-Bibliothek öffnen"
-                    >
-                        <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="2"></rect><rect x="14" y="3" width="7" height="7" rx="2"></rect><rect x="3" y="14" width="7" height="7" rx="2"></rect><path d="M17.5 14v7M14 17.5h7"></path></svg>
-                        Bibliothek öffnen
-                    </button>
                     <div class="min-w-0">
                     <div class="flex items-center gap-2">
                         <div>
@@ -389,6 +202,20 @@
                     </div>
                 </div>
                 <div class="flex flex-wrap items-center justify-end gap-2">
+                    <button
+                        type="button"
+                        x-ref="libraryOpenButton"
+                        x-cloak
+                        x-show.important="! isLibraryVisible()"
+                        x-on:click="toggleLibrary()"
+                        x-bind:aria-expanded="isLibraryVisible()"
+                        aria-controls="{{ $fieldIdPrefix }}-studio-task-catalog-panel"
+                        class="inline-flex h-11 shrink-0 items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3 text-xs font-bold text-blue-800 transition hover:border-blue-300 hover:bg-blue-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                        title="Task-Bibliothek öffnen"
+                    >
+                        <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="2"></rect><rect x="14" y="3" width="7" height="7" rx="2"></rect><rect x="3" y="14" width="7" height="7" rx="2"></rect><path d="M17.5 14v7M14 17.5h7"></path></svg>
+                        Bibliothek öffnen
+                    </button>
                     <div class="hidden items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[10px] font-bold text-slate-600 sm:flex" aria-label="Legende der Verbindungslinien">
                         <span class="inline-flex items-center gap-1"><i class="h-0.5 w-3 rounded bg-emerald-500"></i> Erfolg</span>
                         <span class="inline-flex items-center gap-1"><i class="h-0.5 w-3 rounded bg-rose-400"></i> Fehler</span>
@@ -559,6 +386,188 @@
                 </div>
             </div>
         </section>
+
+        <aside
+            id="{{ $fieldIdPrefix }}-studio-task-catalog-panel"
+            x-trap.noscroll="! desktopSidebar && mobileLibraryOpen"
+            x-bind:inert="! isLibraryVisible()"
+            x-bind:aria-hidden="(! isLibraryVisible()).toString()"
+            data-studio-task-catalog
+            class="ff-task-drawer absolute inset-y-0 right-0 z-40 order-2 flex h-auto w-[min(22rem,100%)] min-h-0 min-w-0 max-w-full shrink-0 flex-col overflow-hidden border-l bg-white text-slate-900 md:static md:z-auto md:col-start-2 md:row-start-1 md:w-full"
+            aria-labelledby="{{ $fieldIdPrefix }}-studio-task-catalog-title"
+        >
+            <div
+                id="{{ $fieldIdPrefix }}-studio-task-library-content"
+                class="contents"
+            >
+            <div class="ff-task-library-header relative overflow-hidden border-b border-slate-800 bg-slate-950 px-4 py-4 text-white">
+                <div class="pointer-events-none absolute -right-12 -top-16 h-40 w-40 rounded-full bg-blue-500/20 blur-3xl" aria-hidden="true"></div>
+                <div class="relative flex items-start justify-between gap-3">
+                    <div class="flex min-w-0 items-start gap-3">
+                        <span class="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/10 text-blue-200 shadow-inner">
+                            <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="2"></rect><rect x="14" y="3" width="7" height="7" rx="2"></rect><rect x="3" y="14" width="7" height="7" rx="2"></rect><path d="M17.5 14v7M14 17.5h7"></path></svg>
+                        </span>
+                        <div class="min-w-0">
+                            <p class="text-[10px] font-bold uppercase tracking-[0.18em] text-blue-200">Workflow-Bausteine</p>
+                            <h2 id="{{ $fieldIdPrefix }}-studio-task-catalog-title" class="mt-1 text-lg font-bold tracking-tight text-white">Task-Bibliothek</h2>
+                        </div>
+                    </div>
+                    <div class="flex shrink-0 items-center gap-2">
+                        <span class="rounded-full border border-white/10 bg-white/10 px-2.5 py-1 font-mono text-[11px] font-bold text-white">{{ $taskDefinitions->count() }}</span>
+                        <button
+                            type="button"
+                            x-ref="libraryCollapseButton"
+                            x-on:click="toggleLibrary()"
+                            x-bind:aria-expanded="isLibraryVisible()"
+                            aria-controls="{{ $fieldIdPrefix }}-studio-task-catalog-panel"
+                            title="Task-Bibliothek einklappen"
+                            class="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/15 bg-white/10 text-blue-100 transition hover:border-blue-300/60 hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
+                        >
+                            <span class="sr-only">Task-Bibliothek einklappen</span>
+                            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m9 5 7 7-7 7"></path></svg>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="space-y-2.5 border-b border-slate-200 bg-white p-3">
+                <div class="grid gap-2 xl:grid-cols-2">
+                    <div>
+                        <label for="{{ $fieldIdPrefix }}-studio-catalog-target" class="text-[10px] font-bold uppercase tracking-wide text-slate-500">Einfügen in</label>
+                        <select id="{{ $fieldIdPrefix }}-studio-catalog-target" wire:model.live="catalogTargetStepId" class="ff-search-field mt-1.5 w-full px-3 text-xs font-semibold" @disabled(! $canEdit)>
+                            @forelse($steps as $step)
+                                <option value="{{ $step->id }}">{{ $step->name }}</option>
+                            @empty
+                                <option value="">Zuerst eine Liste anlegen</option>
+                            @endforelse
+                        </select>
+                    </div>
+                    <div class="hidden md:block">
+                        <label for="{{ $fieldIdPrefix }}-studio-catalog-group" class="text-[10px] font-bold uppercase tracking-wide text-slate-500">Kategorie</label>
+                        <select id="{{ $fieldIdPrefix }}-studio-catalog-group" wire:change="selectTaskGroup($event.target.value)" class="ff-search-field mt-1.5 w-full px-3 text-xs font-semibold">
+                            @if($searchActive)
+                                <option value="" selected>Alle Treffer ({{ $visibleTaskDefinitions->count() }})</option>
+                            @endif
+                            @foreach($taskGroups as $taskGroup)
+                                <option value="{{ $taskGroup }}" @selected(! $searchActive && $activeTaskGroup === $taskGroup)>
+                                    {{ data_get($taskGroupMeta, $taskGroup.'.short_label', $taskGroupLabels[$taskGroup] ?? $taskGroup) }} ({{ $taskGroupCounts->get($taskGroup, 0) }})
+                                </option>
+                            @endforeach
+                        </select>
+                    </div>
+                </div>
+                <div class="relative">
+                    <svg class="pointer-events-none absolute left-3 top-3 h-4 w-4 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
+                    <input type="search" wire:model.live.debounce.250ms="taskSearch" class="ff-search-field w-full py-2 pl-9 pr-10 text-xs placeholder:text-slate-400" placeholder="Task suchen …" aria-label="Tasks im Katalog suchen">
+                    @if($searchActive)
+                        <button
+                            type="button"
+                            wire:click="$set('taskSearch', '')"
+                            class="absolute right-1.5 top-1.5 inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-200 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                            aria-label="Task-Suche leeren"
+                            title="Suche leeren"
+                        >
+                            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"></path></svg>
+                        </button>
+                    @endif
+                </div>
+            </div>
+
+            <nav class="ff-task-group-rail shrink-0 overflow-x-auto overscroll-x-contain border-b border-slate-200 bg-slate-50 px-3 py-2 [scrollbar-width:none] md:hidden" aria-label="Task-Gruppen">
+                <div class="flex min-w-max items-center gap-1.5" role="group" aria-label="Bibliothek filtern">
+                    @if($searchActive)
+                        <span class="inline-flex min-h-11 items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3 text-[11px] font-bold text-blue-800">
+                            Alle Treffer
+                            <span class="rounded-md bg-white px-1.5 py-0.5 font-mono text-[10px]">{{ $visibleTaskDefinitions->count() }}</span>
+                        </span>
+                    @endif
+                    @foreach($taskGroups as $taskGroup)
+                        <button
+                            type="button"
+                            wire:click="selectTaskGroup(@js($taskGroup))"
+                            x-on:click="$el.scrollIntoView({ block: 'nearest', inline: 'center', behavior: scrollBehavior() })"
+                            aria-pressed="{{ ! $searchActive && $activeTaskGroup === $taskGroup ? 'true' : 'false' }}"
+                            class="inline-flex min-h-11 items-center gap-2 whitespace-nowrap rounded-xl border px-3 text-[11px] font-bold transition {{ ! $searchActive && $activeTaskGroup === $taskGroup ? 'border-blue-200 bg-blue-50 text-blue-800 shadow-sm' : 'border-transparent bg-white text-slate-600 hover:border-slate-200 hover:text-slate-950' }}"
+                        >
+                            {{ data_get($taskGroupMeta, $taskGroup.'.short_label', $taskGroupLabels[$taskGroup] ?? $taskGroup) }}
+                            <span class="rounded-md bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-500">{{ $taskGroupCounts->get($taskGroup, 0) }}</span>
+                        </button>
+                    @endforeach
+                </div>
+            </nav>
+
+            <div class="border-b border-slate-200 bg-white px-3 py-2" role="status" aria-live="polite">
+                @if($searchActive)
+                    <div class="flex items-center justify-between gap-2">
+                        <p class="truncate text-xs font-bold text-slate-900">Gruppenübergreifende Suche</p>
+                        <span class="shrink-0 rounded-md bg-blue-50 px-2 py-1 font-mono text-[10px] font-bold text-blue-700">{{ $visibleTaskDefinitions->count() }} Treffer</span>
+                    </div>
+                @else
+                    <div class="flex items-center justify-between gap-2">
+                        <p class="truncate text-xs font-bold text-slate-900">{{ $taskGroupLabels[$activeTaskGroup] ?? $activeTaskGroup }}</p>
+                        <span class="shrink-0 rounded-md bg-slate-100 px-2 py-1 font-mono text-[10px] font-bold text-slate-600">{{ $visibleTaskDefinitions->count() }}</span>
+                    </div>
+                    <p class="mt-0.5 truncate text-[11px] leading-4 text-slate-500" title="{{ data_get($taskGroupMeta, $activeTaskGroup.'.description', '') }}">{{ data_get($taskGroupMeta, $activeTaskGroup.'.description', '') }}</p>
+                @endif
+            </div>
+
+            <div class="ff-task-library-list min-h-0 flex-1 space-y-1.5 overflow-y-auto bg-slate-50/70 p-2">
+                @forelse($visibleTaskDefinitions as $taskDefinition)
+                    <button
+                        type="button"
+                        wire:key="{{ $fieldIdPrefix }}-task-library-{{ $taskDefinition['key'] }}"
+                        wire:click="prepareCatalogTask(@js($taskDefinition['key']))"
+                        x-on:click="if (! desktopSidebar) mobileLibraryOpen = false"
+                        x-bind:draggable="window.matchMedia('(pointer: fine)').matches && @js($canEdit)"
+                        x-on:dragstart.stop="$event.dataTransfer.setData('application/x-workflow-task-catalog', @js($taskDefinition['key'])); $event.dataTransfer.setData('text/plain', @js($taskDefinition['key'])); $event.dataTransfer.effectAllowed = 'copy'"
+                        @disabled(! $canEdit || $steps->isEmpty())
+                        data-task-library-key="{{ $taskDefinition['key'] }}"
+                        data-task-library-group="{{ $taskDefinition['library_group'] }}"
+                        class="ff-catalog-card group block min-h-[64px] w-full border bg-white p-2.5 text-left disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                        <span class="flex items-center gap-2.5">
+                            <span class="ff-catalog-icon inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-500 transition group-hover:border-blue-200 group-hover:bg-blue-100 group-hover:text-blue-700">
+                                @switch($taskDefinition['kind'])
+                                    @case('browser')
+                                        <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"></rect><path d="M3 9h18M7 6.5h.01M10 6.5h.01"></path></svg>
+                                        @break
+                                    @case('input')
+                                        <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="3"></rect><path d="M7 10h.01M11 10h.01M15 10h.01M7 14h7"></path></svg>
+                                        @break
+                                    @case('wait')
+                                        <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>
+                                        @break
+                                    @case('workflow')
+                                        <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="4" width="6" height="5" rx="1"></rect><rect x="15" y="15" width="6" height="5" rx="1"></rect><path d="M9 6.5h3a5 5 0 0 1 5 5V15"></path></svg>
+                                        @break
+                                    @default
+                                        <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h10"></path><circle cx="18" cy="17" r="2"></circle></svg>
+                                @endswitch
+                            </span>
+                            <span class="min-w-0 flex-1">
+                                <span class="flex items-center gap-2">
+                                    <span class="min-w-0 flex-1 truncate text-[13px] font-bold text-slate-950">{{ $taskDefinition['label'] }}</span>
+                                    @if($searchActive)
+                                        <span class="shrink-0 rounded-md bg-slate-100 px-1.5 py-0.5 text-[9px] font-bold text-slate-500">{{ data_get($taskGroupMeta, $taskDefinition['library_group'].'.short_label', $taskDefinition['library_group']) }}</span>
+                                    @endif
+                                </span>
+                                <span class="mt-0.5 block truncate text-[11px] leading-4 text-slate-500" title="{{ $taskDefinition['description'] }}">{{ $taskDefinition['description'] }}</span>
+                            </span>
+                            <span class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-blue-200 bg-blue-50 text-lg font-medium leading-none text-blue-700 transition group-hover:border-blue-600 group-hover:bg-blue-600 group-hover:text-white" aria-hidden="true">+</span>
+                        </span>
+                    </button>
+                @empty
+                    <div class="rounded-2xl border border-dashed border-slate-300 bg-white px-5 py-10 text-center">
+                        <span class="mx-auto inline-flex h-11 w-11 items-center justify-center rounded-full bg-slate-100 text-slate-400">
+                            <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
+                        </span>
+                        <p class="mt-3 text-xs font-bold text-slate-700">Keine passenden Tasks</p>
+                        <p class="mt-1 text-[11px] leading-4 text-slate-500">Suchbegriff anpassen oder eine andere Gruppe wählen.</p>
+                    </div>
+                @endforelse
+            </div>
+            </div>
+        </aside>
     </div>
     @if($modalOnly)
             </div>

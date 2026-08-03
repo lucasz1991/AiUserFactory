@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Livewire\Admin\Config\PersonAccounts;
 use App\Models\Person;
 use App\Models\PersonEmailAccount;
 use App\Models\User;
@@ -57,7 +58,7 @@ class PersonProfilePageTest extends TestCase
 
         $this->actingAs($this->admin());
 
-        Livewire::test(\App\Livewire\Admin\Config\PersonAccounts::class, ['personId' => $person->id])
+        Livewire::test(PersonAccounts::class, ['personId' => $person->id])
             ->assertSee('E-Mail-Account')
             ->assertSee('Instagram')
             ->assertSee('Facebook')
@@ -75,7 +76,7 @@ class PersonProfilePageTest extends TestCase
         $person = $this->makePerson();
         $this->actingAs($this->admin());
 
-        Livewire::test(\App\Livewire\Admin\Config\PersonAccounts::class, ['personId' => $person->id])
+        Livewire::test(PersonAccounts::class, ['personId' => $person->id])
             ->call('selectType', 'x')
             ->call('editAccount', 'x')
             ->assertSet('showForm', true)
