@@ -1,7 +1,7 @@
-@props(['class' => null, 'animated' => false])
+@props(['class' => null, 'animated' => false, 'mode' => 'always'])
 
 @if ($animated)
-    <x-branding.animated-mark :class="$class" mode="hover" />
+    <x-branding.animated-mark :class="$class" :mode="$mode" />
 @else
     <img
         class="{{ $class }}"

@@ -38,7 +38,23 @@
             initialNode: @js($initialRouteNode),
         }),
         mobilePanel: 'canvas',
+        libraryExpanded: (() => {
+            try {
+                return window.localStorage.getItem('followflow.workflow-library-expanded') !== 'false';
+            } catch (error) {
+                return true;
+            }
+        })(),
         focusedTask: @js($initialFocusedTask),
+        toggleLibrary() {
+            this.libraryExpanded = ! this.libraryExpanded;
+            try {
+                window.localStorage.setItem('followflow.workflow-library-expanded', String(this.libraryExpanded));
+            } catch (error) {
+                // Die Sidebar bleibt auch ohne verfuegbaren Browser-Speicher bedienbar.
+            }
+            this.$nextTick(() => this.queueRouteRefresh());
+        },
         scrollBehavior() {
             return window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
         },
@@ -134,7 +150,11 @@
         </button>
     </nav>
 
-    <div data-studio-task-layout class="ff-canvas-shell grid min-h-full w-full min-w-0 grid-cols-[minmax(0,1fr)] overflow-visible xl:h-full xl:min-h-0 xl:grid-cols-[350px_minmax(0,1fr)] xl:overflow-hidden">
+    <div
+        data-studio-task-layout
+        x-bind:class="libraryExpanded ? 'xl:grid-cols-[350px_minmax(0,1fr)]' : 'xl:grid-cols-[72px_minmax(0,1fr)]'"
+        class="ff-canvas-shell grid min-h-full w-full min-w-0 grid-cols-[minmax(0,1fr)] overflow-visible transition-[grid-template-columns] duration-200 xl:h-full xl:min-h-0 xl:overflow-hidden motion-reduce:transition-none"
+    >
         <aside
             id="{{ $fieldIdPrefix }}-studio-task-catalog-panel"
             x-cloak
@@ -143,6 +163,27 @@
             class="ff-task-drawer h-[calc(100dvh-10rem)] w-full min-h-[480px] min-w-0 max-w-full shrink-0 flex-col border-b bg-white text-slate-900 xl:h-auto xl:min-h-0 xl:border-b-0 xl:border-r"
             aria-labelledby="{{ $fieldIdPrefix }}-studio-task-catalog-title"
         >
+            <div x-show="! libraryExpanded" class="hidden h-full flex-col items-center bg-slate-950 px-3 py-4 text-white xl:flex">
+                <button
+                    type="button"
+                    x-on:click="toggleLibrary()"
+                    x-bind:aria-expanded="libraryExpanded"
+                    aria-controls="{{ $fieldIdPrefix }}-studio-task-library-content"
+                    title="Task-Bibliothek ausklappen"
+                    class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/15 bg-white/10 text-blue-100 transition hover:border-blue-300/60 hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
+                >
+                    <span class="sr-only">Task-Bibliothek ausklappen</span>
+                    <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m9 5 7 7-7 7"></path></svg>
+                </button>
+                <span class="mt-4 rounded-full border border-white/10 bg-white/10 px-2 py-1 font-mono text-[10px] font-bold">{{ $taskDefinitions->count() }}</span>
+                <span class="mt-4 [writing-mode:vertical-rl] rotate-180 text-[10px] font-black uppercase tracking-[0.18em] text-slate-300">Task-Bibliothek</span>
+            </div>
+
+            <div
+                id="{{ $fieldIdPrefix }}-studio-task-library-content"
+                x-show="libraryExpanded || mobilePanel === 'catalog'"
+                class="contents"
+            >
             <div class="ff-task-library-header relative overflow-hidden border-b border-slate-800 bg-slate-950 px-4 py-5 text-white">
                 <div class="pointer-events-none absolute -right-12 -top-16 h-40 w-40 rounded-full bg-blue-500/20 blur-3xl" aria-hidden="true"></div>
                 <div class="relative flex items-start justify-between gap-3">
@@ -155,7 +196,20 @@
                             <h2 id="{{ $fieldIdPrefix }}-studio-task-catalog-title" class="mt-1 text-lg font-bold tracking-tight text-white">Task-Bibliothek</h2>
                         </div>
                     </div>
-                    <span class="rounded-full border border-white/10 bg-white/10 px-2.5 py-1 font-mono text-[11px] font-bold text-white">{{ $taskDefinitions->count() }}</span>
+                    <div class="flex shrink-0 items-center gap-2">
+                        <span class="rounded-full border border-white/10 bg-white/10 px-2.5 py-1 font-mono text-[11px] font-bold text-white">{{ $taskDefinitions->count() }}</span>
+                        <button
+                            type="button"
+                            x-on:click="toggleLibrary()"
+                            x-bind:aria-expanded="libraryExpanded"
+                            aria-controls="{{ $fieldIdPrefix }}-studio-task-library-content"
+                            title="Task-Bibliothek einklappen"
+                            class="hidden h-9 w-9 items-center justify-center rounded-xl border border-white/15 bg-white/10 text-blue-100 transition hover:border-blue-300/60 hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 xl:inline-flex"
+                        >
+                            <span class="sr-only">Task-Bibliothek einklappen</span>
+                            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m15 19-7-7 7-7"></path></svg>
+                        </button>
+                    </div>
                 </div>
                 <p class="relative mt-3 max-w-[30rem] text-xs leading-5 text-slate-300">Task auswählen oder am Desktop direkt in eine Liste ziehen. Die Einstellungen öffnen sich vor dem Einsetzen.</p>
             </div>
@@ -263,6 +317,7 @@
                         <p class="mt-1 text-[11px] leading-4 text-slate-500">Suchbegriff anpassen oder eine andere Gruppe wählen.</p>
                     </div>
                 @endforelse
+            </div>
             </div>
         </aside>
 

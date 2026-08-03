@@ -386,6 +386,48 @@ def svg_wordmark_group(font, text: str, size: float, x: float, baseline: float,
     return group, width * scale
 
 
+def svg_wordmark(dark: bool = False) -> str:
+    """Nur die Schrift, ohne Zeichen — fuer Flaechen, auf denen das Zeichen
+    bereits gross steht und ein zweites Badge doppelt waere."""
+    font = load_static_bold()
+    word_size = 46.0
+    baseline = 46.0
+    pad = 2.0
+    prefix = "ffwd" if dark else "ffw"
+
+    follow, w_follow = svg_wordmark_group(
+        font, "Follow", word_size, pad, baseline,
+        "#FFFFFF" if dark else hexc(INK), tracking_em=-0.012,
+    )
+    flow, w_flow = svg_wordmark_group(
+        font, "Flow", word_size, pad + w_follow, baseline,
+        f"url(#{prefix}-word)", tracking_em=-0.012,
+    )
+    tag, w_tag = svg_wordmark_group(
+        font, "AI USER FACTORY", 12.0, pad + 1.5, baseline + 20.0,
+        "#FFFFFF" if dark else hexc(INK_SOFT), tracking_em=0.30,
+        opacity=0.7 if dark else 1.0,
+    )
+
+    width = math.ceil(max(pad + w_follow + w_flow, pad + w_tag) + pad + 2)
+    height = 72
+    gradient = (
+        f'<linearGradient id="{prefix}-word" x1="{pad + w_follow:.1f}" y1="{baseline - word_size:.1f}" '
+        f'x2="{pad + w_follow + w_flow:.1f}" y2="{baseline:.1f}" gradientUnits="userSpaceOnUse">'
+        f'<stop stop-color="{hexc(WORD_ACCENT_A) if not dark else "#C4B5FD"}"/>'
+        f'<stop offset="1" stop-color="{hexc(WORD_ACCENT_B) if not dark else "#F0ABFC"}"/>'
+        f"</linearGradient>"
+    )
+
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" '
+        f'width="{width}" height="{height}" role="img" aria-labelledby="{prefix}-t">'
+        f'<title id="{prefix}-t">FollowFlow — AI User Factory</title>'
+        f"<defs>{gradient}</defs>" + follow + flow + tag +
+        "</svg>"
+    )
+
+
 def svg_logo(dark: bool = False) -> str:
     """Lockup: Zeichen + Wortmarke + Zusatzzeile."""
     font = load_static_bold()
@@ -775,6 +817,8 @@ def main() -> int:
     write(BRAND / "followflow-mark-plain.svg", svg_mark(badge=False, prefix="ffp"))
     write(BRAND / "followflow-logo.svg", svg_logo(dark=False))
     write(BRAND / "followflow-logo-light.svg", svg_logo(dark=True))
+    write(BRAND / "followflow-wordmark.svg", svg_wordmark(dark=False))
+    write(BRAND / "followflow-wordmark-light.svg", svg_wordmark(dark=True))
     write(PUBLIC / "favicon.svg", svg_mark(spec=COMPACT, prefix="fav"))
 
     print("PNG")

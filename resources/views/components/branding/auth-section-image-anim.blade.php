@@ -17,8 +17,17 @@
             mode="always"
             class="h-28 w-28 rounded-[1.6rem] shadow-2xl shadow-black/40 ring-1 ring-white/25"
         />
-        <h1 class="mt-8 text-4xl font-bold tracking-tight">FollowFlow</h1>
-        <p class="mt-2.5 text-13 font-semibold uppercase tracking-[0.35em] text-white/70">AI User Factory</p>
+        {{-- Das echte helle Schriftlogo, nicht gesetzter Text: das Zeichen
+             steht bereits gross darueber, deshalb die Fassung ohne Badge. --}}
+        <h1 class="mt-9">
+            <img
+                src="{{ asset('/site-images/brand/followflow-wordmark-light.svg') }}"
+                alt="FollowFlow — AI User Factory"
+                class="h-20 w-auto"
+                width="248"
+                height="72"
+            >
+        </h1>
     </div>
 
     <style>

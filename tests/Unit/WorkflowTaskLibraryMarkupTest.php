@@ -39,7 +39,12 @@ class WorkflowTaskLibraryMarkupTest extends TestCase
         $source = file_get_contents($root.'/resources/views/livewire/admin/network/partials/workflow-definition-editor.blade.php');
 
         $this->assertStringContainsString('grid-cols-[minmax(0,1fr)]', $source);
-        $this->assertStringContainsString('xl:grid-cols-[350px_minmax(0,1fr)]', $source);
+        $this->assertStringContainsString("libraryExpanded ? 'xl:grid-cols-[350px_minmax(0,1fr)]' : 'xl:grid-cols-[72px_minmax(0,1fr)]'", $source);
+        $this->assertStringContainsString("window.localStorage.getItem('followflow.workflow-library-expanded')", $source);
+        $this->assertStringContainsString('x-on:click="toggleLibrary()"', $source);
+        $this->assertStringContainsString('Task-Bibliothek einklappen', $source);
+        $this->assertStringContainsString('Task-Bibliothek ausklappen', $source);
+        $this->assertStringContainsString('aria-controls="{{ $fieldIdPrefix }}-studio-task-library-content"', $source);
         $this->assertStringContainsString('id="{{ $fieldIdPrefix }}-studio-task-catalog-panel"', $source);
         $this->assertStringContainsString('w-full min-h-[480px] min-w-0 max-w-full', $source);
         $this->assertStringContainsString('w-full min-w-0 max-w-full shrink-0 flex-col', $source);
