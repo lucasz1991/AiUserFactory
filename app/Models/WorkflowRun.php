@@ -14,6 +14,7 @@ class WorkflowRun extends Model
     protected $fillable = [
         'run_uuid',
         'workflow_id',
+        'person_id',
         'workflow_copilot_session_id',
         'workflow_studio_session_id',
         'workflow_revision',
@@ -42,6 +43,15 @@ class WorkflowRun extends Model
     public function workflow(): BelongsTo
     {
         return $this->belongsTo(Workflow::class);
+    }
+
+    /**
+     * Indizierter Spiegel von `context_json['person_id']`, gesetzt beim Start in
+     * `WorkflowExecutionService::start()`.
+     */
+    public function person(): BelongsTo
+    {
+        return $this->belongsTo(Person::class);
     }
 
     public function currentStep(): BelongsTo

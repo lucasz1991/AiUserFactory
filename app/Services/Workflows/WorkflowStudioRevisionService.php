@@ -126,11 +126,14 @@ class WorkflowStudioRevisionService
                 'copilot_verification_status' => 'unverified',
                 'copilot_verified_at' => null,
             ])->save();
-            $lockedSession->forceFill([
+            $sessionAttributes = [
                 'current_revision' => $revisionNumber,
-                'status' => 'draft',
                 'last_activity_at' => now(),
-            ])->save();
+            ];
+            if (! $lockedSession->finished_at) {
+                $sessionAttributes['status'] = 'draft';
+            }
+            $lockedSession->forceFill($sessionAttributes)->save();
 
             app(WorkflowStudioSessionService::class)->appendEvent(
                 $lockedSession,
@@ -192,6 +195,7 @@ class WorkflowStudioRevisionService
         int $expectedRevision,
         string $reason,
         string $actor = 'user',
+        ?Closure $guard = null,
     ): WorkflowStudioRevision {
         $target = $targetRevision instanceof WorkflowStudioRevision
             ? $targetRevision
@@ -210,7 +214,10 @@ class WorkflowStudioRevisionService
             $session,
             $expectedRevision,
             $reason,
-            fn (Workflow $workflow) => $this->restoreSnapshot($workflow, $snapshot),
+            function (Workflow $workflow) use ($snapshot, $guard): void {
+                $guard?->__invoke($workflow);
+                $this->restoreSnapshot($workflow, $snapshot);
+            },
             $actor,
         );
     }

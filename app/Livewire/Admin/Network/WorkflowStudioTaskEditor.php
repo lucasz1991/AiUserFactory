@@ -3,8 +3,10 @@
 namespace App\Livewire\Admin\Network;
 
 use App\Models\Workflow;
+use App\Models\WorkflowStep;
 use App\Models\WorkflowStudioSession;
 use App\Services\Workflows\WorkflowRouteMapPresenter;
+use App\Services\Workflows\WorkflowStudioDefinitionMutationPolicy;
 use App\Services\Workflows\WorkflowStudioRevisionService;
 use App\Services\Workflows\WorkflowTaskCatalog;
 use Closure;
@@ -58,6 +60,39 @@ class WorkflowStudioTaskEditor extends WorkflowManager
         $this->synchronizeTaskEditAccess();
     }
 
+    /**
+     * Verhindert, dass der gehostete Child-Editor den Manager-Request selbst als
+     * zweite Workbench interpretiert. Der Parent schaltet die Surface; dieses
+     * Child übernimmt danach nur Auswahl bzw. Taskdialog.
+     */
+    public function focusDefinitionEditor(
+        int $stepId = 0,
+        string $taskKey = '',
+        bool $openTask = false,
+        bool $openLibrary = true,
+        ?int $studioSessionId = null,
+        ?string $source = null,
+    ): void {
+        if ($studioSessionId !== null && $studioSessionId !== $this->studioSessionId) {
+            return;
+        }
+
+        if ($stepId <= 0) {
+            return;
+        }
+
+        $taskKey = trim($taskKey);
+        if ($taskKey !== '') {
+            $this->selectOverviewTask($stepId, $taskKey);
+        } else {
+            $this->selectCatalogTarget($stepId);
+        }
+
+        if ($openTask && $taskKey !== '') {
+            $this->openFromStudio($stepId, $taskKey, $studioSessionId);
+        }
+    }
+
     #[On('open-workflow-studio-definition-drawer')]
     public function openDefinitionDrawer(?int $studioSessionId = null, int $stepId = 0, string $taskKey = ''): void
     {
@@ -102,6 +137,21 @@ class WorkflowStudioTaskEditor extends WorkflowManager
         $this->resetValidation();
     }
 
+    #[On('workflow-definition-open-add-step')]
+    public function openAddStepFromWorkbench(?int $studioSessionId = null): void
+    {
+        if ($studioSessionId !== null && $studioSessionId !== $this->studioSessionId) {
+            return;
+        }
+
+        if (! $this->ensureDefinitionEditable()) {
+            return;
+        }
+
+        $this->resetValidation();
+        $this->showAddStepModal = true;
+    }
+
     public function requestPauseForTaskEdit(): void
     {
         if (! $this->showEditTaskModal) {
@@ -113,6 +163,12 @@ class WorkflowStudioTaskEditor extends WorkflowManager
         $this->synchronizeTaskEditAccess($session, $activeRun);
 
         if (! $this->taskEditReadOnly) {
+            return;
+        }
+
+        if (! $this->taskEditCanRequestPause) {
+            $this->addError('studioBuilder', $this->taskEditLockMessage ?: 'Die Workflow-Definition ist aktuell schreibgeschuetzt.');
+
             return;
         }
 
@@ -162,6 +218,21 @@ class WorkflowStudioTaskEditor extends WorkflowManager
         }
     }
 
+    #[On('workflow-definition-access-refresh-requested')]
+    public function refreshDefinitionAccess(?int $studioSessionId = null): void
+    {
+        if ($studioSessionId !== null && $studioSessionId !== $this->studioSessionId) {
+            return;
+        }
+
+        $session = $this->studioSession();
+        $this->synchronizeTaskEditAccess($session, $session->activeRun);
+
+        if (! $this->taskEditReadOnly) {
+            $this->resetErrorBag('studioBuilder');
+        }
+    }
+
     public function prepareCatalogTask(string $taskKey): void
     {
         if (! $this->ensureDefinitionEditable()) {
@@ -199,6 +270,16 @@ class WorkflowStudioTaskEditor extends WorkflowManager
         $this->resetValidation();
     }
 
+    public function saveWorkflow(): void
+    {
+        $this->addError('studioBuilder', 'Workflow-Einstellungen werden ausschliesslich im Uebersichtsmodal gespeichert.');
+    }
+
+    public function deleteWorkflow(): void
+    {
+        $this->addError('studioBuilder', 'Ein Workflow kann nicht aus einer laufenden Studio-Workbench geloescht werden.');
+    }
+
     public function addStep(): void
     {
         if ($this->mutateDefinition('Neue Liste im Workflow Studio angelegt.', fn () => parent::addStep())) {
@@ -207,6 +288,20 @@ class WorkflowStudioTaskEditor extends WorkflowManager
                 $this->catalogTargetStepId = (string) $newStep->getKey();
             }
             $this->notifyDefinitionUpdated(message: 'Liste wurde angelegt.');
+        }
+    }
+
+    public function importWorkflowSteps(): void
+    {
+        if ($this->mutateDefinition('Listen aus einem Workflow Studio importiert.', fn () => parent::importWorkflowSteps())) {
+            $this->notifyDefinitionUpdated(message: 'Workflow-Listen wurden importiert.');
+        }
+    }
+
+    public function addActionStep(string $actionId): void
+    {
+        if ($this->mutateDefinition('Aktion aus der Bibliothek im Workflow Studio eingefuegt.', fn () => parent::addActionStep($actionId))) {
+            $this->notifyDefinitionUpdated(message: 'Aktion wurde eingefuegt.');
         }
     }
 
@@ -342,7 +437,11 @@ class WorkflowStudioTaskEditor extends WorkflowManager
             $session,
             $expectedRevision,
             'Task '.$editingTaskKey.' im Workflow Studio bearbeitet.',
-            function () use ($editingTaskStepId, $editingTaskKey, $validated, $mailboxSourceOverride): void {
+            function (Workflow $workflow) use ($editingTaskStepId, $editingTaskKey, $validated, $mailboxSourceOverride): void {
+                app(WorkflowStudioDefinitionMutationPolicy::class)->assertCanMutate(
+                    $workflow,
+                    $this->studioSessionId,
+                );
                 $step = $this->stepForSelectedWorkflow($editingTaskStepId)?->fresh();
 
                 if (! $step) {
@@ -592,7 +691,13 @@ class WorkflowStudioTaskEditor extends WorkflowManager
                 WorkflowStudioSession::query()->findOrFail($this->studioSessionId),
                 (int) $this->selectedWorkflow()?->copilot_revision,
                 $reason,
-                fn () => $mutation(),
+                function (Workflow $workflow) use ($mutation): void {
+                    app(WorkflowStudioDefinitionMutationPolicy::class)->assertCanMutate(
+                        $workflow,
+                        $this->studioSessionId,
+                    );
+                    $mutation();
+                },
                 'user:'.auth()->id(),
             );
 
@@ -629,16 +734,14 @@ class WorkflowStudioTaskEditor extends WorkflowManager
         ?WorkflowStudioSession $session = null,
     ): bool {
         $session ??= $this->studioSession();
+        $workflow = $this->selectedWorkflow();
 
-        if ($session->mode === 'autonomous') {
+        if (! $workflow) {
             return false;
         }
 
-        $activeRun ??= $session->activeRun;
-
-        return ! $activeRun || in_array((string) $activeRun->status, [
-            'paused', 'completed', 'failed', 'cancelled', 'timed_out', 'lost',
-        ], true);
+        return app(WorkflowStudioDefinitionMutationPolicy::class)
+            ->inspect($workflow, $session)['can_edit'];
     }
 
     private function studioSession(): WorkflowStudioSession
@@ -648,14 +751,34 @@ class WorkflowStudioTaskEditor extends WorkflowManager
             ->findOrFail($this->studioSessionId);
     }
 
+    /**
+     * Der Workbench-Editor bleibt bei aktiver Sperre als echte Leseansicht
+     * bedienbar. Mutationen laufen separat durch die fail-closed Policy.
+     */
+    protected function stepForSelectedWorkflow(int $stepId): ?WorkflowStep
+    {
+        return WorkflowStep::query()
+            ->where('workflow_id', $this->selectedWorkflowId)
+            ->whereKey($stepId)
+            ->first();
+    }
+
     private function synchronizeTaskEditAccess(
         ?WorkflowStudioSession $session = null,
         mixed $activeRun = null,
     ): void {
         $session ??= $this->studioSession();
         $activeRun ??= $session->activeRun;
+        $workflow = $this->selectedWorkflow();
+        $policy = $workflow
+            ? app(WorkflowStudioDefinitionMutationPolicy::class)->inspect($workflow, $session)
+            : [
+                'can_edit' => false,
+                'can_pause_for_edit' => false,
+                'message' => 'Der Workflow wurde nicht gefunden.',
+            ];
         $this->taskEditRunStatus = (string) ($activeRun?->status ?? 'idle');
-        $this->taskEditReadOnly = ! $this->definitionIsEditable($activeRun, $session);
+        $this->taskEditReadOnly = ! $policy['can_edit'];
 
         if (! $this->taskEditReadOnly) {
             $this->taskEditCanRequestPause = false;
@@ -665,18 +788,18 @@ class WorkflowStudioTaskEditor extends WorkflowManager
             return;
         }
 
-        if ($session->mode === 'autonomous') {
+        if (! $policy['can_pause_for_edit']) {
             $this->taskEditCanRequestPause = false;
             $this->taskEditPauseRequested = false;
-            $this->taskEditLockMessage = 'Autonome Läufe sind schreibgeschützt und können hier nicht bearbeitet werden.';
+            $this->taskEditLockMessage = $policy['message'];
 
             return;
         }
 
-        $this->taskEditCanRequestPause = (bool) $activeRun;
+        $this->taskEditCanRequestPause = true;
         $this->taskEditLockMessage = $this->taskEditPauseRequested
             ? 'Pause ist angefordert. Die Bearbeitung wird nach dem sicheren Haltepunkt freigeschaltet.'
-            : 'Der Lauf ist aktiv. Pausiere ihn am sicheren Haltepunkt, um diese Task zu bearbeiten.';
+            : $policy['message'];
     }
 
     private function notifyDefinitionUpdated(?int $stepId = null, ?string $taskKey = null, string $message = 'Workflow wurde aktualisiert.'): void

@@ -76,11 +76,28 @@
     };
     $quickPreviewDurationLabel = $quickPreviewRun ? $formatRunDuration($quickPreviewRun) : null;
     $quickPreviewReturnLabel = $quickPreviewRun ? $workflowReturnLabel($quickPreviewRun) : null;
+    $workbenchStatusLabel = match ($workbenchRunStatus) {
+        'queued' => 'Startet',
+        'running' => 'Läuft',
+        'waiting' => 'Wartet',
+        'paused' => 'Pausiert',
+        'stop_requested' => 'Wird gestoppt',
+        'completed' => 'Abgeschlossen',
+        'failed' => 'Fehlgeschlagen',
+        'cancelled' => 'Gestoppt',
+        'timed_out' => 'Zeitüberschreitung',
+        'lost', 'unreachable' => 'Nicht erreichbar',
+        default => 'Bereit',
+    };
+    $managerWorkbenchPollEnabled = $workbenchSurface === 'definition';
+    $managerWorkbenchPollSeconds = $workbenchPauseRequested || in_array($workbenchRunStatus, ['queued', 'running', 'waiting', 'stop_requested', 'unreachable'], true)
+        ? 2
+        : 15;
 @endphp
 <div
     class="workflow-experience space-y-5"
     wire:loading.class="opacity-60 pointer-events-none"
-    wire:target.except="taskSearch,selectTaskGroup,catalogTargetStepId"
+    wire:target.except="taskSearch,selectTaskGroup,catalogTargetStepId,refreshWorkbenchContext"
     x-data="{
         taskInsertTarget: null,
         armTaskInsert(stepId, stepName) {
@@ -100,8 +117,79 @@
             this.taskInsertTarget = null;
             $wire.prepareTaskFromCatalog(target.stepId, taskKey, null);
         },
+        workbenchOpen: $wire.entangle('workbenchOpen').live,
+        workbenchSurface: $wire.entangle('workbenchSurface').live,
+        workbenchTrigger: null,
+        workbenchCopilotPinned: false,
+        rememberWorkbenchTrigger(element = null) {
+            const requested = element || document.activeElement;
+            const menuTrigger = requested?.closest?.('.ff-menu')
+                ?.parentElement
+                ?.querySelector(':scope > button[aria-expanded]');
+
+            this.workbenchTrigger = menuTrigger || requested;
+        },
+        elementIsVisible(element) {
+            return element instanceof HTMLElement
+                && element.getClientRects().length > 0
+                && window.getComputedStyle(element).visibility !== 'hidden';
+        },
+        handleWorkbenchEscape(event) {
+            if (! this.workbenchOpen || event.defaultPrevented) return;
+
+            const shell = this.$refs.workflowWorkbench;
+            if (! shell) return;
+
+            const childDialog = Array.from(shell.querySelectorAll('.jetstream-modal, [role="dialog"][aria-modal="true"]'))
+                .reverse()
+                .find((dialog) => dialog !== shell && this.elementIsVisible(dialog));
+            const openMenu = Array.from(shell.querySelectorAll('.ff-menu'))
+                .find((menu) => this.elementIsVisible(menu));
+
+            // Kinddialoge und Kartenmenues besitzen eigene Escape-Handler. Die
+            // Workbench darf denselben Tastendruck nicht ebenfalls auswerten.
+            if (childDialog || openMenu) return;
+
+            const mobileLibrary = shell.querySelector('[data-workflow-mobile-library][data-open="true"]');
+            if (mobileLibrary && this.elementIsVisible(mobileLibrary)) {
+                event.preventDefault();
+                event.stopImmediatePropagation();
+                window.dispatchEvent(new CustomEvent('workflow-library-close-requested'));
+                return;
+            }
+
+            event.preventDefault();
+            $wire.closeWorkflowWorkbench();
+        },
+        syncWorkbenchCopilot() {
+            const shouldPin = this.workbenchOpen && this.workbenchSurface === 'test';
+            if (shouldPin === this.workbenchCopilotPinned) return;
+
+            this.workbenchCopilotPinned = shouldPin;
+            this.$dispatch(shouldPin ? 'workflow-studio-pin-copilot' : 'workflow-studio-unpin-copilot');
+        },
+        destroy() {
+            if (this.workbenchCopilotPinned) {
+                this.$dispatch('workflow-studio-unpin-copilot');
+            }
+        },
     }"
-    x-init="$wire.$watch('showTaskPanel', open => { if (! open) clearTaskInsert() })"
+    x-init="
+        $wire.$watch('showTaskPanel', open => { if (! open) clearTaskInsert() });
+        $watch('workbenchOpen', open => {
+            syncWorkbenchCopilot();
+            if (open) {
+                $nextTick(() => $refs.workbenchClose?.focus({ preventScroll: true }));
+            } else {
+                $nextTick(() => {
+                    const fallback = document.querySelector('[data-workflow-edit-cta]');
+                    const target = elementIsVisible(workbenchTrigger) ? workbenchTrigger : fallback;
+                    target?.focus({ preventScroll: true });
+                });
+            }
+        });
+        $watch('workbenchSurface', () => syncWorkbenchCopilot());
+    "
     data-workflow-manager-root
     data-workflow-id="{{ $selectedWorkflow?->id ?? '' }}"
     x-on:assistant-open-workflow-improvement.window="
@@ -119,6 +207,7 @@
             $wire.openRunPreviewFromAssistant(Number(detail.run_id || 0), Number(detail.session_id || 0));
         }
     "
+    x-on:keydown.escape.window="handleWorkbenchEscape($event)"
 >
     <section class="ff-command-surface overflow-visible px-4 py-5 sm:px-6 sm:py-6" aria-labelledby="workflow-manager-title">
         <div class="relative z-10 flex flex-wrap items-start justify-between gap-5">
@@ -147,17 +236,17 @@
                 <div class="ml-auto flex max-w-full flex-col items-end gap-3">
                     <div class="flex flex-wrap justify-end gap-2">
                         <div class="relative" x-data="{ open: false }" x-on:keydown.escape.window="open = false">
-                            <button type="button" x-on:click="open = ! open" x-bind:aria-expanded="open" class="ff-action-trigger ff-action-trigger--primary inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold">
+                            <button type="button" x-on:click="rememberWorkbenchTrigger($el); open = ! open" x-bind:aria-expanded="open" class="ff-action-trigger ff-action-trigger--primary inline-flex min-h-11 items-center gap-2 px-4 py-2 text-sm font-semibold">
                                 <span class="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-white/10" aria-hidden="true">▶</span>
                                 Testen
                                 <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" /></svg>
                             </button>
                             <div x-cloak x-show="open" x-transition.origin.top.right x-on:click.outside="open = false" class="ff-menu absolute right-0 z-50 mt-2 w-72 p-1.5">
-                                <button type="button" wire:click="openTestWorkbench('interactive')" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-slate-900 hover:bg-slate-100">
+                                <button type="button" wire:click="openTestWorkbench('interactive')" x-on:click="rememberWorkbenchTrigger($el); open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-slate-900 hover:bg-slate-100">
                                     Eine Task nach der anderen
                                     <span class="mt-0.5 block text-xs font-medium text-slate-500">Auswählen, ausführen, prüfen und direkt bearbeiten</span>
                                 </button>
-                                <button type="button" wire:click="openTestWorkbench('autonomous')" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-cyan-800 hover:bg-cyan-50">
+                                <button type="button" wire:click="openTestWorkbench('autonomous')" x-on:click="rememberWorkbenchTrigger($el); open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-cyan-800 hover:bg-cyan-50">
                                     Autonom optimieren
                                     <span class="mt-0.5 block text-xs font-medium text-cyan-600">Copilot plant, testet und repariert exklusiv</span>
                                 </button>
@@ -165,7 +254,7 @@
                                     Optimierungslaeufe anzeigen
                                     <span class="mt-0.5 block text-xs font-medium text-cyan-600">Kosten, Tests, Logs und Daten</span>
                                 </button>
-                                <button type="button" @if($quickPreviewRun) wire:click="openTestWorkbench('{{ $activeCopilotSession ? 'autonomous' : 'interactive' }}', {{ $quickPreviewRun->id }})" @endif x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-indigo-700 hover:bg-indigo-50 {{ $quickPreviewRun ? '' : 'pointer-events-none opacity-40' }}">
+                                <button type="button" @if($quickPreviewRun) wire:click="openTestWorkbench('{{ $activeCopilotSession ? 'autonomous' : 'interactive' }}', {{ $quickPreviewRun->id }})" @endif x-on:click="rememberWorkbenchTrigger($el); open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-indigo-700 hover:bg-indigo-50 {{ $quickPreviewRun ? '' : 'pointer-events-none opacity-40' }}">
                                     {{ $quickPreviewRun && in_array($quickPreviewRun->status, ['queued', 'running', 'waiting'], true) ? 'Laufenden Test öffnen' : 'Letzten Test öffnen' }}
                                     @if($quickPreviewDurationLabel)
                                         <span class="mt-0.5 block text-xs font-medium text-indigo-500">Dauer: {{ $quickPreviewDurationLabel }}</span>
@@ -182,13 +271,14 @@
                         </div>
 
                         <div class="relative" x-data="{ open: false }" x-on:keydown.escape.window="open = false">
-                            <button type="button" x-on:click="open = ! open" x-bind:aria-expanded="open" class="ff-action-trigger inline-flex items-center gap-2 px-3 py-2 text-sm font-semibold">
+                            <button type="button" x-on:click="rememberWorkbenchTrigger($el); open = ! open" x-bind:aria-expanded="open" class="ff-action-trigger inline-flex min-h-11 items-center gap-2 px-3 py-2 text-sm font-semibold">
                                 Bearbeiten
                                 <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" /></svg>
                             </button>
                             <div x-cloak x-show="open" x-transition.origin.top.right x-on:click.outside="open = false" class="ff-menu absolute right-0 z-50 mt-2 w-64 p-1.5">
+                                <button type="button" wire:click="openDefinitionWorkbench" x-on:click="rememberWorkbenchTrigger($el); open = false" class="block min-h-11 w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-blue-800 hover:bg-blue-50">Workflow im Vollbild bearbeiten</button>
                                 <button type="button" wire:click="$set('showWorkflowModal', true)" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-100">Workflow-Einstellungen</button>
-                                <button type="button" wire:click="$set('showAddStepModal', true)" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-100">Liste hinzufügen</button>
+                                <button type="button" wire:click="openDefinitionWorkbench('add-step')" x-on:click="rememberWorkbenchTrigger($el); open = false" class="block min-h-11 w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-100">Liste hinzufügen</button>
                                 <button type="button" wire:click="$set('showActionLibraryModal', true)" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-amber-700 hover:bg-amber-50">Aktionsbibliothek</button>
                             </div>
                         </div>
@@ -259,16 +349,50 @@
             </div>
         @endif
 
-        <section class="min-h-[70dvh] overflow-hidden rounded-2xl border border-slate-200 bg-slate-100 shadow-[0_22px_60px_-42px_rgba(15,23,42,.45)] md:h-[calc(100dvh-8.5rem)]" aria-label="Workflow-Standardeditor">
-            @include('livewire.admin.network.partials.workflow-definition-editor', [
-                'workflow' => $selectedWorkflow,
-                'activeRun' => null,
-                'runStatus' => null,
-                'canEdit' => true,
-                'modalOnly' => false,
-                'revisionMode' => false,
-                'editorInstance' => 'manager-'.$selectedWorkflow->id,
-            ])
+        <section
+            data-workflow-overview-card
+            class="group overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_22px_60px_-42px_rgba(15,23,42,.45)] transition hover:border-blue-300 hover:shadow-[0_26px_70px_-40px_rgba(37,99,235,.35)]"
+            aria-labelledby="workflow-overview-card-title"
+        >
+            <header class="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 bg-white px-4 py-4 sm:px-5">
+                <div class="min-w-0">
+                    <p class="ff-kicker">Workflow-Karte</p>
+                    <h2 id="workflow-overview-card-title" class="mt-1 text-lg font-bold tracking-tight text-slate-950">Ablauf auf einen Blick</h2>
+                    <p class="mt-1 text-xs leading-5 text-slate-500">Die Größen ändern nur diese Übersicht. Zum Aufbauen öffnet sich die gemeinsame Vollbild-Workbench.</p>
+                </div>
+                <button
+                    type="button"
+                    x-ref="overviewEditCta"
+                    data-workflow-edit-cta
+                    wire:click.stop="openDefinitionWorkbench"
+                    x-on:click.stop="rememberWorkbenchTrigger($el)"
+                    class="ff-action-trigger ff-action-trigger--primary inline-flex min-h-11 items-center gap-2 px-4 text-sm font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+                >
+                    Workflow bearbeiten
+                    <span aria-hidden="true">↗</span>
+                </button>
+            </header>
+
+            <div
+                x-on:click="
+                    if ($event.target.closest('[data-workflow-minimap-zoom]')) return;
+                    rememberWorkbenchTrigger($refs.overviewEditCta);
+                    $wire.openDefinitionWorkbench();
+                "
+                class="cursor-pointer bg-slate-50/70 p-3 sm:p-5"
+                aria-label="Workflow-Karte anklicken, um den Editor zu öffnen"
+            >
+                <x-workflows.minimap
+                    :workflow="$selectedWorkflow"
+                    :route-map="$routeMap"
+                    :selectable-tasks="false"
+                    :zoomable="true"
+                    initial-zoom="overview"
+                    :show-header="false"
+                    :instance="'manager-overview-'.$selectedWorkflow->id"
+                    :source="'manager-overview-'.$selectedWorkflow->id"
+                />
+            </div>
         </section>
 
 
@@ -300,15 +424,149 @@
             </x-slot>
         </x-ui.dialog-modal>
 
-        @if($showTestWorkbenchModal && $selectedWorkflow)
-            <div class="fixed inset-0 top-0 z-[70] !mt-0 overflow-hidden bg-slate-100" style="margin-top: 0 !important;" data-workflow-test-workbench role="dialog" aria-modal="true" aria-label="Workflow testen">
-                <livewire:admin.network.workflow-studio
-                    :workflow="$selectedWorkflow"
-                    :embedded="true"
-                    :initial-mode="$testWorkbenchMode"
-                    :run-id="$testWorkbenchRunId"
-                    :key="'workflow-test-workbench-'.$selectedWorkflow->id.'-'.$testWorkbenchKey"
-                />
+        @if($workbenchBooted && $workbenchStudioSessionId && $selectedWorkflow)
+            <div
+                x-cloak
+                x-show.important="workbenchOpen"
+                x-ref="workflowWorkbench"
+                x-init="$nextTick(() => syncWorkbenchCopilot())"
+                x-trap.inert.noscroll="workbenchOpen"
+                @if($managerWorkbenchPollEnabled)
+                    wire:poll.visible.{{ $managerWorkbenchPollSeconds }}s="refreshWorkbenchContext"
+                @endif
+                class="fixed inset-0 top-0 z-[70] !mt-0 flex h-[100dvh] min-h-0 w-full min-w-0 flex-col overflow-hidden bg-slate-100"
+                style="margin-top: 0 !important;"
+                data-workflow-workbench
+                data-workflow-test-workbench
+                data-workflow-workbench-session="{{ $workbenchStudioSessionId }}"
+                data-workflow-workbench-run="{{ $workbenchRunId }}"
+                data-workflow-manager-poll="{{ $managerWorkbenchPollEnabled ? $managerWorkbenchPollSeconds.'s' : 'hosted-studio' }}"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="workflow-workbench-title"
+            >
+                <header class="relative z-50 shrink-0 border-b border-slate-200 bg-white/95 px-3 py-2.5 shadow-sm backdrop-blur-xl sm:px-4 lg:px-6">
+                    <div class="flex min-w-0 flex-wrap items-center gap-2 sm:gap-3">
+                        <button
+                            type="button"
+                            wire:click="closeWorkflowWorkbench"
+                            class="ff-action-trigger inline-flex min-h-11 shrink-0 items-center gap-2 px-3 text-xs font-bold"
+                        >
+                            <span aria-hidden="true">←</span>
+                            <span class="hidden sm:inline">Zur Übersicht</span>
+                            <span class="sm:hidden">Übersicht</span>
+                        </button>
+
+                        <div class="min-w-0 flex-1 px-1">
+                            <p class="ff-kicker">Workflow-Workbench</p>
+                            <div class="mt-0.5 flex min-w-0 items-center gap-2">
+                                <h2 id="workflow-workbench-title" class="truncate text-sm font-bold text-slate-950 sm:text-base">{{ $selectedWorkflow->name }}</h2>
+                                <span class="ff-status-island shrink-0" data-active="{{ in_array($workbenchRunStatus, ['queued', 'running', 'waiting', 'stop_requested', 'unreachable'], true) ? 'true' : 'false' }}" role="status" aria-live="polite">
+                                    <span class="ff-status-dot" aria-hidden="true"></span>
+                                    <span class="text-[10px] font-bold tracking-wide">{{ $workbenchStatusLabel }}</span>
+                                </span>
+                            </div>
+                        </div>
+
+                        <nav class="order-3 grid w-full grid-cols-2 rounded-xl border border-slate-200 bg-slate-100 p-1 sm:order-none sm:w-auto" role="tablist" aria-label="Workflow-Workbench">
+                            <button
+                                type="button"
+                                role="tab"
+                                wire:click="switchWorkbenchSurface('definition')"
+                                x-bind:aria-selected="(workbenchSurface === 'definition').toString()"
+                                x-bind:class="workbenchSurface === 'definition' ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-500 hover:text-slate-800'"
+                                class="inline-flex min-h-11 items-center justify-center rounded-lg px-4 text-xs font-bold transition"
+                            >Bearbeiten</button>
+                            <button
+                                type="button"
+                                role="tab"
+                                wire:click="switchWorkbenchSurface('test')"
+                                x-bind:aria-selected="(workbenchSurface === 'test').toString()"
+                                x-bind:class="workbenchSurface === 'test' ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-500 hover:text-slate-800'"
+                                class="inline-flex min-h-11 items-center justify-center rounded-lg px-4 text-xs font-bold transition"
+                            >Testen</button>
+                        </nav>
+
+                        <button
+                            type="button"
+                            x-ref="workbenchClose"
+                            wire:click="closeWorkflowWorkbench"
+                            class="ff-action-trigger inline-flex h-11 w-11 shrink-0 items-center justify-center text-lg font-bold"
+                            aria-label="Workflow-Workbench schließen"
+                        >×</button>
+                    </div>
+                </header>
+
+                <div class="relative min-h-0 min-w-0 flex-1 overflow-hidden">
+                    <section
+                        x-show.important="workbenchSurface === 'definition'"
+                        x-bind:inert="workbenchSurface !== 'definition'"
+                        x-bind:aria-hidden="(workbenchSurface !== 'definition').toString()"
+                        class="absolute inset-0 flex min-h-0 min-w-0 flex-col overflow-hidden bg-slate-100"
+                        role="tabpanel"
+                        aria-label="Workflow bearbeiten"
+                        data-workflow-workbench-definition
+                    >
+                        @if($workbenchHistoricalRun)
+                            <div class="shrink-0 border-b border-violet-200 bg-violet-50 px-4 py-2 text-xs font-semibold text-violet-900">
+                                Der Test-Tab zeigt einen historischen Lauf. Bearbeiten verwendet immer die klar getrennte aktuelle Workflow-Definition (Revision {{ $selectedWorkflow->copilot_revision }}).
+                            </div>
+                        @endif
+
+                        @if(! $workbenchCanEdit)
+                            <div class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-950">
+                                <div class="min-w-0">
+                                    <p class="font-bold">Aktuelle Definition ist schreibgeschützt</p>
+                                    <p class="mt-0.5 leading-5">{{ $workbenchLockMessage }}</p>
+                                </div>
+                                @if($workbenchCanPauseForEdit)
+                                    <button
+                                        type="button"
+                                        wire:click="requestPauseAndEdit"
+                                        wire:loading.attr="disabled"
+                                        wire:target="requestPauseAndEdit"
+                                        @disabled($workbenchPauseRequested)
+                                        class="inline-flex min-h-11 shrink-0 items-center rounded-lg bg-amber-700 px-4 text-xs font-bold text-white transition hover:bg-amber-800 disabled:cursor-wait disabled:opacity-60"
+                                    >{{ $workbenchPauseRequested ? 'Pause angefordert …' : 'Pausieren & bearbeiten' }}</button>
+                                @endif
+                            </div>
+                        @elseif($workbenchRunStatus === 'paused')
+                            <div class="shrink-0 border-b border-emerald-200 bg-emerald-50 px-4 py-2 text-xs font-semibold text-emerald-900">
+                                Sicher pausiert: Änderungen werden als neue Revision gespeichert und derselbe Run bleibt fortsetzbar.
+                            </div>
+                        @endif
+
+                        <div class="min-h-0 min-w-0 flex-1 overflow-hidden">
+                            <livewire:admin.network.workflow-studio-task-editor
+                                :workflow="$selectedWorkflow"
+                                :studio-session-id="$workbenchStudioSessionId"
+                                :modal-only="false"
+                                :key="'workflow-workbench-definition-'.$selectedWorkflow->id.'-'.$testWorkbenchKey"
+                            />
+                        </div>
+                    </section>
+
+                    <section
+                        x-show.important="workbenchSurface === 'test'"
+                        x-bind:inert="workbenchSurface !== 'test'"
+                        x-bind:aria-hidden="(workbenchSurface !== 'test').toString()"
+                        class="absolute inset-0 min-h-0 min-w-0 overflow-hidden bg-slate-100"
+                        role="tabpanel"
+                        aria-label="Workflow testen"
+                        data-workflow-workbench-test
+                    >
+                        <livewire:admin.network.workflow-studio
+                            :workflow="$selectedWorkflow"
+                            :embedded="true"
+                            :hosted="true"
+                            :initial-mode="$testWorkbenchMode"
+                            :run-id="$workbenchRunId"
+                            :studio-session-id="$workbenchStudioSessionId"
+                            :host-instance="'workflow-manager-'.$selectedWorkflow->id"
+                            :key="'workflow-workbench-test-'.$selectedWorkflow->id.'-'.$testWorkbenchKey"
+                        />
+                    </section>
+                </div>
             </div>
         @endif
 

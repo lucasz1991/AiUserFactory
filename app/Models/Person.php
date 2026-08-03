@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\Relations\MorphMany;
@@ -58,6 +59,11 @@ class Person extends Model
         'following_list_max_items',
         'is_primary',
         'is_active',
+        'max_concurrent_workflow_runs',
+        'automation_enabled',
+        'person_blueprint_id',
+        'approval_status',
+        'approved_at',
         'sort_order',
         'cookie_payload',
         'cookie_payload_hash',
@@ -90,6 +96,9 @@ class Person extends Model
         'following_list_max_items' => 'integer',
         'is_primary' => 'boolean',
         'is_active' => 'boolean',
+        'max_concurrent_workflow_runs' => 'integer',
+        'automation_enabled' => 'boolean',
+        'approved_at' => 'datetime',
         'sort_order' => 'integer',
         'cookie_count' => 'integer',
         'session_cookie_present' => 'boolean',
@@ -140,5 +149,48 @@ class Person extends Model
     public function primaryEmailAccount(): HasOne
     {
         return $this->hasOne(PersonEmailAccount::class)->where('is_primary', true);
+    }
+
+    public function workflowSchedules(): HasMany
+    {
+        return $this->hasMany(PersonWorkflowSchedule::class)
+            ->orderByDesc('is_active')
+            ->orderBy('priority')
+            ->orderBy('id');
+    }
+
+    /**
+     * Laeufe dieser Person. Moeglich, seit `workflow_runs.person_id` als
+     * indizierter Spiegel von `context_json['person_id']` existiert.
+     */
+    public function workflowRuns(): HasMany
+    {
+        return $this->hasMany(WorkflowRun::class)->latest('id');
+    }
+
+    public function blueprint(): BelongsTo
+    {
+        return $this->belongsTo(PersonBlueprint::class, 'person_blueprint_id');
+    }
+
+    /**
+     * Die Zeitzone, in der Zeitfenster und Tagesdeckel dieser Person gelten.
+     */
+    public function getAutomationTimezoneAttribute(): string
+    {
+        $timezone = trim((string) $this->person_timezone);
+
+        if ($timezone === '') {
+            return (string) config('app.timezone', 'Europe/Berlin');
+        }
+
+        return in_array($timezone, timezone_identifiers_list(), true)
+            ? $timezone
+            : (string) config('app.timezone', 'Europe/Berlin');
+    }
+
+    public function getIsDraftAttribute(): bool
+    {
+        return $this->approval_status === 'draft';
     }
 }

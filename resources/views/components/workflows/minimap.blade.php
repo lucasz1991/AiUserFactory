@@ -11,10 +11,14 @@
     'zoomable' => false,
     'initialZoom' => 'detail',
     'instance' => null,
+    'source' => null,
     'routeMap' => null,
 ])
 
 @php
+    // Route-Berechnungen verwenden spaeter lokal ebenfalls `$source`; die
+    // oeffentliche Event-Quelle deshalb vorab instanzsicher festhalten.
+    $minimapEventSource = $source;
     $workflow = $workflow ?: $workflowRun?->workflow;
     $zoomLevels = [
         'overview' => 'Übersicht',
@@ -579,6 +583,7 @@
         })
         ->all();
     $mapInstance = trim((string) ($instance ?: ($workflowRun?->id ? 'run-'.$workflowRun->id : 'workflow-'.$workflow?->id)));
+    $mapSource = trim((string) ($minimapEventSource ?: $mapInstance));
     $mapId = 'workflow-minimap-'.(\Illuminate\Support\Str::slug($mapInstance) ?: 'preview');
     $activeStep = $stepById->get((int) $activeStepId);
     $activeStepAction = trim((string) ($activeStep?->action_key ?? ''));
@@ -632,7 +637,11 @@
     };
 @endphp
 
-<div {{ $attributes->merge(['class' => 'space-y-3']) }}>
+<div
+    {{ $attributes->merge(['class' => 'space-y-3']) }}
+    data-workflow-minimap-instance="{{ $mapInstance }}"
+    data-workflow-minimap-source="{{ $mapSource }}"
+>
     @if(! $workflow)
         <div class="rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
             Keine Workflow-Daten fuer diesen Prozess gefunden.
@@ -662,6 +671,8 @@
                 routeLines: [],
                 hoveredRouteNode: '',
                 activeRouteNode: @js($activeRouteNode),
+                instance: @js($mapInstance),
+                source: @js($mapSource),
                 zoomLevel: @js($initialZoom),
                 markerIds: {
                     runtime: @js($mapId.'-arrow-runtime'),
@@ -691,13 +702,30 @@
                     document.removeEventListener('livewire:navigated', this._refreshMinimapRoutes);
                     this._minimapResizeObserver?.disconnect();
                 },
+                isRenderable() {
+                    return this.$root.offsetParent !== null && ! this.$root.closest('[inert]');
+                },
+                refreshForEvent(detail = {}) {
+                    const requestedInstance = String(detail?.instance || '');
+                    const requestedSource = String(detail?.source || '');
+                    const targetsInstance = requestedInstance !== '' && requestedInstance === this.instance;
+                    const targetsSource = requestedSource !== '' && requestedSource === this.source;
+
+                    if (! targetsInstance && ! targetsSource) return;
+
+                    this.$nextTick(() => this.refreshRouteLines());
+                },
                 setZoom(level) {
                     if (!['overview', 'standard', 'detail'].includes(level) || this.zoomLevel === level) {
                         return;
                     }
 
                     this.zoomLevel = level;
-                    this.$dispatch('workflow-minimap-zoom-changed', { level });
+                    this.$dispatch('workflow-minimap-zoom-changed', {
+                        level,
+                        instance: this.instance,
+                        source: this.source,
+                    });
                     this.$nextTick(() => this.refreshRouteLines());
                     setTimeout(() => this.refreshRouteLines(), 80);
                 },
@@ -755,7 +783,7 @@
                 refreshRouteLines() {
                     const surface = this.$refs.minimapSurface;
 
-                    if (!surface) {
+                    if (!surface || ! this.isRenderable()) {
                         this.routeOverlay = { width: 0, height: 0 };
                         this.routeSvgMarkup = '';
                         return;
@@ -938,6 +966,7 @@
             }"
             x-ref="minimapSurface"
             x-on:scroll.debounce.100ms="refreshRouteLines()"
+            x-on:workflow-minimap-refresh-requested.window="refreshForEvent($event.detail)"
             data-workflow-minimap-scroll-container
             data-workflow-preview-scrollbar
             class="relative overflow-x-auto pb-2"
@@ -952,7 +981,7 @@
                     @foreach($zoomLevels as $zoomKey => $zoomLabel)
                         <button
                             type="button"
-                            x-on:click="setZoom(@js($zoomKey))"
+                            x-on:click.stop="setZoom(@js($zoomKey))"
                             x-bind:aria-pressed="zoomLevel === @js($zoomKey)"
                             x-bind:class="zoomLevel === @js($zoomKey) ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'"
                             class="inline-flex min-h-11 items-center rounded-lg px-3 text-[11px] font-bold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
@@ -1087,15 +1116,15 @@
                                         @if($selectableTasks)
                                             role="button"
                                             tabindex="0"
-                                             x-on:click.stop="$dispatch('workflow-preview-task-selected', { workflowId: {{ (int) $workflow->id }}, stepId: {{ (int) $step->id }}, taskKey: @js($taskKey) })"
-                                             x-on:keydown.enter.prevent.stop="$dispatch('workflow-preview-task-selected', { workflowId: {{ (int) $workflow->id }}, stepId: {{ (int) $step->id }}, taskKey: @js($taskKey) })"
-                                             x-on:dblclick.stop="$dispatch('workflow-preview-task-edit-requested', { workflowId: {{ (int) $workflow->id }}, stepId: {{ (int) $step->id }}, taskKey: @js($taskKey) })"
+                                             x-on:click.stop="$dispatch('workflow-preview-task-selected', { workflowId: {{ (int) $workflow->id }}, stepId: {{ (int) $step->id }}, taskKey: @js($taskKey), instance, source })"
+                                             x-on:keydown.enter.prevent.stop="$dispatch('workflow-preview-task-selected', { workflowId: {{ (int) $workflow->id }}, stepId: {{ (int) $step->id }}, taskKey: @js($taskKey), instance, source })"
+                                             x-on:dblclick.stop="$dispatch('workflow-preview-task-edit-requested', { workflowId: {{ (int) $workflow->id }}, stepId: {{ (int) $step->id }}, taskKey: @js($taskKey), instance, source })"
                                              title="Task auswählen; Doppelklick zum Bearbeiten"
                                          @endif
                                          @if($selectableTasks)
                                              aria-label="{{ $step->name }}: {{ $task['title'] ?? 'Task' }} ({{ $taskStatus }})"
                                              aria-pressed="{{ $isTaskSelected ? 'true' : 'false' }}"
-                                             x-on:keydown.space.prevent.stop="$dispatch('workflow-preview-task-selected', { workflowId: {{ (int) $workflow->id }}, stepId: {{ (int) $step->id }}, taskKey: @js($taskKey) })"
+                                             x-on:keydown.space.prevent.stop="$dispatch('workflow-preview-task-selected', { workflowId: {{ (int) $workflow->id }}, stepId: {{ (int) $step->id }}, taskKey: @js($taskKey), instance, source })"
                                          @endif
                                          class="relative rounded-md border shadow-sm {{ $tone }} {{ $isTaskSelected ? 'ring-2 ring-sky-500 ring-offset-2 ring-offset-white' : '' }} {{ $selectableTasks ? 'min-h-11 cursor-pointer touch-manipulation transition hover:-translate-y-px hover:shadow-md focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2' : '' }}"
                                          x-bind:class="zoomLevel === 'overview' ? 'px-1.5 py-1 text-[9px]' : (zoomLevel === 'standard' ? 'px-2 py-1 text-[10px]' : 'px-2 py-1.5 text-[11px]')"

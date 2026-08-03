@@ -55,6 +55,11 @@ class Workflow extends Model
         return $this->hasMany(WorkflowRun::class)->latest('id');
     }
 
+    public function personSchedules(): HasMany
+    {
+        return $this->hasMany(PersonWorkflowSchedule::class);
+    }
+
     public function copilotSessions(): HasMany
     {
         return $this->hasMany(WorkflowCopilotSession::class)->latest('id');

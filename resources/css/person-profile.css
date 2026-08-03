@@ -442,6 +442,52 @@
   color: var(--ff-shell-muted, #637188);
 }
 
+/* ------------------------------------------------------------- Tabellen
+ * Fuer die Listen der Automatisierung und der Personen-Fabrik. Die Tabelle
+ * scrollt in ihrem eigenen Container, damit die Seite nie waagerecht laeuft. */
+
+.ff-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+}
+
+.ff-table thead th {
+  background: var(--ff-shell-surface-muted, #f7f9fc);
+  padding: 0.6rem 0.75rem;
+  text-align: left;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ff-shell-muted, #637188);
+  border-bottom: 1px solid var(--ff-shell-border, #d7e0ea);
+  white-space: nowrap;
+}
+
+.ff-table tbody td {
+  padding: 0.7rem 0.75rem;
+  border-bottom: 1px solid var(--ff-shell-line, rgba(148, 163, 184, 0.2));
+  vertical-align: top;
+  color: var(--ff-shell-text, #182435);
+}
+
+.ff-table tbody tr:hover { background: var(--ff-shell-surface-muted, #f7f9fc); }
+
+.ff-table__strong { display: block; font-weight: 600; }
+
+.ff-table__sub {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 0.6875rem;
+  color: var(--ff-shell-muted, #637188);
+}
+
+[data-mode='dark'] .ff-table thead th,
+[data-mode='dark'] .ff-table tbody tr:hover { background: #0f1723; }
+
+[data-mode='dark'] .ff-table tbody td { color: #e2e8f0; }
+
 .ff-mediacard {
   overflow: hidden;
   border-radius: var(--ff-profile-radius-sm, 12px);

@@ -2,12 +2,13 @@
     x-data="{
         fallbackNotice: null,
         fallbackNoticeTimer: null,
+        previewInstance: @js('studio-definition-'.$session->id),
         init() {
-            this.$dispatch('workflow-studio-pin-copilot');
+            if (! @js($hosted)) this.$dispatch('workflow-studio-pin-copilot');
         },
         destroy() {
             window.clearTimeout(this.fallbackNoticeTimer);
-            this.$dispatch('workflow-studio-unpin-copilot');
+            if (! @js($hosted)) this.$dispatch('workflow-studio-unpin-copilot');
         },
         showStudioNotice(event) {
             const detail = Array.isArray(event.detail) ? (event.detail[0] || {}) : (event.detail || {});
@@ -31,22 +32,38 @@
             window.clearTimeout(this.fallbackNoticeTimer);
             this.fallbackNoticeTimer = window.setTimeout(() => this.fallbackNotice = null, type === 'error' ? 5200 : 3000);
         },
+        acceptsPreviewEvent(event) {
+            const detail = event.detail || {};
+            const instance = String(detail.instance || detail.source || '');
+            const originatesHere = typeof Node !== 'undefined'
+                && event.target instanceof Node
+                && this.$root.contains(event.target);
+
+            return Number(detail.workflowId || 0) === {{ (int) $workflow->id }}
+                && (originatesHere || instance === this.previewInstance);
+        },
     }"
     x-on:workflow-studio-notice.window="showStudioNotice($event)"
     x-on:workflow-preview-task-selected.window="
-        if (Number($event.detail.workflowId || 0) === {{ (int) $workflow->id }}) {
+        if (acceptsPreviewEvent($event)) {
             $wire.selectTask(Number($event.detail.stepId || 0), String($event.detail.taskKey || ''));
         }
     "
     x-on:workflow-preview-task-edit-requested.window="
-        if (Number($event.detail.workflowId || 0) === {{ (int) $workflow->id }}) {
+        if (acceptsPreviewEvent($event)) {
             $wire.editTask(Number($event.detail.stepId || 0), String($event.detail.taskKey || ''));
         }
     "
     data-workflow-studio-shell
-    data-workflow-studio-mode="{{ $embedded ? 'embedded' : 'standalone' }}"
-    class="workflow-experience {{ $embedded ? 'relative h-[100dvh]' : 'fixed inset-0 top-0 z-[70] h-[100dvh]' }} flex min-h-0 flex-col overflow-hidden bg-slate-100 text-slate-900"
-    wire:poll.{{ $studioPollSeconds ?? 2 }}s="refreshStudio"
+    data-workflow-studio-mode="{{ $hosted ? 'hosted' : ($embedded ? 'embedded' : 'standalone') }}"
+    data-workflow-studio-session="{{ $session->id }}"
+    data-workflow-studio-host="{{ $hostInstance }}"
+    class="workflow-experience {{ $hosted ? 'relative h-full' : ($embedded ? 'relative h-[100dvh]' : 'fixed inset-0 top-0 z-[70] h-[100dvh]') }} flex min-h-0 w-full flex-col overflow-hidden bg-slate-100 text-slate-900"
+    @if($hosted)
+        wire:poll.visible.{{ $studioPollSeconds ?? 2 }}s="refreshStudio"
+    @else
+        wire:poll.{{ $studioPollSeconds ?? 2 }}s="refreshStudio"
+    @endif
 >
     @php
         $runStatus = $run?->status ?? 'draft';
@@ -59,6 +76,7 @@
         $probeResult = data_get($run?->context_json, 'studio_probe_result');
         $selectedStep = $steps->firstWhere('id', (int) $selectedStepId);
         $selectedTask = collect($selectedStep?->task_cards ?? [])->firstWhere('key', $selectedTaskKey);
+        $historicalRunView = (bool) ($historicalRunView ?? false);
         $permissionLabel = collect($permissionModes)->first(fn ($permission) => $permission->value === $permissionMode)?->label() ?? 'Kritisch nachfragen';
         $statusLabel = match ($runStatus) {
             'queued' => 'Startet',
@@ -77,39 +95,53 @@
 
     <header class="ff-studio-header relative z-30 shrink-0 border-b">
         <div data-studio-primary-bar class="flex flex-wrap items-center gap-3 px-3 py-3 sm:px-4 lg:px-6">
-            @if($embedded)
-                <button type="button" x-on:click="$dispatch('workflow-studio-unpin-copilot')" wire:click="closeStudio" class="ff-action-trigger inline-flex h-9 items-center gap-2 px-3 text-xs font-semibold">
-                    <span aria-hidden="true">←</span> Manager
-                </button>
+            @if($hosted)
+                <div data-workflow-studio-hosted-status class="min-w-[180px] flex-1">
+                    <div class="flex flex-wrap items-center gap-2.5">
+                        <span class="ff-kicker">Workflow-Test</span>
+                        <span class="ff-status-island" data-active="{{ $isActive ? 'true' : 'false' }}" role="status" aria-live="polite">
+                            <span class="ff-status-dot" aria-hidden="true"></span>
+                            <span class="text-[10px] font-bold tracking-wide">{{ $statusLabel }}</span>
+                        </span>
+                    </div>
+                    <p class="mt-1 text-[10px] text-slate-500">Sitzung #{{ $session->id }} · Revision {{ $workflow->copilot_revision }} · {{ $permissionLabel }}</p>
+                </div>
             @else
-                <a href="{{ route('network.workflows.manage', $workflow) }}" class="ff-action-trigger inline-flex h-9 items-center gap-2 px-3 text-xs font-semibold">
-                    <span aria-hidden="true">←</span> Manager
-                </a>
+                @if($embedded)
+                    <button type="button" x-on:click="$dispatch('workflow-studio-unpin-copilot')" wire:click="closeStudio" class="ff-action-trigger inline-flex h-9 items-center gap-2 px-3 text-xs font-semibold">
+                        <span aria-hidden="true">←</span> Manager
+                    </button>
+                @else
+                    <a href="{{ route('network.workflows.manage', $workflow) }}" class="ff-action-trigger inline-flex h-9 items-center gap-2 px-3 text-xs font-semibold">
+                        <span aria-hidden="true">←</span> Manager
+                    </a>
+                @endif
+
+                <div class="min-w-[220px] flex-1">
+                    <div class="flex flex-wrap items-center gap-2.5">
+                        <span class="ff-kicker">Workflow-Test</span>
+                        <h1 class="max-w-xl truncate text-base font-bold tracking-tight text-slate-950">{{ $workflow->name }}</h1>
+                        <span class="ff-status-island" data-active="{{ $isActive ? 'true' : 'false' }}" role="status" aria-live="polite">
+                            <span class="ff-status-dot" aria-hidden="true"></span>
+                            <span class="text-[10px] font-bold tracking-wide">{{ $statusLabel }}</span>
+                        </span>
+                    </div>
+                    <p class="mt-1 text-[10px] text-slate-500">Sitzung #{{ $session->id }} · Revision {{ $workflow->copilot_revision }} · {{ $permissionLabel }}</p>
+                </div>
             @endif
 
-            <div class="min-w-[220px] flex-1">
-                <div class="flex flex-wrap items-center gap-2.5">
-                    <span class="ff-kicker">Workflow-Test</span>
-                    <h1 class="max-w-xl truncate text-base font-bold tracking-tight text-slate-950">{{ $workflow->name }}</h1>
-                    <span class="ff-status-island" data-active="{{ $isActive ? 'true' : 'false' }}" role="status" aria-live="polite">
-                        <span class="ff-status-dot" aria-hidden="true"></span>
-                        <span class="text-[10px] font-bold tracking-wide">{{ $statusLabel }}</span>
-                    </span>
-                </div>
-                <p class="mt-1 text-[10px] text-slate-500">Sitzung #{{ $session->id }} · Revision {{ $workflow->copilot_revision }} · {{ $permissionLabel }}</p>
-            </div>
-
             <div class="ff-segmented-control" role="group" aria-label="Testmodus">
-                <button type="button" wire:click="chooseControlMode('interactive')" aria-pressed="{{ ! $autonomousMode ? 'true' : 'false' }}" @disabled($modeLocked) class="h-8 px-3 text-[11px] font-bold {{ ! $autonomousMode ? 'text-slate-950' : 'text-slate-500 hover:text-slate-800' }} disabled:cursor-not-allowed">
+                <button type="button" wire:click="chooseControlMode('interactive')" aria-pressed="{{ ! $autonomousMode ? 'true' : 'false' }}" @disabled($modeLocked || $historicalRunView) class="h-8 px-3 text-[11px] font-bold {{ ! $autonomousMode ? 'text-slate-950' : 'text-slate-500 hover:text-slate-800' }} disabled:cursor-not-allowed disabled:opacity-40">
                     Eigenes Testen
                 </button>
-                <button type="button" wire:click="chooseControlMode('autonomous')" aria-pressed="{{ $autonomousMode ? 'true' : 'false' }}" @disabled($modeLocked) class="h-8 px-3 text-[11px] font-bold {{ $autonomousMode ? 'text-slate-950' : 'text-slate-500 hover:text-blue-800' }} disabled:cursor-not-allowed">
+                <button type="button" wire:click="chooseControlMode('autonomous')" aria-pressed="{{ $autonomousMode ? 'true' : 'false' }}" @disabled($modeLocked || $historicalRunView) class="h-8 px-3 text-[11px] font-bold {{ $autonomousMode ? 'text-slate-950' : 'text-slate-500 hover:text-blue-800' }} disabled:cursor-not-allowed disabled:opacity-40">
                     Autonomer Copilot
                 </button>
             </div>
             @if($modeLocked)
                 <button type="button" wire:click="unlockControlMode"
                         wire:confirm="Testmodus fuer diese Sitzung entsperren? Der Modus kann danach neu gewaehlt werden."
+                        @disabled($historicalRunView)
                         class="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 text-[10px] font-bold text-slate-600 transition hover:border-cyan-300 hover:bg-cyan-50 hover:text-cyan-800"
                         title="Modus ist festgeschrieben – hier entsperren, um ihn neu zu waehlen">
                     Modus gesperrt · entsperren
@@ -117,12 +149,27 @@
             @endif
         </div>
 
+        @if($historicalRunView)
+            <div data-workflow-historical-run-readonly class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-violet-200 bg-violet-50 px-4 py-2.5 text-xs text-violet-950 lg:px-6" role="status" aria-live="polite">
+                <div class="min-w-0">
+                    <p class="font-bold">Historischer Testlauf · nur ansehen</p>
+                    <p class="mt-0.5 leading-5">Lauf-, Sitzungs- und Copilot-Steuerungen sind gesperrt. Bearbeiten öffnet immer die aktuelle Workflow-Definition.</p>
+                </div>
+                <div class="flex flex-wrap items-center gap-2">
+                    <button type="button" wire:click="openDefinitionBuilder" data-workflow-studio-builder-trigger class="ff-action-trigger inline-flex min-h-11 items-center px-3 text-xs font-bold">Aktuelle Definition öffnen</button>
+                    @if($selectedTask)
+                        <button type="button" wire:click="editSelectedTask" class="ff-action-trigger inline-flex min-h-11 items-center px-3 text-xs font-bold">Ausgewählte Task bearbeiten</button>
+                    @endif
+                </div>
+            </div>
+        @endif
+
         @if(! $autonomousMode)
             <div class="ff-studio-commandbar flex min-w-0 items-center gap-2 overflow-x-auto border-t border-slate-100 px-3 py-2.5 sm:px-4 lg:px-6">
                 {{-- Anders als das Select in den Copilot-Einstellungen bleibt die Personenwahl hier auch nach dem Modus-Lock zwischen Laeufen aenderbar; der Kontext wird erst beim Start in den Run-Context eingefroren --}}
                 <label class="flex shrink-0 items-center gap-2 rounded-xl border border-slate-200 bg-white py-1 pl-3 pr-1" title="Person / Testkontext für diesen Lauf">
                     <span class="shrink-0 text-[9px] font-black uppercase tracking-[0.16em] text-slate-400">Person</span>
-                    <select wire:model="personId" @disabled($isActive || $isPaused) class="h-8 max-w-[200px] rounded-lg border-slate-200 bg-white text-[11px] font-bold text-slate-700 shadow-sm focus:border-cyan-500 focus:ring-cyan-500 disabled:cursor-not-allowed disabled:opacity-40">
+                    <select wire:model="personId" @disabled($historicalRunView || $isActive || $isPaused) class="h-8 max-w-[200px] rounded-lg border-slate-200 bg-white text-[11px] font-bold text-slate-700 shadow-sm focus:border-cyan-500 focus:ring-cyan-500 disabled:cursor-not-allowed disabled:opacity-40">
                         <option value="">Keine Person</option>
                         @foreach($persons as $person)
                             <option value="{{ $person->id }}">{{ $person->display_name }}</option>
@@ -131,13 +178,13 @@
                 </label>
 
                 <div class="ff-run-island shrink-0" role="group" aria-label="Test starten">
-                    <button type="button" wire:click="runSingleTask" @disabled($isActive || ! $selectedTask) class="ff-run-primary inline-flex h-8 items-center gap-2 px-3 text-[11px] font-bold disabled:cursor-not-allowed disabled:opacity-35">
+                    <button type="button" wire:click="runSingleTask" @disabled($historicalRunView || $isActive || ! $selectedTask) class="ff-run-primary inline-flex h-8 items-center gap-2 px-3 text-[11px] font-bold disabled:cursor-not-allowed disabled:opacity-35">
                         <span aria-hidden="true">▷|</span> Eine Task
                     </button>
-                    <button type="button" wire:click="startRun" @disabled($isActive || $isPaused) class="inline-flex h-8 items-center gap-2 px-3 text-[11px] font-bold disabled:cursor-not-allowed disabled:opacity-35">
+                    <button type="button" wire:click="startRun" data-studio-run-start-trigger @disabled($historicalRunView || $isActive || $isPaused) class="inline-flex h-8 items-center gap-2 px-3 text-[11px] font-bold disabled:cursor-not-allowed disabled:opacity-35">
                         <span aria-hidden="true">▶</span> Bis Ende
                     </button>
-                    <button type="button" wire:click="runRealPlayback" @disabled($isActive || $isPaused) title="Wie im echten Ablauf: ohne Screenshots, DOM oder Cursor – am Ende nur das Ergebnis." class="inline-flex h-8 items-center gap-2 px-3 text-[11px] font-bold disabled:cursor-not-allowed disabled:opacity-35">
+                    <button type="button" wire:click="runRealPlayback" @disabled($historicalRunView || $isActive || $isPaused) title="Wie im echten Ablauf: ohne Screenshots, DOM oder Cursor – am Ende nur das Ergebnis." class="inline-flex h-8 items-center gap-2 px-3 text-[11px] font-bold disabled:cursor-not-allowed disabled:opacity-35">
                         <span aria-hidden="true">⏵</span> Echter Ablauf
                     </button>
                 </div>
@@ -155,10 +202,10 @@
                     <button type="button" wire:click="selectNextTask" aria-label="Nächste Task auswählen" @disabled(! $hasNextTask) class="h-8 px-2.5 text-[11px] font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-30">→</button>
                 </div>
 
-                <button type="button" wire:click="pauseRun" @disabled(! $isActive) class="h-9 rounded-lg border border-amber-200 bg-amber-50 px-3 text-[11px] font-bold text-amber-800 transition hover:bg-amber-100 disabled:opacity-30">Pausieren</button>
-                <button type="button" wire:click="resumeRun" @disabled(! $isPaused) class="h-9 rounded-lg border border-emerald-200 bg-emerald-50 px-3 text-[11px] font-bold text-emerald-800 transition hover:bg-emerald-100 disabled:opacity-30">Bis Ende fortsetzen</button>
-                <button type="button" wire:click="restartRun" wire:confirm="Aktuellen Lauf beenden und neu starten?" class="h-9 rounded-lg border border-slate-300 bg-white px-3 text-[11px] font-bold text-slate-600 transition hover:bg-slate-100">Neu versuchen</button>
-                <button type="button" wire:click="stopRun" wire:confirm="Diesen Lauf wirklich stoppen?" @disabled(! $isActive && ! $isPaused) class="h-9 rounded-lg border border-rose-200 bg-white px-3 text-[11px] font-bold text-rose-700 transition hover:bg-rose-50 disabled:opacity-30">Stoppen</button>
+                <button type="button" wire:click="pauseRun" @disabled($historicalRunView || ! $isActive) class="h-9 rounded-lg border border-amber-200 bg-amber-50 px-3 text-[11px] font-bold text-amber-800 transition hover:bg-amber-100 disabled:opacity-30">Pausieren</button>
+                <button type="button" wire:click="resumeRun" @disabled($historicalRunView || ! $isPaused) class="h-9 rounded-lg border border-emerald-200 bg-emerald-50 px-3 text-[11px] font-bold text-emerald-800 transition hover:bg-emerald-100 disabled:opacity-30">Bis Ende fortsetzen</button>
+                <button type="button" wire:click="restartRun" wire:confirm="Aktuellen Lauf beenden und neu starten?" @disabled($historicalRunView) class="h-9 rounded-lg border border-slate-300 bg-white px-3 text-[11px] font-bold text-slate-600 transition hover:bg-slate-100 disabled:opacity-30">Neu versuchen</button>
+                <button type="button" wire:click="stopRun" wire:confirm="Diesen Lauf wirklich stoppen?" @disabled($historicalRunView || (! $isActive && ! $isPaused)) class="h-9 rounded-lg border border-rose-200 bg-white px-3 text-[11px] font-bold text-rose-700 transition hover:bg-rose-50 disabled:opacity-30">Stoppen</button>
 
                 <button
                     type="button"
@@ -187,7 +234,7 @@
         @if($pendingConfirmation)
             <div class="flex flex-wrap items-center justify-between gap-3 border-t border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-950 lg:px-6">
                 <span><strong>Freigabe erforderlich:</strong> {{ $pendingConfirmation['message'] ?? 'Aktion bestätigen?' }}</span>
-                <div class="flex gap-2"><button type="button" wire:click="discardPendingAction" class="rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-bold text-amber-800">Verwerfen</button><button type="button" wire:click="confirmPendingAction" class="rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-bold text-white">Einmalig ausführen</button></div>
+                <div class="flex gap-2"><button type="button" wire:click="discardPendingAction" @disabled($historicalRunView) class="rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-bold text-amber-800 disabled:opacity-40">Verwerfen</button><button type="button" wire:click="confirmPendingAction" @disabled($historicalRunView) class="rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-bold text-white disabled:opacity-40">Einmalig ausführen</button></div>
             </div>
         @endif
         @error('studio')<span class="sr-only" role="alert">{{ $message }}</span>@enderror
@@ -216,15 +263,27 @@
     @endif
 
     @if($showRouteRepairModal)
-        <div wire:key="workflow-studio-route-repair" wire:click.self="closeRouteRepairModal" class="absolute inset-0 z-[70] flex items-center justify-center bg-slate-950/45 p-3 backdrop-blur-sm sm:p-6" role="dialog" aria-modal="true" aria-label="Fehlende Verzweigungen">
-            <section class="flex max-h-full w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-white/70 bg-white shadow-2xl">
+        <div
+            wire:key="workflow-studio-route-repair"
+            x-on:click.self="const studioShell = $el.closest('[data-workflow-studio-shell]'); await $wire.closeRouteRepairModal(); $nextTick(() => studioShell?.querySelector('[data-studio-run-start-trigger]')?.focus({ preventScroll: true }))"
+            x-on:keydown.escape.prevent.stop="const studioShell = $el.closest('[data-workflow-studio-shell]'); await $wire.closeRouteRepairModal(); $nextTick(() => studioShell?.querySelector('[data-studio-run-start-trigger]')?.focus({ preventScroll: true }))"
+            class="absolute inset-0 z-[70] flex items-center justify-center bg-slate-950/45 p-3 backdrop-blur-sm sm:p-6"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Fehlende Verzweigungen"
+        >
+            <section
+                class="flex max-h-full w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-white/70 bg-white shadow-2xl"
+                x-trap.inert.noscroll="true"
+                x-init="$nextTick(() => $refs.routeRepairClose?.focus({ preventScroll: true }))"
+            >
                 <header class="flex shrink-0 items-start justify-between gap-4 border-b border-slate-200 px-4 py-3 sm:px-5">
                     <div>
                         <p class="text-[9px] font-black uppercase tracking-[0.18em] text-amber-700">Workflow-Struktur</p>
                         <h2 class="mt-1 text-base font-bold text-slate-950">{{ count($routeRepairFindings) }} Verzweigung(en) ohne gültiges Ziel</h2>
                         <p class="mt-1 text-xs text-slate-500">Die Zielkarte oder Zielliste wurde gelöscht. Sie können die betroffenen Verzweigungen auf die Standardroute setzen und den Test direkt starten.</p>
                     </div>
-                    <button type="button" wire:click="closeRouteRepairModal" class="h-9 shrink-0 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 hover:bg-slate-100">Schließen ×</button>
+                    <button x-ref="routeRepairClose" type="button" x-on:click="const studioShell = $el.closest('[data-workflow-studio-shell]'); await $wire.closeRouteRepairModal(); $nextTick(() => studioShell?.querySelector('[data-studio-run-start-trigger]')?.focus({ preventScroll: true }))" class="h-9 shrink-0 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 hover:bg-slate-100">Schließen ×</button>
                 </header>
 
                 <div class="min-h-0 flex-1 overflow-y-auto px-4 py-3 sm:px-5">
@@ -262,8 +321,8 @@
                 </div>
 
                 <footer class="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-slate-200 bg-slate-50 px-4 py-3 sm:px-5">
-                    <button type="button" wire:click="closeRouteRepairModal" class="h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 hover:bg-slate-100">Schließen</button>
-                    <button type="button" wire:click="applyRouteRepairAndStart" @disabled($routeRepairBlockingMessages !== []) class="h-9 rounded-lg bg-slate-900 px-3.5 text-xs font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40">
+                    <button type="button" x-on:click="const studioShell = $el.closest('[data-workflow-studio-shell]'); await $wire.closeRouteRepairModal(); $nextTick(() => studioShell?.querySelector('[data-studio-run-start-trigger]')?.focus({ preventScroll: true }))" class="h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 hover:bg-slate-100">Schließen</button>
+                    <button type="button" wire:click="applyRouteRepairAndStart" @disabled($historicalRunView || $routeRepairBlockingMessages !== []) class="h-9 rounded-lg bg-slate-900 px-3.5 text-xs font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40">
                         Auf Standardroute setzen und Test starten
                     </button>
                 </footer>
@@ -271,10 +330,22 @@
         </div>
     @endif
 
-    @if($showCopilotSettingsModal)
-        <div wire:key="workflow-studio-copilot-settings" wire:click.self="$set('showCopilotSettingsModal', false)" class="absolute inset-0 z-40 flex items-center justify-center bg-slate-950/35 p-3 backdrop-blur-sm sm:p-6" role="dialog" aria-modal="true" aria-label="Copilot-Einstellungen">
-            <section class="flex max-h-full w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-white/70 bg-white shadow-2xl">
-                <header class="flex shrink-0 items-center justify-between gap-4 border-b border-slate-200 px-4 py-3 sm:px-5"><div><p class="text-[9px] font-black uppercase tracking-[0.18em] text-cyan-700">Workflow-Copilot</p><h2 class="mt-1 text-base font-bold text-slate-950">Einstellungen und Start</h2><p class="mt-1 text-xs text-slate-500">Ziel, Testkontext und Berechtigungen dieser Studio-Sitzung.</p></div><button type="button" wire:click="$set('showCopilotSettingsModal', false)" class="h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 hover:bg-slate-100">Schließen ×</button></header>
+    @if($showCopilotSettingsModal && ! $historicalRunView)
+        <div
+            wire:key="workflow-studio-copilot-settings"
+            x-on:click.self="const studioShell = $el.closest('[data-workflow-studio-shell]'); await $wire.set('showCopilotSettingsModal', false); $nextTick(() => studioShell?.querySelector('[data-studio-copilot-settings-trigger]')?.focus({ preventScroll: true }))"
+            x-on:keydown.escape.prevent.stop="const studioShell = $el.closest('[data-workflow-studio-shell]'); await $wire.set('showCopilotSettingsModal', false); $nextTick(() => studioShell?.querySelector('[data-studio-copilot-settings-trigger]')?.focus({ preventScroll: true }))"
+            class="absolute inset-0 z-40 flex items-center justify-center bg-slate-950/35 p-3 backdrop-blur-sm sm:p-6"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Copilot-Einstellungen"
+        >
+            <section
+                class="flex max-h-full w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-white/70 bg-white shadow-2xl"
+                x-trap.inert.noscroll="true"
+                x-init="$nextTick(() => $refs.copilotSettingsClose?.focus({ preventScroll: true }))"
+            >
+                <header class="flex shrink-0 items-center justify-between gap-4 border-b border-slate-200 px-4 py-3 sm:px-5"><div><p class="text-[9px] font-black uppercase tracking-[0.18em] text-cyan-700">Workflow-Copilot</p><h2 class="mt-1 text-base font-bold text-slate-950">Einstellungen und Start</h2><p class="mt-1 text-xs text-slate-500">Ziel, Testkontext und Berechtigungen dieser Studio-Sitzung.</p></div><button x-ref="copilotSettingsClose" type="button" x-on:click="const studioShell = $el.closest('[data-workflow-studio-shell]'); await $wire.set('showCopilotSettingsModal', false); $nextTick(() => studioShell?.querySelector('[data-studio-copilot-settings-trigger]')?.focus({ preventScroll: true }))" class="h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 hover:bg-slate-100">Schließen ×</button></header>
                 <div class="min-h-0 flex-1 overflow-y-auto">
                     @include('livewire.admin.network.workflow-studio.copilot-rail')
                 </div>
@@ -282,14 +353,16 @@
         </div>
     @endif
 
-    <livewire:admin.network.workflow-studio-task-editor
-        :workflow="$workflow"
-        :studio-session-id="$session->id"
-        :modal-only="true"
-        :key="'workflow-studio-task-modal-'.$workflow->id.'-'.$session->id"
-    />
+    @unless($hosted)
+        <livewire:admin.network.workflow-studio-task-editor
+            :workflow="$workflow"
+            :studio-session-id="$session->id"
+            :modal-only="true"
+            :key="'workflow-studio-task-modal-'.$workflow->id.'-'.$session->id"
+        />
+    @endunless
 
-    @if(! $autonomousMode)
+    @if(! $autonomousMode && ! $historicalRunView)
         @include('livewire.admin.network.workflow-studio.selector-modal')
     @endif
 </div>

@@ -25,6 +25,8 @@ use App\Services\Workflows\WorkflowRouteMapPresenter;
 use App\Services\Workflows\WorkflowRouteTargetAutoRepairService;
 use App\Services\Workflows\WorkflowRunDebugPackageService;
 use App\Services\Workflows\WorkflowSelectorSyntaxService;
+use App\Services\Workflows\WorkflowStudioControlService;
+use App\Services\Workflows\WorkflowStudioDefinitionMutationPolicy;
 use App\Services\Workflows\WorkflowStudioRevisionService;
 use App\Services\Workflows\WorkflowStudioSessionService;
 use App\Services\Workflows\WorkflowTaskCatalog;
@@ -139,6 +141,27 @@ class WorkflowManager extends Component
     public bool $showRunModal = false;
 
     public bool $showTestWorkbenchModal = false;
+
+    /** Gemeinsame, persistent gemountete Vollbild-Workbench fuer Definition und Tests. */
+    public bool $workbenchOpen = false;
+
+    public bool $workbenchBooted = false;
+
+    public string $workbenchSurface = 'definition';
+
+    public ?int $workbenchStudioSessionId = null;
+
+    public ?int $workbenchRunId = null;
+
+    public string $workbenchRunStatus = 'idle';
+
+    public string $workbenchSessionMode = 'interactive';
+
+    public bool $workbenchPauseRequested = false;
+
+    public bool $workbenchDefinitionCanEdit = true;
+
+    public bool $workbenchHistoricalRun = false;
 
     public string $testWorkbenchMode = 'interactive';
 
@@ -387,6 +410,7 @@ class WorkflowManager extends Component
         $runStats = $selectedWorkflow
             ? $this->workflowRunStats($selectedWorkflow)
             : ['runs' => 0, 'successful_runs' => 0, 'failed_runs' => 0];
+        $workbenchContext = $this->workbenchContext($selectedWorkflow);
 
         return view('livewire.admin.network.workflow-manager', [
             'selectedWorkflow' => $selectedWorkflow,
@@ -409,6 +433,11 @@ class WorkflowManager extends Component
             'visibleTaskDefinitions' => $visibleTaskDefinitions,
             'searchActive' => $search !== '',
             'routeMap' => $routeMap,
+            'workbenchSession' => $workbenchContext['session'],
+            'workbenchRun' => $workbenchContext['run'],
+            'workbenchCanEdit' => $workbenchContext['can_edit'],
+            'workbenchCanPauseForEdit' => $workbenchContext['can_pause_for_edit'],
+            'workbenchLockMessage' => $workbenchContext['lock_message'],
             'summary' => [
                 'actions' => $steps->filter(fn (WorkflowStep $step): bool => $step->type !== WorkflowStep::TYPE_WAIT)->count(),
                 'lists' => $steps->count(),
@@ -420,9 +449,25 @@ class WorkflowManager extends Component
 
     public function saveWorkflow(): void
     {
-        $workflow = $this->editableWorkflow();
+        $workflow = $this->selectedWorkflow();
 
         if (! $workflow) {
+            return;
+        }
+
+        $studioSession = $this->definitionSessionForWorkflow($workflow);
+
+        if ($studioSession) {
+            $policy = app(WorkflowStudioDefinitionMutationPolicy::class)->inspect($workflow, $studioSession);
+
+            if (! $policy['can_edit']) {
+                session()->flash('error', $policy['message']);
+
+                return;
+            }
+        } elseif ($workflow->has_active_copilot_lock) {
+            session()->flash('error', 'Dieser Workflow wird gerade exklusiv durch den Copilot optimiert und kann nicht manuell veraendert werden.');
+
             return;
         }
 
@@ -462,7 +507,7 @@ class WorkflowManager extends Component
             'session_label' => $validated['workflowBrowserSessionLabel'] ?? '',
         ]);
 
-        $workflow->forceFill([
+        $attributes = [
             'name' => trim($validated['workflowName']),
             'description' => trim((string) ($validated['workflowDescription'] ?? '')),
             'category' => $this->normalizeGroup($validated['workflowGroup']),
@@ -470,7 +515,33 @@ class WorkflowManager extends Component
             'is_active' => (bool) $validated['workflowActive'],
             'is_locked' => (bool) $validated['workflowLocked'],
             'settings_json' => $settings,
-        ])->save();
+        ];
+
+        try {
+            if ($studioSession) {
+                app(WorkflowStudioRevisionService::class)->apply(
+                    $studioSession,
+                    (int) $workflow->copilot_revision,
+                    'Workflow-Einstellungen in der Uebersicht gespeichert.',
+                    function (Workflow $lockedWorkflow) use ($studioSession, $attributes): void {
+                        app(WorkflowStudioDefinitionMutationPolicy::class)->assertCanMutate(
+                            $lockedWorkflow,
+                            $studioSession,
+                        );
+                        $lockedWorkflow->forceFill($attributes)->save();
+                    },
+                    'user:'.auth()->id(),
+                );
+            } else {
+                $workflow->forceFill($attributes)->save();
+            }
+        } catch (\DomainException $exception) {
+            if ($exception->getMessage() !== 'Die angeforderte Workflow-Aenderung hat keine Definition veraendert.') {
+                session()->flash('error', $exception->getMessage());
+
+                return;
+            }
+        }
 
         $this->showWorkflowModal = false;
 
@@ -500,7 +571,7 @@ class WorkflowManager extends Component
     {
         $workflow = $this->selectedWorkflow();
 
-        if (! $workflow) {
+        if (! $workflow || ! $this->directManagerDefinitionMutationAllowed($workflow)) {
             return;
         }
 
@@ -618,7 +689,7 @@ class WorkflowManager extends Component
     public function addActionStep(string $actionId): void
     {
         $catalog = app(PersonaActionWorkflowCatalog::class);
-        $workflow = $this->editableWorkflow();
+        $workflow = $this->selectedWorkflow();
         $action = $catalog->actionById($actionId);
 
         if (! $workflow || ! $action) {
@@ -627,14 +698,55 @@ class WorkflowManager extends Component
             return;
         }
 
-        $workflow->steps()->create([
-            'name' => (string) ($action['label'] ?? 'Geplante Aktion'),
-            'type' => WorkflowStep::TYPE_PLANNED_ACTION,
-            'action_key' => (string) ($action['id'] ?? Str::uuid()),
-            'position' => ((int) $workflow->steps()->max('position')) + 10,
-            'is_enabled' => true,
-            'config_json' => $catalog->workflowStepConfig($action),
-        ]);
+        $createAction = function (Workflow $targetWorkflow) use ($action, $catalog): void {
+            $targetWorkflow->steps()->create([
+                'name' => (string) ($action['label'] ?? 'Geplante Aktion'),
+                'type' => WorkflowStep::TYPE_PLANNED_ACTION,
+                'action_key' => (string) ($action['id'] ?? Str::uuid()),
+                'position' => ((int) $targetWorkflow->steps()->max('position')) + 10,
+                'is_enabled' => true,
+                'config_json' => $catalog->workflowStepConfig($action),
+            ]);
+        };
+
+        if ($this instanceof WorkflowStudioTaskEditor) {
+            $createAction($workflow);
+        } else {
+            $session = $this->definitionSessionForWorkflow($workflow);
+
+            if (! $session) {
+                if (! $this->directManagerDefinitionMutationAllowed($workflow)) {
+                    return;
+                }
+
+                $createAction($workflow);
+            } else {
+                try {
+                    app(WorkflowStudioRevisionService::class)->apply(
+                        $session,
+                        (int) ($workflow->copilot_revision ?? 0),
+                        'Aktion aus der Uebersichts-Bibliothek eingefuegt.',
+                        function (Workflow $lockedWorkflow) use ($createAction, $session): void {
+                            app(WorkflowStudioDefinitionMutationPolicy::class)->assertCanMutate(
+                                $lockedWorkflow,
+                                $session->getKey(),
+                            );
+                            $createAction($lockedWorkflow);
+                        },
+                        'user:'.auth()->id(),
+                    );
+                } catch (\DomainException $exception) {
+                    session()->flash('error', $exception->getMessage());
+
+                    return;
+                } catch (\Throwable $exception) {
+                    report($exception);
+                    session()->flash('error', 'Die Aktion konnte nicht revisionssicher eingefuegt werden.');
+
+                    return;
+                }
+            }
+        }
 
         $this->showActionLibraryModal = false;
 
@@ -643,6 +755,10 @@ class WorkflowManager extends Component
 
     public function toggleStep(int $stepId): void
     {
+        if (! $this->directManagerDefinitionMutationAllowed()) {
+            return;
+        }
+
         $step = $this->stepForSelectedWorkflow($stepId);
 
         if (! $step) {
@@ -654,6 +770,10 @@ class WorkflowManager extends Component
 
     public function removeStep(int $stepId): void
     {
+        if (! $this->directManagerDefinitionMutationAllowed()) {
+            return;
+        }
+
         $step = $this->stepForSelectedWorkflow($stepId);
 
         if (! $step) {
@@ -692,6 +812,10 @@ class WorkflowManager extends Component
 
     public function saveEditStep(): void
     {
+        if (! $this->directManagerDefinitionMutationAllowed()) {
+            return;
+        }
+
         $step = $this->editingStepId ? $this->stepForSelectedWorkflow($this->editingStepId) : null;
 
         if (! $step) {
@@ -789,7 +913,7 @@ class WorkflowManager extends Component
 
     public function openFromStudio(int $stepId, string $taskKey): void
     {
-        $this->openEditTaskCard($stepId, $taskKey);
+        $this->focusDefinitionEditor($stepId, $taskKey, true);
     }
 
     public function selectCatalogTarget(int $stepId): void
@@ -963,12 +1087,27 @@ class WorkflowManager extends Component
     }
 
     #[On('workflow-standard-editor-focus-requested')]
-    public function focusDefinitionEditor(int $stepId, string $taskKey = '', bool $openTask = false): void
-    {
-        $this->showTestWorkbenchModal = false;
-        $this->testWorkbenchRunId = null;
+    public function focusDefinitionEditor(
+        int $stepId = 0,
+        string $taskKey = '',
+        bool $openTask = false,
+        bool $openLibrary = true,
+        ?int $studioSessionId = null,
+        ?string $source = null,
+    ): void {
+        if ($studioSessionId !== null
+            && $this->workbenchStudioSessionId !== null
+            && $studioSessionId !== $this->workbenchStudioSessionId) {
+            return;
+        }
+
+        $this->openDefinitionWorkbench();
 
         if ($stepId <= 0) {
+            if ($openLibrary) {
+                $this->dispatchDefinitionWorkbenchEntered();
+            }
+
             return;
         }
 
@@ -990,10 +1129,17 @@ class WorkflowManager extends Component
             'workflow-standard-editor-focused',
             stepId: $stepId,
             taskKey: $taskKey,
+            editorInstance: $this->definitionEditorInstance(),
+            source: $source ?: 'workflow-manager',
         );
 
         if ($openTask && $taskKey !== '') {
-            $this->openEditTaskCard($stepId, $taskKey);
+            $this->dispatch(
+                'open-workflow-studio-task-editor',
+                stepId: $stepId,
+                taskKey: $taskKey,
+                studioSessionId: $this->workbenchStudioSessionId,
+            );
         }
     }
 
@@ -1286,24 +1432,268 @@ class WorkflowManager extends Component
 
     public function openTestWorkbench(string $mode = 'interactive', ?int $runId = null): void
     {
-        if (! $this->selectedWorkflow()) {
+        $mode = $mode === 'autonomous' ? 'autonomous' : 'interactive';
+        $runId = $runId && $runId > 0 ? $runId : null;
+        $reopenExistingContext = $runId === null
+            && $this->workbenchBooted
+            && ! $this->workbenchOpen
+            && $this->workbenchSurface === 'test'
+            && $this->testWorkbenchMode === $mode;
+
+        if ($reopenExistingContext) {
+            $runId = $this->workbenchRunId;
+        }
+
+        $session = $this->ensureWorkbenchSession($mode, $runId);
+
+        if (! $session) {
             return;
         }
 
-        $this->testWorkbenchMode = $mode === 'autonomous' ? 'autonomous' : 'interactive';
-        $this->testWorkbenchRunId = $runId && $runId > 0 ? $runId : null;
-        $this->testWorkbenchKey++;
+        $this->testWorkbenchMode = $mode;
+        $this->testWorkbenchRunId = $runId ?: $session->active_workflow_run_id;
+        $this->workbenchRunId = $this->testWorkbenchRunId;
+        $this->workbenchSurface = 'test';
+        $this->workbenchOpen = true;
+        $this->workbenchBooted = true;
+        $this->showTestWorkbenchModal = true;
         $this->showRunModal = false;
         $this->showCopilotModal = false;
         $this->showRunPreviewModal = false;
+        $this->refreshWorkbenchContext();
+        $this->dispatchHostedStudioContext();
+    }
+
+    public function openDefinitionWorkbench(?string $dialog = null): void
+    {
+        $session = $this->ensureWorkbenchSession($this->testWorkbenchMode, $this->workbenchRunId);
+
+        if (! $session) {
+            return;
+        }
+
+        $this->workbenchSurface = 'definition';
+        $this->workbenchOpen = true;
+        $this->workbenchBooted = true;
         $this->showTestWorkbenchModal = true;
+        $this->showRunModal = false;
+        $this->showCopilotModal = false;
+        $this->showRunPreviewModal = false;
+        $this->refreshWorkbenchContext();
+        $this->dispatchDefinitionWorkbenchEntered();
+
+        if ($dialog === 'add-step') {
+            $this->dispatch(
+                'workflow-definition-open-add-step',
+                studioSessionId: $this->workbenchStudioSessionId,
+            );
+        }
+    }
+
+    public function switchWorkbenchSurface(string $surface): void
+    {
+        $surface = $surface === 'test' ? 'test' : 'definition';
+
+        if (! $this->workbenchBooted) {
+            if ($surface === 'test') {
+                $this->openTestWorkbench($this->testWorkbenchMode, $this->workbenchRunId);
+            } else {
+                $this->openDefinitionWorkbench();
+            }
+
+            return;
+        }
+
+        $this->workbenchOpen = true;
+        $this->showTestWorkbenchModal = true;
+        $this->workbenchSurface = $surface;
+        $this->refreshWorkbenchContext();
+
+        if ($surface === 'definition') {
+            $this->dispatchDefinitionWorkbenchEntered();
+        } else {
+            $this->dispatchHostedStudioContext();
+        }
+    }
+
+    public function requestPauseAndEdit(): void
+    {
+        $workflow = $this->selectedWorkflow();
+        $session = $workflow && $this->workbenchStudioSessionId
+            ? WorkflowStudioSession::query()
+                ->where('workflow_id', $workflow->getKey())
+                ->find($this->workbenchStudioSessionId)
+            : null;
+
+        if (! $workflow || ! $session) {
+            $this->openDefinitionWorkbench();
+
+            return;
+        }
+
+        $policy = app(WorkflowStudioDefinitionMutationPolicy::class)->inspect($workflow, $session);
+        $run = $policy['run'];
+        $this->workbenchDefinitionCanEdit = (bool) $policy['can_edit'];
+
+        if ($policy['can_edit']) {
+            $this->workbenchPauseRequested = false;
+            $this->workbenchSurface = 'definition';
+            $this->dispatchDefinitionWorkbenchEntered();
+
+            return;
+        }
+
+        if (! $policy['can_pause_for_edit'] || ! $run) {
+            session()->flash('error', $policy['message'] ?: 'Die Workflow-Definition ist aktuell schreibgeschuetzt.');
+            $this->workbenchSurface = 'definition';
+
+            return;
+        }
+
+        $this->workbenchPauseRequested = true;
+        $this->workbenchSurface = 'definition';
+        $this->dispatch(
+            'workflow-studio-pause-for-edit-requested',
+            studioSessionId: (int) $session->getKey(),
+            runId: (int) $run->getKey(),
+            stepId: null,
+            taskKey: null,
+        );
+    }
+
+    #[On('workflow-studio-run-status-changed')]
+    public function handleWorkbenchRunStatusChanged(
+        int $studioSessionId,
+        ?int $runId = null,
+        string $status = 'idle',
+    ): void {
+        if ($this->workbenchStudioSessionId !== $studioSessionId) {
+            return;
+        }
+
+        $workflow = $this->selectedWorkflow();
+
+        if (! $workflow) {
+            return;
+        }
+
+        $session = WorkflowStudioSession::query()
+            ->where('workflow_id', $workflow->getKey())
+            ->find($studioSessionId);
+
+        if (! $session) {
+            return;
+        }
+
+        $previousDefinitionCanEdit = $this->workbenchDefinitionCanEdit;
+        $this->workbenchSessionMode = $session->mode === 'autonomous' ? 'autonomous' : 'interactive';
+        $this->testWorkbenchMode = $this->workbenchSessionMode;
+
+        $run = $runId
+            ? WorkflowRun::query()
+                ->where('workflow_id', $workflow->getKey())
+                ->where(function ($query) use ($studioSessionId): void {
+                    $query->where('workflow_studio_session_id', $studioSessionId)
+                        ->orWhereNull('workflow_studio_session_id');
+                })
+                ->find($runId)
+            : null;
+
+        if ($runId !== null && ! $run) {
+            return;
+        }
+
+        $this->workbenchRunId = $run?->getKey() ? (int) $run->getKey() : null;
+        $this->testWorkbenchRunId = $this->workbenchRunId;
+        $this->workbenchRunStatus = (string) ($run?->status ?? 'idle');
+        $this->workbenchHistoricalRun = (bool) ($run
+            && (int) $session->active_workflow_run_id !== (int) $run->getKey());
+
+        $activeRunMatches = $run
+            && (int) $session->active_workflow_run_id === (int) $run->getKey();
+        $policy = app(WorkflowStudioDefinitionMutationPolicy::class)->inspect(
+            $workflow,
+            $session,
+        );
+        $this->workbenchDefinitionCanEdit = (bool) $policy['can_edit'];
+
+        if ($previousDefinitionCanEdit !== $this->workbenchDefinitionCanEdit || $this->workbenchPauseRequested) {
+            $this->dispatchDefinitionAccessRefresh();
+        }
+
+        if ($this->workbenchPauseRequested && $activeRunMatches && $policy['can_edit']) {
+            $this->workbenchPauseRequested = false;
+            $this->workbenchSurface = 'definition';
+            $this->dispatchDefinitionWorkbenchEntered();
+        }
+    }
+
+    public function refreshWorkbenchContext(): void
+    {
+        if (! $this->workbenchStudioSessionId) {
+            return;
+        }
+
+        $workflow = $this->selectedWorkflow();
+
+        if (! $workflow) {
+            return;
+        }
+
+        $session = WorkflowStudioSession::query()
+            ->with('activeRun')
+            ->where('workflow_id', $workflow->getKey())
+            ->find($this->workbenchStudioSessionId);
+
+        if (! $session) {
+            return;
+        }
+
+        $displayRun = $this->workbenchRunId
+            ? WorkflowRun::query()
+                ->where('workflow_id', $workflow->getKey())
+                ->where(function ($query) use ($session): void {
+                    $query->where('workflow_studio_session_id', $session->getKey())
+                        ->orWhereNull('workflow_studio_session_id');
+                })
+                ->find($this->workbenchRunId)
+            : $session->activeRun;
+        $previousDefinitionCanEdit = $this->workbenchDefinitionCanEdit;
+        $this->workbenchSessionMode = $session->mode === 'autonomous' ? 'autonomous' : 'interactive';
+        $this->testWorkbenchMode = $this->workbenchSessionMode;
+        $this->workbenchRunId = $displayRun?->getKey() ? (int) $displayRun->getKey() : null;
+        $this->testWorkbenchRunId = $this->workbenchRunId;
+        $this->workbenchRunStatus = (string) ($displayRun?->status ?? 'idle');
+        $this->workbenchHistoricalRun = (bool) ($displayRun
+            && (int) $session->active_workflow_run_id !== (int) $displayRun->getKey());
+        $policy = app(WorkflowStudioDefinitionMutationPolicy::class)->inspect(
+            $workflow,
+            $session,
+        );
+        $this->workbenchDefinitionCanEdit = (bool) $policy['can_edit'];
+
+        if ($previousDefinitionCanEdit !== $this->workbenchDefinitionCanEdit || $this->workbenchPauseRequested) {
+            $this->dispatchDefinitionAccessRefresh();
+        }
+
+        if ($this->workbenchPauseRequested && $policy['can_edit']) {
+            $this->workbenchPauseRequested = false;
+            $this->workbenchSurface = 'definition';
+            $this->dispatchDefinitionWorkbenchEntered();
+        }
     }
 
     #[On('workflow-test-workbench-close')]
     public function closeTestWorkbench(): void
     {
+        $this->closeWorkflowWorkbench();
+    }
+
+    public function closeWorkflowWorkbench(): void
+    {
+        $this->workbenchOpen = false;
         $this->showTestWorkbenchModal = false;
-        $this->testWorkbenchRunId = null;
+        $this->workbenchPauseRequested = false;
     }
 
     #[On('workflow-studio-revision-restored')]
@@ -1340,6 +1730,10 @@ class WorkflowManager extends Component
 
     public function saveEditTaskCard(?string $mailboxSourceOverride = null): void
     {
+        if (! $this->directManagerDefinitionMutationAllowed()) {
+            return;
+        }
+
         $step = $this->editingTaskStepId ? $this->stepForSelectedWorkflow($this->editingTaskStepId) : null;
 
         if (! $step) {
@@ -1500,6 +1894,10 @@ class WorkflowManager extends Component
 
     public function removeTaskCard(int $stepId, string $taskKey): void
     {
+        if (! $this->directManagerDefinitionMutationAllowed()) {
+            return;
+        }
+
         $step = $this->stepForSelectedWorkflow($stepId);
 
         if (! $step) {
@@ -1557,6 +1955,10 @@ class WorkflowManager extends Component
 
     public function reorderTaskCard(int $stepId, mixed $item, mixed $position): void
     {
+        if (! $this->directManagerDefinitionMutationAllowed()) {
+            return;
+        }
+
         $workflow = $this->selectedWorkflow();
         $step = $this->stepForSelectedWorkflow($stepId);
 
@@ -1600,6 +2002,10 @@ class WorkflowManager extends Component
 
     public function moveTaskCard(int $targetStepId, mixed $sourceStepId, string $taskKey, mixed $position): void
     {
+        if (! $this->directManagerDefinitionMutationAllowed()) {
+            return;
+        }
+
         $workflow = $this->selectedWorkflow();
         $targetStep = $this->stepForSelectedWorkflow($targetStepId);
 
@@ -2676,6 +3082,195 @@ class WorkflowManager extends Component
         ], true);
     }
 
+    protected function ensureWorkbenchSession(string $mode, ?int $runId = null): ?WorkflowStudioSession
+    {
+        $workflow = $this->selectedWorkflow();
+
+        if (! $workflow) {
+            return null;
+        }
+
+        $mode = $mode === 'autonomous' ? 'autonomous' : 'interactive';
+        $requestedRun = $runId
+            ? WorkflowRun::query()
+                ->where('workflow_id', $workflow->getKey())
+                ->find($runId)
+            : null;
+
+        if ($runId && ! $requestedRun) {
+            session()->flash('error', 'Der angeforderte Testlauf gehoert nicht zu diesem Workflow.');
+
+            return null;
+        }
+
+        $session = $requestedRun?->workflow_studio_session_id
+            ? WorkflowStudioSession::query()
+                ->where('workflow_id', $workflow->getKey())
+                ->find($requestedRun->workflow_studio_session_id)
+            : null;
+
+        if (! $session && $this->workbenchStudioSessionId) {
+            $session = WorkflowStudioSession::query()
+                ->where('workflow_id', $workflow->getKey())
+                ->find($this->workbenchStudioSessionId);
+
+            if ($session?->finished_at && ! $requestedRun) {
+                $session = null;
+            }
+        }
+
+        $session ??= app(WorkflowStudioSessionService::class)->latestOrOpen(
+            $workflow,
+            auth()->user(),
+            $mode,
+        );
+
+        $session = $session->fresh();
+        $sessionMode = $session->mode === 'autonomous' ? 'autonomous' : 'interactive';
+
+        if (! $requestedRun && $sessionMode !== $mode) {
+            if ($session->mode_locked_at) {
+                $activeRun = $session->activeRun;
+
+                if (! $activeRun || in_array((string) $activeRun->status, $this->editableRunStatuses(), true)) {
+                    $session = app(WorkflowStudioSessionService::class)->open(
+                        $workflow,
+                        auth()->user(),
+                        $mode,
+                    );
+                } else {
+                    session()->flash('warning', 'Der Testmodus ist fuer den aktiven Lauf festgelegt. Die bestehende Sitzung bleibt erhalten.');
+                    $mode = $sessionMode;
+                }
+            } else {
+                $session = app(WorkflowStudioControlService::class)->choose($session, $mode, auth()->user());
+            }
+        }
+
+        app(WorkflowStudioRevisionService::class)->ensureBaseline($session);
+
+        if ($this->workbenchStudioSessionId !== (int) $session->getKey()) {
+            $this->workbenchStudioSessionId = (int) $session->getKey();
+            $this->testWorkbenchKey++;
+        }
+
+        $displayRun = $requestedRun ?: $session->activeRun;
+        $this->workbenchBooted = true;
+        $this->workbenchSessionMode = $session->mode === 'autonomous' ? 'autonomous' : 'interactive';
+        $this->workbenchRunId = $displayRun?->getKey() ? (int) $displayRun->getKey() : null;
+        $this->testWorkbenchRunId = $this->workbenchRunId;
+        $this->workbenchRunStatus = (string) ($displayRun?->status ?? 'idle');
+        $this->workbenchHistoricalRun = (bool) ($displayRun
+            && (int) $session->active_workflow_run_id !== (int) $displayRun->getKey());
+        $this->workbenchDefinitionCanEdit = (bool) app(WorkflowStudioDefinitionMutationPolicy::class)
+            ->inspect($workflow, $session)['can_edit'];
+
+        return $session->fresh() ?? $session;
+    }
+
+    /**
+     * @return array{
+     *     session: ?WorkflowStudioSession,
+     *     run: ?WorkflowRun,
+     *     can_edit: bool,
+     *     can_pause_for_edit: bool,
+     *     lock_message: string
+     * }
+     */
+    protected function workbenchContext(?Workflow $workflow): array
+    {
+        $empty = [
+            'session' => null,
+            'run' => null,
+            'can_edit' => true,
+            'can_pause_for_edit' => false,
+            'lock_message' => '',
+        ];
+
+        if (! $workflow || ! $this->workbenchStudioSessionId) {
+            return $empty;
+        }
+
+        $session = WorkflowStudioSession::query()
+            ->where('workflow_id', $workflow->getKey())
+            ->find($this->workbenchStudioSessionId);
+
+        if (! $session) {
+            return $empty;
+        }
+
+        $displayRun = $this->workbenchRunId
+            ? WorkflowRun::query()
+                ->where('workflow_id', $workflow->getKey())
+                ->where(function ($query) use ($session): void {
+                    $query->where('workflow_studio_session_id', $session->getKey())
+                        ->orWhereNull('workflow_studio_session_id');
+                })
+                ->find($this->workbenchRunId)
+            : null;
+        $policy = app(WorkflowStudioDefinitionMutationPolicy::class)->inspect($workflow, $session);
+
+        return [
+            'session' => $session,
+            'run' => $displayRun ?: $policy['run'],
+            'can_edit' => $policy['can_edit'],
+            'can_pause_for_edit' => $policy['can_pause_for_edit'],
+            'lock_message' => $policy['message'],
+        ];
+    }
+
+    /** @return list<string> */
+    protected function editableRunStatuses(): array
+    {
+        return WorkflowStudioDefinitionMutationPolicy::EDITABLE_RUN_STATUSES;
+    }
+
+    protected function definitionEditorInstance(): string
+    {
+        return 'studio-'.($this->workbenchStudioSessionId ?: 'pending');
+    }
+
+    protected function dispatchDefinitionWorkbenchEntered(): void
+    {
+        $this->dispatchDefinitionAccessRefresh();
+        $this->dispatch(
+            'workflow-definition-workbench-entered',
+            editorInstance: $this->definitionEditorInstance(),
+            source: 'workflow-manager',
+        );
+        $this->dispatch(
+            'workflow-minimap-refresh-requested',
+            instance: 'definition-route-'.$this->workbenchStudioSessionId,
+            source: $this->definitionEditorInstance(),
+        );
+    }
+
+    protected function dispatchDefinitionAccessRefresh(): void
+    {
+        if (! $this->workbenchStudioSessionId) {
+            return;
+        }
+
+        $this->dispatch(
+            'workflow-definition-access-refresh-requested',
+            studioSessionId: $this->workbenchStudioSessionId,
+        );
+    }
+
+    protected function dispatchHostedStudioContext(): void
+    {
+        if (! $this->workbenchStudioSessionId) {
+            return;
+        }
+
+        $this->dispatch(
+            'workflow-hosted-studio-context-requested',
+            studioSessionId: $this->workbenchStudioSessionId,
+            mode: $this->testWorkbenchMode,
+            runId: $this->workbenchRunId,
+        );
+    }
+
     protected function selectedWorkflow(): ?Workflow
     {
         if (! $this->selectedWorkflowId) {
@@ -2697,7 +3292,66 @@ class WorkflowManager extends Component
             return null;
         }
 
+        if (! $workflow || ! $this->directManagerDefinitionMutationAllowed($workflow)) {
+            return null;
+        }
+
         return $workflow;
+    }
+
+    protected function definitionSessionForWorkflow(Workflow $workflow): ?WorkflowStudioSession
+    {
+        if ($this->workbenchStudioSessionId) {
+            $session = WorkflowStudioSession::query()
+                ->where('workflow_id', $workflow->getKey())
+                ->find($this->workbenchStudioSessionId);
+
+            if ($session) {
+                return $session;
+            }
+        }
+
+        return WorkflowStudioSession::query()
+            ->where('workflow_id', $workflow->getKey())
+            ->whereNull('finished_at')
+            ->latest('last_activity_at')
+            ->latest('id')
+            ->first();
+    }
+
+    protected function directManagerDefinitionMutationAllowed(?Workflow $workflow = null): bool
+    {
+        if ($this instanceof WorkflowStudioTaskEditor) {
+            return true;
+        }
+
+        $workflow ??= $this->selectedWorkflow();
+
+        if (! $workflow) {
+            return false;
+        }
+
+        $session = $this->definitionSessionForWorkflow($workflow);
+
+        if (! $session) {
+            return ! $workflow->has_active_copilot_lock;
+        }
+
+        $policy = app(WorkflowStudioDefinitionMutationPolicy::class)->inspect($workflow, $session);
+
+        if (! $policy['can_edit']) {
+            session()->flash('error', $policy['message']);
+
+            return false;
+        }
+
+        if ($this->workbenchBooted) {
+            session()->flash('error', 'Diese Struktur wird im revisionierten Bearbeiten-Tab der Workflow-Workbench geaendert.');
+
+            return false;
+        }
+
+        return true;
     }
 
     protected function previewWorkflowRun(): ?WorkflowRun

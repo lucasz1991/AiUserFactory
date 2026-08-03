@@ -1,6 +1,7 @@
 @props([
     'task',
     'showPorts' => false,
+    'locked' => false,
 ])
 
 @php
@@ -28,15 +29,21 @@
     @endif
     <div class="flex min-w-0 items-center justify-between gap-2">
         <div class="flex min-w-0 flex-1 items-center gap-2">
-            <div class="flex h-6 w-6 shrink-0 cursor-grab items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-700 active:cursor-grabbing" title="Task verschieben">
-                <svg class="h-3.5 w-3.5" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="5" cy="3" r="1"></circle><circle cx="11" cy="3" r="1"></circle><circle cx="5" cy="8" r="1"></circle><circle cx="11" cy="8" r="1"></circle><circle cx="5" cy="13" r="1"></circle><circle cx="11" cy="13" r="1"></circle></svg>
-            </div>
+            @if(! $locked)
+                <div class="flex h-6 w-6 shrink-0 cursor-grab items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-700 active:cursor-grabbing" title="Task verschieben">
+                    <svg class="h-3.5 w-3.5" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="5" cy="3" r="1"></circle><circle cx="11" cy="3" r="1"></circle><circle cx="5" cy="8" r="1"></circle><circle cx="11" cy="8" r="1"></circle><circle cx="5" cy="13" r="1"></circle><circle cx="11" cy="13" r="1"></circle></svg>
+                </div>
+            @endif
             <span class="h-2 w-2 shrink-0 rounded-full {{ $kindTone }}"></span>
             <p class="min-w-0 break-words line-clamp-2 text-sm font-semibold leading-5 text-slate-900">{{ $task['title'] ?? 'Task' }}</p>
         </div>
         @isset($actions)
-            <div class="relative shrink-0" x-data="{ open: false }">
-                <button type="button" x-on:click.stop="open = ! open" x-bind:aria-expanded="open" class="ff-task-card-control flex h-7 w-7 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-900" aria-label="Taskaktionen">
+            <div
+                class="relative shrink-0"
+                x-data="{ open: false }"
+                x-on:keydown.escape.stop.prevent="if (open) { open = false; $nextTick(() => $refs.actionsTrigger?.focus({ preventScroll: true })) }"
+            >
+                <button x-ref="actionsTrigger" type="button" x-on:click.stop="open = ! open" x-bind:aria-expanded="open" class="ff-task-card-control flex h-7 w-7 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-900" aria-label="Taskaktionen">
                     <svg class="h-4 w-4" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="8" r="1.25"></circle><circle cx="8" cy="8" r="1.25"></circle><circle cx="13" cy="8" r="1.25"></circle></svg>
                 </button>
                 <div x-cloak x-show="open" x-transition.origin.top.right x-on:click.stop x-on:click.outside="open = false" class="ff-menu absolute right-0 z-30 mt-1 w-36 p-1">

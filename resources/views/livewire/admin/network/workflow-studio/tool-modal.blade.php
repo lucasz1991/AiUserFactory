@@ -15,21 +15,26 @@
 
 <div
     wire:key="workflow-studio-tool-modal-{{ $activeToolModal }}"
-    wire:click.self="closeToolModal"
+    x-on:click.self="const studioShell = $el.closest('[data-workflow-studio-shell]'); await $wire.closeToolModal(); $nextTick(() => studioShell?.querySelector('[data-studio-tool-trigger=&quot;{{ $activeToolModal }}&quot;]')?.focus({ preventScroll: true }))"
+    x-on:keydown.escape.prevent.stop="const studioShell = $el.closest('[data-workflow-studio-shell]'); await $wire.closeToolModal(); $nextTick(() => studioShell?.querySelector('[data-studio-tool-trigger=&quot;{{ $activeToolModal }}&quot;]')?.focus({ preventScroll: true }))"
     {{-- Standard-z-Skala statt Arbitrary-Klasse: z-40 existiert in jedem (auch alten/gecachten) CSS-Build --}}
     class="absolute inset-0 z-40 flex items-center justify-center bg-slate-950/35 p-3 backdrop-blur-sm sm:p-6"
     role="dialog"
     aria-modal="true"
     aria-label="{{ $toolTitle }}"
 >
-    <section class="flex max-h-[calc(100vh-1.5rem)] w-full {{ $activeToolModal === 'browser' ? 'max-w-[96rem]' : 'max-w-6xl' }} flex-col overflow-hidden rounded-2xl border border-white/70 bg-white shadow-2xl">
+    <section
+        class="flex max-h-[calc(100vh-1.5rem)] w-full {{ $activeToolModal === 'browser' ? 'max-w-[96rem]' : 'max-w-6xl' }} flex-col overflow-hidden rounded-2xl border border-white/70 bg-white shadow-2xl"
+        x-trap.inert.noscroll="true"
+        x-init="$nextTick(() => $refs.toolModalClose?.focus({ preventScroll: true }))"
+    >
         <header class="flex shrink-0 items-center justify-between gap-4 border-b border-slate-200 bg-white px-4 py-3 sm:px-5">
             <div class="min-w-0">
                 <p class="text-[9px] font-black uppercase tracking-[0.18em] text-cyan-700">Testwerkzeug</p>
                 <h2 class="mt-1 truncate text-base font-bold text-slate-950">{{ $toolTitle }}</h2>
                 <p class="mt-1 text-xs text-slate-500">{{ $toolDescription }}</p>
             </div>
-            <button type="button" wire:click="closeToolModal" class="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 transition hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-cyan-500">Schließen <span aria-hidden="true">×</span></button>
+            <button x-ref="toolModalClose" type="button" x-on:click="const studioShell = $el.closest('[data-workflow-studio-shell]'); await $wire.closeToolModal(); $nextTick(() => studioShell?.querySelector('[data-studio-tool-trigger=&quot;{{ $activeToolModal }}&quot;]')?.focus({ preventScroll: true }))" class="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 transition hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-cyan-500">Schließen <span aria-hidden="true">×</span></button>
         </header>
 
         <div class="min-h-0 flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-5">
@@ -46,7 +51,7 @@
                                     <button
                                         type="button"
                                         wire:click="openSelectorProbe(@js($window['name']))"
-                                        @disabled(! $isPaused)
+                                        @disabled($historicalRunView || ! $isPaused)
                                         title="{{ $isPaused ? 'Echte Browseraktion im pausierten Lauf vorbereiten' : 'Für Live-Proben den Lauf zuerst manuell pausieren' }}"
                                         class="shrink-0 rounded-lg border border-cyan-200 bg-cyan-50 px-3 py-2 text-[10px] font-bold text-cyan-800 hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-40"
                                     >
@@ -63,8 +68,8 @@
                                     'cursor' => $window['cursor'] ?? null,
                                     'targetId' => $window['target_id'] ?? null,
                                 ],
-                                'interactive' => ! $autonomousMode,
-                                'canProbe' => ! $autonomousMode && $isPaused,
+                                'interactive' => ! $autonomousMode && ! $historicalRunView,
+                                'canProbe' => ! $autonomousMode && ! $historicalRunView && $isPaused,
                             ])
                             @if(filled($window['dom_url'] ?? null))
                                 <div class="border-t border-slate-100 px-4 py-2"><a href="{{ $window['dom_url'] }}" target="_blank" rel="noopener" class="text-[10px] font-bold text-cyan-700 hover:text-cyan-900">Bereinigten DOM-Snapshot öffnen</a></div>

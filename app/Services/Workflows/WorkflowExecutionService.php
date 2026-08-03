@@ -249,6 +249,19 @@ class WorkflowExecutionService
                 $attributes['workflow_studio_session_id'] = $studioSessionId ?: null;
             }
 
+            // Indizierter Spiegel des Personenbezugs. `context_json['person_id']`
+            // bleibt die fuehrende Quelle — die Spalte macht "alle Laeufe dieser
+            // Person" ueberhaupt erst guenstig abfragbar.
+            if (Schema::hasColumn('workflow_runs', 'person_id')) {
+                $contextPersonId = (int) (
+                    data_get($attributes['context_json'], 'person_id')
+                    ?: data_get($attributes['context_json'], 'personId')
+                    ?: 0
+                );
+
+                $attributes['person_id'] = $contextPersonId > 0 ? $contextPersonId : null;
+            }
+
             $run = WorkflowRun::query()->create($attributes);
 
             $lockedWorkflow->forceFill(['last_run_at' => now()])->save();

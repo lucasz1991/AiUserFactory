@@ -110,7 +110,7 @@ class WorkflowCopilotUiMarkupTest extends TestCase
         $this->assertStringContainsString('data-workflow-selector-suggestions', $domInspector);
         $this->assertStringContainsString('canProbe', $domInspector);
         $this->assertStringContainsString('data-workflow-browser-tool', $toolModal);
-        $this->assertStringContainsString("'canProbe' => ! \$autonomousMode && \$isPaused", $toolModal);
+        $this->assertStringContainsString("'canProbe' => ! \$autonomousMode && ! \$historicalRunView && \$isPaused", $toolModal);
         $this->assertStringContainsString('bodyOnlyNodes', $domInspectorJavascript);
         $this->assertStringContainsString('querySelectorAll', $domInspectorJavascript);
         $this->assertStringContainsString('selectFromScreenshot', $domInspectorJavascript);

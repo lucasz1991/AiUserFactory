@@ -59,6 +59,27 @@ class Kernel extends ConsoleKernel
                 ->withoutOverlapping(5);
         }
 
+        // Zeitgesteuerte Personen-Workflows. Bis hierher hat kein einziger
+        // Scheduler-Eintrag je einen Workflow gestartet; `workflows.trigger_type`
+        // wurde zwar gespeichert, aber nirgends ausgewertet. Der Dispatcher
+        // prueft selbst, ob die Automatisierung ueberhaupt eingeschaltet ist —
+        // deshalb kostet der Eintrag im Ruhezustand nur eine Abfrage.
+        if (Schema::hasTable('person_workflow_schedules')) {
+            $schedule->command('network:dispatch-person-workflows')
+                ->everyMinute()
+                ->withoutOverlapping(5)
+                ->runInBackground();
+        }
+
+        // Personen-Fabrik. Erzeugt ausschliesslich Entwuerfe; die Aktivierung
+        // bleibt ein bewusster manueller Schritt in der Oberflaeche.
+        if (Schema::hasTable('person_blueprints')) {
+            $schedule->command('network:run-person-factory')
+                ->everyFiveMinutes()
+                ->withoutOverlapping(10)
+                ->runInBackground();
+        }
+
         // Taegliches Aufraeumen: erledigte Prozess-Zeilen, alte Lauf-Verzeichnisse
         // und verwaiste Browser-Profile, damit storage/ und managed_processes
         // nicht unbegrenzt wachsen.

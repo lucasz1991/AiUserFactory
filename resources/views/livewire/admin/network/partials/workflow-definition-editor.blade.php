@@ -2,6 +2,10 @@
     $modalOnly = (bool) ($modalOnly ?? false);
     $revisionMode = (bool) ($revisionMode ?? false);
     $editorInstance = (string) ($editorInstance ?? ('workflow-'.$workflow->id));
+    $definitionSurfaceMode = (string) ($definitionSurfaceMode ?? ($modalOnly ? 'studio-drawer' : 'workbench'));
+    $definitionSurfaceMode = in_array($definitionSurfaceMode, ['workbench', 'studio-drawer'], true)
+        ? $definitionSurfaceMode
+        : 'workbench';
     $initialOverviewStep = $steps->firstWhere('id', $overviewSelectedStepId) ?: $steps->first();
     $initialRouteNode = $initialOverviewStep
         ? $initialOverviewStep->action_key.'::'.($overviewSelectedTaskKey !== '' ? $overviewSelectedTaskKey : '*')
@@ -32,21 +36,35 @@
     data-studio-task-editor
     data-workflow-definition-editor
     data-workflow-editor-instance="{{ $editorInstance }}"
+    data-definition-surface-mode="{{ $definitionSurfaceMode }}"
+    data-definition-read-only="{{ $canEdit ? 'false' : 'true' }}"
     x-data="{
         ...workflowRouteSurface({
             instance: @js($routeMarkerId),
             initialNode: @js($initialRouteNode),
         }),
+        editorInstance: @js($editorInstance),
         desktopSidebar: window.matchMedia('(min-width: 720px)').matches,
         mobileLibraryOpen: false,
-        libraryExpanded: (() => {
-            try {
-                return window.localStorage.getItem('followflow.workflow-library-expanded') !== 'false';
-            } catch (error) {
-                return true;
-            }
-        })(),
+        libraryExpanded: true,
         focusedTask: @js($initialFocusedTask),
+        eventTargetsThisEditor(detail = {}) {
+            const source = String(detail?.editorInstance || detail?.instance || detail?.source || '');
+
+            if (source !== '') {
+                return [this.editorInstance, @js($routeMarkerId)].includes(source);
+            }
+
+            return this.$root.offsetParent !== null && ! this.$root.closest('[inert]');
+        },
+        enterDefinitionWorkbench(detail = {}) {
+            if (! this.eventTargetsThisEditor(detail)) return;
+
+            this.desktopSidebar = window.matchMedia('(min-width: 720px)').matches;
+            this.libraryExpanded = true;
+            this.mobileLibraryOpen = false;
+            this.$nextTick(() => this.queueRouteRefresh());
+        },
         isLibraryVisible() {
             return this.desktopSidebar ? this.libraryExpanded : this.mobileLibraryOpen;
         },
@@ -54,11 +72,6 @@
             const nextState = Boolean(expanded);
             if (this.desktopSidebar) {
                 this.libraryExpanded = nextState;
-                try {
-                    window.localStorage.setItem('followflow.workflow-library-expanded', String(this.libraryExpanded));
-                } catch (error) {
-                    // Die Sidebar bleibt auch ohne verfuegbaren Browser-Speicher bedienbar.
-                }
             } else {
                 this.mobileLibraryOpen = nextState;
             }
@@ -74,6 +87,13 @@
         },
         toggleLibrary() {
             this.setLibraryExpanded(! this.isLibraryVisible(), true);
+        },
+        closeMobileLibrary(detail = {}) {
+            if (! this.eventTargetsThisEditor(detail) || this.desktopSidebar || ! this.mobileLibraryOpen) {
+                return;
+            }
+
+            this.setLibraryExpanded(false, true);
         },
         scrollBehavior() {
             return window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
@@ -120,22 +140,24 @@
             }
         },
     }"
-    x-on:workflow-preview-task-selected.stop="focusOverviewTask($event.detail)"
-    x-on:workflow-preview-task-edit-requested.stop="editOverviewTask($event.detail)"
-    x-on:workflow-standard-editor-focused.window="focusOverviewTask($event.detail)"
+    x-on:workflow-preview-task-selected.stop="if (eventTargetsThisEditor($event.detail)) focusOverviewTask($event.detail)"
+    x-on:workflow-preview-task-edit-requested.stop="if (eventTargetsThisEditor($event.detail)) editOverviewTask($event.detail)"
+    x-on:workflow-standard-editor-focused.window="if (eventTargetsThisEditor($event.detail)) focusOverviewTask($event.detail)"
+    x-on:workflow-definition-workbench-entered.window="enterDefinitionWorkbench($event.detail)"
+    x-on:workflow-library-close-requested.window="closeMobileLibrary()"
     x-on:workflow-task-move-requested.stop="
+        if (! @js($canEdit)) return;
         const detail = $event.detail || {};
         detail.direction === 'another-list'
             ? $wire.prepareTaskMove(Number(detail.stepId || 0), String(detail.taskKey || ''))
             : $wire.moveTaskRelative(Number(detail.stepId || 0), String(detail.taskKey || ''), String(detail.direction || ''));
     "
     x-on:workflow-step-move-requested.stop="
+        if (! @js($canEdit)) return;
         const detail = $event.detail || {};
         $wire.moveStepRelative(Number(detail.stepId || 0), String(detail.direction || ''));
     "
-    x-on:workflow-minimap-zoom-changed.window="queueRouteRefresh()"
     x-on:resize.window="desktopSidebar = window.matchMedia('(min-width: 720px)').matches; if (desktopSidebar) mobileLibraryOpen = false; queueRouteRefresh()"
-    x-on:keydown.escape.window="if (! desktopSidebar && mobileLibraryOpen) setLibraryExpanded(false, true)"
 >
     @if($showDefinitionSurface)
     @if($modalOnly)
@@ -149,15 +171,20 @@
         role="dialog"
         aria-modal="true"
         aria-labelledby="{{ $routeMarkerId }}-definition-drawer-title"
+        x-on:keydown.escape.prevent.stop="await $wire.closeDefinitionDrawer(); $nextTick(() => document.querySelector('[data-workflow-studio-builder-trigger]')?.focus({ preventScroll: true }))"
     >
-        <section class="flex min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-white/70 bg-slate-100 shadow-2xl">
+        <section
+            class="flex min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-white/70 bg-slate-100 shadow-2xl"
+            x-trap.inert.noscroll="true"
+            x-init="$nextTick(() => $refs.definitionDrawerClose?.focus({ preventScroll: true }))"
+        >
             <header class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3 sm:px-5">
                 <div class="min-w-0">
                     <p class="text-[9px] font-black uppercase tracking-[0.18em] text-blue-700">Workflow aufbauen</p>
                     <h2 id="{{ $routeMarkerId }}-definition-drawer-title" class="mt-1 truncate text-base font-bold text-slate-950">Listen und Tasks bearbeiten</h2>
                     <p class="mt-1 text-xs text-slate-500">{{ $revisionMode ? 'Jede Änderung wird als neue Workflow-Revision gespeichert.' : 'Listen, Tasks und Routen dieses Workflows bearbeiten.' }}</p>
                 </div>
-                <button type="button" wire:click="closeDefinitionDrawer" data-studio-definition-drawer-close class="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 transition hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-cyan-500">Schließen <span aria-hidden="true">×</span></button>
+                <button x-ref="definitionDrawerClose" type="button" wire:click="closeDefinitionDrawer" data-studio-definition-drawer-close class="inline-flex h-11 shrink-0 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 transition hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-cyan-500">Schließen <span aria-hidden="true">×</span></button>
             </header>
             <div class="min-h-0 w-full min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain bg-slate-100 md:overflow-hidden">
     @endif
@@ -178,14 +205,14 @@
         x-bind:data-library-expanded="isLibraryVisible() ? 'true' : 'false'"
         x-on:transitionend.self="if ($event.propertyName === 'grid-template-columns') queueRouteRefresh()"
         x-on:transitioncancel.self="queueRouteRefresh()"
-        class="ff-canvas-shell relative grid min-h-full w-full min-w-0 grid-cols-[minmax(0,1fr)] overflow-hidden transition-[grid-template-columns] duration-300 ease-out md:h-full md:min-h-0 md:grid-cols-[minmax(0,1fr)_350px] motion-reduce:transition-none"
+        class="ff-canvas-shell relative grid h-full min-h-0 w-full min-w-0 grid-cols-[minmax(0,1fr)] overflow-hidden transition-[grid-template-columns] duration-300 ease-out md:grid-cols-[minmax(0,1fr)_350px] motion-reduce:transition-none"
     >
         <section
             id="{{ $fieldIdPrefix }}-studio-task-canvas-panel"
             x-bind:inert="! desktopSidebar && mobileLibraryOpen"
             x-bind:aria-hidden="(! desktopSidebar && mobileLibraryOpen).toString()"
             data-studio-editor-canvas-panel
-            class="order-1 flex min-h-[560px] w-full min-w-0 max-w-full shrink-0 flex-col bg-slate-50 md:col-start-1 md:row-start-1 md:min-h-0"
+            class="order-1 flex h-full min-h-0 w-full min-w-0 max-w-full shrink-0 flex-col overflow-hidden bg-slate-50 md:col-start-1 md:row-start-1"
         >
             <div class="ff-canvas-toolbar flex shrink-0 flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
                 <div class="flex min-w-0 items-start gap-3">
@@ -241,47 +268,13 @@
                         class="inline-flex min-h-11 items-center rounded-xl border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 transition hover:border-blue-300 hover:text-blue-700"
                         x-text="showRoutes ? 'Linien ausblenden' : 'Linien einblenden'"
                     ></button>
-                    <button type="button" wire:click="$set('showAddStepModal', true)" @disabled(! $canEdit) class="ff-action-trigger ff-action-trigger--primary inline-flex h-10 items-center gap-2 px-3 text-xs font-bold disabled:cursor-not-allowed disabled:opacity-40">
-                        <span class="text-base leading-none">+</span> Neue Liste
-                    </button>
+                    @if($canEdit)
+                        <button type="button" wire:click="$set('showAddStepModal', true)" class="ff-action-trigger ff-action-trigger--primary inline-flex h-11 items-center gap-2 px-3 text-xs font-bold">
+                            <span class="text-base leading-none">+</span> Neue Liste
+                        </button>
+                    @endif
                 </div>
             </div>
-
-            <section
-                x-data="{ overviewOpen: true }"
-                data-studio-editor-overview
-                class="shrink-0 border-b border-slate-200 bg-white/90"
-                aria-label="Workflow-Übersicht"
-            >
-                <button
-                    type="button"
-                    x-on:click="overviewOpen = ! overviewOpen; $nextTick(() => queueRouteRefresh())"
-                    x-bind:aria-expanded="overviewOpen"
-                    class="flex min-h-11 w-full items-center justify-between gap-3 px-4 py-2 text-left transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500"
-                >
-                    <span>
-                        <span class="block text-[10px] font-black uppercase tracking-[0.14em] text-blue-700">Workflow-Karte</span>
-                        <span class="mt-0.5 block text-[11px] text-slate-500">Task antippen, um die zugehörige Karte im Editor zu fokussieren.</span>
-                    </span>
-                    <span class="shrink-0 text-[11px] font-bold text-slate-600" x-text="overviewOpen ? 'Einklappen' : 'Aufklappen'"></span>
-                </button>
-                <div x-cloak x-show="overviewOpen" x-collapse.duration.180ms class="ff-builder-overview-map border-t border-slate-100 px-3 py-2 sm:px-4">
-                    <x-workflows.minimap
-                        :workflow="$workflow"
-                        :workflow-run="$activeRun"
-                        :route-map="$routeMap"
-                        :active-step-id="$activeRun?->current_workflow_step_id"
-                        :active-task-key="data_get($activeRun?->context_json, 'next_task_key')"
-                        :selected-step-id="$overviewSelectedStepId"
-                        :selected-task-key="$overviewSelectedTaskKey"
-                        :show-header="false"
-                        :selectable-tasks="true"
-                        :zoomable="true"
-                        initial-zoom="overview"
-                        :instance="$editorInstance"
-                    />
-                </div>
-            </section>
 
             <details class="group shrink-0 border-b border-slate-200 bg-white/80 px-4 py-2.5 text-xs text-slate-600">
                 <summary class="flex cursor-pointer list-none items-center justify-between gap-3 font-bold text-slate-700 marker:hidden">
@@ -299,7 +292,7 @@
 
             @if(! $canEdit)
                 <div class="flex shrink-0 items-center justify-between gap-3 border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-900">
-                    <span><strong>Bearbeitung gesperrt:</strong> Der Lauf ist {{ $runStatus ?: 'aktiv' }}. Pausiere ihn, damit Browserzustand und Task-Reihenfolge konsistent bleiben.</span>
+                    <span><strong>Bearbeitung gesperrt:</strong> {{ $taskEditLockMessageState ?: 'Der Lauf ist '.($runStatus ?: 'aktiv').'. Pausiere ihn, damit Browserzustand und Task-Reihenfolge konsistent bleiben.' }}</span>
                 </div>
             @endif
             @error('studioBuilder')
@@ -340,12 +333,16 @@
                     <g x-html="routeSvgMarkup"></g>
                 </svg>
                 <div
-                    x-sort="$dispatch('reorderWorkflowSteps', { item: $item, position: $position })"
+                    @if($canEdit)
+                        x-sort="$dispatch('reorderWorkflowSteps', { item: $item, position: $position })"
+                    @endif
                     class="relative z-20 flex min-h-full min-w-max items-start gap-8 px-4 pb-10 pt-6 sm:px-6 sm:pt-8"
                 >
                     @forelse($steps as $step)
                         <div
-                            x-sort:item="{{ $step->id }}"
+                            @if($canEdit)
+                                x-sort:item="{{ $step->id }}"
+                            @endif
                             wire:key="studio-builder-step-{{ $step->id }}"
                             data-studio-editor-step
                             class="rounded-2xl transition {{ (string) $step->id === $catalogTargetStepId ? 'ring-2 ring-blue-500 ring-offset-4 ring-offset-slate-50' : '' }}"
@@ -360,11 +357,15 @@
                             </x-workflows.step-card>
                         </div>
                     @empty
-                        <button type="button" wire:click="$set('showAddStepModal', true)" @disabled(! $canEdit) class="flex min-h-64 w-[320px] items-center justify-center rounded-2xl border-2 border-dashed border-slate-300 bg-white/80 p-8 text-center text-sm font-bold text-slate-600 transition hover:border-cyan-400 hover:text-cyan-700 disabled:opacity-40">Erste Liste anlegen</button>
+                        @if($canEdit)
+                            <button type="button" wire:click="$set('showAddStepModal', true)" class="flex min-h-64 w-[320px] items-center justify-center rounded-2xl border-2 border-dashed border-slate-300 bg-white/80 p-8 text-center text-sm font-bold text-slate-600 transition hover:border-cyan-400 hover:text-cyan-700">Erste Liste anlegen</button>
+                        @else
+                            <div class="flex min-h-64 w-[320px] items-center justify-center rounded-2xl border border-slate-200 bg-white/80 p-8 text-center text-sm font-semibold text-slate-500">Keine Listen in der aktuellen Definition.</div>
+                        @endif
                     @endforelse
 
-                    @if($steps->isNotEmpty())
-                        <button type="button" wire:click="$set('showAddStepModal', true)" @disabled(! $canEdit) class="flex min-h-48 w-[240px] shrink-0 items-center justify-center rounded-2xl border-2 border-dashed border-slate-300 bg-white/70 p-6 text-center text-sm font-bold text-slate-500 transition hover:border-cyan-400 hover:bg-white hover:text-cyan-700 disabled:opacity-40">+ Weitere Liste</button>
+                    @if($canEdit && $steps->isNotEmpty())
+                        <button type="button" wire:click="$set('showAddStepModal', true)" class="flex min-h-48 w-[240px] shrink-0 items-center justify-center rounded-2xl border-2 border-dashed border-slate-300 bg-white/70 p-6 text-center text-sm font-bold text-slate-500 transition hover:border-cyan-400 hover:bg-white hover:text-cyan-700">+ Weitere Liste</button>
                     @endif
 
                     <div class="flex w-44 shrink-0 flex-col gap-3 pt-2" aria-label="Workflow-Terminalziele">
@@ -392,7 +393,9 @@
             x-trap.noscroll="! desktopSidebar && mobileLibraryOpen"
             x-bind:inert="! isLibraryVisible()"
             x-bind:aria-hidden="(! isLibraryVisible()).toString()"
+            x-bind:data-open="mobileLibraryOpen ? 'true' : 'false'"
             data-studio-task-catalog
+            data-workflow-mobile-library
             class="ff-task-drawer absolute inset-y-0 right-0 z-40 order-2 flex h-auto w-[min(22rem,100%)] min-h-0 min-w-0 max-w-full shrink-0 flex-col overflow-hidden border-l bg-white text-slate-900 md:static md:z-auto md:col-start-2 md:row-start-1 md:w-full"
             aria-labelledby="{{ $fieldIdPrefix }}-studio-task-catalog-title"
         >
@@ -421,7 +424,7 @@
                             x-bind:aria-expanded="isLibraryVisible()"
                             aria-controls="{{ $fieldIdPrefix }}-studio-task-catalog-panel"
                             title="Task-Bibliothek einklappen"
-                            class="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/15 bg-white/10 text-blue-100 transition hover:border-blue-300/60 hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
+                            class="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-white/15 bg-white/10 text-blue-100 transition hover:border-blue-300/60 hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
                         >
                             <span class="sr-only">Task-Bibliothek einklappen</span>
                             <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m9 5 7 7-7 7"></path></svg>
@@ -458,12 +461,12 @@
                 </div>
                 <div class="relative">
                     <svg class="pointer-events-none absolute left-3 top-3 h-4 w-4 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
-                    <input type="search" wire:model.live.debounce.250ms="taskSearch" class="ff-search-field w-full py-2 pl-9 pr-10 text-xs placeholder:text-slate-400" placeholder="Task suchen …" aria-label="Tasks im Katalog suchen">
+                    <input type="search" wire:model.live.debounce.250ms="taskSearch" class="ff-search-field w-full py-2 pl-9 pr-12 text-xs placeholder:text-slate-400" placeholder="Task suchen …" aria-label="Tasks im Katalog suchen">
                     @if($searchActive)
                         <button
                             type="button"
                             wire:click="$set('taskSearch', '')"
-                            class="absolute right-1.5 top-1.5 inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-200 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                            class="absolute right-0 top-0 inline-flex h-11 w-11 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-200 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
                             aria-label="Task-Suche leeren"
                             title="Suche leeren"
                         >
@@ -577,6 +580,7 @@
     @endif
 
     @if($showDefinitionSurface)
+    @if($canEdit)
     <x-ui.dialog-modal wire:model="showAddStepModal" :id="$routeMarkerId.'-add-step-modal'" maxWidth="2xl">
         <x-slot name="title">
             <div><span class="text-base font-semibold text-slate-950">Neue Workflow-Liste</span><p class="mt-1 text-xs font-normal text-slate-500">Eine Liste gruppiert zusammengehörige Tasks und besitzt eigene Erfolgs- und Fehlerwege.</p></div>
@@ -676,6 +680,7 @@
         </x-slot>
     </x-ui.dialog-modal>
     @endif
+    @endif
 
     <x-ui.dialog-modal :id="$routeMarkerId.'-edit-task-modal'" wire:model="showEditTaskModal" maxWidth="5xl">
         <x-slot name="title">
@@ -725,7 +730,7 @@
         </x-slot>
     </x-ui.dialog-modal>
 
-    @if($showDefinitionSurface)
+    @if($showDefinitionSurface && $canEdit)
     <x-ui.dialog-modal wire:model="showMoveTaskModal" :id="$routeMarkerId.'-move-task-modal'" maxWidth="lg">
         <x-slot name="title">
             <div><span class="text-base font-semibold text-slate-950">Task in andere Liste verschieben</span><p class="mt-1 text-xs font-normal text-slate-500">Die Task wird ans Ende der gewählten Liste verschoben. Gekoppelte Loop-Blöcke bleiben zusammen.</p></div>

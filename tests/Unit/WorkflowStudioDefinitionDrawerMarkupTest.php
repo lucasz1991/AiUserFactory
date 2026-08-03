@@ -6,24 +6,29 @@ use PHPUnit\Framework\TestCase;
 
 class WorkflowStudioDefinitionDrawerMarkupTest extends TestCase
 {
-    public function test_studio_offers_a_builder_trigger_only_while_the_user_controls_the_session(): void
+    public function test_studio_offers_builder_triggers_for_historical_context_and_user_controlled_session(): void
     {
         $studio = file_get_contents($this->viewPath('workflow-studio.blade.php'));
 
         $this->assertStringContainsString('wire:click="openDefinitionBuilder"', $studio);
         $this->assertStringContainsString('data-workflow-studio-builder-trigger', $studio);
+        $this->assertSame(2, substr_count($studio, 'data-workflow-studio-builder-trigger'));
 
-        $triggerPosition = strpos($studio, 'data-workflow-studio-builder-trigger');
+        $historicalBlockStart = strpos($studio, '@if($historicalRunView)');
+        $historicalTriggerPosition = strpos($studio, 'data-workflow-studio-builder-trigger', $historicalBlockStart);
         $interactiveBlockStart = strpos($studio, '@if(! $autonomousMode)');
-        // Der autonome Zweig beginnt mit diesem Hinweis; der Ausloeser muss davor liegen,
-        // damit er im Copilot-Modus gar nicht erst gerendert wird.
+        $interactiveTriggerPosition = strpos($studio, 'data-workflow-studio-builder-trigger', $interactiveBlockStart);
         $autonomousBranch = strpos($studio, '<strong>Autonome Steuerung:</strong>');
 
-        $this->assertIsInt($triggerPosition);
+        $this->assertIsInt($historicalBlockStart);
+        $this->assertIsInt($historicalTriggerPosition);
         $this->assertIsInt($interactiveBlockStart);
+        $this->assertIsInt($interactiveTriggerPosition);
         $this->assertIsInt($autonomousBranch);
-        $this->assertGreaterThan($interactiveBlockStart, $triggerPosition);
-        $this->assertLessThan($autonomousBranch, $triggerPosition);
+        $this->assertGreaterThan($historicalBlockStart, $historicalTriggerPosition);
+        $this->assertLessThan($interactiveBlockStart, $historicalTriggerPosition);
+        $this->assertGreaterThan($interactiveBlockStart, $interactiveTriggerPosition);
+        $this->assertLessThan($autonomousBranch, $interactiveTriggerPosition);
     }
 
     public function test_shared_editor_wraps_library_and_canvas_into_an_overlay_for_the_studio_only(): void
@@ -41,7 +46,8 @@ class WorkflowStudioDefinitionDrawerMarkupTest extends TestCase
         // ausschliesslich an $modalOnly, waehrend Bibliothek und Canvas geteilt bleiben.
         $this->assertStringNotContainsString('@unless($modalOnly)', $source);
         $this->assertSame(2, substr_count($source, '@if($modalOnly)'));
-        $this->assertSame(3, substr_count($source, '@if($showDefinitionSurface)'));
+        $this->assertSame(2, substr_count($source, '@if($showDefinitionSurface)'));
+        $this->assertStringContainsString('@if($showDefinitionSurface && $canEdit)', $source);
         $this->assertStringContainsString('data-studio-task-catalog', $source);
         $this->assertStringContainsString('data-studio-workflow-canvas', $source);
     }

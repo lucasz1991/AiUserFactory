@@ -103,6 +103,7 @@
             $tabs = [
                 'overview' => 'Uebersicht',
                 'accounts' => 'Accounts',
+                'automation' => 'Automatisierung',
                 'ai' => 'AI-Profil',
                 'activity' => 'Aktivitaeten',
                 'processes' => 'Prozesse',
@@ -328,6 +329,12 @@
                         @endif
                     </div>
                 @endif
+            </div>
+
+            <div x-show="tab === 'automation'" class="ff-profile-panel space-y-6" data-profile-panel>
+                <livewire:admin.config.person-automation
+                    :person-id="$personRecord->id"
+                    :key="'person-automation-'.$personRecord->id" />
             </div>
 
             <div x-show="tab === 'ai'" class="ff-profile-panel space-y-6" data-profile-panel>

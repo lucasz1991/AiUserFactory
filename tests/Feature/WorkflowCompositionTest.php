@@ -4,10 +4,13 @@ namespace Tests\Feature;
 
 use App\Livewire\Admin\Network\WorkflowManager;
 use App\Livewire\Admin\Network\WorkflowsIndex;
+use App\Livewire\Admin\Network\WorkflowStudioTaskEditor;
+use App\Models\User;
 use App\Models\Workflow;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowStep;
 use App\Services\Workflows\WorkflowExecutionService;
+use App\Services\Workflows\WorkflowStudioSessionService;
 use App\Services\Workflows\WorkflowTaskCatalog;
 use App\Services\Workflows\WorkflowTaskRunner;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -53,7 +56,8 @@ class WorkflowCompositionTest extends TestCase
             ->assertSee('Achtung: Dieser Workflow ist gesperrt.')
             ->assertSee('Als Admin kannst du ihn trotzdem bearbeiten.')
             ->assertSee('Testen')
-            ->assertSee('Task-Bibliothek');
+            ->assertSee('Workflow bearbeiten')
+            ->assertDontSee('Task-Bibliothek');
 
         $tasks = $this->runtimeTasks($parentStep);
 
@@ -684,8 +688,14 @@ class WorkflowCompositionTest extends TestCase
     {
         $workflow = $this->workflow('fill-field-variable-source');
         $step = $this->step($workflow, 'Search input', []);
+        $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
+        $session = app(WorkflowStudioSessionService::class)->open($workflow, $admin, 'manual', 'ask_critical');
+        $this->actingAs($admin);
 
-        Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
+        $editor = Livewire::test(WorkflowStudioTaskEditor::class, [
+            'workflow' => $workflow,
+            'studioSessionId' => $session->id,
+        ])
             ->call('prepareTaskFromCatalog', $step->id, 'input.fill_field', 0)
             ->assertSee('Wertquelle')
             ->assertSee('Workflow-Variable')
@@ -705,7 +715,7 @@ class WorkflowCompositionTest extends TestCase
         $this->assertSame('', $task['value']);
         $this->assertSame('', $task['input']);
 
-        Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
+        $editor
             ->call('openEditTaskCard', $step->id, $task['key'])
             ->assertSet('editingTaskValueSource', 'workflow_variable')
             ->assertSet('editingTaskWorkflowVariable', 'google_search_url')
@@ -727,13 +737,19 @@ class WorkflowCompositionTest extends TestCase
     {
         $workflow = $this->workflow('validate-input-variable-editor');
         $step = $this->step($workflow, 'Workflow inputs', []);
+        $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
+        $session = app(WorkflowStudioSessionService::class)->open($workflow, $admin, 'manual', 'ask_critical');
+        $this->actingAs($admin);
         $definitions = [
             ['name' => 'browser_window', 'type' => 'browser_window', 'required' => false],
             ['name' => 'search_count', 'required' => false, 'default' => 3],
             ['name' => 'google_search_url', 'required' => true],
         ];
 
-        Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
+        $editor = Livewire::test(WorkflowStudioTaskEditor::class, [
+            'workflow' => $workflow,
+            'studioSessionId' => $session->id,
+        ])
             ->call('prepareTaskFromCatalog', $step->id, 'data.validate_inputs', 0)
             ->assertSee('Eingabevariablen')
             ->assertSee('Variablenname')
@@ -747,7 +763,7 @@ class WorkflowCompositionTest extends TestCase
         $this->assertSame($definitions, json_decode($task['input_definitions'], true));
         $this->assertSame('search_inputs', $task['output_group']);
 
-        Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
+        $editor
             ->call('openEditTaskCard', $step->id, $task['key'])
             ->assertSet('editingTaskExtra.input_definitions', json_encode($definitions, JSON_UNESCAPED_SLASHES))
             ->assertSee('Quelle und Task-', false);
@@ -846,8 +862,14 @@ class WorkflowCompositionTest extends TestCase
                 'input' => 'person.socialmedia.instagram.username',
             ],
         ]);
+        $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
+        $session = app(WorkflowStudioSessionService::class)->open($workflow, $admin, 'manual', 'ask_critical');
+        $this->actingAs($admin);
 
-        Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
+        Livewire::test(WorkflowStudioTaskEditor::class, [
+            'workflow' => $workflow,
+            'studioSessionId' => $session->id,
+        ])
             ->call('openEditTaskCard', $step->id, 'legacy-literal')
             ->assertSet('editingTaskValueSource', 'literal')
             ->assertSet('editingTaskInputValue', 'literal search')

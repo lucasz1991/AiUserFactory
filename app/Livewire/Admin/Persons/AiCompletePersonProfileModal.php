@@ -3,6 +3,7 @@
 namespace App\Livewire\Admin\Persons;
 
 use App\Models\Person;
+use App\Services\Persons\PersonProfileComposer;
 use App\Services\Ai\AiConnectionService;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Carbon;
@@ -25,42 +26,16 @@ class AiCompletePersonProfileModal extends Component
 
     public string $profilePrompt = '';
 
-    public array $allowedRootFields = [
-        'person_first_name',
-        'person_last_name',
-        'person_alias',
-        'person_date_of_birth',
-        'person_gender',
-        'person_email',
-        'person_phone',
-        'person_timezone',
-        'person_address_line1',
-        'person_address_line2',
-        'person_postal_code',
-        'person_city',
-        'person_state',
-        'person_country',
-        'person_notes',
-    ];
+    /*
+     * Feldlisten und Systemprompt liegen in `PersonProfileComposer`, damit
+     * dieser Dialog und die Personen-Fabrik dieselbe Quelle nutzen. Die Werte
+     * bleiben oeffentliche Livewire-Eigenschaften, weil das Blade sie liest.
+     */
+    public array $allowedRootFields = PersonProfileComposer::ROOT_FIELDS;
 
-    public array $allowedIdentityFields = [
-        'nationality',
-        'occupation',
-        'relationship_status',
-        'physical_appearance',
-        'languages',
-        'interests',
-        'personality_traits',
-        'values',
-        'daily_routine',
-        'background_story',
-    ];
+    public array $allowedIdentityFields = PersonProfileComposer::IDENTITY_FIELDS;
 
-    public array $allowedBotFields = [
-        'communication_style',
-        'writing_style',
-        'behavior_guidelines',
-    ];
+    public array $allowedBotFields = PersonProfileComposer::BOT_FIELDS;
 
     #[On('open-ai-complete-person-profile')]
     public function open(int $personId): void
@@ -293,65 +268,8 @@ class AiCompletePersonProfileModal extends Component
 
     protected function systemPrompt(): string
     {
-        return <<<PROMPT
-Du bist ein Datenassistent fuer eine interne Persona-Verwaltung.
-
-Telefonnummern und Adressen muessen offensichtlich realistisch sein.
-
-Du darfst ausschliesslich diese JSON-Struktur zurueckgeben:
-
-{
-  "root": {
-    "person_first_name": "",
-    "person_last_name": "",
-    "person_alias": "",
-    "person_date_of_birth": "",
-    "person_gender": "",
-    "person_email": "",
-    "person_phone": "",
-    "person_timezone": "",
-    "person_address_line1": "",
-    "person_address_line2": "",
-    "person_postal_code": "",
-    "person_city": "",
-    "person_state": "",
-    "person_country": "",
-    "person_notes": ""
-  },
-  "identity_profile": {
-    "nationality": "",
-    "occupation": "",
-    "relationship_status": "",
-    "physical_appearance": "",
-    "languages": "",
-    "interests": "",
-    "personality_traits": "",
-    "values": "",
-    "daily_routine": "",
-    "background_story": ""
-  },
-  "bot_profile": {
-    "communication_style": "",
-    "writing_style": "",
-    "behavior_guidelines": ""
-  }
-}
-
-Regeln:
-- Antworte nur als valides JSON.
-- Keine Markdown-Codebloecke.
-- Keine Bilder, Dateien, Uploads oder Pfade.
-- Keine Instagram-Daten veraendern, erfinden oder ergaenzen.
-- Keine Login-, Cookie-, Session- oder Scraper-Daten.
-- Bestehende Werte respektieren, ausser der Nutzerprompt verlangt klar eine Anpassung.
-- Leere Textfelder sinnvoll ergaenzen.
-- Wenn der Nutzer im Prompt Alter oder Altersbereich vorgibt, gib person_date_of_birth als plausibles Datum im Format YYYY-MM-DD zurueck. Erfinde kein exaktes Geburtsdatum, wenn vorhandene Daten oder Nutzerprompt dagegen sprechen.
-- Die optische Beschreibung beschreibt nur sichtbare Merkmale der Person in neutraler Sprache.
-- Listenfelder als Zeilenliste ausgeben.
-- daily_routine muss konkrete, plausible Zeitfenster fuer Arbeit, Freizeit, Schlaf und kurze Online-/Feed-Momente enthalten.
-- interests, personality_traits und values muessen genug Material fuer wiederkehrende interne Content-Themen und Sessions liefern.
-- communication_style, writing_style und behavior_guidelines duerfen nur interne Sandbox-Interaktionen beschreiben, keine echte Plattform-Automation, keine Logins, keine Cookies und keine Scraper-Schritte.
-PROMPT;
+        // Eine Quelle fuer Dialog und Personen-Fabrik.
+        return app(PersonProfileComposer::class)->systemPrompt();
     }
 
     public function previewAgeLabel(): string

@@ -45,8 +45,9 @@
                     <button
                         type="button"
                         wire:click="openToolModal('{{ $tool }}')"
+                        data-studio-tool-trigger="{{ $tool }}"
                         title="{{ $description }}"
-                        class="ff-tool-button inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-[10px] font-bold focus:outline-none"
+                        class="ff-tool-button inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-[10px] font-bold focus:outline-none disabled:cursor-not-allowed disabled:opacity-40"
                     >
                         <span class="h-1.5 w-1.5 rounded-full {{ $dotClass }}" aria-hidden="true"></span>
                         {{ $label }}
@@ -57,8 +58,9 @@
                     <button
                         type="button"
                         wire:click="openSelectorProbe(@js($defaultBrowserWindow))"
+                        @disabled($historicalRunView)
                         title="Selector im aktiven Browserfenster prüfen"
-                        class="ff-tool-button inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-[10px] font-bold focus:outline-none"
+                        class="ff-tool-button inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-[10px] font-bold focus:outline-none disabled:cursor-not-allowed disabled:opacity-40"
                     >
                         <svg class="h-3.5 w-3.5 text-blue-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
                             <path d="M12 3v4m0 10v4M3 12h4m10 0h4"></path>
@@ -73,7 +75,9 @@
         <button
             type="button"
             wire:click="$set('showCopilotSettingsModal', true)"
-            class="ff-action-trigger ff-action-trigger--primary ml-auto inline-flex h-10 shrink-0 items-center gap-2 px-3 text-[10px] font-bold focus:outline-none"
+            data-studio-copilot-settings-trigger
+            @disabled($historicalRunView)
+            class="ff-action-trigger ff-action-trigger--primary ml-auto inline-flex h-10 shrink-0 items-center gap-2 px-3 text-[10px] font-bold focus:outline-none disabled:cursor-not-allowed disabled:opacity-40"
         >
             <span class="inline-flex h-5 min-w-5 items-center justify-center rounded-md bg-white/10 px-1 text-[9px] font-black" aria-hidden="true">AI</span>
             Copilot-Einstellungen

@@ -449,10 +449,47 @@
   backdrop-filter: blur(22px) saturate(1.35);
 }
 
+[data-workflow-definition-editor][data-definition-surface-mode='workbench'] {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  max-height: 100dvh;
+  overflow: hidden;
+}
+
+[data-workflow-workbench] button,
+[data-workflow-workbench] select,
+[data-workflow-workbench] input:not([type='hidden']):not([type='checkbox']):not([type='radio']) {
+  min-height: 44px;
+}
+
+[data-workflow-definition-editor][data-definition-surface-mode='workbench'] [data-studio-task-layout],
+[data-workflow-definition-editor][data-definition-surface-mode='workbench'] [data-studio-editor-canvas-panel] {
+  height: 100%;
+  min-height: 0;
+  max-height: 100%;
+}
+
 @media (min-width: 720px) {
   [data-studio-task-layout][data-library-expanded] {
     grid-template-columns: minmax(0, 1fr) 350px !important;
     transition: grid-template-columns 280ms var(--ff-ease) !important;
+  }
+
+  [data-studio-task-layout] [data-studio-editor-canvas-panel] {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  [data-studio-task-layout] [data-studio-task-catalog] {
+    position: static;
+    inset: auto;
+    z-index: auto;
+    grid-column: 2;
+    grid-row: 1;
+    width: 100%;
+    height: 100%;
   }
 
   [data-studio-task-layout][data-library-expanded] [data-studio-task-catalog] {
@@ -1063,17 +1100,21 @@
 @media (max-width: 719px) {
   [data-studio-task-editor] {
     min-height: 0;
+    max-width: 100%;
     overscroll-behavior: contain;
   }
 
   [data-studio-task-editor] [data-studio-task-layout] {
-    min-height: calc(100dvh - 10rem);
+    height: 100%;
+    min-height: 0;
+    max-height: 100%;
     border-radius: 0 !important;
   }
 
   [data-studio-task-editor] [data-studio-editor-canvas-panel] {
-    height: calc(100dvh - 10rem);
-    min-height: 32rem;
+    height: 100%;
+    min-height: 0;
+    max-height: 100%;
   }
 
   [data-studio-task-editor] [data-studio-workflow-canvas] {
@@ -1262,6 +1303,27 @@
 }
 
 @media (hover: none), (pointer: coarse) {
+  [data-workflow-studio-shell] :is(
+    button,
+    select,
+    textarea,
+    input:not([type='hidden']):not([type='checkbox']):not([type='radio']),
+    a[href],
+    summary,
+    [role='button'],
+    [role='tab']
+  ) {
+    min-height: 44px !important;
+  }
+
+  [data-workflow-studio-shell] :is(button, a[href], [role='button'], [role='tab']) {
+    min-width: 44px !important;
+  }
+
+  [data-workflow-studio-shell] label:has(input[type='checkbox'], input[type='radio']) {
+    min-height: 44px;
+  }
+
   .ff-touch-step-reorder {
     grid-template-columns: repeat(2, minmax(44px, 1fr));
     gap: .5rem;
@@ -1315,6 +1377,27 @@
 }
 
 @media (max-width: 767px) {
+  [data-workflow-studio-shell] :is(
+    button,
+    select,
+    textarea,
+    input:not([type='hidden']):not([type='checkbox']):not([type='radio']),
+    a[href],
+    summary,
+    [role='button'],
+    [role='tab']
+  ) {
+    min-height: 44px !important;
+  }
+
+  [data-workflow-studio-shell] :is(button, a[href], [role='button'], [role='tab']) {
+    min-width: 44px !important;
+  }
+
+  [data-workflow-studio-shell] label:has(input[type='checkbox'], input[type='radio']) {
+    min-height: 44px;
+  }
+
   [data-workflow-studio-shell] .ff-action-trigger,
   [data-workflow-studio-shell] .ff-tool-button,
   [data-workflow-studio-shell] .ff-segmented-control > button,

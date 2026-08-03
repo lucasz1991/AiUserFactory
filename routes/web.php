@@ -16,6 +16,8 @@ use App\Livewire\Admin\ClientController\NodeIndex as ClientControllerNodeIndex;
 use App\Livewire\Admin\Config\PersonDetail;
 use App\Livewire\Admin\Config\SettingsPage;
 use App\Livewire\Admin\Network\ActionsPage;
+use App\Livewire\Admin\Network\AutomationIndex;
+use App\Livewire\Admin\Network\PersonFactoryIndex;
 use App\Livewire\Admin\Network\WorkflowAssistanceInbox;
 use App\Livewire\Admin\Network\WorkflowManager;
 use App\Livewire\Admin\Network\WorkflowsIndex;
@@ -80,6 +82,8 @@ Route::middleware(['auth:sanctum', config('jetstream.auth_session')])->group(fun
         Route::get('/netzwerk/workflow-aufgaben/{requestUuid?}', WorkflowAssistanceInbox::class)
             ->whereUuid('requestUuid')
             ->name('network.workflow-assistance');
+        Route::get('/netzwerk/automatisierung', AutomationIndex::class)->name('network.automation');
+        Route::get('/netzwerk/personen-fabrik', PersonFactoryIndex::class)->name('network.person-factory');
         Route::get('/netzwerk/workflows', WorkflowsIndex::class)->name('network.workflows');
         Route::get('/netzwerk/workflows/{workflow}/studio', WorkflowStudio::class)->name('network.workflows.studio');
         Route::get('/netzwerk/workflows/{workflow}', WorkflowManager::class)->name('network.workflows.manage');

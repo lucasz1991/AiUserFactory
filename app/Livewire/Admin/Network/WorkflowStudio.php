@@ -23,6 +23,7 @@ use App\Services\Workflows\WorkflowRouteTargetAutoRepairService;
 use App\Services\Workflows\WorkflowStudioAuthorizationService;
 use App\Services\Workflows\WorkflowStudioCheckpointService;
 use App\Services\Workflows\WorkflowStudioControlService;
+use App\Services\Workflows\WorkflowStudioDefinitionMutationPolicy;
 use App\Services\Workflows\WorkflowStudioRevisionService;
 use App\Services\Workflows\WorkflowStudioSessionService;
 use App\Services\Workflows\WorkflowTaskCatalog;
@@ -59,6 +60,10 @@ class WorkflowStudio extends Component
     public string $mode = 'interactive';
 
     public bool $embedded = false;
+
+    public bool $hosted = false;
+
+    public string $hostInstance = '';
 
     public string $activeWorkspaceTab = 'test';
 
@@ -123,19 +128,27 @@ class WorkflowStudio extends Component
         bool $embedded = false,
         string $initialMode = 'interactive',
         ?int $runId = null,
+        bool $hosted = false,
+        ?int $studioSessionId = null,
+        string $hostInstance = '',
     ): void {
         $this->workflowId = (int) $workflow->getKey();
-        $this->embedded = $embedded;
-        $requestedMode = $embedded ? $initialMode : (string) request()->query('mode', $initialMode);
+        $this->hosted = $hosted;
+        $this->embedded = $embedded || $hosted;
+        $this->hostInstance = trim($hostInstance) ?: 'workflow-workbench-'.$workflow->getKey();
+        $requestedMode = $this->embedded ? $initialMode : (string) request()->query('mode', $initialMode);
         $this->mode = $requestedMode === 'autonomous' ? 'autonomous' : 'interactive';
         $requestedRun = WorkflowRun::query()
             ->where('workflow_id', $workflow->getKey())
             ->find((int) ($runId ?: request()->query('run', 0)));
-        $requestedSessionId = (int) request()->query('session', $requestedRun?->workflow_studio_session_id ?? 0);
+        $explicitSessionId = (int) ($studioSessionId ?? 0);
+        $requestedSessionId = (int) ($explicitSessionId
+            ?: request()->query('session', $requestedRun?->workflow_studio_session_id ?? 0));
+        $sessionQuery = WorkflowStudioSession::query()->where('workflow_id', $workflow->getKey());
         $session = $requestedSessionId > 0
-            ? WorkflowStudioSession::query()
-                ->where('workflow_id', $workflow->getKey())
-                ->find($requestedSessionId)
+            ? ($explicitSessionId > 0
+                ? $sessionQuery->findOrFail($requestedSessionId)
+                : $sessionQuery->find($requestedSessionId))
             : null;
         $session ??= app(WorkflowStudioSessionService::class)->latestOrOpen(
             $workflow,
@@ -145,22 +158,37 @@ class WorkflowStudio extends Component
         if (! $session->mode_locked_at) {
             $session = app(WorkflowStudioControlService::class)->choose($session, $this->mode, auth()->user());
         }
+        $hostedHistoricalRequest = $this->hosted
+            && $requestedRun
+            && (int) ($session->active_workflow_run_id ?? 0) !== (int) $requestedRun->getKey();
         $activeCopilotId = (int) ($workflow->active_workflow_copilot_session_id ?? 0);
-        if ($this->mode === 'autonomous' && $activeCopilotId > 0 && ! $session->workflow_copilot_session_id) {
+        if (! $hostedHistoricalRequest && $this->mode === 'autonomous' && $activeCopilotId > 0 && ! $session->workflow_copilot_session_id) {
             $session->forceFill(['workflow_copilot_session_id' => $activeCopilotId])->save();
             WorkflowOptimizationPlan::query()
                 ->where('workflow_copilot_session_id', $activeCopilotId)
                 ->update(['workflow_studio_session_id' => $session->id]);
         }
-        if ($this->mode === 'autonomous' && $activeCopilotId > 0 && ! $session->mode_locked_at) {
+        if (! $hostedHistoricalRequest && $this->mode === 'autonomous' && $activeCopilotId > 0 && ! $session->mode_locked_at) {
             $session = app(WorkflowStudioControlService::class)->lock($session, 'autonomous', auth()->user());
         }
         app(WorkflowStudioRevisionService::class)->ensureBaseline($session);
 
         if ($requestedRun) {
-            app(WorkflowStudioSessionService::class)->attachRun($session, $requestedRun);
+            if ($explicitSessionId > 0
+                && $requestedRun->workflow_studio_session_id
+                && (int) $requestedRun->workflow_studio_session_id !== (int) $session->getKey()) {
+                throw new DomainException('Der angeforderte Workflow-Lauf gehoert nicht zur gehosteten Studio-Sitzung.');
+            }
 
-            if ($requestedRun->workflow_copilot_session_id && ! $session->workflow_copilot_session_id) {
+            // Hosted-History ist eine reine Anzeige. Weder bereits zugeordnete noch
+            // alte unzugeordnete Runs dürfen beim Öffnen zum aktiven Session-Run
+            // werden; sonst könnte ein laufender Test verdrängt und die Definition
+            // fälschlich entsperrt werden. Standalone behält das Legacy-Attach bei.
+            if (! $this->hosted) {
+                app(WorkflowStudioSessionService::class)->attachRun($session, $requestedRun);
+            }
+
+            if (! $hostedHistoricalRequest && $requestedRun->workflow_copilot_session_id && ! $session->workflow_copilot_session_id) {
                 $session->forceFill([
                     'workflow_copilot_session_id' => $requestedRun->workflow_copilot_session_id,
                 ])->save();
@@ -592,6 +620,10 @@ class WorkflowStudio extends Component
 
     public function confirmPendingAction(): void
     {
+        if (! $this->ensureWritableTestContext()) {
+            return;
+        }
+
         $pending = $this->pendingConfirmation;
         $actionId = (string) ($pending['confirmation_id'] ?? '');
         if ($actionId === '') {
@@ -685,7 +717,10 @@ class WorkflowStudio extends Component
 
     public function openStandardEditorForStep(int $stepId): void
     {
-        app(WorkflowStudioControlService::class)->assertUserControl($this->session());
+        if (! $this->hosted) {
+            app(WorkflowStudioControlService::class)->assertUserControl($this->session());
+        }
+
         $step = $this->workflow()->steps()->find($stepId);
         if (! $step) {
             return;
@@ -698,6 +733,13 @@ class WorkflowStudio extends Component
     public function editTask(int $stepId, string $taskKey): void
     {
         $this->selectTask($stepId, $taskKey);
+
+        if ($this->hosted) {
+            $this->dispatchHostedDefinitionRequest($stepId, $taskKey, true);
+
+            return;
+        }
+
         $this->dispatch(
             'open-workflow-studio-task-editor',
             stepId: $stepId,
@@ -708,6 +750,17 @@ class WorkflowStudio extends Component
 
     public function openDefinitionBuilder(): void
     {
+        if ($this->hosted) {
+            $this->dispatchHostedDefinitionRequest(
+                (int) $this->selectedStepId,
+                $this->selectedTaskKey,
+                false,
+                true,
+            );
+
+            return;
+        }
+
         try {
             app(WorkflowStudioControlService::class)->assertUserControl($this->session());
         } catch (DomainException $exception) {
@@ -729,6 +782,12 @@ class WorkflowStudio extends Component
     {
         $stepId = max(0, $stepId);
         $taskKey = trim($taskKey);
+
+        if ($this->hosted) {
+            $this->dispatchHostedDefinitionRequest($stepId, $taskKey, $openTask);
+
+            return;
+        }
 
         if ($this->embedded) {
             $this->dispatch(
@@ -752,6 +811,23 @@ class WorkflowStudio extends Component
         }
 
         $this->redirect(route('network.workflows.manage', $parameters), navigate: true);
+    }
+
+    private function dispatchHostedDefinitionRequest(
+        int $stepId = 0,
+        string $taskKey = '',
+        bool $openTask = false,
+        bool $openLibrary = false,
+    ): void {
+        $this->dispatch(
+            'workflow-standard-editor-focus-requested',
+            stepId: max(0, $stepId),
+            taskKey: trim($taskKey),
+            openTask: $openTask,
+            openLibrary: $openLibrary,
+            studioSessionId: $this->studioSessionId,
+            source: $this->hostInstance,
+        );
     }
 
     public function openToolModal(string $tool): void
@@ -829,7 +905,12 @@ class WorkflowStudio extends Component
                 $this->session(),
                 (int) $this->workflow()->copilot_revision,
                 'Task '.$taskKey.' im Workflow Studio bearbeitet.',
-                function () use ($step, $taskKey, $replacement): void {
+                function (Workflow $workflow) use ($step, $taskKey, $replacement): void {
+                    app(WorkflowStudioDefinitionMutationPolicy::class)->assertCanMutate(
+                        $workflow,
+                        $this->studioSessionId,
+                    );
+                    $step = $workflow->steps()->findOrFail($step->getKey());
                     $config = is_array($step->config_json) ? $step->config_json : [];
                     $config['tasks'] = collect($step->task_cards)
                         ->map(fn (array $task): array => (string) ($task['key'] ?? '') === $taskKey ? $replacement : $task)
@@ -1013,10 +1094,62 @@ class WorkflowStudio extends Component
         }
     }
 
+    #[On('workflow-hosted-studio-context-requested')]
+    public function synchronizeHostedContext(
+        ?int $studioSessionId = null,
+        ?string $mode = null,
+        ?int $runId = null,
+    ): void {
+        if (! $this->hosted || $studioSessionId === null || $studioSessionId !== $this->studioSessionId) {
+            return;
+        }
+
+        $session = $this->session()->fresh();
+        $requestedMode = $mode === 'autonomous' ? 'autonomous' : 'interactive';
+        $sessionMode = $session->mode === 'autonomous' ? 'autonomous' : 'interactive';
+
+        if ($mode !== null && ! $session->mode_locked_at && $requestedMode !== $sessionMode) {
+            try {
+                $session = app(WorkflowStudioControlService::class)->choose($session, $requestedMode, auth()->user());
+            } catch (DomainException $exception) {
+                $this->addError('studio', $exception->getMessage());
+                $this->dispatchStudioNotice($this->result('failed', $exception->getMessage()));
+            }
+        }
+
+        $session = $session->fresh();
+        $this->mode = $session->mode === 'autonomous' ? 'autonomous' : 'interactive';
+
+        if ($runId !== null && $runId > 0) {
+            $requestedRun = WorkflowRun::query()
+                ->whereKey($runId)
+                ->where('workflow_id', $this->workflowId)
+                ->where(function ($query): void {
+                    $query->where('workflow_studio_session_id', $this->studioSessionId)
+                        ->orWhereNull('workflow_studio_session_id');
+                })
+                ->first();
+
+            if ($requestedRun) {
+                $this->activeRunId = (int) $requestedRun->getKey();
+                $this->synchronizeSelectionWithRunCursor($requestedRun);
+                $this->dispatchRunStatusChanged($requestedRun);
+            }
+        } else {
+            $this->activeRunId = $session->active_workflow_run_id
+                ? (int) $session->active_workflow_run_id
+                : null;
+        }
+
+        $this->refreshStudio();
+    }
+
     public function refreshStudio(): void
     {
         $session = $this->session()->fresh();
-        $this->activeRunId = $session?->active_workflow_run_id ? (int) $session->active_workflow_run_id : $this->activeRunId;
+        if ((! $this->hosted || $this->activeRunId === null) && $session?->active_workflow_run_id) {
+            $this->activeRunId = (int) $session->active_workflow_run_id;
+        }
         $pending = data_get($session?->state_json, 'pending_copilot_confirmation');
         if ($this->pendingConfirmation === [] && is_array($pending) && filled($pending['confirmation_id'] ?? null)) {
             $this->pendingConfirmation = $pending;
@@ -1024,7 +1157,10 @@ class WorkflowStudio extends Component
         $run = $this->activeRun();
         $this->synchronizeSelectionWithRunCursor($run);
         $this->ensureSelectedTaskExists();
-        if ($session && $run && $session->status !== $run->status && $session->status !== 'confirmation_required') {
+        $runIsSessionActive = $session
+            && $run
+            && (int) $session->active_workflow_run_id === (int) $run->getKey();
+        if ($runIsSessionActive && $session->status !== $run->status && $session->status !== 'confirmation_required') {
             $previousStatus = (string) $session->status;
             $session->forceFill([
                 'status' => $run->status,
@@ -1079,6 +1215,7 @@ class WorkflowStudio extends Component
         $session = $this->session()->load('copilotSession');
         $run = $this->activeRun()?->load(['stepRuns.workflowStep', 'artifacts']);
         $copilotSession = $session->copilotSession;
+        $historicalRunView = $this->isHistoricalRunView($session, $run);
         $taskNavigation = $this->taskNavigation($workflow);
         $selectedTaskIndex = $taskNavigation->search(fn (array $task): bool => (int) $task['step_id'] === (int) $this->selectedStepId
             && (string) $task['task_key'] === $this->selectedTaskKey
@@ -1122,6 +1259,7 @@ class WorkflowStudio extends Component
             'hasNextTask' => $selectedTaskIndex !== null && $selectedTaskIndex < $taskNavigation->count() - 1,
             'modeLocked' => (bool) $session->mode_locked_at,
             'autonomousMode' => $session->mode === 'autonomous',
+            'historicalRunView' => $historicalRunView,
         ]);
 
         return $this->embedded ? $view : $view->layout('layouts.master');
@@ -1152,6 +1290,7 @@ class WorkflowStudio extends Component
     {
         $this->resetErrorBag();
         try {
+            $this->assertWritableTestContext();
             $this->lastActionResult = $action();
             app(WorkflowStudioSessionService::class)->appendEvent($this->session(), $event, $this->lastActionResult['message'] ?? $event, $this->lastActionResult);
             $this->dispatchStudioNotice($this->lastActionResult);
@@ -1243,17 +1382,79 @@ class WorkflowStudio extends Component
 
     private function session(): WorkflowStudioSession
     {
-        return WorkflowStudioSession::query()->findOrFail($this->studioSessionId);
+        return WorkflowStudioSession::query()
+            ->where('workflow_id', $this->workflowId)
+            ->findOrFail($this->studioSessionId);
     }
 
     private function activeRun(): ?WorkflowRun
     {
-        return $this->activeRunId ? WorkflowRun::query()->find($this->activeRunId) : $this->session()->activeRun;
+        if (! $this->activeRunId) {
+            return $this->session()->activeRun;
+        }
+
+        return WorkflowRun::query()
+            ->where('workflow_id', $this->workflowId)
+            ->where(function ($query): void {
+                $query->where('workflow_studio_session_id', $this->studioSessionId);
+
+                if ($this->hosted) {
+                    $query->orWhereNull('workflow_studio_session_id');
+                }
+            })
+            ->find($this->activeRunId);
     }
 
     private function activeRunOrFail(): WorkflowRun
     {
-        return $this->activeRun() ?? throw new DomainException('Es ist kein Studio-Lauf aktiv.');
+        $run = $this->activeRun() ?? throw new DomainException('Es ist kein Studio-Lauf aktiv.');
+        $this->assertRunIsSessionActive($run);
+
+        return $run;
+    }
+
+    private function assertWritableTestContext(): void
+    {
+        if ($this->isHistoricalRunView()) {
+            throw new DomainException('Dieser historische Testlauf ist schreibgeschuetzt. Laufsteuerung und Einstellungen gelten nur fuer den aktuellen Test.');
+        }
+    }
+
+    private function ensureWritableTestContext(): bool
+    {
+        try {
+            $this->assertWritableTestContext();
+
+            return true;
+        } catch (DomainException $exception) {
+            $this->addError('studio', $exception->getMessage());
+            $this->lastActionResult = $this->result('failed', $exception->getMessage());
+            $this->dispatchStudioNotice($this->lastActionResult);
+
+            return false;
+        }
+    }
+
+    private function assertRunIsSessionActive(WorkflowRun $run): void
+    {
+        $session = $this->session()->fresh();
+
+        if ((int) $session->active_workflow_run_id !== (int) $run->getKey()) {
+            throw new DomainException('Dieser historische Testlauf ist schreibgeschuetzt. Waehle den aktuellen Lauf, um ihn zu steuern.');
+        }
+    }
+
+    private function isHistoricalRunView(?WorkflowStudioSession $session = null, ?WorkflowRun $run = null): bool
+    {
+        $run ??= $this->activeRun();
+
+        if (! $run) {
+            return false;
+        }
+
+        $session ??= $this->session();
+
+        return (int) ($session->active_workflow_run_id ?? 0) !== (int) $run->getKey();
     }
 
     private function copilotSessionOrFail(): WorkflowCopilotSession
@@ -1714,6 +1915,10 @@ class WorkflowStudio extends Component
      */
     public function applyRouteRepairAndStart(): void
     {
+        if (! $this->ensureWritableTestContext()) {
+            return;
+        }
+
         $intent = $this->routeRepairIntent;
         $findings = $this->routeRepairFindings;
         $this->resetRouteRepairPrompt();

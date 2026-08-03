@@ -63,6 +63,20 @@
                                 Aktionen
                             </x-menu.sidebar-nav-link>
                             <x-menu.sidebar-nav-link
+                                :href="route('network.automation')"
+                                :active="request()->routeIs('network.automation')"
+                                nested
+                            >
+                                Automatisierung
+                            </x-menu.sidebar-nav-link>
+                            <x-menu.sidebar-nav-link
+                                :href="route('network.person-factory')"
+                                :active="request()->routeIs('network.person-factory')"
+                                nested
+                            >
+                                Personen-Fabrik
+                            </x-menu.sidebar-nav-link>
+                            <x-menu.sidebar-nav-link
                                 :href="route('network.workflow-assistance')"
                                 :active="request()->routeIs('network.workflow-assistance*')"
                                 nested

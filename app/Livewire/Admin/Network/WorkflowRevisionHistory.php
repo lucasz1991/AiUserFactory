@@ -5,8 +5,8 @@ namespace App\Livewire\Admin\Network;
 use App\Models\Workflow;
 use App\Models\WorkflowStudioRevision;
 use App\Models\WorkflowStudioSession;
+use App\Services\Workflows\WorkflowStudioDefinitionMutationPolicy;
 use App\Services\Workflows\WorkflowStudioRevisionService;
-use DomainException;
 use Livewire\Component;
 
 class WorkflowRevisionHistory extends Component
@@ -27,22 +27,23 @@ class WorkflowRevisionHistory extends Component
 
     public function restoreRevision(int $revisionNumber): void
     {
-        $session = WorkflowStudioSession::query()->findOrFail($this->studioSessionId);
-        $run = $session->activeRun;
-        if ($run && $run->stepRuns()->where('status', 'running')->exists()) {
-            throw new DomainException('Ein laufender Task muss vor der Wiederherstellung sicher pausiert werden.');
-        }
-        if ($run && ! in_array($run->status, ['paused', 'completed', 'failed', 'cancelled', 'timed_out', 'lost'], true)) {
-            throw new DomainException('Der Lauf muss vor der Wiederherstellung pausiert werden.');
-        }
-
         $workflow = Workflow::query()->findOrFail($this->workflowId);
+        $session = WorkflowStudioSession::query()
+            ->where('workflow_id', $workflow->getKey())
+            ->findOrFail($this->studioSessionId);
+        app(WorkflowStudioDefinitionMutationPolicy::class)->assertCanMutate(
+            $workflow,
+            $session,
+            false,
+        );
         app(WorkflowStudioRevisionService::class)->restore(
             $session,
             $revisionNumber,
             (int) $workflow->copilot_revision,
             'Revision '.$revisionNumber.' wurde als neuer aktueller Stand wiederhergestellt.',
             'user:'.auth()->id(),
+            fn (Workflow $lockedWorkflow) => app(WorkflowStudioDefinitionMutationPolicy::class)
+                ->assertCanMutate($lockedWorkflow, $session),
         );
         session()->flash('success', 'Revision '.$revisionNumber.' wurde als neue Revision wiederhergestellt.');
         $this->dispatch('workflow-studio-revision-restored');

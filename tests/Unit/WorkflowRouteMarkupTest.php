@@ -77,6 +77,16 @@ class WorkflowRouteMarkupTest extends TestCase
         $this->assertStringContainsString('this.$nextTick(() => this.refreshRouteLines())', $definition);
         $this->assertStringContainsString('new ResizeObserver(() => this.refreshRouteLines())', $definition);
         $this->assertStringContainsString('data-workflow-minimap-zoom-level="{{ $zoomKey }}"', $source);
+        $this->assertStringContainsString('x-on:click.stop="setZoom(@js($zoomKey))"', $source);
+        $this->assertStringContainsString('data-workflow-minimap-instance="{{ $mapInstance }}"', $source);
+        $this->assertStringContainsString('data-workflow-minimap-source="{{ $mapSource }}"', $source);
+        $this->assertStringContainsString('instance: this.instance', $definition);
+        $this->assertStringContainsString('source: this.source', $definition);
+        $this->assertStringContainsString('refreshForEvent(detail = {})', $definition);
+        $this->assertStringContainsString("requestedInstance !== '' && requestedInstance === this.instance", $definition);
+        $this->assertStringContainsString("requestedSource !== '' && requestedSource === this.source", $definition);
+        $this->assertStringContainsString('! this.isRenderable()', $definition);
+        $this->assertStringContainsString('x-on:workflow-minimap-refresh-requested.window="refreshForEvent($event.detail)"', $source);
         $this->assertStringContainsString("zoomLevel === 'overview' ? 'w-36'", $source);
         $this->assertStringContainsString("'w-48' : 'w-56'", $source);
         $this->assertStringNotContainsString('transform: scale(', $source);
@@ -102,6 +112,10 @@ class WorkflowRouteMarkupTest extends TestCase
         $this->assertStringContainsString('data-minimap-node="terminal::end"', $source);
         $this->assertStringContainsString('data-minimap-node="terminal::fail"', $source);
         $this->assertStringContainsString('Str::slug($mapInstance)', $source);
+        $this->assertStringContainsString("'source' => null", $source);
+        $this->assertStringContainsString('$minimapEventSource = $source;', $source);
+        $this->assertStringContainsString('$mapSource = trim((string) ($minimapEventSource ?: $mapInstance));', $source);
+        $this->assertStringContainsString('taskKey: @js($taskKey), instance, source', $source);
         $this->assertStringContainsString('x-on:keydown.space.prevent.stop', $source);
         $this->assertStringContainsString('aria-pressed="{{ $isTaskSelected ? \'true\' : \'false\' }}"', $source);
         $this->assertStringNotContainsString('aria-selected=', $source);

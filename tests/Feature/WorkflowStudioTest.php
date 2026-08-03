@@ -1050,6 +1050,20 @@ class WorkflowStudioTest extends TestCase
         [$workflow, $step] = $this->workflow();
         $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
         $session = app(WorkflowStudioSessionService::class)->open($workflow, $admin, 'autonomous', 'ask_critical');
+        $run = WorkflowRun::query()->create([
+            'run_uuid' => (string) str()->uuid(),
+            'workflow_id' => $workflow->id,
+            'workflow_studio_session_id' => $session->id,
+            'workflow_revision' => 0,
+            'current_workflow_step_id' => $step->id,
+            'status' => 'running',
+            'requested_by' => 'workflow-studio',
+            'queued_at' => now(),
+            'started_at' => now(),
+            'context_json' => ['next_task_key' => 'first-task'],
+            'result_json' => [],
+        ]);
+        app(WorkflowStudioSessionService::class)->attachRun($session, $run);
         app(WorkflowStudioRevisionService::class)->ensureBaseline($session);
         $this->actingAs($admin);
 
@@ -1418,7 +1432,7 @@ class WorkflowStudioTest extends TestCase
         $this->assertSame(1, data_get($run->fresh()->result_json, 'process_termination.external_runs'));
     }
 
-    public function test_shared_editor_renders_the_static_minimap_with_three_zoom_levels_before_the_first_run(): void
+    public function test_manager_overview_owns_the_static_minimap_while_the_shared_editor_renders_only_the_canvas(): void
     {
         [$workflow, $step] = $this->workflow();
         $stepConfig = $step->config_json;
@@ -1431,17 +1445,21 @@ class WorkflowStudioTest extends TestCase
         $session = app(WorkflowStudioSessionService::class)->open($workflow, $admin, 'manual', 'ask_critical');
         $this->actingAs($admin);
 
-        Livewire::test(WorkflowStudioTaskEditor::class, [
-            'workflow' => $workflow,
-            'studioSessionId' => $session->id,
-        ])
-            ->assertSeeHtml('data-studio-editor-overview')
+        Livewire::test(WorkflowManager::class, ['workflow' => $workflow])
+            ->assertSeeHtml('data-workflow-overview-card')
             ->assertSeeHtml('data-workflow-minimap-zoom-level="overview"')
             ->assertSeeHtml('data-workflow-minimap-zoom-level="standard"')
             ->assertSeeHtml('data-workflow-minimap-zoom-level="detail"')
             ->assertSeeHtml('data-minimap-node="browser-tasks::first-task"')
-            ->assertSeeHtml('workflow-minimap-studio-'.$session->id.'-arrow-default')
-            ->assertSee('Zeitüberschreitung')
+            ->assertSeeHtml('workflow-minimap-manager-overview-'.$workflow->id.'-arrow-default');
+
+        Livewire::test(WorkflowStudioTaskEditor::class, [
+            'workflow' => $workflow,
+            'studioSessionId' => $session->id,
+        ])
+            ->assertDontSeeHtml('data-studio-editor-overview')
+            ->assertDontSeeHtml('data-workflow-minimap-zoom-level=')
+            ->assertSeeHtml('data-studio-workflow-canvas')
             ->assertSee('Timeout beenden')
             ->assertSet('overviewSelectedStepId', $step->id)
             ->assertSet('overviewSelectedTaskKey', 'first-task');
@@ -1551,6 +1569,102 @@ class WorkflowStudioTest extends TestCase
                     && ($parameters['taskKey'] ?? null) === ''
                     && ($parameters['openTask'] ?? null) === false;
             });
+    }
+
+    public function test_hosted_studio_uses_the_explicit_session_and_routes_editing_into_its_manager_host(): void
+    {
+        [$workflow, $step] = $this->workflow();
+        $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
+        $session = app(WorkflowStudioSessionService::class)->open($workflow, $admin, 'manual', 'ask_critical');
+        $this->actingAs($admin);
+
+        $component = Livewire::test(WorkflowStudio::class, [
+            'workflow' => $workflow,
+            'hosted' => true,
+            'studioSessionId' => $session->id,
+            'hostInstance' => 'manager-workbench-'.$workflow->id,
+        ])
+            ->assertSet('hosted', true)
+            ->assertSet('embedded', true)
+            ->assertSet('studioSessionId', $session->id)
+            ->assertSeeHtml('data-workflow-studio-mode="hosted"')
+            ->assertSeeHtml('data-workflow-studio-hosted-status')
+            ->assertSeeHtml('wire:poll.visible.')
+            ->assertDontSeeHtml('wire:click="closeStudio"')
+            ->call('selectTask', $step->id, 'first-task')
+            ->call('openDefinitionBuilder')
+            ->assertHasNoErrors()
+            ->assertDispatched('workflow-standard-editor-focus-requested', function (string $name, array $parameters) use ($workflow, $session, $step): bool {
+                return (int) ($parameters['studioSessionId'] ?? 0) === (int) $session->id
+                    && (int) ($parameters['stepId'] ?? 0) === (int) $step->id
+                    && ($parameters['taskKey'] ?? null) === 'first-task'
+                    && ($parameters['openTask'] ?? null) === false
+                    && ($parameters['openLibrary'] ?? null) === true
+                    && ($parameters['source'] ?? null) === 'manager-workbench-'.$workflow->id;
+            })
+            ->call('editSelectedTask')
+            ->assertDispatched('workflow-standard-editor-focus-requested', function (string $name, array $parameters) use ($session, $step): bool {
+                return (int) ($parameters['studioSessionId'] ?? 0) === (int) $session->id
+                    && (int) ($parameters['stepId'] ?? 0) === (int) $step->id
+                    && ($parameters['taskKey'] ?? null) === 'first-task'
+                    && ($parameters['openTask'] ?? null) === true;
+            })
+            ->assertNotDispatched('open-workflow-studio-task-editor')
+            ->assertNotDispatched('open-workflow-studio-definition-drawer');
+    }
+
+    public function test_hosted_studio_reuses_its_component_while_syncing_a_matching_run_and_control_mode(): void
+    {
+        [$workflow, $step] = $this->workflow();
+        $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
+        $session = app(WorkflowStudioSessionService::class)->open($workflow, $admin, 'manual', 'ask_critical');
+        $otherSession = app(WorkflowStudioSessionService::class)->open($workflow, $admin, 'manual', 'ask_critical');
+        $firstRun = WorkflowRun::query()->create([
+            'run_uuid' => (string) str()->uuid(),
+            'workflow_id' => $workflow->id,
+            'workflow_studio_session_id' => $session->id,
+            'workflow_revision' => 0,
+            'current_workflow_step_id' => $step->id,
+            'status' => 'paused',
+            'requested_by' => 'workflow-studio',
+            'queued_at' => now(),
+            'context_json' => ['next_task_key' => 'first-task'],
+            'result_json' => [],
+        ]);
+        $secondRun = WorkflowRun::query()->create([
+            'run_uuid' => (string) str()->uuid(),
+            'workflow_id' => $workflow->id,
+            'workflow_studio_session_id' => $session->id,
+            'workflow_revision' => 0,
+            'current_workflow_step_id' => $step->id,
+            'status' => 'completed',
+            'requested_by' => 'workflow-studio',
+            'queued_at' => now(),
+            'finished_at' => now(),
+            'context_json' => ['next_task_key' => 'first-task'],
+            'result_json' => [],
+        ]);
+        $this->actingAs($admin);
+
+        Livewire::test(WorkflowStudio::class, [
+            'workflow' => $workflow,
+            'hosted' => true,
+            'studioSessionId' => $session->id,
+            'runId' => $firstRun->id,
+        ])
+            ->assertSet('activeRunId', $firstRun->id)
+            ->call('synchronizeHostedContext', $session->id, 'autonomous', $secondRun->id)
+            ->assertSet('studioSessionId', $session->id)
+            ->assertSet('mode', 'autonomous')
+            ->assertSet('activeRunId', $secondRun->id)
+            ->call('refreshStudio')
+            ->assertSet('activeRunId', $secondRun->id)
+            ->call('synchronizeHostedContext', $otherSession->id, 'interactive', $firstRun->id)
+            ->assertSet('studioSessionId', $session->id)
+            ->assertSet('mode', 'autonomous')
+            ->assertSet('activeRunId', $secondRun->id);
+
+        $this->assertSame('autonomous', $session->fresh()->mode);
     }
 
     public function test_standard_editor_touch_actions_reorder_steps_and_move_a_task_to_another_list(): void

@@ -75,16 +75,22 @@
                         <svg class="h-4 w-4" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="5" cy="3" r="1"></circle><circle cx="11" cy="3" r="1"></circle><circle cx="5" cy="8" r="1"></circle><circle cx="11" cy="8" r="1"></circle><circle cx="5" cy="13" r="1"></circle><circle cx="11" cy="13" r="1"></circle></svg>
                     </div>
                 @endif
-                @isset($actions)
-                    <div class="relative" x-data="{ open: false }">
-                        <button type="button" x-on:click.stop="open = ! open" x-bind:aria-expanded="open" class="ff-step-header-control flex h-8 w-8 items-center justify-center rounded-md text-slate-400 transition hover:bg-white/10 hover:text-white" aria-label="Listenaktionen">
+                @if(! $locked)
+                    @isset($actions)
+                    <div
+                        class="relative"
+                        x-data="{ open: false }"
+                        x-on:keydown.escape.stop.prevent="if (open) { open = false; $nextTick(() => $refs.actionsTrigger?.focus({ preventScroll: true })) }"
+                    >
+                        <button x-ref="actionsTrigger" type="button" x-on:click.stop="open = ! open" x-bind:aria-expanded="open" class="ff-step-header-control flex h-8 w-8 items-center justify-center rounded-md text-slate-400 transition hover:bg-white/10 hover:text-white" aria-label="Listenaktionen">
                             <svg class="h-4 w-4" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="8" r="1.25"></circle><circle cx="8" cy="8" r="1.25"></circle><circle cx="13" cy="8" r="1.25"></circle></svg>
                         </button>
                         <div x-cloak x-show="open" x-transition.origin.top.right x-on:click.stop x-on:click.outside="open = false" class="ff-menu absolute right-0 z-30 mt-1 w-40 p-1">
                             {{ $actions }}
                         </div>
                     </div>
-                @endisset
+                    @endisset
+                @endif
             </div>
         </div>
         @if(! $locked)
@@ -209,11 +215,13 @@
                 }
             },
         }"
-        x-on:dragenter.prevent="dragInside = true"
-        x-on:dragover.prevent="$event.dataTransfer.dropEffect = dragEffect($event)"
-        x-on:dragleave.self="dragInside = false"
-        x-on:drop.prevent.stop="dropTask($event)"
-        x-on:dragend.window="finishTaskDrag()"
+        @if(! $locked)
+            x-on:dragenter.prevent="dragInside = true"
+            x-on:dragover.prevent="$event.dataTransfer.dropEffect = dragEffect($event)"
+            x-on:dragleave.self="dragInside = false"
+            x-on:drop.prevent.stop="dropTask($event)"
+            x-on:dragend.window="finishTaskDrag()"
+        @endif
         x-bind:class="dragInside ? 'bg-slate-100/80 ring-2 ring-inset ring-slate-300' : ''"
         class="min-w-0 flex-1 space-y-0 px-3 pb-4 pt-2 transition"
     >
@@ -240,9 +248,11 @@
                     wire:key="workflow-task-{{ $step->id }}-{{ $task['key'] ?? 'task' }}"
                 >
                     <div
-                        x-on:dragover.prevent="$event.dataTransfer.dropEffect = dragEffect($event)"
-                        x-on:drop.prevent.stop="dropTask($event, {{ $loop->index }})"
-                        class="h-3 rounded border border-dashed border-transparent transition hover:h-8 hover:border-slate-300 hover:bg-slate-50"
+                        @if(! $locked)
+                            x-on:dragover.prevent="$event.dataTransfer.dropEffect = dragEffect($event)"
+                            x-on:drop.prevent.stop="dropTask($event, {{ $loop->index }})"
+                        @endif
+                        class="h-3 rounded border border-dashed border-transparent {{ $locked ? '' : 'transition hover:h-8 hover:border-slate-300 hover:bg-slate-50' }}"
                     ></div>
                     @if($connectsFromPrevious)
                         <div
@@ -275,7 +285,7 @@
                         x-bind:class="focusedTask === @js($step->id.'::'.($task['key'] ?? '')) ? 'ring-2 ring-slate-400 ring-offset-2 ring-offset-slate-100' : ''"
                         class="relative z-20 w-full min-w-0 max-w-full rounded-lg"
                     >
-                        <x-workflows.task-card :task="$task" :show-ports="true">
+                        <x-workflows.task-card :task="$task" :show-ports="true" :locked="$locked">
                             @if(! $locked)
                                 <x-slot name="actions">
                                     <button type="button" wire:click="openEditTaskCard({{ $step->id }}, @js($task['key'] ?? ''))" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-100">Bearbeiten</button>
@@ -339,14 +349,16 @@
                     'title' => $step->name,
                     'description' => $step->config_summary,
                     'kind' => $step->type === 'wait' ? 'wait' : 'data',
-                ]" />
+                ]" :locked="$locked" />
             </div>
         @endif
 
         <div
-            x-on:dragover.prevent="$event.dataTransfer.dropEffect = dragEffect($event)"
-            x-on:drop.prevent.stop="dropTask($event, {{ count($step->task_cards) }})"
-            class="mb-2 h-3 rounded border border-dashed border-transparent transition hover:h-8 hover:border-slate-300 hover:bg-slate-50"
+            @if(! $locked)
+                x-on:dragover.prevent="$event.dataTransfer.dropEffect = dragEffect($event)"
+                x-on:drop.prevent.stop="dropTask($event, {{ count($step->task_cards) }})"
+            @endif
+            class="mb-2 h-3 rounded border border-dashed border-transparent {{ $locked ? '' : 'transition hover:h-8 hover:border-slate-300 hover:bg-slate-50' }}"
         ></div>
 
         @if(! $locked)
