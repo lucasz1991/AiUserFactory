@@ -80,6 +80,7 @@
 <div
     class="workflow-experience space-y-5"
     wire:loading.class="opacity-60 pointer-events-none"
+    wire:target.except="taskSearch,selectTaskGroup,catalogTargetStepId"
     x-data="{
         taskInsertTarget: null,
         armTaskInsert(stepId, stepName) {

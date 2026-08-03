@@ -18,8 +18,10 @@
 --}}
 
 <link rel="manifest" href="{{ asset('manifest.webmanifest') }}">
-<link rel="icon" type="image/png" sizes="192x192" href="{{ route('pwa.icon', ['icon' => 'pwa-192.png']) }}">
-<link rel="apple-touch-icon" sizes="180x180" href="{{ route('pwa.icon', ['icon' => 'apple-touch-icon-180.png']) }}">
+{{-- `v` bricht den Favicon-Cache der Browser; beim Zeichenwechsel zusammen mit
+     `layouts/metahead.php` hochzaehlen. Das Manifest bleibt bewusst ohne Query. --}}
+<link rel="icon" type="image/png" sizes="192x192" href="{{ route('pwa.icon', ['icon' => 'pwa-192.png', 'v' => '2026-08-01']) }}">
+<link rel="apple-touch-icon" sizes="180x180" href="{{ route('pwa.icon', ['icon' => 'apple-touch-icon-180.png', 'v' => '2026-08-01']) }}">
 
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">

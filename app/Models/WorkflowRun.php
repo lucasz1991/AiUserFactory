@@ -78,4 +78,9 @@ class WorkflowRun extends Model
     {
         return $this->hasMany(WorkflowRunCheckpoint::class)->orderBy('sequence');
     }
+
+    public function assistanceRequests(): HasMany
+    {
+        return $this->hasMany(WorkflowAssistanceRequest::class)->orderByDesc('requested_at');
+    }
 }

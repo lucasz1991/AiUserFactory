@@ -606,17 +606,27 @@ def _ellipse_polyline(cx: float, cy: float, rx: float, ry: float, unit: float, s
 
 
 def render_mark(size: int, spec: MarkSpec = STANDARD, badge: bool = True, phase: float = 0.0,
-                monochrome: bool = False, inset: float = 1.0, pulse: float = 1.0) -> Image.Image:
-    """Zeichen als RGBA-Bild. `inset` < 1 haelt Maskable-Sicherheitszonen frei."""
+                monochrome: bool = False, inset: float = 1.0, pulse: float = 1.0,
+                square_badge: bool = False) -> Image.Image:
+    """Zeichen als RGBA-Bild. `inset` < 1 haelt Maskable-Sicherheitszonen frei.
+
+    `square_badge` fuellt das Quadrat randlos und ohne Transparenz. Das brauchen
+    genau zwei Ziele: das maskable Icon, dessen Ecken sonst durch die
+    Betriebssystem-Maske durchscheinen, und das Apple-Touch-Icon, weil iOS
+    Transparenz mit Schwarz hinterlegt und selbst abrundet.
+    """
     s = size * SS
     canvas = Image.new("RGBA", (s, s), (0, 0, 0, 0))
 
     if badge and not monochrome:
         grad = _badge_gradient(s)
         mask = Image.new("L", (s, s), 0)
-        ImageDraw.Draw(mask).rounded_rectangle(
-            [0, 0, s - 1, s - 1], radius=int(BADGE_RADIUS * s), fill=255
-        )
+        if square_badge:
+            mask.paste(255, (0, 0, s, s))
+        else:
+            ImageDraw.Draw(mask).rounded_rectangle(
+                [0, 0, s - 1, s - 1], radius=int(BADGE_RADIUS * s), fill=255
+            )
         canvas.paste(grad, (0, 0), mask)
 
     # Zeichenflaeche (fuer maskable verkleinert)
@@ -822,20 +832,23 @@ def main() -> int:
     write(PUBLIC / "favicon.svg", svg_mark(spec=COMPACT, prefix="fav"))
 
     print("PNG")
+    # (Groesse, Zeichenvariante, Innenabstand, randloses Quadrat)
     png_targets = {
-        ICONS / "pwa-192.png": (192, STANDARD, 1.0),
-        ICONS / "pwa-512.png": (512, STANDARD, 1.0),
-        ICONS / "pwa-maskable-512.png": (512, STANDARD, 0.62),
-        ICONS / "apple-touch-icon-180.png": (180, STANDARD, 1.0),
-        LEGACY_FAVICON / "android-chrome-192x192.png": (192, STANDARD, 1.0),
-        LEGACY_FAVICON / "android-chrome-512x512.png": (512, STANDARD, 1.0),
-        LEGACY_FAVICON / "apple-touch-icon.png": (180, STANDARD, 1.0),
-        LEGACY_FAVICON / "favicon-32x32.png": (32, COMPACT, 1.0),
-        LEGACY_FAVICON / "favicon-16x16.png": (16, COMPACT, 1.0),
+        ICONS / "pwa-192.png": (192, STANDARD, 1.0, False),
+        ICONS / "pwa-512.png": (512, STANDARD, 1.0, False),
+        ICONS / "pwa-maskable-512.png": (512, STANDARD, 0.62, True),
+        ICONS / "apple-touch-icon-180.png": (180, STANDARD, 0.86, True),
+        LEGACY_FAVICON / "android-chrome-192x192.png": (192, STANDARD, 1.0, False),
+        LEGACY_FAVICON / "android-chrome-512x512.png": (512, STANDARD, 1.0, False),
+        LEGACY_FAVICON / "apple-touch-icon.png": (180, STANDARD, 0.86, True),
+        LEGACY_FAVICON / "favicon-32x32.png": (32, COMPACT, 1.0, False),
+        LEGACY_FAVICON / "favicon-16x16.png": (16, COMPACT, 1.0, False),
     }
-    for target, (size, spec, inset) in png_targets.items():
+    for target, (size, spec, inset, square) in png_targets.items():
         target.parent.mkdir(parents=True, exist_ok=True)
-        render_mark(size, spec=spec, inset=inset).save(target, format="PNG", optimize=True)
+        render_mark(size, spec=spec, inset=inset, square_badge=square).save(
+            target, format="PNG", optimize=True
+        )
         print(f"  {target.relative_to(ROOT)}")
 
     badge = render_mark(96, spec=COMPACT, badge=False, monochrome=True)

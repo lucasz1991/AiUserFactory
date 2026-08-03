@@ -3548,6 +3548,7 @@ async function run() {
   let requestedDynamicRoute = null;
   let requestedRouteMessage = null;
   let lastCompletedTaskKey = '';
+  let manualIntervention = null;
   let routeTransitions = 0;
   const routeAttemptCounts = new Map();
   const loopTransitionCounts = new Map();
@@ -3893,6 +3894,38 @@ async function run() {
     });
 
     flushDebugArtifactManifest(true);
+
+    if (
+      result.manualInterventionRequired === true
+      || result.manual_intervention_required === true
+    ) {
+      const intervention = result.humanIntervention || result.human_intervention || {};
+      const sourceTaskKey = String(task.route_source_task_key || task.parent_task_key || task.key || '').trim();
+      manualIntervention = cleanForJson({
+        id: intervention.id || null,
+        type: intervention.type || 'manual',
+        provider: intervention.provider || null,
+        reasonCode: intervention.reasonCode || intervention.reason_code || 'manual_intervention_required',
+        reason_code: intervention.reason_code || intervention.reasonCode || 'manual_intervention_required',
+        browserWindow: intervention.browserWindow || intervention.browser_window || context.activeBrowserWindow || 'main',
+        browser_window: intervention.browser_window || intervention.browserWindow || context.activeBrowserWindow || 'main',
+        expiresAfterMinutes: intervention.expiresAfterMinutes || intervention.expires_after_minutes || 15,
+        expires_after_minutes: intervention.expires_after_minutes || intervention.expiresAfterMinutes || 15,
+        instructions: intervention.instructions || '',
+        evidence: intervention.evidence || null,
+        taskKey: sourceTaskKey,
+        task_key: sourceTaskKey,
+        runtimeTaskKey: String(task.key || ''),
+        runtime_task_key: String(task.key || ''),
+      });
+      lastCompletedTaskKey = sourceTaskKey;
+      pushEvent('human-intervention-required', result.statusMessage || 'Der Workflow wartet auf eine manuelle Eingabe.', {
+        taskKey: sourceTaskKey,
+        interventionType: manualIntervention.type,
+        reasonCode: manualIntervention.reasonCode,
+      });
+      break;
+    }
 
     if (String(task?.task_key || '') === 'loop.for_each_element') {
       const reportedLimit = reportedLoopIterationLimit(task, result);
@@ -4299,8 +4332,10 @@ async function run() {
 
   const result = {
     ok: true,
-    status: 'success',
-    statusMessage: requestedRouteMessage || 'Workflow-Tasks wurden ausgefuehrt.',
+    status: manualIntervention ? 'waiting_for_human' : 'success',
+    statusMessage: manualIntervention
+      ? 'Der Workflow wartet auf die manuelle Bearbeitung durch einen Administrator.'
+      : (requestedRouteMessage || 'Workflow-Tasks wurden ausgefuehrt.'),
     account: publicAccount(context.account, true),
     new_password: context.new_password || context.account?.password || null,
     generated_password: context.generated_password || context.new_password || context.account?.password || null,
@@ -4317,6 +4352,12 @@ async function run() {
     ...(lastCompletedTaskKey ? {
       completedTaskKey: lastCompletedTaskKey,
       completed_task_key: lastCompletedTaskKey,
+    } : {}),
+    ...(manualIntervention ? {
+      manualInterventionRequired: true,
+      manual_intervention_required: true,
+      humanIntervention: manualIntervention,
+      human_intervention: manualIntervention,
     } : {}),
     ...(debugObservabilityEnabled() ? { debugArtifacts } : {}),
     browserWindows: observableBrowserWindows(lastBrowserWindows),

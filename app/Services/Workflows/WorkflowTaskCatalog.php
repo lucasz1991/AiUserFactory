@@ -83,6 +83,7 @@ class WorkflowTaskCatalog
         'wait.selector' => 10,
         'wait.status' => 20,
         'wait.seconds' => 30,
+        'human.recaptcha_handoff' => 35,
         'decision.element_exists' => 40,
         'decision.variable' => 50,
         'decision.array_length' => 60,
@@ -1117,6 +1118,40 @@ class WorkflowTaskCatalog
                     'failure_payload' => true,
                 ],
             ],
+            'browser.assistance_click_coordinates' => [
+                'label' => 'Koordinatenklick fuer Admin-Hilfe',
+                'kind' => 'browser',
+                'runner' => 'node',
+                'node_script' => 'node/workflows/tasks/browser/assistance_click_coordinates.cjs',
+                'hidden_from_library' => true,
+                'requires_server_orchestration' => true,
+                'timeout_seconds' => 30,
+                'description' => 'Interner, begrenzter Admin-Probe-Task: klickt eine normalisierte Position im pausierten Browserfenster.',
+                'form' => [
+                    'selector' => false,
+                    'value' => false,
+                    'url' => false,
+                    'success_payload' => false,
+                    'failure_payload' => false,
+                ],
+            ],
+            'browser.assistance_type_text' => [
+                'label' => 'Text fuer Admin-Hilfe eingeben',
+                'kind' => 'input',
+                'runner' => 'node',
+                'node_script' => 'node/workflows/tasks/browser/assistance_type_text.cjs',
+                'hidden_from_library' => true,
+                'requires_server_orchestration' => true,
+                'timeout_seconds' => 30,
+                'description' => 'Interner, begrenzter Admin-Probe-Task: schreibt Text in das aktuell fokussierte Browserfeld.',
+                'form' => [
+                    'selector' => false,
+                    'value' => true,
+                    'url' => false,
+                    'success_payload' => false,
+                    'failure_payload' => false,
+                ],
+            ],
             'browser.press_key' => [
                 'label' => 'Taste senden',
                 'kind' => 'input',
@@ -1321,6 +1356,48 @@ class WorkflowTaskCatalog
                     'url' => false,
                     'success_payload' => true,
                     'failure_payload' => true,
+                ],
+            ],
+            'human.recaptcha_handoff' => [
+                'label' => 'reCAPTCHA erkennen & Admin anfordern',
+                'kind' => 'wait',
+                'runner' => 'node',
+                'node_script' => 'node/workflows/tasks/human/recaptcha_handoff.cjs',
+                'requires_server_orchestration' => true,
+                'timeout_seconds' => 45,
+                'description' => 'Prueft das aktive Browserfenster auf reCAPTCHA. Bei einem Treffer pausiert der Workflow sicher und erstellt eine uebernehmbare Admin-Aufgabe; ohne Treffer laeuft er normal weiter.',
+                'form' => [
+                    'browser_window' => true,
+                    'selector' => false,
+                    'value' => false,
+                    'url' => false,
+                    'mailbox_source' => false,
+                    'success_payload' => false,
+                    'failure_payload' => false,
+                    'extra_fields' => [
+                        [
+                            'name' => 'instructions',
+                            'label' => 'Hinweis fuer die Administratoren',
+                            'type' => 'textarea',
+                            'rows' => 3,
+                            'span' => 'full',
+                            'default' => 'Bitte das reCAPTCHA im angezeigten Browserfenster manuell loesen und anschliessend erneut pruefen.',
+                            'help' => 'Keine Zugangsdaten oder Geheimnisse eintragen. Der Text wird allen Workflow-Administratoren angezeigt.',
+                            'tab' => 'Admin-Aufgabe',
+                        ],
+                        [
+                            'name' => 'expires_after_minutes',
+                            'label' => 'Bearbeitungszeit in Minuten',
+                            'type' => 'number',
+                            'min' => 5,
+                            'max' => 60,
+                            'step' => 1,
+                            'default' => '15',
+                            'required' => true,
+                            'help' => 'Der Browser wird nur begrenzt geparkt. Nach Ablauf darf der Lauf nicht blind fortgesetzt werden.',
+                            'tab' => 'Admin-Aufgabe',
+                        ],
+                    ],
                 ],
             ],
             'mail.generate_address' => [
@@ -1847,6 +1924,7 @@ class WorkflowTaskCatalog
             'data.read_account_data', 'data.resolve_person', 'data.read_login_data' => ['Liefert normalisierte Personen-, Account- oder Login-Daten fuer nachfolgende Tasks.'],
             'data.persist_mail_account', 'data.persist_webmail_session', 'data.persist_browser_session', 'data.delete_browser_session' => ['Liefert Speicher-/Loeschstatus und die betroffenen, nicht geheimen Identifikatoren.'],
             'wait.selector', 'wait.seconds', 'wait.status' => ['Liefert Warte- und Statusinformationen; vorhandene Workflow-Variablen bleiben unveraendert erhalten.'],
+            'human.recaptcha_handoff' => ['Liefert captchaDetected. Bei einem Treffer entsteht zusaetzlich ein sicherer Human-Intervention-Marker; CAPTCHA-Token oder Browser-Geheimnisse werden niemals ausgegeben.'],
             'browser.open', 'browser.open_url', 'browser.open_webmail_session', 'browser.open_browser_session' => ['Stellt ein benanntes Browserfenster bzw. eine Seite fuer nachfolgende Tasks bereit und meldet den Oeffnungs-/Sessionstatus.'],
             'browser.close' => ['Meldet das geschlossene Browserfenster; andere benannte Fenster bleiben erhalten.'],
             default => ['Liefert einen normalisierten Status mit ok, status und statusMessage. Task-spezifische Ergebniswerte werden in den gemeinsamen Runtime-Kontext uebernommen.'],
@@ -1909,6 +1987,11 @@ class WorkflowTaskCatalog
                 'value_source=fixed verwendet ausschliesslich einen Datenpfad aus dem Personen-/Systemdaten-Katalog.',
                 'value_source=workflow_variable loest den Variablennamen auf; er darf nicht als sichtbarer Literaltext in das Formular geschrieben werden.',
                 'value_source=literal schreibt den angegebenen freien Text unveraendert in das Feld.',
+            ],
+            'human.recaptcha_handoff' => [
+                'Dieser Task erkennt und pausiert ausschliesslich. Er loest, umgeht oder beantwortet kein CAPTCHA automatisch.',
+                'Nach einem Treffer darf der Lauf nur ueber die zugewiesene Admin-Aufgabe und eine erneute negative Pruefung fortgesetzt werden.',
+                'Der Task muss direkt im Haupt-Workflow stehen; innerhalb eines eingebetteten Unter-Workflows ist der Fortsetzungscursor derzeit nicht eindeutig genug.',
             ],
             'browser.click', 'input.submit' => ['Nach Navigation oder deutlicher DOM-Aenderung sollte eine Wait- oder Find-Task den neuen Seitenzustand bestaetigen.'],
             default => ['Verwende stabile Kartenschluessel und benannte Workflow-Variablen, damit Copilot, Routing und Laufdiagnose dieselben Referenzen benutzen.'],
@@ -2219,6 +2302,7 @@ class WorkflowTaskCatalog
                 'wait.selector',
                 'wait.status',
                 'wait.seconds',
+                'human.recaptcha_handoff',
                 'decision.element_exists',
                 'decision.variable',
                 'decision.array_length',
@@ -2422,7 +2506,7 @@ class WorkflowTaskCatalog
             $definition['browser_window'] = 'main';
         }
 
-        foreach (['node_script', 'php_handler', 'workflow_id', 'workflow_slug', 'browser_window', 'browser_window_name', 'selector', 'element_selector', 'input_selector', 'input', 'value', 'url', 'mailbox_source', 'script_person_source', 'success_payload', 'failure_payload', 'next', 'on_partial', 'on_error', 'status_routes', 'loop_pair_id', 'loop_pair_segment', 'loop_start_key', 'loop_end_key'] as $key) {
+        foreach (['node_script', 'php_handler', 'workflow_id', 'workflow_slug', 'browser_window', 'browser_window_name', 'selector', 'element_selector', 'input_selector', 'input', 'value', 'url', 'mailbox_source', 'script_person_source', 'success_payload', 'failure_payload', 'next', 'on_partial', 'on_error', 'status_routes', 'loop_pair_id', 'loop_pair_segment', 'loop_start_key', 'loop_end_key', 'requires_server_orchestration'] as $key) {
             $value = Arr::get($overrides, $key, Arr::get($definition, $key));
 
             if ($value !== null && $value !== '') {

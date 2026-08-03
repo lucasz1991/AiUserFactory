@@ -503,7 +503,7 @@ class WorkflowStudioTaskEditor extends WorkflowManager
         if (! $taskGroups->contains($this->activeTaskGroup)) {
             $this->activeTaskGroup = (string) ($taskGroups->first() ?? 'navigation');
         }
-        $search = mb_strtolower(trim($this->taskSearch));
+        $search = $this->normalizeTaskLibrarySearch($this->taskSearch);
         $visibleTaskDefinitions = ($search === ''
             ? $taskDefinitions->where('library_group', $this->activeTaskGroup)
             : $taskDefinitions)
@@ -512,14 +512,17 @@ class WorkflowStudioTaskEditor extends WorkflowManager
                     return true;
                 }
 
-                return str_contains(mb_strtolower(implode(' ', [
+                $haystack = $this->normalizeTaskLibrarySearch(implode(' ', [
                     (string) ($definition['label'] ?? ''),
                     (string) ($definition['description'] ?? ''),
                     (string) ($definition['key'] ?? ''),
                     (string) ($definition['library_group_label'] ?? ''),
                     (string) ($definition['library_group_short_label'] ?? ''),
                     (string) ($definition['library_group_description'] ?? ''),
-                ])), $search);
+                ]));
+
+                return collect(preg_split('/\s+/u', $search, -1, PREG_SPLIT_NO_EMPTY) ?: [])
+                    ->every(fn (string $token): bool => str_contains($haystack, $token));
             })
             ->values();
         $studioSession = $this->studioSession();

@@ -352,7 +352,7 @@ class WorkflowManager extends Component
             $this->activeTaskGroup = (string) ($taskGroups->first() ?? 'navigation');
         }
 
-        $search = mb_strtolower(trim($this->taskSearch));
+        $search = $this->normalizeTaskLibrarySearch($this->taskSearch);
         $visibleTaskDefinitions = ($search === ''
             ? $taskDefinitions->where('library_group', $this->activeTaskGroup)
             : $taskDefinitions)
@@ -361,14 +361,17 @@ class WorkflowManager extends Component
                     return true;
                 }
 
-                return str_contains(mb_strtolower(implode(' ', [
+                $haystack = $this->normalizeTaskLibrarySearch(implode(' ', [
                     (string) ($definition['label'] ?? ''),
                     (string) ($definition['description'] ?? ''),
                     (string) ($definition['key'] ?? ''),
                     (string) ($definition['library_group_label'] ?? ''),
                     (string) ($definition['library_group_short_label'] ?? ''),
                     (string) ($definition['library_group_description'] ?? ''),
-                ])), $search);
+                ]));
+
+                return collect(preg_split('/\s+/u', $search, -1, PREG_SPLIT_NO_EMPTY) ?: [])
+                    ->every(fn (string $token): bool => str_contains($haystack, $token));
             })
             ->values();
 
@@ -798,6 +801,16 @@ class WorkflowManager extends Component
         $this->catalogTargetStepId = (string) $stepId;
         $this->overviewSelectedStepId = $stepId;
         $this->overviewSelectedTaskKey = '';
+    }
+
+    public function selectTaskGroup(string $taskGroup): void
+    {
+        if (! array_key_exists($taskGroup, $this->taskGroupLabels())) {
+            return;
+        }
+
+        $this->activeTaskGroup = $taskGroup;
+        $this->taskSearch = '';
     }
 
     public function selectOverviewTask(int $stepId, string $taskKey): void
@@ -3233,6 +3246,15 @@ class WorkflowManager extends Component
         return collect(app(WorkflowTaskCatalog::class)->libraryGroups())
             ->mapWithKeys(fn (array $group, string $key): array => [$key => (string) ($group['label'] ?? $key)])
             ->all();
+    }
+
+    protected function normalizeTaskLibrarySearch(string $value): string
+    {
+        return str_replace(
+            ['ä', 'ö', 'ü', 'ß'],
+            ['ae', 'oe', 'ue', 'ss'],
+            mb_strtolower(trim($value)),
+        );
     }
 
     protected function workflowTaskOptions(?Workflow $selectedWorkflow): array

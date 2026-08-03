@@ -47,4 +47,9 @@ class WorkflowStepRun extends Model
     {
         return $this->hasMany(WorkflowRunArtifact::class)->orderBy('id');
     }
+
+    public function assistanceRequests(): HasMany
+    {
+        return $this->hasMany(WorkflowAssistanceRequest::class)->orderByDesc('requested_at');
+    }
 }

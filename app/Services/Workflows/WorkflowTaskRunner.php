@@ -59,6 +59,8 @@ class WorkflowTaskRunner
         }
         $browserSessionAutomation = $this->browserSessionAutomation($run, $runtimeContext);
         $tasks = $this->withAutomaticBrowserSessionLoad($tasks, $browserSessionAutomation, $runtimeContext);
+        $assistancePreview = $this->requiresAssistancePreview($run, $tasks, $runtimeContext);
+        $livePreviewEnabled = $assistancePreview ? true : $livePreviewEnabled;
 
         return [
             'runId' => $runId,
@@ -84,13 +86,13 @@ class WorkflowTaskRunner
             'headlessEnabled' => (bool) ($settings['headless_enabled'] ?? false),
             'navigationTimeoutMs' => ((int) ($settings['navigation_timeout_seconds'] ?? 120)) * 1000,
             'observationTimeoutMs' => min(180000, max(30000, ((int) ($settings['observation_timeout_seconds'] ?? 60)) * 1000)),
-            'keepWorkflowBrowserMaxIdleMs' => $this->keepWorkflowBrowserMaxIdleMs($settings),
+            'keepWorkflowBrowserMaxIdleMs' => $this->keepWorkflowBrowserMaxIdleMs($settings, $tasks, $runtimeContext),
             'scriptName' => 'run_step.cjs',
             'runtimeHash' => $this->runtimeFingerprint()->hash(),
             'runtimeHashAlgorithm' => WorkflowRuntimeFingerprint::ALGORITHM,
             'executionTarget' => 'client_controller',
             'devDebug' => $this->devDebugRuntimeConfig($run, $step, $stepRun, false),
-            'observability' => $this->observabilityRuntime($run),
+            'observability' => $this->observabilityRuntime($run, $assistancePreview),
             'browserSessionAutomation' => $browserSessionAutomation,
             'browser_session_automation' => $browserSessionAutomation,
         ];
@@ -140,6 +142,8 @@ class WorkflowTaskRunner
         }
         $browserSessionAutomation = $this->browserSessionAutomation($run, $runtimeContext);
         $tasks = $this->withAutomaticBrowserSessionLoad($tasks, $browserSessionAutomation, $runtimeContext);
+        $assistancePreview = $this->requiresAssistancePreview($run, $tasks, $runtimeContext);
+        $livePreviewEnabled = $assistancePreview ? true : $livePreviewEnabled;
 
         $runtime = [
             'runId' => $runId,
@@ -179,10 +183,10 @@ class WorkflowTaskRunner
             'chromiumNoSandbox' => (bool) ($settings['chromium_no_sandbox'] ?? false),
             'navigationTimeoutMs' => ((int) ($settings['navigation_timeout_seconds'] ?? 120)) * 1000,
             'observationTimeoutMs' => min(180000, max(30000, ((int) ($settings['observation_timeout_seconds'] ?? 60)) * 1000)),
-            'keepWorkflowBrowserMaxIdleMs' => $this->keepWorkflowBrowserMaxIdleMs($settings),
+            'keepWorkflowBrowserMaxIdleMs' => $this->keepWorkflowBrowserMaxIdleMs($settings, $tasks, $runtimeContext),
             'scriptName' => 'run_step.cjs',
             'devDebug' => $this->devDebugRuntimeConfig($run, $step, $stepRun),
-            'observability' => $this->observabilityRuntime($run),
+            'observability' => $this->observabilityRuntime($run, $assistancePreview),
             'browserSessionAutomation' => $browserSessionAutomation,
             'browser_session_automation' => $browserSessionAutomation,
         ];
@@ -647,6 +651,14 @@ class WorkflowTaskRunner
         foreach ($tasks as $task) {
             if (! is_array($task)) {
                 continue;
+            }
+
+            if ($embeddedWorkflowFrameKey !== null
+                && (string) ($task['task_key'] ?? '') === 'human.recaptcha_handoff') {
+                throw new \RuntimeException(
+                    'Der reCAPTCHA-Admin-Task muss direkt im Haupt-Workflow stehen. '
+                    .'In eingebetteten Unter-Workflows ist der sichere Fortsetzungscursor noch nicht eindeutig.',
+                );
             }
 
             if (! $this->isEmbeddedWorkflowTask($task)) {
@@ -1295,9 +1307,17 @@ class WorkflowTaskRunner
      * Prozess ohne Fortschritt weiterlaufen darf, bevor er sich selbst beendet.
      * 0 deaktiviert die Selbst-Aufraeumung (nicht empfohlen). Default 15 Minuten.
      */
-    protected function keepWorkflowBrowserMaxIdleMs(array $settings): int
+    protected function keepWorkflowBrowserMaxIdleMs(array $settings, array $tasks = [], array $runtimeContext = []): int
     {
         $seconds = (int) ($settings['browser_keep_alive_max_idle_seconds'] ?? 900);
+
+        if ($this->requiresAssistancePreviewContext($tasks, $runtimeContext)) {
+            $assistanceSeconds = collect($tasks)
+                ->where('task_key', 'human.recaptcha_handoff')
+                ->map(fn (array $task): int => max(5, min(60, (int) ($task['expires_after_minutes'] ?? 15))) * 60)
+                ->max() ?: 900;
+            $seconds = max($seconds, $assistanceSeconds);
+        }
 
         if ($seconds <= 0) {
             return 0;
@@ -1405,9 +1425,22 @@ class WorkflowTaskRunner
      *
      * @return array{level: string, resultOnly: bool, capturesScreenshots: bool, capturesDom: bool, showsCursor: bool}
      */
-    protected function observabilityRuntime(WorkflowRun $run): array
+    protected function observabilityRuntime(WorkflowRun $run, bool $forceAssistancePreview = false): array
     {
         $policy = $this->observabilityPolicy();
+
+        if ($forceAssistancePreview) {
+            // Human-Handoff-Lease: ausschliesslich ein aktuelles Browserbild,
+            // niemals DOM, Cookies, Storage oder den internen CDP-Endpunkt.
+            return [
+                'level' => WorkflowObservabilityPolicy::LEVEL_PREVIEW,
+                'resultOnly' => false,
+                'capturesScreenshots' => true,
+                'capturesDom' => false,
+                'showsCursor' => false,
+                'humanAssistanceLease' => true,
+            ];
+        }
 
         return [
             'level' => $policy->level($run),
@@ -1437,6 +1470,31 @@ class WorkflowTaskRunner
         $override = filter_var($workflowSettings['live_preview'], FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE);
 
         return $override ?? $globalEnabled;
+    }
+
+    protected function requiresAssistancePreview(WorkflowRun $run, array $tasks, array $runtimeContext): bool
+    {
+        $runContext = is_array($run->context_json) ? $run->context_json : [];
+
+        return (int) data_get($runContext, 'workflow_assistance.active_request_id', 0) > 0
+            || $this->requiresAssistancePreviewContext($tasks, $runtimeContext);
+    }
+
+    protected function requiresAssistancePreviewContext(array $tasks, array $runtimeContext): bool
+    {
+        if ((int) data_get($runtimeContext, 'workflow_assistance.active_request_id', 0) > 0) {
+            return true;
+        }
+
+        return collect($tasks)->contains(fn (array $task): bool => in_array(
+            (string) ($task['task_key'] ?? ''),
+            [
+                'human.recaptcha_handoff',
+                'browser.assistance_click_coordinates',
+                'browser.assistance_type_text',
+            ],
+            true,
+        ));
     }
 
     /**

@@ -47,6 +47,12 @@ class ClientWorkflowBundleCompiler
             foreach ($tasks as $task) {
                 $runner = strtolower(trim((string) ($task['runner'] ?? '')));
                 $nodeScript = trim((string) ($task['node_script'] ?? ''));
+
+                if ((bool) ($task['requires_server_orchestration'] ?? false)
+                    || (string) ($task['task_key'] ?? '') === 'human.recaptcha_handoff') {
+                    $reasons[] = 'Server-Handoff erforderlich: '.$step->name.' / '.($task['title'] ?? $task['key'] ?? 'Task');
+                }
+
                 if ($runner === 'php' || ($runner !== 'node' && $nodeScript === '')) {
                     $reasons[] = 'Nicht portable Task: '.$step->name.' / '.($task['title'] ?? $task['key'] ?? 'Task');
                 }

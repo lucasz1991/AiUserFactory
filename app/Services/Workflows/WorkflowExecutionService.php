@@ -1114,6 +1114,12 @@ class WorkflowExecutionService
             $this->applyWorkflowVariablesResult($stepRun->workflowRun, $result);
         }
 
+        if (app(WorkflowAssistanceService::class)->requiresCaptchaAssistance($result)) {
+            $this->holdCaptchaAssistance($stepRun, $result);
+
+            return;
+        }
+
         if (is_array(data_get($stepRun->workflowRun->fresh(), 'context_json.studio_probe'))) {
             $this->holdStudioProbeResult(
                 $stepRun,
@@ -1837,6 +1843,34 @@ class WorkflowExecutionService
         }
 
         RunWorkflowJob::dispatch($run->id);
+    }
+
+    protected function holdCaptchaAssistance(WorkflowStepRun $stepRun, array $result): void
+    {
+        $run = $stepRun->workflowRun->fresh();
+        $context = is_array($run->context_json) ? $run->context_json : [];
+        $context['manual_pause_requested'] = true;
+        $context['manual_pause_requested_at'] = now()->toIso8601String();
+        $context['human_intervention_pending'] = [
+            'type' => 'captcha',
+            'reason_code' => 'captcha_detected',
+            'task_key' => $result['completedTaskKey'] ?? $result['completed_task_key'] ?? null,
+            'detected_at' => now()->toIso8601String(),
+        ];
+        $run->forceFill(['context_json' => $context])->save();
+
+        // Derselbe, bereits bewaehrte Cursorpfad wie bei einem einzeln
+        // ausgefuehrten Studio-Task: Browser-Owner sichern, naechste Task bzw.
+        // Listenroute bestimmen und den Run am sicheren Rand pausieren.
+        $this->continueInteractiveDebugTask($stepRun, $result, true);
+
+        $request = app(WorkflowAssistanceService::class)->requestCaptcha($stepRun->fresh(), $result);
+        $run = $request->workflowRun()->first();
+        if ($run) {
+            $context = is_array($run->context_json) ? $run->context_json : [];
+            unset($context['human_intervention_pending']);
+            $run->forceFill(['context_json' => $context])->save();
+        }
     }
 
     protected function holdStudioProbeResult(WorkflowStepRun $stepRun, array $result, bool $successful): void

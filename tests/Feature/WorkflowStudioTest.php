@@ -1517,9 +1517,16 @@ class WorkflowStudioTest extends TestCase
             ->assertSeeHtml('data-task-library-key="browser.open"')
             ->assertDontSeeHtml('data-task-library-key="loop.for_each_element"')
             ->set('taskSearch', 'Schleifen')
-            ->assertSee('Treffer in allen Gruppen')
+            ->assertSee('Gruppenübergreifende Suche')
             ->assertSeeHtml('data-task-library-key="loop.for_each_element"')
-            ->assertDontSeeHtml('data-task-library-key="browser.highlight"');
+            ->assertDontSeeHtml('data-task-library-key="browser.highlight"')
+            ->call('selectTaskGroup', 'navigation')
+            ->assertSet('taskSearch', '')
+            ->assertSet('activeTaskGroup', 'navigation')
+            ->assertSeeHtml('data-task-library-key="browser.open"')
+            ->assertDontSeeHtml('data-task-library-key="loop.for_each_element"')
+            ->set('taskSearch', 'oeffnen browser')
+            ->assertSeeHtml('data-task-library-key="browser.open"');
     }
 
     public function test_embedded_studio_routes_general_list_editing_back_to_the_focused_standard_editor(): void
