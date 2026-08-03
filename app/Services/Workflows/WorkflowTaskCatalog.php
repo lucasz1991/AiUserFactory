@@ -2,6 +2,7 @@
 
 namespace App\Services\Workflows;
 
+use App\Services\Persons\PersonAccountRegistry;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Str;
 
@@ -2163,7 +2164,31 @@ class WorkflowTaskCatalog
      */
     public function inputFillDataValueGroups(): array
     {
-        return self::INPUT_FILL_DATA_VALUE_GROUPS;
+        return array_replace(self::INPUT_FILL_DATA_VALUE_GROUPS, $this->personAccountValueGroups());
+    }
+
+    /**
+     * Wertegruppen fuer die Kontenstruktur `person.accounts.<typ>.…`.
+     *
+     * Die Typen kommen aus `PersonAccountRegistry`, damit Oberflaeche,
+     * Laufzeitkontext und Task-Editor dieselbe Liste zeigen. Sie stehen
+     * bewusst nicht in der Konstante: ein neuer Kontotyp soll nur an einer
+     * Stelle gepflegt werden.
+     *
+     * @return array<string, array{label:string,options:array<string,string>}>
+     */
+    protected function personAccountValueGroups(): array
+    {
+        $groups = [];
+
+        foreach (array_keys(PersonAccountRegistry::TYPES) as $type) {
+            $groups['person.accounts.'.$type] = [
+                'label' => 'Konto der Bezugsperson: '.(PersonAccountRegistry::TYPES[$type]['label'] ?? ucfirst($type)),
+                'options' => PersonAccountRegistry::dataPathsFor($type),
+            ];
+        }
+
+        return $groups;
     }
 
     /**
@@ -2173,7 +2198,7 @@ class WorkflowTaskCatalog
     {
         $options = [];
 
-        foreach (self::INPUT_FILL_DATA_VALUE_GROUPS as $group) {
+        foreach ($this->inputFillDataValueGroups() as $group) {
             $options = array_replace($options, $group['options']);
         }
 

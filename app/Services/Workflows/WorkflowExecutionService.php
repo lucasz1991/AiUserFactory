@@ -21,6 +21,7 @@ use App\Models\WorkflowStudioSession;
 use App\Services\ClientController\NetworkJobDispatcher;
 use App\Services\Mail\MailAccountRegistrationRunner;
 use App\Services\Mail\WebmailSessionRunner;
+use App\Services\Persons\PersonAccountRegistry;
 use App\Services\Workflows\Tasks\PersistBrowserSessionTask;
 use App\Services\Workflows\Tasks\PersistMailAccountTask;
 use App\Services\Workflows\Tasks\PersistWebmailSessionTask;
@@ -561,83 +562,83 @@ class WorkflowExecutionService
                 ->lockForUpdate()
                 ->findOrFail($runId);
 
-        if ($run->status !== 'paused') {
-            return ['ok' => false, 'message' => 'Nur ein pausierter Workflow-Lauf kann fortgesetzt werden.'];
-        }
-
-        $context = is_array($run->context_json) ? $run->context_json : [];
-        if ((int) data_get($context, 'workflow_assistance.active_request_id', 0) > 0) {
-            return [
-                'ok' => false,
-                'message' => 'Dieser Lauf wartet auf eine Admin-Aufgabe. Fortsetzen ist nur nach erneuter reCAPTCHA-Pruefung in der Aufgabenansicht erlaubt.',
-            ];
-        }
-        unset(
-            $context['manual_pause_requested'],
-            $context['manual_pause_requested_at'],
-            $context['manual_pause_checkpoint'],
-        );
-
-        if ($singleTask) {
-            $context['studio_single_task'] = true;
-        } else {
-            unset($context['studio_single_task']);
-        }
-
-        $taskKey = trim((string) $taskKey);
-        if ($workflowStepId && $taskKey !== '') {
-            $step = $run->workflow->steps->firstWhere('id', $workflowStepId);
-            $taskExists = $step && collect($step->task_cards)->contains(
-                fn (array $task): bool => trim((string) ($task['key'] ?? '')) === $taskKey,
-            );
-
-            if (! $taskExists) {
-                throw new \InvalidArgumentException('Der ausgewaehlte Fortsetzungs-Task existiert nicht mehr.');
+            if ($run->status !== 'paused') {
+                return ['ok' => false, 'message' => 'Nur ein pausierter Workflow-Lauf kann fortgesetzt werden.'];
             }
 
-            $context['next_task_key'] = $taskKey;
-            unset($context['next_step_action_key']);
-            $run->current_workflow_step_id = $workflowStepId;
+            $context = is_array($run->context_json) ? $run->context_json : [];
+            if ((int) data_get($context, 'workflow_assistance.active_request_id', 0) > 0) {
+                return [
+                    'ok' => false,
+                    'message' => 'Dieser Lauf wartet auf eine Admin-Aufgabe. Fortsetzen ist nur nach erneuter reCAPTCHA-Pruefung in der Aufgabenansicht erlaubt.',
+                ];
+            }
+            unset(
+                $context['manual_pause_requested'],
+                $context['manual_pause_requested_at'],
+                $context['manual_pause_checkpoint'],
+            );
 
-            $run->stepRuns()
-                ->where('workflow_step_id', $workflowStepId)
-                ->update([
-                    'status' => 'queued',
-                    'external_run_type' => null,
-                    'external_run_id' => null,
-                    'finished_at' => null,
-                    'duration_ms' => null,
-                    'error_message' => null,
-                ]);
-        } elseif ((int) $run->current_workflow_step_id > 0 && trim((string) ($context['next_task_key'] ?? '')) !== '') {
-            $run->stepRuns()
-                ->where('workflow_step_id', (int) $run->current_workflow_step_id)
-                ->where('status', 'waiting')
-                ->update([
-                    'status' => 'queued',
-                    'external_run_type' => null,
-                    'external_run_id' => null,
-                    'finished_at' => null,
-                    'duration_ms' => null,
-                    'error_message' => null,
-                ]);
-        }
+            if ($singleTask) {
+                $context['studio_single_task'] = true;
+            } else {
+                unset($context['studio_single_task']);
+            }
 
-        $run->forceFill([
-            'status' => 'running',
-            'context_json' => $context,
-            'finished_at' => null,
-            'error_message' => null,
-        ])->save();
+            $taskKey = trim((string) $taskKey);
+            if ($workflowStepId && $taskKey !== '') {
+                $step = $run->workflow->steps->firstWhere('id', $workflowStepId);
+                $taskExists = $step && collect($step->task_cards)->contains(
+                    fn (array $task): bool => trim((string) ($task['key'] ?? '')) === $taskKey,
+                );
 
-        RunWorkflowJob::dispatch($run->id)->afterCommit();
+                if (! $taskExists) {
+                    throw new \InvalidArgumentException('Der ausgewaehlte Fortsetzungs-Task existiert nicht mehr.');
+                }
 
-        return [
-            'ok' => true,
-            'message' => $singleTask
-                ? 'Die ausgewählte Task wird einmal ausgeführt; danach pausiert der Lauf wieder.'
-                : ($taskKey !== '' ? 'Workflow-Lauf wird ab dem ausgewaehlten Task kontinuierlich fortgesetzt.' : 'Workflow-Lauf wird kontinuierlich fortgesetzt.'),
-        ];
+                $context['next_task_key'] = $taskKey;
+                unset($context['next_step_action_key']);
+                $run->current_workflow_step_id = $workflowStepId;
+
+                $run->stepRuns()
+                    ->where('workflow_step_id', $workflowStepId)
+                    ->update([
+                        'status' => 'queued',
+                        'external_run_type' => null,
+                        'external_run_id' => null,
+                        'finished_at' => null,
+                        'duration_ms' => null,
+                        'error_message' => null,
+                    ]);
+            } elseif ((int) $run->current_workflow_step_id > 0 && trim((string) ($context['next_task_key'] ?? '')) !== '') {
+                $run->stepRuns()
+                    ->where('workflow_step_id', (int) $run->current_workflow_step_id)
+                    ->where('status', 'waiting')
+                    ->update([
+                        'status' => 'queued',
+                        'external_run_type' => null,
+                        'external_run_id' => null,
+                        'finished_at' => null,
+                        'duration_ms' => null,
+                        'error_message' => null,
+                    ]);
+            }
+
+            $run->forceFill([
+                'status' => 'running',
+                'context_json' => $context,
+                'finished_at' => null,
+                'error_message' => null,
+            ])->save();
+
+            RunWorkflowJob::dispatch($run->id)->afterCommit();
+
+            return [
+                'ok' => true,
+                'message' => $singleTask
+                    ? 'Die ausgewählte Task wird einmal ausgeführt; danach pausiert der Lauf wieder.'
+                    : ($taskKey !== '' ? 'Workflow-Lauf wird ab dem ausgewaehlten Task kontinuierlich fortgesetzt.' : 'Workflow-Lauf wird kontinuierlich fortgesetzt.'),
+            ];
         });
     }
 
@@ -4614,6 +4615,13 @@ class WorkflowExecutionService
         $personPayload = null;
 
         if ($person) {
+            // Punktstruktur `person.accounts.<typ>.username|address|password` fuer
+            // alle Kontotypen der Person. Enthaelt Klartextpasswoerter und wird
+            // deshalb in jedem oeffentlichen Ausgabepfad redigiert (Regel 6):
+            // `redactPublicWorkflowContext()` hier, `publicWorkflow()` im
+            // Node-Runner.
+            $accountsPayload = app(PersonAccountRegistry::class)->workflowPayload($person, true);
+
             $personPayload = [
                 'id' => $person->id,
                 'displayName' => $person->display_name,
@@ -4633,6 +4641,7 @@ class WorkflowExecutionService
                 'loginPassword' => $personLoginPassword,
                 'hasLoginPassword' => $personLoginPassword !== '',
                 'emailAccount' => $effectiveAccount,
+                'accounts' => $accountsPayload,
                 'browserSessions' => $browserSessions,
                 'browser_sessions' => $browserSessions,
                 'metadata' => [

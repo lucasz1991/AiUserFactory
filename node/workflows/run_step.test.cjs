@@ -302,6 +302,68 @@ test('public workflow status redacts the Instagram login password', () => {
   assert.equal(JSON.stringify(run.status.workflow).includes(loginPassword), false);
 });
 
+test('person.accounts paths resolve per account type and their passwords stay out of the public status', () => {
+  const mailPassword = 'mail-secret-must-not-be-public';
+  const instagramPassword = 'instagram-secret-must-not-be-public';
+  const accountsWorkflow = {
+    person: {
+      accounts: {
+        email: {
+          username: 'nora.brandt',
+          address: 'nora.brandt@proton.me',
+          password: mailPassword,
+          url: 'https://mail.proton.me',
+          hasPassword: true,
+        },
+        instagram: {
+          username: 'nora_brandt',
+          address: 'https://www.instagram.com/nora_brandt/',
+          password: instagramPassword,
+          hasPassword: true,
+        },
+      },
+    },
+  };
+
+  const mailUsername = executeTasks([captureInputTask('accounts-mail-username', {
+    value_source: 'fixed',
+    value: 'person.accounts.email.username',
+  })], accountsWorkflow);
+  const mailAddress = executeTasks([captureInputTask('accounts-mail-address', {
+    value_source: 'fixed',
+    value: 'person.accounts.email.address',
+  })], accountsWorkflow);
+  const mailSecret = executeTasks([captureInputTask('accounts-mail-password', {
+    value_source: 'fixed',
+    value: 'person.accounts.email.password',
+  })], accountsWorkflow);
+  const instagramUsername = executeTasks([captureInputTask('accounts-instagram-username', {
+    value_source: 'fixed',
+    value: 'person.accounts.instagram.username',
+  })], accountsWorkflow);
+  const unknownType = executeTasks([captureInputTask('accounts-unknown-type', {
+    value_source: 'fixed',
+    value: 'person.accounts.myspace.username',
+  })], accountsWorkflow);
+
+  assert.equal(mailUsername.tasks[0].capturedInput.value, 'nora.brandt');
+  assert.equal(mailAddress.tasks[0].capturedInput.value, 'nora.brandt@proton.me');
+  assert.equal(mailSecret.tasks[0].capturedInput.value, mailPassword);
+  assert.equal(instagramUsername.tasks[0].capturedInput.value, 'nora_brandt');
+  assert.equal(unknownType.tasks[0].capturedInput.value, '');
+  assert.equal(unknownType.tasks[0].capturedInput.valueResolutionStatus, 'missing_context_value');
+
+  const run = executeTasks([returnTask('accounts-public-redaction', true)], accountsWorkflow, true);
+  const publicAccounts = run.status.workflow.person.accounts;
+
+  assert.equal(publicAccounts.email.username, 'nora.brandt');
+  assert.equal(publicAccounts.email.hasPassword, true);
+  assert.equal(publicAccounts.email.password, '');
+  assert.equal(publicAccounts.instagram.password, '');
+  assert.equal(JSON.stringify(run.status.workflow).includes(mailPassword), false);
+  assert.equal(JSON.stringify(run.status.workflow).includes(instagramPassword), false);
+});
+
 test('a fixed person.email falls back to the main verification account without a reference person', () => {
   const verificationWorkflow = {
     // Keine Bezugsperson, aber ein Haupt-Verifikationskonto.

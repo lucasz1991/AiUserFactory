@@ -270,6 +270,18 @@ function publicWorkflow(workflow = null) {
     delete copy.person.login_password;
     delete copy.person.loginPasswordEncrypted;
     delete copy.person.login_password_encrypted;
+
+    // `person.accounts.<typ>.password` traegt Klartextpasswoerter aller
+    // Kontotypen (E-Mail, Instagram, Facebook, X, ...). Der Schluessel bleibt
+    // stehen, damit im Statuslog sichtbar ist, welcher Pfad existierte; der
+    // Wert wird geleert.
+    if (copy.person.accounts && typeof copy.person.accounts === 'object') {
+      for (const account of Object.values(copy.person.accounts)) {
+        if (account && typeof account === 'object') {
+          account.password = '';
+        }
+      }
+    }
   }
 
   return copy;

@@ -317,16 +317,13 @@ class WorkflowAssistanceService
         ?string $resolutionNote = null,
     ): array {
         $this->assertOperator($operator);
-        $alreadyResumed = false;
 
-        $runId = DB::transaction(function () use ($request, $operator, $resolutionNote, &$alreadyResumed): int {
+        return DB::transaction(function () use ($request, $operator, $resolutionNote): array {
             $run = WorkflowRun::query()->lockForUpdate()->findOrFail($request->workflow_run_id);
             $locked = WorkflowAssistanceRequest::query()->lockForUpdate()->findOrFail($request->getKey());
 
             if ($locked->status === WorkflowAssistanceRequest::STATUS_RESOLVED && $locked->resume_dispatched_at) {
-                $alreadyResumed = true;
-
-                return (int) $run->getKey();
+                return ['ok' => true, 'message' => 'Der Workflow wurde bereits fortgesetzt.'];
             }
 
             $this->assertAssignedOperator($locked, $operator);
@@ -371,27 +368,19 @@ class WorkflowAssistanceService
             ])->save();
             $this->appendEventLocked($locked, 'resolved', $operator, 'reCAPTCHA wurde geprueft und als geloest bestaetigt.');
 
-            return (int) $run->getKey();
-        });
-
-        if ($alreadyResumed) {
-            return ['ok' => true, 'message' => 'Der Workflow wurde bereits fortgesetzt.'];
-        }
-
-        $response = app(WorkflowExecutionService::class)->resumeManualPause($runId);
-        if (! ($response['ok'] ?? false)) {
-            throw new DomainException((string) ($response['message'] ?? 'Der Workflow konnte nicht fortgesetzt werden.'));
-        }
-
-        DB::transaction(function () use ($request, $operator): void {
-            $locked = WorkflowAssistanceRequest::query()->lockForUpdate()->findOrFail($request->getKey());
-            if (! $locked->resume_dispatched_at) {
-                $locked->forceFill(['resume_dispatched_at' => now()])->save();
-                $this->appendEventLocked($locked, 'resumed', $operator, 'Der Workflow wurde ab dem gespeicherten Cursor fortgesetzt.');
+            // Keep verification, state transition, queue dispatch and audit entry in
+            // one transaction. A failed resume therefore restores the open request
+            // and the guarded pause instead of leaving a resolved orphan behind.
+            $response = app(WorkflowExecutionService::class)->resumeManualPause($run->getKey());
+            if (! ($response['ok'] ?? false)) {
+                throw new DomainException((string) ($response['message'] ?? 'Der Workflow konnte nicht fortgesetzt werden.'));
             }
-        });
 
-        return $response;
+            $locked->forceFill(['resume_dispatched_at' => now()])->save();
+            $this->appendEventLocked($locked, 'resumed', $operator, 'Der Workflow wurde ab dem gespeicherten Cursor fortgesetzt.');
+
+            return $response;
+        });
     }
 
     public function latestBrowserSnapshot(WorkflowAssistanceRequest $request): array

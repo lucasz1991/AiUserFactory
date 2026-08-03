@@ -7,6 +7,7 @@ import resize from '@alpinejs/resize';
 import intersect from '@alpinejs/intersect';
 import sort from '@alpinejs/sort';
 import './components/workflow-motion';
+import './components/person-profile-motion';
 import { workflowSelectorField } from './components/workflow-selector-syntax';
 import { workflowRouteSurface } from './components/workflow-route-surface';
 import { workflowDomInspector } from './components/workflow-dom-inspector';

@@ -1567,6 +1567,17 @@ class WorkflowTaskRunner
                     unset($public['person']['metadata']['email_account']['webmail_session']);
                 }
             }
+
+            // `person.accounts.<typ>.password` traegt Klartextpasswoerter aller
+            // Kontotypen. Der Schluessel bleibt bestehen, damit der Aufbau des
+            // Kontexts im Log sichtbar bleibt, der Wert wird geleert.
+            if (isset($public['person']['accounts']) && is_array($public['person']['accounts'])) {
+                foreach ($public['person']['accounts'] as $type => $account) {
+                    if (is_array($account)) {
+                        $public['person']['accounts'][$type]['password'] = '';
+                    }
+                }
+            }
         }
 
         return $public;

@@ -50,9 +50,11 @@ return new class extends Migration
 
         Schema::create('workflow_assistance_events', function (Blueprint $table): void {
             $table->id();
-            $table->foreignId('workflow_assistance_request_id')
-                ->constrained('workflow_assistance_requests')
-                ->cascadeOnDelete();
+            $table->foreignId('workflow_assistance_request_id');
+            $table->foreign(
+                'workflow_assistance_request_id',
+                'workflow_assist_event_request_fk',
+            )->references('id')->on('workflow_assistance_requests')->cascadeOnDelete();
             $table->unsignedBigInteger('sequence');
             $table->string('event_type', 80)->index();
             $table->foreignId('actor_user_id')->nullable()->constrained('users')->nullOnDelete();

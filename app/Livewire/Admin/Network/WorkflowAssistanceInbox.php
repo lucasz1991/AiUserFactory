@@ -110,7 +110,9 @@ class WorkflowAssistanceInbox extends Component
     public function sendBrowserKey(string $key): void
     {
         if (! in_array($key, ['Enter', 'Tab'], true)) {
-            throw new DomainException('Diese Taste ist in der Admin-Browseransicht nicht erlaubt.');
+            $this->addError('assistance', 'Diese Taste ist in der Admin-Browseransicht nicht erlaubt.');
+
+            return;
         }
 
         $this->runProbe('key', ['key' => $key]);

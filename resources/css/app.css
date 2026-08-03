@@ -1,4 +1,5 @@
 @import './workflow-experience.css';
+@import './person-profile.css';
 
 @tailwind base;
 @tailwind components;
