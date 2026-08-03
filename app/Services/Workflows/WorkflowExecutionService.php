@@ -551,13 +551,27 @@ class WorkflowExecutionService
         ?string $taskKey = null,
         bool $singleTask = false,
     ): array {
-        $run = $this->loadRun($workflowRun);
+        $runId = $workflowRun instanceof WorkflowRun
+            ? (int) $workflowRun->getKey()
+            : (int) $workflowRun;
+
+        return DB::transaction(function () use ($runId, $workflowStepId, $taskKey, $singleTask): array {
+            $run = WorkflowRun::query()
+                ->with(['workflow.steps'])
+                ->lockForUpdate()
+                ->findOrFail($runId);
 
         if ($run->status !== 'paused') {
             return ['ok' => false, 'message' => 'Nur ein pausierter Workflow-Lauf kann fortgesetzt werden.'];
         }
 
         $context = is_array($run->context_json) ? $run->context_json : [];
+        if ((int) data_get($context, 'workflow_assistance.active_request_id', 0) > 0) {
+            return [
+                'ok' => false,
+                'message' => 'Dieser Lauf wartet auf eine Admin-Aufgabe. Fortsetzen ist nur nach erneuter reCAPTCHA-Pruefung in der Aufgabenansicht erlaubt.',
+            ];
+        }
         unset(
             $context['manual_pause_requested'],
             $context['manual_pause_requested_at'],
@@ -616,7 +630,7 @@ class WorkflowExecutionService
             'error_message' => null,
         ])->save();
 
-        RunWorkflowJob::dispatch($run->id);
+        RunWorkflowJob::dispatch($run->id)->afterCommit();
 
         return [
             'ok' => true,
@@ -624,6 +638,7 @@ class WorkflowExecutionService
                 ? 'Die ausgewählte Task wird einmal ausgeführt; danach pausiert der Lauf wieder.'
                 : ($taskKey !== '' ? 'Workflow-Lauf wird ab dem ausgewaehlten Task kontinuierlich fortgesetzt.' : 'Workflow-Lauf wird kontinuierlich fortgesetzt.'),
         ];
+        });
     }
 
     public function runManualProbe(

@@ -63,6 +63,13 @@
                                 Aktionen
                             </x-menu.sidebar-nav-link>
                             <x-menu.sidebar-nav-link
+                                :href="route('network.workflow-assistance')"
+                                :active="request()->routeIs('network.workflow-assistance*')"
+                                nested
+                            >
+                                Workflow-Aufgaben
+                            </x-menu.sidebar-nav-link>
+                            <x-menu.sidebar-nav-link
                                 :href="route('network.workflows')"
                                 :active="request()->routeIs('network.workflows*')"
                                 nested

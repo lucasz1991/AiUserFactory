@@ -9,12 +9,14 @@ use App\Http\Controllers\Ai\AssistantAudioOutputStreamController;
 use App\Http\Controllers\PushSubscriptionController;
 use App\Http\Controllers\PwaIconController;
 use App\Http\Controllers\Workflows\WorkflowRunArtifactController;
+use App\Http\Controllers\Workflows\WorkflowAssistancePreviewController;
 use App\Livewire\Admin\ClientController\Dashboard as ClientControllerDashboard;
 use App\Livewire\Admin\ClientController\NodeDetail as ClientControllerNodeDetail;
 use App\Livewire\Admin\ClientController\NodeIndex as ClientControllerNodeIndex;
 use App\Livewire\Admin\Config\PersonDetail;
 use App\Livewire\Admin\Config\SettingsPage;
 use App\Livewire\Admin\Network\ActionsPage;
+use App\Livewire\Admin\Network\WorkflowAssistanceInbox;
 use App\Livewire\Admin\Network\WorkflowManager;
 use App\Livewire\Admin\Network\WorkflowsIndex;
 use App\Livewire\Admin\Network\WorkflowStudio;
@@ -73,6 +75,11 @@ Route::middleware(['auth:sanctum', config('jetstream.auth_session')])->group(fun
         Route::get('/personen', AdminConfig::class)->name('persons.index');
         Route::get('/personen/{profileId}', PersonDetail::class)->name('persons.show');
         Route::get('/netzwerk/aktionen', ActionsPage::class)->name('network.actions');
+        Route::get('/netzwerk/workflow-aufgaben/{assistance}/browserbild', WorkflowAssistancePreviewController::class)
+            ->name('network.workflow-assistance.preview');
+        Route::get('/netzwerk/workflow-aufgaben/{requestUuid?}', WorkflowAssistanceInbox::class)
+            ->whereUuid('requestUuid')
+            ->name('network.workflow-assistance');
         Route::get('/netzwerk/workflows', WorkflowsIndex::class)->name('network.workflows');
         Route::get('/netzwerk/workflows/{workflow}/studio', WorkflowStudio::class)->name('network.workflows.studio');
         Route::get('/netzwerk/workflows/{workflow}', WorkflowManager::class)->name('network.workflows.manage');

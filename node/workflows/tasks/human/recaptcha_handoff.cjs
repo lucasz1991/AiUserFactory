@@ -77,11 +77,10 @@ async function inspectRecaptcha(page) {
     : (typeof page?.mainFrame === 'function' ? [page.mainFrame()] : [page]);
   const evidence = await Promise.all(frames.filter(Boolean).map(inspectFrame));
   const solved = evidence.some((item) => item.responsePresent || item.anchorChecked);
-  const signalled = evidence.some((item) => (
-    item.frameUrlSignal
-    || item.matchedSelectors.length > 0
-    || item.textSignal
-  ));
+  // A recaptcha frame URL alone is not enough: invisible reCAPTCHA/v3 loads
+  // background frames that never require human interaction. At least one
+  // visible DOM/text signal must be present before a workflow is paused.
+  const signalled = evidence.some((item) => item.matchedSelectors.length > 0 || item.textSignal);
 
   return {
     detected: signalled && !solved,

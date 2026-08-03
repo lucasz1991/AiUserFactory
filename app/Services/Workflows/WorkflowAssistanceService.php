@@ -109,6 +109,7 @@ class WorkflowAssistanceService
                         'intervention_id' => $marker['id'] ?? null,
                         'runtime_task_key' => $marker['runtimeTaskKey'] ?? $marker['runtime_task_key'] ?? null,
                         'provider' => 'recaptcha',
+                        'original_interactive_debug' => (bool) ($context['interactive_debug'] ?? false),
                         'evidence' => $this->safeEvidence($marker['evidence'] ?? data_get($result, 'captcha')),
                     ],
                     'requested_at' => now(),
@@ -356,6 +357,9 @@ class WorkflowAssistanceService
             ];
             $context['workflow_assistance_history'] = array_slice($history, -50);
             unset($context['workflow_assistance']);
+            if (! (bool) data_get($locked->metadata_json, 'original_interactive_debug', false)) {
+                unset($context['interactive_debug']);
+            }
             $run->forceFill(['context_json' => $context])->save();
 
             $locked->forceFill([
@@ -509,6 +513,10 @@ class WorkflowAssistanceService
             $task['verification_only'] = true;
         }
 
+        if ($action === 'type') {
+            $task['value_source'] = 'literal';
+        }
+
         $task['assistance_request_uuid'] = $request->request_uuid;
 
         return $task;
@@ -516,7 +524,6 @@ class WorkflowAssistanceService
 
     protected function verificationStateForRun(WorkflowAssistanceRequest $request, WorkflowRun $run): array
     {
-        $run->setRelation('assistanceRequestForVerification', $request);
         $probe = is_array(data_get($run->context_json, 'studio_probe_result'))
             ? data_get($run->context_json, 'studio_probe_result')
             : [];
@@ -669,9 +676,7 @@ class WorkflowAssistanceService
 
         return Str::limit(
             strtolower((string) $parts['scheme']).'://'.$authority
-                .($parts['path'] ?? '')
-                .(isset($parts['query']) ? '?'.$parts['query'] : '')
-                .(isset($parts['fragment']) ? '#'.$parts['fragment'] : ''),
+                .($parts['path'] ?? ''),
             2000,
             '',
         );

@@ -1,5 +1,6 @@
 @php
     $pageContext = match (true) {
+        request()->routeIs('network.workflow-assistance*') => 'Workflow-Aufgaben',
         request()->routeIs('network.workflows*') => 'Workflow Management',
         request()->routeIs('client-controller.*') => 'ClientController',
         request()->routeIs('persons.*', 'network.actions') => 'Netzwerk',
@@ -57,6 +58,28 @@
             </div>
 
             @auth
+                @if(Auth::user()->isAdmin() && \Illuminate\Support\Facades\Schema::hasTable('workflow_assistance_requests'))
+                    @php
+                        $workflowAssistanceCount = \App\Models\WorkflowAssistanceRequest::query()->open()->count();
+                    @endphp
+                    <a
+                        href="{{ route('network.workflow-assistance') }}"
+                        class="ff-topbar-control relative"
+                        wire:navigate
+                        aria-label="Workflow-Aufgaben{{ $workflowAssistanceCount > 0 ? ': '.$workflowAssistanceCount.' offen' : '' }}"
+                        title="Workflow-Aufgaben"
+                        data-ff-topbar-control
+                        data-app-badge-count="{{ $workflowAssistanceCount }}"
+                    >
+                        <i data-feather="bell" aria-hidden="true"></i>
+                        @if($workflowAssistanceCount > 0)
+                            <span class="absolute -right-1 -top-1 inline-flex min-h-5 min-w-5 items-center justify-center rounded-full border-2 border-white bg-rose-500 px-1 text-[9px] font-black leading-none text-white">
+                                {{ $workflowAssistanceCount > 99 ? '99+' : $workflowAssistanceCount }}
+                            </span>
+                        @endif
+                    </a>
+                @endif
+
                 <a
                     href="{{ route('admin.settings') }}"
                     class="ff-topbar-control"

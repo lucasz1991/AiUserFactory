@@ -1,39 +1,32 @@
-<div class="space-y-6" wire:loading.class="opacity-60 pointer-events-none">
-    <div class="flex flex-wrap items-start justify-between gap-4">
-        <div>
-            <h1 class="text-2xl font-bold text-slate-800">Person-Detail</h1>
-            <p class="mt-1 text-sm text-slate-500">Persona, AI-Profil, Aktivitaeten und Medien an einem Ort.</p>
-        </div>
-        <div class="flex flex-wrap gap-3">
-            <a href="{{ route('persons.index') }}" class="rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50">
-                Zurueck
-            </a>
-            @if($personRecord)
-                <button type="button" wire:click="openRuntimeSettingsModal" class="rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50">
-                    Timeouts
-                </button>
-                <button type="button" wire:click="buildInstagramSession" class="rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50">
-                    Session aufbauen
-                </button>
-                <button type="button" wire:click="$dispatch('open-person-image-modal', { personId: {{ $personRecord->id }} })" class="rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50">
-                    Bilder
-                </button>
-                <button type="button" wire:click="$dispatch('open-ai-complete-person-profile', { personId: {{ $personRecord->id }} })" class="rounded-lg bg-primary-base px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#274d86]">
-                    Bearbeiten
-                </button>
-            @endif
-        </div>
-    </div>
+{{--
+    Personen-Profil.
 
+    Aufbau: Hero-Header mit Identitaet und Bereitschaft, darunter eine KPI-Reihe
+    zum Betriebszustand, darunter die Tabs. Die frueheren Kopfzeilen-Knoepfe
+    (Zurueck, Timeouts, Session aufbauen, Bilder) stehen bewusst nicht mehr hier,
+    sondern an ihrer fachlichen Stelle: Timeouts, Session und Registrierung im
+    Accounts-Tab, Bilder im Medien-Tab.
+
+    Die Bewegungsschicht liegt additiv in `resources/js/components/person-profile-motion.js`
+    und haengt an `[data-person-profile]`; ohne JavaScript bleibt alles sichtbar.
+--}}
+<div
+    class="ff-person-profile"
+    data-person-profile
+    wire:loading.class="ff-person-profile--busy"
+    x-data="{ tab: 'overview' }"
+    x-on:person-open-credentials.window="$wire.openEditProfile()"
+    x-on:person-open-runtime-settings.window="$wire.openRuntimeSettingsModal()"
+    x-on:person-build-session.window="$wire.buildInstagramSession()"
+    x-on:person-register-instagram.window="$wire.registerInstagramAccount()"
+>
     @if (session()->has('success'))
-        <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">
-            {{ session('success') }}
-        </div>
+        <div class="ff-flash ff-flash--success">{{ session('success') }}</div>
     @endif
 
     @if($profileDetail === [] || ! $personRecord)
         <x-admin.panel>
-            <div class="text-sm text-slate-500">Keine Person ausgewaehlt.</div>
+            <div class="p-5 text-sm text-slate-500">Keine Person ausgewaehlt.</div>
         </x-admin.panel>
     @else
         @php
@@ -48,446 +41,224 @@
                 'disabled' => 'Deaktiviert',
                 default => 'Manuell',
             };
-            $instagramAccount = collect($profileDetail['social_accounts'] ?? [])->firstWhere('platform', 'instagram') ?? [];
-            $instagramUsername = $instagramAccount['username'] ?? ($profileDetail['login_username'] ?? '');
-            $instagramStatus = ($instagramAccount['status'] ?? null) ?: (($profileDetail['is_active'] ?? false) ? 'active' : 'inactive');
-            $instagramStatusLabel = match($instagramStatus) {
-                'active' => 'Aktiv',
-                'inactive' => 'Inaktiv',
-                'blocked' => 'Gesperrt',
-                default => ucfirst((string) $instagramStatus),
-            };
-            $instagramStatusClass = match($instagramStatus) {
-                'active' => 'bg-emerald-50 text-emerald-700 ring-emerald-200',
-                'blocked' => 'bg-amber-50 text-amber-700 ring-amber-200',
-                default => 'bg-slate-100 text-slate-700 ring-slate-200',
-            };
+            $processStatus = $profileDetail['process_status'] ?? [];
+            $connectedAccounts = (int) ($accountSummary['connected'] ?? 0);
+            $totalAccountTypes = (int) ($accountSummary['total'] ?? 0);
+            $accountsWithPassword = (int) ($accountSummary['with_password'] ?? 0);
+            $mediaCount = count($imageFiles) + ($avatarUrl !== '' ? 1 : 0);
+            $sessionReady = (bool) $personRecord->session_cookie_present;
+            $riskScore = (int) ($activityMetrics['max_day_risk_score'] ?? 0);
+
+            $metrics = [
+                [
+                    'key' => 'accounts',
+                    'label' => 'Accounts verbunden',
+                    'value' => $connectedAccounts,
+                    'suffix' => ' / '.$totalAccountTypes,
+                    'detail' => $connectedAccounts > 0 ? 'Portale und Mailkonto' : 'Noch kein Zugang hinterlegt',
+                    'tone' => $connectedAccounts > 0 ? 'ok' : 'muted',
+                ],
+                [
+                    'key' => 'credentials',
+                    'label' => 'Zugangsdaten',
+                    'value' => $accountsWithPassword,
+                    'suffix' => '',
+                    'detail' => $accountsWithPassword > 0 ? 'Passwoerter verschluesselt gespeichert' : 'Keine Passwoerter gespeichert',
+                    'tone' => $accountsWithPassword > 0 ? 'ok' : 'warn',
+                ],
+                [
+                    'key' => 'session',
+                    'label' => 'Login-Session',
+                    'value' => (int) $personRecord->cookie_count,
+                    'suffix' => ' Cookies',
+                    'detail' => $sessionReady ? 'Session-Cookie vorhanden' : 'Kein Session-Cookie',
+                    'tone' => $sessionReady ? 'ok' : 'muted',
+                ],
+                [
+                    'key' => 'processes',
+                    'label' => 'Prozesse',
+                    'value' => (int) ($processStatus['count'] ?? 0),
+                    'suffix' => '',
+                    'detail' => $processStatus['detail'] ?? 'Aktuell inaktiv',
+                    'tone' => ($processStatus['level'] ?? 'empty') === 'running' ? 'ok' : (($processStatus['level'] ?? '') === 'warning' ? 'warn' : 'muted'),
+                ],
+                [
+                    'key' => 'media',
+                    'label' => 'Medien',
+                    'value' => $mediaCount,
+                    'suffix' => '',
+                    'detail' => $avatarUrl !== '' ? 'Profilbild gesetzt' : 'Kein Profilbild',
+                    'tone' => $mediaCount > 0 ? 'ok' : 'muted',
+                ],
+                [
+                    'key' => 'risk',
+                    'label' => 'Aktivitaetsrisiko',
+                    'value' => $riskScore,
+                    'suffix' => '',
+                    'detail' => $activitySimulation === [] ? 'Kein Plan hinterlegt' : ($activityMetrics['planned_sessions'] ?? 0).' geplante Sessions',
+                    'tone' => $riskScore >= 70 ? 'alert' : ($activitySimulation === [] ? 'muted' : 'ok'),
+                ],
+            ];
+
+            $tabs = [
+                'overview' => 'Uebersicht',
+                'accounts' => 'Accounts',
+                'ai' => 'AI-Profil',
+                'activity' => 'Aktivitaeten',
+                'processes' => 'Prozesse',
+                'media' => 'Dateien & Bilder',
+                'raw' => 'Rohdaten',
+            ];
         @endphp
 
-        <section class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-            <div class="bg-gradient-to-br from-primary-base to-[#274d86] px-6 py-6 text-white">
-                <div class="flex flex-wrap items-start gap-5">
-                    @if($avatarUrl !== '')
-                        <img src="{{ $avatarUrl }}" alt="{{ $profileDetail['display_name'] }}" class="h-28 w-28 rounded-lg object-cover ring-2 ring-white/20">
-                    @else
-                        <div class="flex h-28 w-28 items-center justify-center rounded-lg bg-white/10 text-4xl font-semibold">
-                            {{ strtoupper(substr($profileDetail['label'] ?? 'P', 0, 1)) }}
-                        </div>
-                    @endif
+        <section class="ff-profile-hero" data-profile-hero>
+            <div class="ff-profile-hero__glow" aria-hidden="true"></div>
 
-                    <div class="min-w-0 flex-1">
-                        <p class="text-xs font-semibold uppercase tracking-wide text-white/70">Persona</p>
-                        <h2 class="mt-1 truncate text-3xl font-bold">{{ $profileDetail['display_name'] }}</h2>
-                        <p class="mt-2 text-sm text-white/80">
+            <div class="ff-profile-hero__inner">
+                <div class="ff-profile-hero__identity">
+                    <div class="ff-profile-hero__avatar" data-hero-avatar>
+                        @if($avatarUrl !== '')
+                            <img src="{{ $avatarUrl }}" alt="{{ $profileDetail['display_name'] }}">
+                        @else
+                            <span>{{ mb_strtoupper(mb_substr($profileDetail['label'] ?? 'P', 0, 1)) }}</span>
+                        @endif
+                        <span @class([
+                            'ff-profile-hero__pulse',
+                            'ff-profile-hero__pulse--on' => $profileDetail['is_active'] ?? false,
+                        ])></span>
+                    </div>
+
+                    <div class="ff-profile-hero__text">
+                        <p class="ff-profile-hero__eyebrow" data-hero-line>Persona</p>
+                        <h1 class="ff-profile-hero__name" data-hero-line>{{ $profileDetail['display_name'] }}</h1>
+                        <p class="ff-profile-hero__meta" data-hero-line>
                             {{ $profileDetail['person_alias'] ?: $profileDetail['label'] }}
-                            <span class="mx-2 text-white/40">/</span>
-                            {{ $profileDetail['login_username'] !== '' ? '@'.$profileDetail['login_username'] : 'Kein Instagram-Benutzername' }}
+                            <span aria-hidden="true">&middot;</span>
+                            {{ $personRecord->person_city ?: 'Ort offen' }}
+                            <span aria-hidden="true">&middot;</span>
+                            {{ $personRecord->person_timezone ?: 'Zeitzone offen' }}
                         </p>
 
-                        <div class="mt-4 flex flex-wrap gap-2">
+                        <div class="ff-profile-hero__chips" data-hero-line>
                             @if($profileDetail['is_primary'] ?? false)
-                                <span class="rounded-full bg-secondary-base px-2.5 py-1 text-xs font-semibold text-white">Standard</span>
+                                <span class="ff-chip ff-chip--accent">Standard</span>
                             @endif
-                            <span class="rounded-full {{ ($profileDetail['is_active'] ?? false) ? 'bg-emerald-500/20 text-emerald-50 ring-emerald-300/40' : 'bg-white/10 text-slate-100 ring-white/20' }} px-2.5 py-1 text-xs font-semibold ring-1">
+                            <span class="ff-chip ff-chip--{{ ($profileDetail['is_active'] ?? false) ? 'ok' : 'muted' }}">
                                 {{ ($profileDetail['is_active'] ?? false) ? 'Aktiv' : 'Inaktiv' }}
                             </span>
-                            <span class="rounded-full bg-white/10 px-2.5 py-1 text-xs font-semibold text-slate-100 ring-1 ring-white/10">Bot: {{ $botStatusLabel }}</span>
-                            <span class="rounded-full bg-white/10 px-2.5 py-1 text-xs font-semibold text-slate-100 ring-1 ring-white/10">{{ $personRecord->person_city ?: 'Ort offen' }}</span>
+                            <span class="ff-chip">Bot: {{ $botStatusLabel }}</span>
+                            @if($personRecord->is_scrape_blocked)
+                                <span class="ff-chip ff-chip--alert">
+                                    Gesperrt bis {{ $personRecord->scrape_blocked_until?->format('d.m.Y H:i') }}
+                                </span>
+                            @endif
                         </div>
+
+                        @if(($accountSummary['items'] ?? []) !== [])
+                            <ul class="ff-profile-hero__accounts" data-hero-line>
+                                @foreach($accountSummary['items'] as $account)
+                                    <li wire:key="hero-account-{{ $account['type'] }}">
+                                        <span class="ff-profile-hero__accountmark ff-profile-hero__accountmark--{{ $account['accent'] }}">
+                                            {{ mb_strtoupper(mb_substr($account['label'], 0, 1)) }}
+                                        </span>
+                                        <span class="ff-profile-hero__accounthandle">{{ $account['handle'] ?: $account['label'] }}</span>
+                                    </li>
+                                @endforeach
+                            </ul>
+                        @endif
                     </div>
                 </div>
-            </div>
 
-            <div class="grid gap-3 p-5 sm:grid-cols-2 xl:grid-cols-5">
-                <x-admin.stat label="Bilder" :value="count($imageFiles) + ($avatarUrl !== '' ? 1 : 0)" tone="slate" />
-                <x-admin.stat label="Sessions" :value="$activityMetrics['planned_sessions'] ?? 0" tone="blue" />
-                <x-admin.stat label="Aktionen" :value="$activityMetrics['planned_steps'] ?? 0" tone="emerald" />
-                <x-admin.stat label="Content" :value="$activityMetrics['planned_posts'] ?? 0" tone="amber" />
-                <x-admin.stat label="Max. Risiko" :value="$activityMetrics['max_day_risk_score'] ?? 0" :tone="(($activityMetrics['max_day_risk_score'] ?? 0) >= 70 ? 'red' : 'slate')" />
+                <div class="ff-profile-hero__actions" data-hero-line>
+                    <button
+                        type="button"
+                        wire:click="$dispatch('open-ai-complete-person-profile', { personId: {{ $personRecord->id }} })"
+                        class="ff-btn ff-btn--primary ff-action-trigger--primary"
+                    >
+                        Profil bearbeiten
+                    </button>
+                    <button type="button" @click="tab = 'accounts'" class="ff-btn ff-btn--ghost">
+                        Accounts oeffnen
+                    </button>
+                </div>
             </div>
         </section>
 
-        <div x-data="{ tab: 'overview' }" class="space-y-6">
-            <div class="overflow-x-auto rounded-xl border border-slate-200 bg-slate-100 p-1.5 shadow-sm">
-                <div class="flex min-w-max gap-1">
-                    <button type="button" @click="tab = 'overview'" :class="tab === 'overview' ? 'bg-primary-base text-white shadow-sm' : 'text-slate-600 hover:bg-slate-200/70'" class="rounded-lg px-4 py-2 text-sm font-semibold transition">Uebersicht</button>
-                    <button type="button" @click="tab = 'ai'" :class="tab === 'ai' ? 'bg-primary-base text-white shadow-sm' : 'text-slate-600 hover:bg-slate-200/70'" class="rounded-lg px-4 py-2 text-sm font-semibold transition">AI-Profil</button>
-                    <button type="button" @click="tab = 'activity'" :class="tab === 'activity' ? 'bg-primary-base text-white shadow-sm' : 'text-slate-600 hover:bg-slate-200/70'" class="rounded-lg px-4 py-2 text-sm font-semibold transition">Aktivitaeten</button>
-                    <button type="button" @click="tab = 'email'" :class="tab === 'email' ? 'bg-primary-base text-white shadow-sm' : 'text-slate-600 hover:bg-slate-200/70'" class="rounded-lg px-4 py-2 text-sm font-semibold transition">E-Mail</button>
-                    <button type="button" @click="tab = 'processes'" :class="tab === 'processes' ? 'bg-primary-base text-white shadow-sm' : 'text-slate-600 hover:bg-slate-200/70'" class="rounded-lg px-4 py-2 text-sm font-semibold transition">Prozesse</button>
-                    <button type="button" @click="tab = 'media'" :class="tab === 'media' ? 'bg-primary-base text-white shadow-sm' : 'text-slate-600 hover:bg-slate-200/70'" class="rounded-lg px-4 py-2 text-sm font-semibold transition">Dateien & Bilder</button>
-                    <button type="button" @click="tab = 'social'" :class="tab === 'social' ? 'bg-primary-base text-white shadow-sm' : 'text-slate-600 hover:bg-slate-200/70'" class="rounded-lg px-4 py-2 text-sm font-semibold transition">Social Media</button>
-                    <button type="button" @click="tab = 'raw'" :class="tab === 'raw' ? 'bg-primary-base text-white shadow-sm' : 'text-slate-600 hover:bg-slate-200/70'" class="rounded-lg px-4 py-2 text-sm font-semibold transition">Rohdaten</button>
-                </div>
+        <section class="ff-profile-metrics" data-profile-metrics aria-label="Kennzahlen der Person">
+            @foreach($metrics as $metric)
+                <article class="ff-metric ff-metric--{{ $metric['tone'] }}" wire:key="metric-{{ $metric['key'] }}">
+                    <dl>
+                        <dt>{{ $metric['label'] }}</dt>
+                        <dd data-metric-value>{{ $metric['value'] }}<span class="ff-metric__suffix">{{ $metric['suffix'] }}</span></dd>
+                    </dl>
+                    <p class="ff-metric__detail">{{ $metric['detail'] }}</p>
+                </article>
+            @endforeach
+        </section>
+
+        <div class="ff-profile-tabs" role="tablist" aria-label="Profilbereiche">
+            <div class="ff-profile-tabs__track">
+                @foreach($tabs as $key => $label)
+                    <button
+                        type="button"
+                        role="tab"
+                        @click="tab = '{{ $key }}'"
+                        :aria-selected="tab === '{{ $key }}' ? 'true' : 'false'"
+                        :class="tab === '{{ $key }}' ? 'ff-profile-tab ff-profile-tab--active' : 'ff-profile-tab'"
+                        class="ff-profile-tab"
+                    >{{ $label }}</button>
+                @endforeach
             </div>
+        </div>
 
-            <div x-show="tab === 'overview'" class="space-y-6">
+        <div class="ff-profile-panels">
+            <div x-show="tab === 'overview'" class="ff-profile-panel space-y-6" data-profile-panel>
                 <div class="grid gap-6 xl:grid-cols-2">
-                    <x-admin.panel title="Stammdaten">
-                        <dl class="grid gap-4 text-sm sm:grid-cols-2">
-                            <div><dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">Vorname</dt><dd class="mt-1 text-sm font-medium text-slate-800">{{ $personRecord->person_first_name ?: 'Nicht hinterlegt' }}</dd></div>
-                            <div><dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">Nachname</dt><dd class="mt-1 text-sm font-medium text-slate-800">{{ $personRecord->person_last_name ?: 'Nicht hinterlegt' }}</dd></div>
-                            <div><dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">Alias</dt><dd class="mt-1 text-sm font-medium text-slate-800">{{ $personRecord->person_alias ?: 'Nicht hinterlegt' }}</dd></div>
-                            <div><dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">Geburtsdatum</dt><dd class="mt-1 text-sm font-medium text-slate-800">{{ $personRecord->person_date_of_birth?->format('d.m.Y') ?: 'Nicht hinterlegt' }}</dd></div>
-                            <div><dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">Geschlecht / Rolle</dt><dd class="mt-1 text-sm font-medium text-slate-800">{{ $personRecord->person_gender ?: 'Nicht hinterlegt' }}</dd></div>
-                            <div><dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">Nationalitaet</dt><dd class="mt-1 text-sm font-medium text-slate-800">{{ data_get($identity, 'nationality') ?: 'Nicht hinterlegt' }}</dd></div>
+                    <x-admin.panel title="Stammdaten" class="ff-surface">
+                        <dl class="ff-datagrid">
+                            <div><dt>Vorname</dt><dd>{{ $personRecord->person_first_name ?: 'Nicht hinterlegt' }}</dd></div>
+                            <div><dt>Nachname</dt><dd>{{ $personRecord->person_last_name ?: 'Nicht hinterlegt' }}</dd></div>
+                            <div><dt>Alias</dt><dd>{{ $personRecord->person_alias ?: 'Nicht hinterlegt' }}</dd></div>
+                            <div><dt>Geburtsdatum</dt><dd>{{ $personRecord->person_date_of_birth?->format('d.m.Y') ?: 'Nicht hinterlegt' }}</dd></div>
+                            <div><dt>Geschlecht / Rolle</dt><dd>{{ $personRecord->person_gender ?: 'Nicht hinterlegt' }}</dd></div>
+                            <div><dt>Nationalitaet</dt><dd>{{ data_get($identity, 'nationality') ?: 'Nicht hinterlegt' }}</dd></div>
                         </dl>
                     </x-admin.panel>
 
-                    <x-admin.panel title="Kontakt und Adresse">
-                        <dl class="grid gap-4 text-sm sm:grid-cols-2">
-                            <div><dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">E-Mail</dt><dd class="mt-1 break-all text-sm font-medium text-slate-800">{{ $personRecord->person_email ?: 'Nicht hinterlegt' }}</dd></div>
-                            <div><dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">Telefon</dt><dd class="mt-1 text-sm font-medium text-slate-800">{{ $personRecord->person_phone ?: 'Nicht hinterlegt' }}</dd></div>
-                            <div><dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">Zeitzone</dt><dd class="mt-1 text-sm font-medium text-slate-800">{{ $personRecord->person_timezone ?: 'Nicht hinterlegt' }}</dd></div>
-                            <div><dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">PLZ / Ort</dt><dd class="mt-1 text-sm font-medium text-slate-800">{{ trim(($personRecord->person_postal_code ?: '').' '.($personRecord->person_city ?: '')) ?: 'Nicht hinterlegt' }}</dd></div>
-                            <div class="sm:col-span-2"><dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">Adresse</dt><dd class="mt-1 text-sm font-medium text-slate-800">{{ trim(($personRecord->person_address_line1 ?: '').' '.($personRecord->person_address_line2 ?: '')) ?: 'Nicht hinterlegt' }}</dd></div>
+                    <x-admin.panel title="Kontakt und Adresse" class="ff-surface">
+                        <dl class="ff-datagrid">
+                            <div><dt>E-Mail</dt><dd class="break-all">{{ $personRecord->person_email ?: 'Nicht hinterlegt' }}</dd></div>
+                            <div><dt>Telefon</dt><dd>{{ $personRecord->person_phone ?: 'Nicht hinterlegt' }}</dd></div>
+                            <div><dt>Zeitzone</dt><dd>{{ $personRecord->person_timezone ?: 'Nicht hinterlegt' }}</dd></div>
+                            <div><dt>PLZ / Ort</dt><dd>{{ trim(($personRecord->person_postal_code ?: '').' '.($personRecord->person_city ?: '')) ?: 'Nicht hinterlegt' }}</dd></div>
+                            <div class="sm:col-span-2"><dt>Adresse</dt><dd>{{ trim(($personRecord->person_address_line1 ?: '').' '.($personRecord->person_address_line2 ?: '')) ?: 'Nicht hinterlegt' }}</dd></div>
                         </dl>
                     </x-admin.panel>
                 </div>
 
-                <x-admin.panel title="Technik und Status">
-                    <dl class="grid gap-4 text-sm md:grid-cols-3">
-                        <div><dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">Plattform</dt><dd class="mt-1 text-sm font-medium text-slate-800">{{ $personRecord->platform }}</dd></div>
-                        <div><dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">Profile Key</dt><dd class="mt-1 break-all text-sm font-medium text-slate-800">{{ $personRecord->profile_key }}</dd></div>
-                        <div><dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">Base-Sync</dt><dd class="mt-1 text-sm font-medium text-slate-800">{{ $personRecord->base_sync_status ?: 'pending' }}</dd></div>
-                        <div><dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">Cookie Count</dt><dd class="mt-1 text-sm font-medium text-slate-800">{{ $personRecord->cookie_count }}</dd></div>
-                        <div><dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">Session Cookie</dt><dd class="mt-1 text-sm font-medium text-slate-800">{{ $personRecord->session_cookie_present ? 'Vorhanden' : 'Nicht vorhanden' }}</dd></div>
-                        <div><dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">Instagram-Sperre</dt><dd class="mt-1 text-sm font-medium text-slate-800">{{ $personRecord->scrape_blocked_until?->format('d.m.Y H:i') ?: 'Keine aktive Sperre' }}</dd></div>
+                <x-admin.panel title="Technik und Status" class="ff-surface">
+                    <dl class="ff-datagrid ff-datagrid--wide">
+                        <div><dt>Plattform</dt><dd>{{ $personRecord->platform }}</dd></div>
+                        <div><dt>Profile Key</dt><dd class="break-all">{{ $personRecord->profile_key }}</dd></div>
+                        <div><dt>Base-Sync</dt><dd>{{ $personRecord->base_sync_status ?: 'pending' }}</dd></div>
+                        <div><dt>Cookie Count</dt><dd>{{ $personRecord->cookie_count }}</dd></div>
+                        <div><dt>Session Cookie</dt><dd>{{ $personRecord->session_cookie_present ? 'Vorhanden' : 'Nicht vorhanden' }}</dd></div>
+                        <div><dt>Instagram-Sperre</dt><dd>{{ $personRecord->scrape_blocked_until?->format('d.m.Y H:i') ?: 'Keine aktive Sperre' }}</dd></div>
                     </dl>
 
                     @if($personRecord->person_notes)
-                        <div class="mt-5 border-t border-slate-100 pt-4">
-                            <h4 class="text-sm font-semibold text-slate-800">Notizen</h4>
-                            <p class="mt-2 whitespace-pre-line text-sm text-slate-600">{{ $personRecord->person_notes }}</p>
+                        <div class="ff-panel-note">
+                            <h4>Notizen</h4>
+                            <p>{{ $personRecord->person_notes }}</p>
                         </div>
                     @endif
                 </x-admin.panel>
             </div>
 
-            <div x-show="tab === 'ai'" class="space-y-6">
-                <x-admin.panel title="AI-Persona" description="Diese Felder steuern Kontext, Stil und Verhalten der Persona.">
-                    <x-slot name="actions">
-                        <button type="button" wire:click="saveAiProfile" class="rounded-lg bg-primary-base px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#274d86]">
-                            Speichern
-                        </button>
-                    </x-slot>
-
-                    <div class="grid gap-4 md:grid-cols-2">
-                        <div>
-                            <label class="block text-sm font-medium text-slate-700">Nationalitaet</label>
-                            <input type="text" wire:model.defer="aiNationality" class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 shadow-sm focus:border-primary-base focus:ring-2 focus:ring-primary-base/30">
-                            @error('aiNationality') <p class="mt-1.5 text-sm text-red-500">{{ $message }}</p> @enderror
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-slate-700">Beruf / Taetigkeit</label>
-                            <input type="text" wire:model.defer="aiOccupation" class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 shadow-sm focus:border-primary-base focus:ring-2 focus:ring-primary-base/30">
-                            @error('aiOccupation') <p class="mt-1.5 text-sm text-red-500">{{ $message }}</p> @enderror
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-slate-700">Beziehungsstatus</label>
-                            <input type="text" wire:model.defer="aiRelationshipStatus" class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 shadow-sm focus:border-primary-base focus:ring-2 focus:ring-primary-base/30">
-                            @error('aiRelationshipStatus') <p class="mt-1.5 text-sm text-red-500">{{ $message }}</p> @enderror
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-slate-700">Sprachen</label>
-                            <textarea rows="3" wire:model.defer="aiLanguages" class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 shadow-sm focus:border-primary-base focus:ring-2 focus:ring-primary-base/30"></textarea>
-                            @error('aiLanguages') <p class="mt-1.5 text-sm text-red-500">{{ $message }}</p> @enderror
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-slate-700">Interessen</label>
-                            <textarea rows="4" wire:model.defer="aiInterests" class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 shadow-sm focus:border-primary-base focus:ring-2 focus:ring-primary-base/30"></textarea>
-                            @error('aiInterests') <p class="mt-1.5 text-sm text-red-500">{{ $message }}</p> @enderror
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-slate-700">Persoenlichkeitsmerkmale</label>
-                            <textarea rows="4" wire:model.defer="aiPersonalityTraits" class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 shadow-sm focus:border-primary-base focus:ring-2 focus:ring-primary-base/30"></textarea>
-                            @error('aiPersonalityTraits') <p class="mt-1.5 text-sm text-red-500">{{ $message }}</p> @enderror
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-slate-700">Werte und Ueberzeugungen</label>
-                            <textarea rows="4" wire:model.defer="aiValues" class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 shadow-sm focus:border-primary-base focus:ring-2 focus:ring-primary-base/30"></textarea>
-                            @error('aiValues') <p class="mt-1.5 text-sm text-red-500">{{ $message }}</p> @enderror
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-slate-700">Kommunikationsstil</label>
-                            <textarea rows="4" wire:model.defer="aiCommunicationStyle" class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 shadow-sm focus:border-primary-base focus:ring-2 focus:ring-primary-base/30"></textarea>
-                            @error('aiCommunicationStyle') <p class="mt-1.5 text-sm text-red-500">{{ $message }}</p> @enderror
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-slate-700">Schreibstil</label>
-                            <textarea rows="4" wire:model.defer="aiWritingStyle" class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 shadow-sm focus:border-primary-base focus:ring-2 focus:ring-primary-base/30"></textarea>
-                            @error('aiWritingStyle') <p class="mt-1.5 text-sm text-red-500">{{ $message }}</p> @enderror
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-slate-700">Typischer Tagesablauf</label>
-                            <textarea rows="4" wire:model.defer="aiDailyRoutine" class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 shadow-sm focus:border-primary-base focus:ring-2 focus:ring-primary-base/30"></textarea>
-                            @error('aiDailyRoutine') <p class="mt-1.5 text-sm text-red-500">{{ $message }}</p> @enderror
-                        </div>
-                        <div class="md:col-span-2">
-                            <label class="block text-sm font-medium text-slate-700">Hintergrundgeschichte</label>
-                            <textarea rows="5" wire:model.defer="aiBackgroundStory" class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 shadow-sm focus:border-primary-base focus:ring-2 focus:ring-primary-base/30"></textarea>
-                            @error('aiBackgroundStory') <p class="mt-1.5 text-sm text-red-500">{{ $message }}</p> @enderror
-                        </div>
-                        <div class="md:col-span-2">
-                            <label class="block text-sm font-medium text-slate-700">Verhaltensrichtlinien fuer die AI</label>
-                            <textarea rows="5" wire:model.defer="aiBehaviorGuidelines" class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 shadow-sm focus:border-primary-base focus:ring-2 focus:ring-primary-base/30"></textarea>
-                            @error('aiBehaviorGuidelines') <p class="mt-1.5 text-sm text-red-500">{{ $message }}</p> @enderror
-                        </div>
-                    </div>
-                </x-admin.panel>
-            </div>
-
-            <div x-show="tab === 'activity'" class="space-y-6">
-                <x-admin.panel title="Interne Aktivitaeten" description="Sandbox-Plan fuer realistische Persona-Sessions ohne reale Plattformaktionen.">
-                    <x-slot name="actions">
-                        @if($activitySimulation !== [])
-                            <button type="button" wire:click="clearActivitySimulation" onclick="return confirm('Interne Aktivitaets-Simulation wirklich entfernen?')" class="rounded-lg border border-red-200 bg-white px-4 py-2.5 text-sm font-semibold text-red-700 shadow-sm transition hover:bg-red-50">
-                                Entfernen
-                            </button>
-                        @endif
-                    </x-slot>
-
-                    <div class="grid gap-4 md:grid-cols-4">
-                        <div>
-                            <label class="block text-sm font-medium text-slate-700">Tage</label>
-                            <input type="number" min="1" max="14" wire:model.defer="activitySimulationDays" class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 shadow-sm focus:border-primary-base focus:ring-2 focus:ring-primary-base/30">
-                            @error('activitySimulationDays') <p class="mt-1.5 text-sm text-red-500">{{ $message }}</p> @enderror
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-slate-700">Intensitaet</label>
-                            <select wire:model.defer="activitySimulationIntensity" class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 shadow-sm focus:border-primary-base focus:ring-2 focus:ring-primary-base/30">
-                                <option value="quiet">Ruhig</option>
-                                <option value="balanced">Ausgewogen</option>
-                                <option value="active">Aktiv</option>
-                                <option value="creator">Creator</option>
-                            </select>
-                            @error('activitySimulationIntensity') <p class="mt-1.5 text-sm text-red-500">{{ $message }}</p> @enderror
-                        </div>
-                        <div class="md:col-span-2">
-                            <label class="block text-sm font-medium text-slate-700">Seed</label>
-                            <input type="text" wire:model.defer="activitySimulationSeed" placeholder="leer lassen fuer automatischen Seed" class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 shadow-sm focus:border-primary-base focus:ring-2 focus:ring-primary-base/30">
-                            @error('activitySimulationSeed') <p class="mt-1.5 text-sm text-red-500">{{ $message }}</p> @enderror
-                        </div>
-                    </div>
-
-                    <div class="mt-4 flex justify-end">
-                        <button type="button" wire:click="generateActivitySimulation" class="rounded-lg bg-primary-base px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#274d86]">
-                            Aktivitaeten planen
-                        </button>
-                    </div>
-
-                    @if($activitySimulation === [])
-                        <div class="mt-5 rounded-xl border border-dashed border-slate-300 bg-slate-50 p-6 text-sm text-slate-500">
-                            Noch kein interner Aktivitaetsplan gespeichert.
-                        </div>
-                    @else
-                        <div class="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-                            <x-admin.stat label="Sessions" :value="$activityMetrics['planned_sessions'] ?? 0" />
-                            <x-admin.stat label="Schritte" :value="$activityMetrics['planned_steps'] ?? 0" />
-                            <x-admin.stat label="Content" :value="$activityMetrics['planned_posts'] ?? 0" />
-                            <x-admin.stat label="Kommentare" :value="$activityMetrics['planned_comments'] ?? 0" />
-                            <x-admin.stat label="Max. Risiko" :value="$activityMetrics['max_day_risk_score'] ?? 0" />
-                        </div>
-
-                        <div class="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-                            <p class="font-semibold">Interne Sandbox</p>
-                            <p class="mt-1">Kein Login, keine Browser-Automation, keine externen Plattformaktionen. Status: {{ $activitySimulation['status'] ?? 'draft' }}.</p>
-                        </div>
-
-                        @if(!empty($activityProfile['content_themes']))
-                            <div class="mt-4 flex flex-wrap gap-2">
-                                @foreach($activityProfile['content_themes'] as $theme)
-                                    <span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700 ring-1 ring-slate-200">{{ $theme }}</span>
-                                @endforeach
-                            </div>
-                        @endif
-
-                        <div class="mt-5 space-y-4">
-                            @foreach($activityDays as $day)
-                                @php
-                                    $dayMetrics = $day['metrics'] ?? [];
-                                    $riskClass = match($dayMetrics['risk_level'] ?? 'low') {
-                                        'review' => 'bg-red-50 text-red-700 ring-red-200',
-                                        'moderate' => 'bg-amber-50 text-amber-700 ring-amber-200',
-                                        default => 'bg-emerald-50 text-emerald-700 ring-emerald-200',
-                                    };
-                                @endphp
-                                <article class="rounded-xl border border-slate-200 bg-slate-50 p-4" wire:key="activity-day-{{ $day['date'] ?? $loop->index }}">
-                                    <div class="flex flex-wrap items-start justify-between gap-3">
-                                        <div>
-                                            <h4 class="text-sm font-semibold text-slate-800">{{ $day['weekday'] ?? '' }}, {{ $day['date'] ?? '' }}</h4>
-                                            <p class="mt-1 text-sm text-slate-600">{{ $day['anchor'] ?? '' }}</p>
-                                        </div>
-                                        <div class="flex flex-wrap gap-2">
-                                            <span class="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 ring-1 ring-slate-200">{{ $dayMetrics['sessions'] ?? 0 }} Sessions</span>
-                                            <span class="rounded-full px-2.5 py-1 text-xs font-semibold ring-1 {{ $riskClass }}">Risiko {{ $dayMetrics['risk_score'] ?? 0 }}</span>
-                                        </div>
-                                    </div>
-
-                                    <div class="mt-4 grid gap-3 lg:grid-cols-2">
-                                        @foreach(array_slice($day['sessions'] ?? [], 0, 4) as $session)
-                                            <div class="rounded-lg border border-slate-200 bg-white p-3">
-                                                <div class="flex flex-wrap items-center justify-between gap-2">
-                                                    <p class="text-sm font-semibold text-slate-800">{{ $session['starts_at_local'] ?? '' }} - {{ $session['session_type'] ?? 'session' }}</p>
-                                                    <span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">{{ $session['duration_minutes'] ?? 0 }} Min.</span>
-                                                </div>
-                                                <p class="mt-1 text-sm text-slate-600">{{ $session['intent'] ?? '' }}</p>
-                                            </div>
-                                        @endforeach
-                                    </div>
-                                </article>
-                            @endforeach
-                        </div>
-                    @endif
-                </x-admin.panel>
-            </div>
-
-            <div x-show="tab === 'email'" class="space-y-6">
-                <livewire:admin.config.person-email-account-settings :person-id="$personRecord->id" :key="'person-email-account-'.$personRecord->id" />
-            </div>
-
-            <div x-show="tab === 'processes'" class="space-y-6">
-                <livewire:admin.config.person-process-list :person-id="$personRecord->id" :key="'person-process-list-'.$personRecord->id" />
-            </div>
-
-            <div x-show="tab === 'media'" class="space-y-6">
-                <x-admin.panel title="Profilbild" description="Avatar direkt auf der Person speichern oder entfernen.">
-                    <form wire:submit="uploadAvatar" class="flex flex-wrap items-end gap-3">
-                        <div class="min-w-[260px] flex-1">
-                            <input type="file" wire:model="avatarUpload" accept="image/*" class="block w-full rounded-lg border border-slate-300 bg-white text-sm text-slate-600 shadow-sm file:mr-4 file:border-0 file:bg-slate-100 file:px-4 file:py-2.5 file:text-sm file:font-semibold file:text-slate-700 hover:file:bg-slate-200 focus:border-primary-base focus:ring-2 focus:ring-primary-base/30">
-                            @error('avatarUpload') <p class="mt-1.5 text-sm text-red-500">{{ $message }}</p> @enderror
-                        </div>
-                        <button type="submit" class="rounded-lg bg-primary-base px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#274d86]">Speichern</button>
-                        @if($avatarUrl !== '')
-                            <button type="button" wire:click="deleteAvatar" onclick="return confirm('Profilbild wirklich loeschen?')" class="rounded-lg border border-red-200 bg-white px-4 py-2.5 text-sm font-semibold text-red-700 shadow-sm transition hover:bg-red-50">Loeschen</button>
-                        @endif
-                    </form>
-                </x-admin.panel>
-
-                @livewire('tools.file-pools.manage-file-pools', ['modelType' => \App\Models\Person::class, 'modelId' => $personRecord->id, 'readOnly' => false], key('person-file-pool-'.$personRecord->id))
-
-                <x-admin.panel title="Bilder" description="Profilbild und weitere Bilddateien koennen einzeln verwaltet werden.">
-                    <x-slot name="actions">
-                        <button type="button" wire:click="$dispatch('open-person-image-modal', { personId: {{ $personRecord->id }} })" class="rounded-lg bg-primary-base px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#274d86]">
-                            Bilder erstellen
-                        </button>
-                    </x-slot>
-
-                    @if($imageFiles === [])
-                        <div class="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-6 text-sm text-slate-500">Keine weiteren Bilder vorhanden.</div>
-                    @else
-                        <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-                            @foreach($imageFiles as $imageFile)
-                                <article class="overflow-hidden rounded-xl border border-slate-200 bg-slate-50 shadow-sm" wire:key="person-image-{{ $imageFile['id'] }}">
-                                    @if(($imageFile['url'] ?? '') !== '')
-                                        <img src="{{ $imageFile['url'] }}" alt="{{ $imageFile['name'] }}" class="aspect-square w-full object-cover">
-                                    @else
-                                        <div class="flex aspect-square w-full items-center justify-center bg-slate-100 text-sm text-slate-500">Kein Vorschaubild</div>
-                                    @endif
-
-                                    <div class="space-y-3 p-3">
-                                        <div>
-                                            <p class="truncate text-sm font-semibold text-slate-800">{{ $imageFile['name'] }}</p>
-                                            <p class="mt-1 text-xs text-slate-500">{{ $imageFile['type'] }}{{ ($imageFile['size'] ?? '') !== '' ? ' - '.$imageFile['size'] : '' }}</p>
-                                        </div>
-                                        <div class="flex flex-wrap gap-2">
-                                            @if(($imageFile['url'] ?? '') !== '')
-                                                <a href="{{ $imageFile['url'] }}" target="_blank" rel="noopener" class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50">Oeffnen</a>
-                                            @endif
-                                            <button type="button" wire:click="useImageAsAvatar({{ $imageFile['id'] }})" class="rounded-lg border border-primary-base/30 bg-white px-3 py-1.5 text-xs font-semibold text-primary-base transition hover:bg-primary-base/5">Als Profilbild</button>
-                                            <button type="button" wire:click="deleteImageFile({{ $imageFile['id'] }})" onclick="return confirm('Dieses Bild wirklich loeschen?')" class="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 transition hover:bg-red-50">Loeschen</button>
-                                        </div>
-                                    </div>
-                                </article>
-                            @endforeach
-                        </div>
-                    @endif
-                </x-admin.panel>
-            </div>
-
-            <div x-show="tab === 'social'" x-data="{ socialPortal: 'instagram' }" class="space-y-6">
-                <x-admin.panel title="Social Media Accounts" description="Portale werden getrennt verwaltet; aktiv ist aktuell Instagram.">
-                    <x-slot name="actions">
-                        <div class="flex flex-wrap gap-2">
-                            <button type="button" wire:click="openEditProfile" class="rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50">
-                                Zugangsdaten bearbeiten
-                            </button>
-                            <button type="button" wire:click="openRuntimeSettingsModal" class="rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50">
-                                Timeouts
-                            </button>
-                            <button type="button" wire:click="registerInstagramAccount" wire:loading.attr="disabled" class="rounded-lg border border-pink-200 bg-white px-4 py-2.5 text-sm font-semibold text-pink-700 shadow-sm transition hover:bg-pink-50 disabled:cursor-wait disabled:opacity-60">
-                                Instagram registrieren
-                            </button>
-                            <button type="button" wire:click="buildInstagramSession" wire:loading.attr="disabled" class="rounded-lg bg-primary-base px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#274d86] disabled:cursor-wait disabled:opacity-60">
-                                Login-Session speichern
-                            </button>
-                        </div>
-                    </x-slot>
-
-                    <div class="mb-5 flex flex-wrap gap-1 rounded-xl border border-slate-200 bg-slate-100 p-1.5">
-                        <button type="button" @click="socialPortal = 'instagram'" :class="socialPortal === 'instagram' ? 'bg-primary-base text-white shadow-sm' : 'text-slate-600 hover:bg-slate-200/70'" class="rounded-lg px-3 py-2 text-sm font-semibold transition">Instagram</button>
-                        <button type="button" @click="socialPortal = 'facebook'" :class="socialPortal === 'facebook' ? 'bg-primary-base text-white shadow-sm' : 'text-slate-600 hover:bg-slate-200/70'" class="rounded-lg px-3 py-2 text-sm font-semibold transition">Facebook</button>
-                        <button type="button" @click="socialPortal = 'tiktok'" :class="socialPortal === 'tiktok' ? 'bg-primary-base text-white shadow-sm' : 'text-slate-600 hover:bg-slate-200/70'" class="rounded-lg px-3 py-2 text-sm font-semibold transition">TikTok</button>
-                        <button type="button" @click="socialPortal = 'x'" :class="socialPortal === 'x' ? 'bg-primary-base text-white shadow-sm' : 'text-slate-600 hover:bg-slate-200/70'" class="rounded-lg px-3 py-2 text-sm font-semibold transition">X</button>
-                    </div>
-
-                    <article x-show="socialPortal === 'instagram'" class="overflow-hidden rounded-lg border border-pink-100 bg-gradient-to-br from-pink-50 via-white to-orange-50">
-                        <div class="flex flex-wrap items-start justify-between gap-4 border-b border-pink-100 bg-white/70 p-5">
-                            <div class="min-w-0">
-                                <p class="text-xs font-semibold uppercase tracking-wide text-pink-600">Instagram</p>
-                                <h3 class="mt-1 truncate text-xl font-semibold text-slate-900">
-                                    {{ $instagramUsername !== '' ? '@'.$instagramUsername : 'Kein Instagram-Benutzername' }}
-                                </h3>
-                                <p class="mt-1 text-sm text-slate-600">Profil: {{ $profileDetail['label'] }}</p>
-                            </div>
-                            <div class="flex flex-wrap gap-2">
-                                <span class="rounded-full px-2.5 py-1 text-xs font-semibold ring-1 {{ $instagramStatusClass }}">{{ $instagramStatusLabel }}</span>
-                                <span class="rounded-full {{ ($profileDetail['has_stored_password'] ?? false) ? 'bg-emerald-50 text-emerald-700 ring-emerald-200' : 'bg-amber-50 text-amber-700 ring-amber-200' }} px-2.5 py-1 text-xs font-semibold ring-1">
-                                    {{ ($profileDetail['has_stored_password'] ?? false) ? 'Passwort gespeichert' : 'Kein Passwort' }}
-                                </span>
-                                <span class="rounded-full {{ $personRecord->session_cookie_present ? 'bg-emerald-50 text-emerald-700 ring-emerald-200' : 'bg-slate-100 text-slate-700 ring-slate-200' }} px-2.5 py-1 text-xs font-semibold ring-1">
-                                    {{ $personRecord->session_cookie_present ? 'Session-Cookie vorhanden' : 'Kein Session-Cookie' }}
-                                </span>
-                            </div>
-                        </div>
-
-                        <div class="grid gap-4 p-5 md:grid-cols-2 xl:grid-cols-3">
-                            <div class="rounded-lg bg-white/80 p-4 ring-1 ring-slate-200">
-                                <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Benutzername</p>
-                                <p class="mt-2 break-all text-sm font-semibold text-slate-900">{{ $instagramUsername !== '' ? '@'.$instagramUsername : 'Nicht hinterlegt' }}</p>
-                            </div>
-                            <div class="rounded-lg bg-white/80 p-4 ring-1 ring-slate-200">
-                                <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Browser-Profil</p>
-                                <p class="mt-2 break-all text-sm text-slate-900">{{ $profileDetail['browser_profile_path'] }}</p>
-                            </div>
-                            <div class="rounded-lg bg-white/80 p-4 ring-1 ring-slate-200">
-                                <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Cookie-Datei</p>
-                                <p class="mt-2 break-all text-sm text-slate-900">{{ $profileDetail['cookie_file_path'] }}</p>
-                            </div>
-                            <div class="rounded-lg bg-white/80 p-4 ring-1 ring-slate-200">
-                                <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Cookies</p>
-                                <p class="mt-2 text-sm text-slate-900">{{ $personRecord->cookie_count }} gespeichert</p>
-                                <p class="mt-1 text-xs text-slate-500">Synchronisiert: {{ $personRecord->cookies_synced_at?->format('d.m.Y H:i') ?: 'Noch nicht' }}</p>
-                            </div>
-                            <div class="rounded-lg bg-white/80 p-4 ring-1 ring-slate-200">
-                                <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Auto-Login</p>
-                                <p class="mt-2 text-sm text-slate-900">{{ ($profileDetail['login_username'] ?? '') !== '' ? 'Benutzername hinterlegt' : 'Nicht konfiguriert' }}</p>
-                                <p class="mt-1 text-xs text-slate-500">Passwort: {{ ($profileDetail['has_stored_password'] ?? false) ? 'gespeichert' : 'fehlt' }}</p>
-                            </div>
-                            <div class="rounded-lg bg-white/80 p-4 ring-1 ring-slate-200">
-                                <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Instagram-Sperre</p>
-                                <p class="mt-2 text-sm text-slate-900">{{ $personRecord->scrape_blocked_until?->format('d.m.Y H:i') ?: 'Keine aktive Sperre' }}</p>
-                                @if($personRecord->scrape_blocked_reason)
-                                    <p class="mt-1 text-xs text-amber-700">{{ $personRecord->scrape_blocked_reason }}</p>
-                                @endif
-                            </div>
-                        </div>
-                    </article>
-
-                    <div x-show="socialPortal !== 'instagram'" class="rounded-lg border border-slate-200 bg-slate-50 p-5 text-sm text-slate-600">
-                        Dieses Portal ist vorbereitet, aber noch nicht implementiert.
-                    </div>
-                </x-admin.panel>
+            <div x-show="tab === 'accounts'" class="ff-profile-panel space-y-6" data-profile-panel>
+                <livewire:admin.config.person-accounts
+                    :person-id="$personRecord->id"
+                    :key="'person-accounts-'.$personRecord->id" />
 
                 @if($sessionBuildResult)
                     @php
@@ -546,9 +317,250 @@
                 @endif
             </div>
 
-            <div x-show="tab === 'raw'">
-                <x-admin.panel title="Rohdaten" description="Vollstaendige gespeicherte Personendaten fuer technische Pruefung und Prompting.">
-                    <pre class="overflow-x-auto rounded-lg bg-slate-900 p-4 text-xs leading-relaxed text-slate-100">{{ json_encode($personRecord->toArray(), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) }}</pre>
+            <div x-show="tab === 'ai'" class="ff-profile-panel space-y-6" data-profile-panel>
+                <x-admin.panel title="AI-Persona" description="Diese Felder steuern Kontext, Stil und Verhalten der Persona." class="ff-surface">
+                    <x-slot name="actions">
+                        <button type="button" wire:click="saveAiProfile" class="ff-btn ff-btn--primary">
+                            Speichern
+                        </button>
+                    </x-slot>
+
+                    <div class="grid gap-4 p-5 md:grid-cols-2">
+                        <div>
+                            <label class="ff-label">Nationalitaet</label>
+                            <input type="text" wire:model.defer="aiNationality" class="ff-input">
+                            @error('aiNationality') <p class="ff-error">{{ $message }}</p> @enderror
+                        </div>
+                        <div>
+                            <label class="ff-label">Beruf / Taetigkeit</label>
+                            <input type="text" wire:model.defer="aiOccupation" class="ff-input">
+                            @error('aiOccupation') <p class="ff-error">{{ $message }}</p> @enderror
+                        </div>
+                        <div>
+                            <label class="ff-label">Beziehungsstatus</label>
+                            <input type="text" wire:model.defer="aiRelationshipStatus" class="ff-input">
+                            @error('aiRelationshipStatus') <p class="ff-error">{{ $message }}</p> @enderror
+                        </div>
+                        <div>
+                            <label class="ff-label">Sprachen</label>
+                            <textarea rows="3" wire:model.defer="aiLanguages" class="ff-input"></textarea>
+                            @error('aiLanguages') <p class="ff-error">{{ $message }}</p> @enderror
+                        </div>
+                        <div>
+                            <label class="ff-label">Interessen</label>
+                            <textarea rows="4" wire:model.defer="aiInterests" class="ff-input"></textarea>
+                            @error('aiInterests') <p class="ff-error">{{ $message }}</p> @enderror
+                        </div>
+                        <div>
+                            <label class="ff-label">Persoenlichkeitsmerkmale</label>
+                            <textarea rows="4" wire:model.defer="aiPersonalityTraits" class="ff-input"></textarea>
+                            @error('aiPersonalityTraits') <p class="ff-error">{{ $message }}</p> @enderror
+                        </div>
+                        <div>
+                            <label class="ff-label">Werte und Ueberzeugungen</label>
+                            <textarea rows="4" wire:model.defer="aiValues" class="ff-input"></textarea>
+                            @error('aiValues') <p class="ff-error">{{ $message }}</p> @enderror
+                        </div>
+                        <div>
+                            <label class="ff-label">Kommunikationsstil</label>
+                            <textarea rows="4" wire:model.defer="aiCommunicationStyle" class="ff-input"></textarea>
+                            @error('aiCommunicationStyle') <p class="ff-error">{{ $message }}</p> @enderror
+                        </div>
+                        <div>
+                            <label class="ff-label">Schreibstil</label>
+                            <textarea rows="4" wire:model.defer="aiWritingStyle" class="ff-input"></textarea>
+                            @error('aiWritingStyle') <p class="ff-error">{{ $message }}</p> @enderror
+                        </div>
+                        <div>
+                            <label class="ff-label">Typischer Tagesablauf</label>
+                            <textarea rows="4" wire:model.defer="aiDailyRoutine" class="ff-input"></textarea>
+                            @error('aiDailyRoutine') <p class="ff-error">{{ $message }}</p> @enderror
+                        </div>
+                        <div class="md:col-span-2">
+                            <label class="ff-label">Hintergrundgeschichte</label>
+                            <textarea rows="5" wire:model.defer="aiBackgroundStory" class="ff-input"></textarea>
+                            @error('aiBackgroundStory') <p class="ff-error">{{ $message }}</p> @enderror
+                        </div>
+                        <div class="md:col-span-2">
+                            <label class="ff-label">Verhaltensrichtlinien fuer die AI</label>
+                            <textarea rows="5" wire:model.defer="aiBehaviorGuidelines" class="ff-input"></textarea>
+                            @error('aiBehaviorGuidelines') <p class="ff-error">{{ $message }}</p> @enderror
+                        </div>
+                    </div>
+                </x-admin.panel>
+            </div>
+
+            <div x-show="tab === 'activity'" class="ff-profile-panel space-y-6" data-profile-panel>
+                <x-admin.panel title="Interne Aktivitaeten" description="Sandbox-Plan fuer realistische Persona-Sessions ohne reale Plattformaktionen." class="ff-surface">
+                    <x-slot name="actions">
+                        @if($activitySimulation !== [])
+                            <button type="button" wire:click="clearActivitySimulation" wire:confirm="Interne Aktivitaets-Simulation wirklich entfernen?" class="ff-btn ff-btn--danger">
+                                Entfernen
+                            </button>
+                        @endif
+                    </x-slot>
+
+                    <div class="p-5">
+                        <div class="grid gap-4 md:grid-cols-4">
+                            <div>
+                                <label class="ff-label">Tage</label>
+                                <input type="number" min="1" max="14" wire:model.defer="activitySimulationDays" class="ff-input">
+                                @error('activitySimulationDays') <p class="ff-error">{{ $message }}</p> @enderror
+                            </div>
+                            <div>
+                                <label class="ff-label">Intensitaet</label>
+                                <select wire:model.defer="activitySimulationIntensity" class="ff-input">
+                                    <option value="quiet">Ruhig</option>
+                                    <option value="balanced">Ausgewogen</option>
+                                    <option value="active">Aktiv</option>
+                                    <option value="creator">Creator</option>
+                                </select>
+                                @error('activitySimulationIntensity') <p class="ff-error">{{ $message }}</p> @enderror
+                            </div>
+                            <div class="md:col-span-2">
+                                <label class="ff-label">Seed</label>
+                                <input type="text" wire:model.defer="activitySimulationSeed" placeholder="leer lassen fuer automatischen Seed" class="ff-input">
+                                @error('activitySimulationSeed') <p class="ff-error">{{ $message }}</p> @enderror
+                            </div>
+                        </div>
+
+                        <div class="mt-4 flex justify-end">
+                            <button type="button" wire:click="generateActivitySimulation" class="ff-btn ff-btn--primary">
+                                Aktivitaeten planen
+                            </button>
+                        </div>
+
+                        @if($activitySimulation === [])
+                            <div class="ff-emptystate">Noch kein interner Aktivitaetsplan gespeichert.</div>
+                        @else
+                            <div class="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                                <x-admin.stat label="Sessions" :value="$activityMetrics['planned_sessions'] ?? 0" />
+                                <x-admin.stat label="Schritte" :value="$activityMetrics['planned_steps'] ?? 0" />
+                                <x-admin.stat label="Content" :value="$activityMetrics['planned_posts'] ?? 0" />
+                                <x-admin.stat label="Kommentare" :value="$activityMetrics['planned_comments'] ?? 0" />
+                                <x-admin.stat label="Max. Risiko" :value="$activityMetrics['max_day_risk_score'] ?? 0" />
+                            </div>
+
+                            <div class="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                                <p class="font-semibold">Interne Sandbox</p>
+                                <p class="mt-1">Kein Login, keine Browser-Automation, keine externen Plattformaktionen. Status: {{ $activitySimulation['status'] ?? 'draft' }}.</p>
+                            </div>
+
+                            @if(!empty($activityProfile['content_themes']))
+                                <div class="mt-4 flex flex-wrap gap-2">
+                                    @foreach($activityProfile['content_themes'] as $theme)
+                                        <span class="ff-chip">{{ $theme }}</span>
+                                    @endforeach
+                                </div>
+                            @endif
+
+                            <div class="mt-5 space-y-4">
+                                @foreach($activityDays as $day)
+                                    @php
+                                        $dayMetrics = $day['metrics'] ?? [];
+                                        $riskClass = match($dayMetrics['risk_level'] ?? 'low') {
+                                            'review' => 'bg-red-50 text-red-700 ring-red-200',
+                                            'moderate' => 'bg-amber-50 text-amber-700 ring-amber-200',
+                                            default => 'bg-emerald-50 text-emerald-700 ring-emerald-200',
+                                        };
+                                    @endphp
+                                    <article class="rounded-xl border border-slate-200 bg-slate-50 p-4" wire:key="activity-day-{{ $day['date'] ?? $loop->index }}">
+                                        <div class="flex flex-wrap items-start justify-between gap-3">
+                                            <div>
+                                                <h4 class="text-sm font-semibold text-slate-800">{{ $day['weekday'] ?? '' }}, {{ $day['date'] ?? '' }}</h4>
+                                                <p class="mt-1 text-sm text-slate-600">{{ $day['anchor'] ?? '' }}</p>
+                                            </div>
+                                            <div class="flex flex-wrap gap-2">
+                                                <span class="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 ring-1 ring-slate-200">{{ $dayMetrics['sessions'] ?? 0 }} Sessions</span>
+                                                <span class="rounded-full px-2.5 py-1 text-xs font-semibold ring-1 {{ $riskClass }}">Risiko {{ $dayMetrics['risk_score'] ?? 0 }}</span>
+                                            </div>
+                                        </div>
+
+                                        <div class="mt-4 grid gap-3 lg:grid-cols-2">
+                                            @foreach(array_slice($day['sessions'] ?? [], 0, 4) as $session)
+                                                <div class="rounded-lg border border-slate-200 bg-white p-3">
+                                                    <div class="flex flex-wrap items-center justify-between gap-2">
+                                                        <p class="text-sm font-semibold text-slate-800">{{ $session['starts_at_local'] ?? '' }} - {{ $session['session_type'] ?? 'session' }}</p>
+                                                        <span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">{{ $session['duration_minutes'] ?? 0 }} Min.</span>
+                                                    </div>
+                                                    <p class="mt-1 text-sm text-slate-600">{{ $session['intent'] ?? '' }}</p>
+                                                </div>
+                                            @endforeach
+                                        </div>
+                                    </article>
+                                @endforeach
+                            </div>
+                        @endif
+                    </div>
+                </x-admin.panel>
+            </div>
+
+            <div x-show="tab === 'processes'" class="ff-profile-panel space-y-6" data-profile-panel>
+                <livewire:admin.config.person-process-list :person-id="$personRecord->id" :key="'person-process-list-'.$personRecord->id" />
+            </div>
+
+            <div x-show="tab === 'media'" class="ff-profile-panel space-y-6" data-profile-panel>
+                <x-admin.panel title="Profilbild" description="Avatar direkt auf der Person speichern oder entfernen." class="ff-surface">
+                    <form wire:submit="uploadAvatar" class="flex flex-wrap items-end gap-3 p-5">
+                        <div class="min-w-[260px] flex-1">
+                            <input type="file" wire:model="avatarUpload" accept="image/*" class="block w-full rounded-lg border border-slate-300 bg-white text-sm text-slate-600 shadow-sm file:mr-4 file:border-0 file:bg-slate-100 file:px-4 file:py-2.5 file:text-sm file:font-semibold file:text-slate-700 hover:file:bg-slate-200">
+                            @error('avatarUpload') <p class="ff-error">{{ $message }}</p> @enderror
+                        </div>
+                        <button type="submit" class="ff-btn ff-btn--primary">Speichern</button>
+                        @if($avatarUrl !== '')
+                            <button type="button" wire:click="deleteAvatar" wire:confirm="Profilbild wirklich loeschen?" class="ff-btn ff-btn--danger">Loeschen</button>
+                        @endif
+                    </form>
+                </x-admin.panel>
+
+                @livewire('tools.file-pools.manage-file-pools', ['modelType' => \App\Models\Person::class, 'modelId' => $personRecord->id, 'readOnly' => false], key('person-file-pool-'.$personRecord->id))
+
+                <x-admin.panel title="Bilder" description="Profilbild und weitere Bilddateien koennen einzeln verwaltet werden." class="ff-surface">
+                    <x-slot name="actions">
+                        <button type="button" wire:click="$dispatch('open-person-image-modal', { personId: {{ $personRecord->id }} })" class="ff-btn ff-btn--primary">
+                            Bilder erstellen
+                        </button>
+                    </x-slot>
+
+                    <div class="p-5">
+                        @if($imageFiles === [])
+                            <div class="ff-emptystate">Keine weiteren Bilder vorhanden.</div>
+                        @else
+                            <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                                @foreach($imageFiles as $imageFile)
+                                    <article class="ff-mediacard" wire:key="person-image-{{ $imageFile['id'] }}">
+                                        @if(($imageFile['url'] ?? '') !== '')
+                                            <img src="{{ $imageFile['url'] }}" alt="{{ $imageFile['name'] }}" class="aspect-square w-full object-cover">
+                                        @else
+                                            <div class="flex aspect-square w-full items-center justify-center bg-slate-100 text-sm text-slate-500">Kein Vorschaubild</div>
+                                        @endif
+
+                                        <div class="space-y-3 p-3">
+                                            <div>
+                                                <p class="truncate text-sm font-semibold text-slate-800">{{ $imageFile['name'] }}</p>
+                                                <p class="mt-1 text-xs text-slate-500">{{ $imageFile['type'] }}{{ ($imageFile['size'] ?? '') !== '' ? ' - '.$imageFile['size'] : '' }}</p>
+                                            </div>
+                                            <div class="flex flex-wrap gap-2">
+                                                @if(($imageFile['url'] ?? '') !== '')
+                                                    <a href="{{ $imageFile['url'] }}" target="_blank" rel="noopener" class="ff-btn ff-btn--small">Oeffnen</a>
+                                                @endif
+                                                <button type="button" wire:click="useImageAsAvatar({{ $imageFile['id'] }})" class="ff-btn ff-btn--small ff-btn--accent">Als Profilbild</button>
+                                                <button type="button" wire:click="deleteImageFile({{ $imageFile['id'] }})" wire:confirm="Dieses Bild wirklich loeschen?" class="ff-btn ff-btn--small ff-btn--danger">Loeschen</button>
+                                            </div>
+                                        </div>
+                                    </article>
+                                @endforeach
+                            </div>
+                        @endif
+                    </div>
+                </x-admin.panel>
+            </div>
+
+            <div x-show="tab === 'raw'" class="ff-profile-panel" data-profile-panel>
+                <x-admin.panel title="Rohdaten" description="Vollstaendige gespeicherte Personendaten fuer technische Pruefung und Prompting." class="ff-surface">
+                    <div class="p-5">
+                        <pre class="overflow-x-auto rounded-lg bg-slate-900 p-4 text-xs leading-relaxed text-slate-100">{{ json_encode($personRecord->toArray(), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) }}</pre>
+                    </div>
                 </x-admin.panel>
             </div>
         </div>

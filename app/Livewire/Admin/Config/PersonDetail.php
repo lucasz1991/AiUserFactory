@@ -4,6 +4,7 @@ namespace App\Livewire\Admin\Config;
 
 use App\Models\File;
 use App\Models\Person;
+use App\Services\Persons\PersonAccountRegistry;
 use App\Services\Simulation\PersonaActivityPlanner;
 use Illuminate\Support\Facades\Storage;
 use Livewire\Attributes\On;
@@ -58,6 +59,15 @@ class PersonDetail extends PersonList
     public string $activitySimulationSeed = '';
 
     public array $activitySimulation = [];
+
+    /**
+     * Kennzahlen der Kopfzeile. Werden aus `PersonAccountRegistry` und den
+     * bereits geladenen Profil-/Mediendaten abgeleitet, damit der Header ohne
+     * zusaetzliche Abfragen auskommt.
+     *
+     * @var array<string, mixed>
+     */
+    public array $accountSummary = [];
 
     public function mount(?string $profileId = null): void
     {
@@ -368,6 +378,7 @@ class PersonDetail extends PersonList
         $this->loadImageFiles();
         $this->hydrateAiProfile();
         $this->loadActivitySimulationState();
+        $this->loadAccountSummary();
 
         if ($profile) {
             $this->fillFormFromProfile($profile);
@@ -575,6 +586,40 @@ class PersonDetail extends PersonList
             ? (string) $simulation['intensity']
             : 'balanced';
         $this->activitySimulationSeed = trim((string) ($simulation['seed'] ?? ''));
+    }
+
+    /**
+     * Kontenkennzahlen fuer den Profil-Header. Bewusst ohne Klartextpasswoerter:
+     * die Kopfzeile braucht nur, ob ein Zugang vollstaendig ist.
+     */
+    protected function loadAccountSummary(): void
+    {
+        $this->accountSummary = [
+            'total' => count(PersonAccountRegistry::TYPES),
+            'connected' => 0,
+            'with_password' => 0,
+            'items' => [],
+        ];
+
+        if (! $this->personRecord) {
+            return;
+        }
+
+        $accounts = app(PersonAccountRegistry::class)->all($this->personRecord);
+
+        $this->accountSummary['connected'] = collect($accounts)->where('isConfigured', true)->count();
+        $this->accountSummary['with_password'] = collect($accounts)->where('hasPassword', true)->count();
+        $this->accountSummary['items'] = collect($accounts)
+            ->where('isConfigured', true)
+            ->map(fn (array $account): array => [
+                'type' => $account['type'],
+                'label' => $account['label'],
+                'handle' => $account['handle'] !== '' ? $account['handle'] : $account['address'],
+                'accent' => $account['accent'],
+                'has_password' => $account['hasPassword'],
+            ])
+            ->values()
+            ->all();
     }
 
     protected function splitMultilineValues(string $value): array
