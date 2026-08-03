@@ -51,8 +51,18 @@ class AppServiceProvider extends ServiceProvider
             return;
         }
 
-        $basePath = rtrim((string) $this->app['request']->getBaseUrl(), '/');
+        $this->applyLivewireBasePath(
+            rtrim((string) $this->app['request']->getBaseUrl(), '/')
+        );
+    }
 
+    /**
+     * Reine Anwendung des Basispfads — ohne Anfrage, damit sie pruefbar bleibt.
+     * Ein leerer Basispfad bedeutet: die Anwendung liegt auf der Domainwurzel,
+     * Livewires Vorgabe stimmt und es wird nichts veraendert.
+     */
+    protected function applyLivewireBasePath(string $basePath): void
+    {
         if ($basePath === '') {
             return;
         }

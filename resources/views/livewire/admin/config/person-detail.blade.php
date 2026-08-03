@@ -170,10 +170,18 @@
                 </div>
 
                 <div class="ff-profile-hero__actions" data-hero-line>
+                    {{-- `data-magnetic` ist der eigene Haken fuer die Bewegungsschicht.
+                         Frueher stand hier `ff-action-trigger--primary` aus dem
+                         Workflow-Design — die Klasse setzt ihren Verlauf per
+                         `!important` und greift dabei auf `var(--ff-ink)` zu, das
+                         nur im Workflow-Bereich definiert ist. Ausserhalb wird die
+                         ganze Kurzschreibweise ungueltig und der Knopf faellt auf
+                         transparenten Grund zurueck: weisse Schrift auf Weiss. --}}
                     <button
                         type="button"
                         wire:click="$dispatch('open-ai-complete-person-profile', { personId: {{ $personRecord->id }} })"
-                        class="ff-btn ff-btn--primary ff-action-trigger--primary"
+                        class="ff-btn ff-btn--primary"
+                        data-magnetic
                     >
                         Profil bearbeiten
                     </button>

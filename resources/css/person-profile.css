@@ -37,7 +37,7 @@
 /* ------------------------------------------------------------------ Flash */
 
 .ff-flash {
-  border-radius: var(--ff-profile-radius-sm);
+  border-radius: var(--ff-profile-radius-sm, 12px);
   border: 1px solid var(--ff-shell-border, #d7e0ea);
   background: var(--ff-shell-surface, #fff);
   padding: 0.75rem 1rem;
@@ -57,11 +57,11 @@
 .ff-profile-hero {
   position: relative;
   overflow: hidden;
-  border-radius: var(--ff-profile-radius);
+  border-radius: var(--ff-profile-radius, 18px);
   border: 1px solid rgba(255, 255, 255, 0.14);
   background:
     radial-gradient(120% 160% at 12% 8%, #3a6fb8 0%, transparent 58%),
-    linear-gradient(135deg, var(--ff-profile-brand) 0%, var(--ff-profile-brand-deep) 62%, #16294a 100%);
+    linear-gradient(135deg, var(--ff-profile-brand, #2f5c9e) 0%, var(--ff-profile-brand-deep, #1e3f70) 62%, #16294a 100%);
   color: #fff;
   box-shadow: 0 24px 48px -32px rgba(15, 30, 60, 0.75);
 }
@@ -100,7 +100,7 @@
   flex: 0 0 auto;
   width: 6.5rem;
   height: 6.5rem;
-  border-radius: var(--ff-profile-radius);
+  border-radius: var(--ff-profile-radius, 18px);
   overflow: hidden;
   background: rgba(255, 255, 255, 0.12);
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.25), 0 18px 30px -20px rgba(0, 0, 0, 0.7);
@@ -197,7 +197,7 @@
   height: 1.35rem;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.9);
-  color: var(--ff-profile-brand-deep);
+  color: var(--ff-profile-brand-deep, #1e3f70);
   font-size: 0.65rem;
   font-weight: 800;
 }
@@ -266,11 +266,11 @@
 .ff-metric {
   position: relative;
   overflow: hidden;
-  border-radius: var(--ff-profile-radius-sm);
+  border-radius: var(--ff-profile-radius-sm, 12px);
   border: 1px solid var(--ff-shell-border, #d7e0ea);
   background: var(--ff-shell-surface, #fff);
   padding: 0.9rem 1rem;
-  transition: transform 320ms var(--ff-profile-spring), box-shadow 320ms var(--ff-profile-spring);
+  transition: transform 320ms var(--ff-profile-spring, cubic-bezier(0.22, 1, 0.36, 1)), box-shadow 320ms var(--ff-profile-spring, cubic-bezier(0.22, 1, 0.36, 1));
 }
 
 .ff-metric::before {
@@ -281,9 +281,9 @@
   background: var(--ff-shell-soft, #8c99aa);
 }
 
-.ff-metric--ok::before { background: var(--ff-profile-ok); }
-.ff-metric--warn::before { background: var(--ff-profile-warn); }
-.ff-metric--alert::before { background: var(--ff-profile-alert); }
+.ff-metric--ok::before { background: var(--ff-profile-ok, #16a34a); }
+.ff-metric--warn::before { background: var(--ff-profile-warn, #d97706); }
+.ff-metric--alert::before { background: var(--ff-profile-alert, #dc2626); }
 
 .ff-metric:hover {
   transform: translateY(-2px);
@@ -349,7 +349,7 @@
   color: var(--ff-shell-muted, #637188);
   cursor: pointer;
   white-space: nowrap;
-  transition: color 220ms var(--ff-profile-spring), background 220ms var(--ff-profile-spring);
+  transition: color 220ms var(--ff-profile-spring, cubic-bezier(0.22, 1, 0.36, 1)), background 220ms var(--ff-profile-spring, cubic-bezier(0.22, 1, 0.36, 1));
 }
 
 .ff-profile-tab:hover { color: var(--ff-shell-text, #182435); background: rgba(148, 163, 184, 0.16); }
@@ -359,12 +359,12 @@
    `important: true`, mehrere gebuendelte Fremd-Stylesheets) darf der aktive
    Zustand nicht von der Regelreihenfolge abhaengen. */
 .ff-profile-tabs .ff-profile-tab--active {
-  background: var(--ff-profile-brand);
+  background: var(--ff-profile-brand, #2f5c9e);
   color: #fff;
   box-shadow: 0 10px 18px -14px rgba(47, 92, 158, 0.9);
 }
 
-.ff-profile-tabs .ff-profile-tab--active:hover { background: var(--ff-profile-brand-deep); color: #fff; }
+.ff-profile-tabs .ff-profile-tab--active:hover { background: var(--ff-profile-brand-deep, #1e3f70); color: #fff; }
 
 .ff-profile-panels { min-height: 12rem; }
 
@@ -386,7 +386,7 @@
 /* --------------------------------------------------------------- Surfaces */
 
 .ff-surface {
-  border-radius: var(--ff-profile-radius) !important;
+  border-radius: var(--ff-profile-radius, 18px) !important;
   border-color: var(--ff-shell-border, #d7e0ea) !important;
   box-shadow: 0 18px 34px -30px rgba(15, 30, 60, 0.6) !important;
   overflow: hidden;
@@ -434,7 +434,7 @@
 
 .ff-emptystate {
   margin-top: 1.25rem;
-  border-radius: var(--ff-profile-radius-sm);
+  border-radius: var(--ff-profile-radius-sm, 12px);
   border: 1px dashed var(--ff-shell-border, #d7e0ea);
   background: var(--ff-shell-surface-muted, #f7f9fc);
   padding: 1.5rem;
@@ -444,10 +444,10 @@
 
 .ff-mediacard {
   overflow: hidden;
-  border-radius: var(--ff-profile-radius-sm);
+  border-radius: var(--ff-profile-radius-sm, 12px);
   border: 1px solid var(--ff-shell-border, #d7e0ea);
   background: var(--ff-shell-surface-muted, #f7f9fc);
-  transition: transform 320ms var(--ff-profile-spring), box-shadow 320ms var(--ff-profile-spring);
+  transition: transform 320ms var(--ff-profile-spring, cubic-bezier(0.22, 1, 0.36, 1)), box-shadow 320ms var(--ff-profile-spring, cubic-bezier(0.22, 1, 0.36, 1));
 }
 
 .ff-mediacard:hover {
@@ -472,19 +472,19 @@
   color: var(--ff-shell-text, #182435);
   cursor: pointer;
   text-decoration: none;
-  transition: background 200ms var(--ff-profile-spring), border-color 200ms var(--ff-profile-spring), transform 200ms var(--ff-profile-spring);
+  transition: background 200ms var(--ff-profile-spring, cubic-bezier(0.22, 1, 0.36, 1)), border-color 200ms var(--ff-profile-spring, cubic-bezier(0.22, 1, 0.36, 1)), transform 200ms var(--ff-profile-spring, cubic-bezier(0.22, 1, 0.36, 1));
 }
 
 .ff-btn:hover { background: var(--ff-shell-surface-muted, #f7f9fc); }
 .ff-btn:disabled { opacity: 0.6; cursor: wait; }
 
 .ff-btn--primary {
-  background: var(--ff-profile-brand);
+  background: var(--ff-profile-brand, #2f5c9e);
   border-color: transparent;
   color: #fff;
 }
 
-.ff-btn--primary:hover { background: var(--ff-profile-brand-deep); }
+.ff-btn--primary:hover { background: var(--ff-profile-brand-deep, #1e3f70); }
 
 .ff-btn--accent {
   background: #33a043;
@@ -538,8 +538,8 @@
 
 .ff-input:focus {
   outline: none;
-  border-color: var(--ff-profile-brand);
-  box-shadow: 0 0 0 3px var(--ff-profile-brand-soft);
+  border-color: var(--ff-profile-brand, #2f5c9e);
+  box-shadow: 0 0 0 3px var(--ff-profile-brand-soft, rgba(47, 92, 158, 0.1));
 }
 
 .ff-error { margin-top: 0.35rem; font-size: 0.8125rem; color: #ef4444; }
@@ -551,7 +551,7 @@
   font-size: 0.75rem;
   font-weight: 600;
   cursor: pointer;
-  color: var(--ff-profile-brand);
+  color: var(--ff-profile-brand, #2f5c9e);
 }
 
 .ff-linkbutton--danger { color: #dc2626; }
@@ -559,7 +559,7 @@
 /* --------------------------------------------------------------- Accounts */
 
 .ff-accounts {
-  border-radius: var(--ff-profile-radius);
+  border-radius: var(--ff-profile-radius, 18px);
   border: 1px solid var(--ff-shell-border, #d7e0ea);
   background: var(--ff-shell-surface, #fff);
   overflow: hidden;
@@ -594,7 +594,7 @@
   background: rgba(47, 92, 158, 0.1);
   padding: 0.1rem 0.35rem;
   font-size: 0.75rem;
-  color: var(--ff-profile-brand-deep);
+  color: var(--ff-profile-brand-deep, #1e3f70);
 }
 
 .ff-accounts__summary-metrics { display: flex; gap: 1.25rem; }
@@ -612,13 +612,17 @@
   .ff-accounts__body { grid-template-columns: 17rem minmax(0, 1fr); }
 }
 
+/* Auf schmalen Geraeten steht die Liste ueber dem Inhalt und wird gedeckelt,
+   damit man nicht erst an zwoelf Eintraegen vorbeiscrollen muss. Ab der
+   zweispaltigen Ansicht darf sie ihre volle Hoehe haben — sonst wird der
+   letzte Eintrag angeschnitten und die Leiste sieht kaputt aus. */
 .ff-accounts__rail {
   display: flex;
   flex-direction: column;
   gap: 0.3rem;
   border-bottom: 1px solid var(--ff-shell-line, rgba(148, 163, 184, 0.2));
   padding: 0.85rem;
-  max-height: 32rem;
+  max-height: 22rem;
   overflow-y: auto;
 }
 
@@ -626,6 +630,8 @@
   .ff-accounts__rail {
     border-bottom: 0;
     border-right: 1px solid var(--ff-shell-line, rgba(148, 163, 184, 0.2));
+    max-height: none;
+    overflow-y: visible;
   }
 }
 
@@ -635,19 +641,19 @@
   gap: 0.65rem;
   width: 100%;
   border: 1px solid transparent;
-  border-radius: var(--ff-profile-radius-sm);
+  border-radius: var(--ff-profile-radius-sm, 12px);
   background: transparent;
   padding: 0.55rem 0.7rem;
   text-align: left;
   cursor: pointer;
-  transition: background 200ms var(--ff-profile-spring), border-color 200ms var(--ff-profile-spring), transform 200ms var(--ff-profile-spring);
+  transition: background 200ms var(--ff-profile-spring, cubic-bezier(0.22, 1, 0.36, 1)), border-color 200ms var(--ff-profile-spring, cubic-bezier(0.22, 1, 0.36, 1)), transform 200ms var(--ff-profile-spring, cubic-bezier(0.22, 1, 0.36, 1));
 }
 
 .ff-account-chip:hover { background: var(--ff-shell-surface-muted, #f7f9fc); transform: translateX(2px); }
 
 .ff-accounts__rail .ff-account-chip--active {
   border-color: rgba(47, 92, 158, 0.35);
-  background: var(--ff-profile-brand-soft);
+  background: var(--ff-profile-brand-soft, rgba(47, 92, 158, 0.1));
 }
 
 .ff-account-chip__mark {
@@ -688,14 +694,14 @@
   background: rgba(148, 163, 184, 0.4);
 }
 
-.ff-account-chip__dot--half { background: var(--ff-profile-warn); }
-.ff-account-chip__dot--on { background: var(--ff-profile-ok); }
+.ff-account-chip__dot--half { background: var(--ff-profile-warn, #d97706); }
+.ff-account-chip__dot--on { background: var(--ff-profile-ok, #16a34a); }
 
 .ff-accounts__panel { display: flex; flex-direction: column; gap: 1rem; padding: 1.25rem; min-width: 0; }
 .ff-accounts__empty { font-size: 0.875rem; color: var(--ff-shell-muted, #637188); }
 
 .ff-account-card {
-  border-radius: var(--ff-profile-radius-sm);
+  border-radius: var(--ff-profile-radius-sm, 12px);
   border: 1px solid var(--ff-shell-border, #d7e0ea);
   background: var(--ff-shell-surface, #fff);
   padding: 1.15rem;
@@ -724,7 +730,7 @@
   display: inline-block;
   margin-top: 0.3rem;
   font-size: 0.8125rem;
-  color: var(--ff-profile-brand);
+  color: var(--ff-profile-brand, #2f5c9e);
   overflow-wrap: anywhere;
 }
 
@@ -787,7 +793,7 @@
 .ff-badge--muted { background: rgba(148, 163, 184, 0.16); border-color: rgba(148, 163, 184, 0.32); color: #475569; }
 
 .ff-account-paths {
-  border-radius: var(--ff-profile-radius-sm);
+  border-radius: var(--ff-profile-radius-sm, 12px);
   border: 1px dashed var(--ff-shell-border, #d7e0ea);
   background: var(--ff-shell-surface-muted, #f7f9fc);
   padding: 1rem 1.15rem;
@@ -819,7 +825,7 @@
   padding: 0.5rem 0.65rem;
 }
 
-.ff-account-paths code { font-size: 0.75rem; color: var(--ff-profile-brand-deep); overflow-wrap: anywhere; }
+.ff-account-paths code { font-size: 0.75rem; color: var(--ff-profile-brand-deep, #1e3f70); overflow-wrap: anywhere; }
 .ff-account-paths span { font-size: 0.6875rem; color: var(--ff-shell-muted, #637188); }
 
 /* --------------------------------------------------------------- Dunkelmodus */

@@ -68,6 +68,59 @@ class PersonProfileMarkupTest extends TestCase
         $this->assertStringContainsString("wire:click=\"selectType('{{ \$type }}')\"", $source);
     }
 
+    /**
+     * Regression: die Knoepfe trugen zeitweise `ff-action-trigger--primary` aus
+     * dem Workflow-Design, nur um den Magnet-Effekt zu bekommen. Diese Klasse
+     * setzt ihren Verlauf mit `!important` und greift auf `var(--ff-ink)` zu,
+     * das ausserhalb des Workflow-Bereichs nicht existiert. Die Kurzschreibweise
+     * wird damit ungueltig, `background-color` faellt auf `transparent` zurueck
+     * und der Knopf war weisse Schrift auf weissem Grund.
+     */
+    public function test_profile_buttons_do_not_borrow_the_workflow_button_skin(): void
+    {
+        foreach (['person-detail', 'person-accounts'] as $view) {
+            $source = $this->view($view);
+
+            $this->assertStringNotContainsString('ff-action-trigger--primary', $source, $view);
+            $this->assertStringNotContainsString('ff-copilot-launcher', $source, $view);
+        }
+
+        $motion = file_get_contents(dirname(__DIR__, 2).'/resources/js/components/person-profile-motion.js');
+
+        $this->assertStringContainsString('[data-person-profile] [data-magnetic]', $motion);
+        $this->assertStringContainsString('data-magnetic', $this->view('person-detail'));
+    }
+
+    /**
+     * Regression: startet Alpine nicht (im Projekt kommt es mit `livewire.js`),
+     * standen alle sieben Panels untereinander auf einer endlos langen Seite.
+     */
+    public function test_tab_panels_stay_collapsed_until_alpine_signals_readiness(): void
+    {
+        $source = $this->view('person-detail');
+        $styles = file_get_contents(dirname(__DIR__, 2).'/resources/css/person-profile.css');
+
+        $this->assertStringContainsString("x-init=\"\$root.dataset.tabsReady = '1'\"", $source);
+        $this->assertStringContainsString(
+            '.ff-person-profile:not([data-tabs-ready]) .ff-profile-panel:not(:first-child)',
+            $styles
+        );
+    }
+
+    /**
+     * Jede eigene Farb- und Radiusvariable braucht einen Ersatzwert. Ohne ihn
+     * wird die ganze Deklaration ungueltig, sobald das Token fehlt — genau der
+     * Fehler, der den Primaerknopf unsichtbar gemacht hat.
+     */
+    public function test_profile_custom_properties_always_carry_a_fallback(): void
+    {
+        $styles = file_get_contents(dirname(__DIR__, 2).'/resources/css/person-profile.css');
+
+        preg_match_all('/var\(--ff-profile-[a-z-]+\)/', $styles, $matches);
+
+        $this->assertSame([], $matches[0], 'var() ohne Ersatzwert: '.implode(', ', $matches[0]));
+    }
+
     public function test_motion_layer_is_registered_and_stays_optional(): void
     {
         $root = dirname(__DIR__, 2);

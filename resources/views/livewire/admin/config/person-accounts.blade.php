@@ -111,7 +111,7 @@
                     @endif
 
                     <div class="ff-account-card__actions">
-                        <button type="button" wire:click="editAccount('{{ $selected['type'] }}')" class="ff-btn ff-btn--primary ff-action-trigger--primary">
+                        <button type="button" wire:click="editAccount('{{ $selected['type'] }}')" class="ff-btn ff-btn--primary" data-magnetic>
                             Account bearbeiten
                         </button>
 

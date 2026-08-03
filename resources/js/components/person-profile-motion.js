@@ -303,8 +303,10 @@ function initPersonProfileMotion() {
     };
 
     const onPointerOver = (event) => {
+      /* Eigener Haken statt einer geliehenen Workflow-Klasse: `.ff-action-trigger--primary`
+         bringt dort ein komplettes Knopf-Design per `!important` mit. */
       const el = event.target instanceof Element
-        ? event.target.closest('[data-person-profile] .ff-action-trigger--primary')
+        ? event.target.closest('[data-person-profile] [data-magnetic]')
         : null;
 
       if (el) {
