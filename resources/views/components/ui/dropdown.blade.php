@@ -141,15 +141,10 @@
                     hide(false);
                 }
             "
-            @focusout="
-                if (
-                    open
-                    && !$el.contains($event.relatedTarget)
-                    && !$refs.trigger.contains($event.relatedTarget)
-                ) {
-                    hide(false);
-                }
-            "
+            @focusout="open
+                && !$el.contains($event.relatedTarget)
+                && !$refs.trigger.contains($event.relatedTarget)
+                && hide(false)"
             @keydown.escape.prevent.stop="hide(true)"
             @keydown.arrow-down.prevent.stop="moveFocus(1)"
             @keydown.arrow-up.prevent.stop="moveFocus(-1)"

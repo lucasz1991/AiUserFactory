@@ -28,7 +28,7 @@
 @endphp
 
 <div
-    class="{{ $modalOnly ? '' : 'h-full w-full min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain xl:overflow-hidden' }}"
+    class="{{ $modalOnly ? '' : 'h-full w-full min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain lg:overflow-hidden' }}"
     data-studio-task-editor
     data-workflow-definition-editor
     data-workflow-editor-instance="{{ $editorInstance }}"
@@ -38,6 +38,7 @@
             initialNode: @js($initialRouteNode),
         }),
         mobilePanel: 'canvas',
+        desktopSidebar: window.matchMedia('(min-width: 960px)').matches,
         libraryExpanded: (() => {
             try {
                 return window.localStorage.getItem('followflow.workflow-library-expanded') !== 'false';
@@ -126,6 +127,7 @@
         $wire.moveStepRelative(Number(detail.stepId || 0), String(detail.direction || ''));
     "
     x-on:workflow-minimap-zoom-changed.window="queueRouteRefresh()"
+    x-on:resize.window="desktopSidebar = window.matchMedia('(min-width: 960px)').matches; queueRouteRefresh()"
 >
     @if($showDefinitionSurface)
     @if($modalOnly)
@@ -149,9 +151,9 @@
                 </div>
                 <button type="button" wire:click="closeDefinitionDrawer" data-studio-definition-drawer-close class="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 transition hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-cyan-500">Schließen <span aria-hidden="true">×</span></button>
             </header>
-            <div class="min-h-0 w-full min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain bg-slate-100 xl:overflow-hidden">
+            <div class="min-h-0 w-full min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain bg-slate-100 lg:overflow-hidden">
     @endif
-    <nav data-studio-mobile-switch class="sticky top-0 z-40 grid w-full min-w-0 grid-cols-2 gap-1.5 border-b border-slate-200 bg-white/95 p-2 backdrop-blur xl:hidden" aria-label="Mobiler Editorbereich">
+    <nav data-studio-mobile-switch class="sticky top-0 z-40 grid w-full min-w-0 grid-cols-2 gap-1.5 border-b border-slate-200 bg-white/95 p-2 backdrop-blur lg:hidden" aria-label="Mobiler Editorbereich">
         <button type="button" x-on:click="mobilePanel = 'canvas'; $nextTick(() => queueRouteRefresh())" x-bind:aria-pressed="mobilePanel === 'canvas'" aria-controls="{{ $fieldIdPrefix }}-studio-task-canvas-panel" x-bind:class="mobilePanel === 'canvas' ? 'bg-slate-950 text-white shadow-sm' : 'bg-slate-100 text-slate-600'" class="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-3 text-xs font-bold transition">
             <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="7" height="6" rx="1"></rect><rect x="14" y="14" width="7" height="6" rx="1"></rect><path d="M10 7h3a4 4 0 0 1 4 4v3"></path></svg>
             Workflow <span class="font-mono opacity-70">{{ $steps->sum(fn ($step) => count($step->task_cards)) }}</span>
@@ -165,14 +167,17 @@
     <div
         data-studio-task-layout
         x-bind:data-library-expanded="libraryExpanded ? 'true' : 'false'"
-        class="ff-canvas-shell grid min-h-full w-full min-w-0 grid-cols-[minmax(0,1fr)] overflow-visible xl:h-full xl:min-h-0 xl:overflow-hidden"
+        x-on:transitionend.self="if ($event.propertyName === 'grid-template-columns') queueRouteRefresh()"
+        x-on:transitioncancel.self="queueRouteRefresh()"
+        class="ff-canvas-shell grid min-h-full w-full min-w-0 grid-cols-[minmax(0,1fr)] overflow-visible transition-[grid-template-columns] duration-300 ease-out lg:h-full lg:min-h-0 lg:grid-cols-[330px_minmax(0,1fr)] lg:overflow-hidden motion-reduce:transition-none"
     >
         <aside
             id="{{ $fieldIdPrefix }}-studio-task-catalog-panel"
             x-cloak
-            x-bind:class="mobilePanel === 'catalog' ? 'flex' : 'hidden xl:flex'"
+            x-bind:class="mobilePanel === 'catalog' ? 'flex' : 'hidden lg:flex'"
+            x-bind:inert="! libraryExpanded && desktopSidebar"
             data-studio-task-catalog
-            class="ff-task-drawer h-[calc(100dvh-10rem)] w-full min-h-[480px] min-w-0 max-w-full shrink-0 flex-col overflow-hidden border-b bg-white text-slate-900 xl:h-auto xl:min-h-0 xl:border-b-0 xl:border-r"
+            class="ff-task-drawer h-[calc(100dvh-10rem)] w-full min-h-[480px] min-w-0 max-w-full shrink-0 flex-col overflow-hidden border-b bg-white text-slate-900 lg:h-auto lg:min-h-0 lg:border-b-0 lg:border-r"
             aria-labelledby="{{ $fieldIdPrefix }}-studio-task-catalog-title"
         >
             <div
@@ -200,7 +205,7 @@
                             x-bind:aria-expanded="libraryExpanded"
                             aria-controls="{{ $fieldIdPrefix }}-studio-task-library-content"
                             title="Task-Bibliothek einklappen"
-                            class="hidden h-9 w-9 items-center justify-center rounded-xl border border-white/15 bg-white/10 text-blue-100 transition hover:border-blue-300/60 hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 xl:inline-flex"
+                            class="hidden h-9 w-9 items-center justify-center rounded-xl border border-white/15 bg-white/10 text-blue-100 transition hover:border-blue-300/60 hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 lg:inline-flex"
                         >
                             <span class="sr-only">Task-Bibliothek einklappen</span>
                             <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m15 19-7-7 7-7"></path></svg>
@@ -221,7 +226,7 @@
                             @endforelse
                         </select>
                     </div>
-                    <div class="hidden xl:block">
+                    <div class="hidden lg:block">
                         <label for="{{ $fieldIdPrefix }}-studio-catalog-group" class="text-[10px] font-bold uppercase tracking-wide text-slate-500">Kategorie</label>
                         <select id="{{ $fieldIdPrefix }}-studio-catalog-group" wire:change="selectTaskGroup($event.target.value)" class="ff-search-field mt-1.5 w-full px-3 text-xs font-semibold">
                             @if($searchActive)
@@ -252,7 +257,7 @@
                 </div>
             </div>
 
-            <nav class="ff-task-group-rail shrink-0 overflow-x-auto overscroll-x-contain border-b border-slate-200 bg-slate-50 px-3 py-2 [scrollbar-width:none] xl:hidden" aria-label="Task-Gruppen">
+            <nav class="ff-task-group-rail shrink-0 overflow-x-auto overscroll-x-contain border-b border-slate-200 bg-slate-50 px-3 py-2 [scrollbar-width:none] lg:hidden" aria-label="Task-Gruppen">
                 <div class="flex min-w-max items-center gap-1.5" role="group" aria-label="Bibliothek filtern">
                     @if($searchActive)
                         <span class="inline-flex min-h-11 items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3 text-[11px] font-bold text-blue-800">
@@ -351,9 +356,9 @@
         <section
             id="{{ $fieldIdPrefix }}-studio-task-canvas-panel"
             x-cloak
-            x-bind:class="mobilePanel === 'canvas' ? 'flex' : 'hidden xl:flex'"
+            x-bind:class="mobilePanel === 'canvas' ? 'flex' : 'hidden lg:flex'"
             data-studio-editor-canvas-panel
-            class="min-h-[560px] w-full min-w-0 max-w-full shrink-0 flex-col bg-slate-50 xl:min-h-0"
+            class="min-h-[560px] w-full min-w-0 max-w-full shrink-0 flex-col bg-slate-50 lg:min-h-0"
         >
             <div class="ff-canvas-toolbar flex shrink-0 flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
                 <div class="flex min-w-0 items-start gap-3">
@@ -365,7 +370,7 @@
                         x-on:click="toggleLibrary()"
                         x-bind:aria-expanded="libraryExpanded"
                         aria-controls="{{ $fieldIdPrefix }}-studio-task-catalog-panel"
-                        class="hidden h-11 shrink-0 items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3 text-xs font-bold text-blue-800 transition hover:border-blue-300 hover:bg-blue-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 xl:inline-flex"
+                        class="hidden h-11 shrink-0 items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3 text-xs font-bold text-blue-800 transition hover:border-blue-300 hover:bg-blue-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 lg:inline-flex"
                         title="Task-Bibliothek öffnen"
                     >
                         <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="2"></rect><rect x="14" y="3" width="7" height="7" rx="2"></rect><rect x="3" y="14" width="7" height="7" rx="2"></rect><path d="M17.5 14v7M14 17.5h7"></path></svg>

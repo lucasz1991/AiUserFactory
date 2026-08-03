@@ -103,9 +103,13 @@ class WorkflowAssistanceInboxTest extends TestCase
             ->assertSee('CAPTCHA-Bypass')
             ->assertSee('reCAPTCHA erneut')
             ->assertSeeHtml('wire:click="claim"')
+            ->assertSeeHtml('role="tablist"')
+            ->assertSeeHtml('role="tab"')
+            ->assertSeeHtml('aria-selected="true"')
             ->assertSeeHtml('min-h-11')
             ->assertSeeHtml('min-w-11')
-            ->assertSeeHtml('min-h-12');
+            ->assertSeeHtml('min-h-12')
+            ->assertSeeHtml('min-h-20');
     }
 
     private function user(string $role, string $name): User

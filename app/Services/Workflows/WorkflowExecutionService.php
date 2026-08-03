@@ -25,6 +25,7 @@ use App\Services\Persons\PersonAccountRegistry;
 use App\Services\Workflows\Tasks\PersistBrowserSessionTask;
 use App\Services\Workflows\Tasks\PersistMailAccountTask;
 use App\Services\Workflows\Tasks\PersistWebmailSessionTask;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Crypt;
@@ -331,7 +332,7 @@ class WorkflowExecutionService
             ->find($runId);
 
         if (! $locator) {
-            throw (new \Illuminate\Database\Eloquent\ModelNotFoundException)->setModel(WorkflowRun::class, [$runId]);
+            throw (new ModelNotFoundException)->setModel(WorkflowRun::class, [$runId]);
         }
 
         $sessionId = (int) (

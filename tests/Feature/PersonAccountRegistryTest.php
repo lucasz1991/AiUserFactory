@@ -6,6 +6,7 @@ use App\Models\Person;
 use App\Models\PersonEmailAccount;
 use App\Services\Persons\PersonAccountRegistry;
 use App\Services\Workflows\WorkflowTaskCatalog;
+use App\Services\Workflows\WorkflowTaskRunner;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Crypt;
 use Tests\TestCase;
@@ -147,6 +148,32 @@ class PersonAccountRegistryTest extends TestCase
 
         $this->assertArrayNotHasKey('tiktok', $person->social_accounts ?? []);
         $this->assertFalse($registry->account($person, 'tiktok')['isConfigured']);
+    }
+
+    public function test_the_public_runtime_context_clears_every_account_password(): void
+    {
+        $runner = app(WorkflowTaskRunner::class);
+        $method = new \ReflectionMethod($runner, 'publicRuntimeContext');
+        $method->setAccessible(true);
+
+        $public = $method->invoke($runner, [
+            'person' => [
+                'loginUsername' => 'nora.brandt',
+                'loginPassword' => 'instagram-secret',
+                'accounts' => [
+                    'email' => ['username' => 'nora.brandt', 'password' => 'mail-secret', 'hasPassword' => true],
+                    'instagram' => ['username' => 'nora_brandt', 'password' => 'instagram-secret', 'hasPassword' => true],
+                ],
+            ],
+        ]);
+
+        $this->assertSame('nora.brandt', $public['person']['accounts']['email']['username']);
+        $this->assertTrue($public['person']['accounts']['email']['hasPassword']);
+        $this->assertSame('', $public['person']['accounts']['email']['password']);
+        $this->assertSame('', $public['person']['accounts']['instagram']['password']);
+        $this->assertArrayNotHasKey('loginPassword', $public['person']);
+        $this->assertStringNotContainsString('mail-secret', json_encode($public));
+        $this->assertStringNotContainsString('instagram-secret', json_encode($public));
     }
 
     public function test_the_task_catalog_offers_the_account_paths_as_input_values(): void

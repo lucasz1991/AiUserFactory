@@ -3,6 +3,7 @@
 namespace App\Livewire\Admin\Config;
 
 use App\Models\File;
+use App\Models\FilePool;
 use App\Models\Person;
 use App\Services\Persons\PersonAccountRegistry;
 use App\Services\Simulation\PersonaActivityPlanner;
@@ -518,7 +519,7 @@ class PersonDetail extends PersonList
         $filePoolId = $this->personRecord->filePool?->id;
 
         return $filePoolId !== null
-            && $file->fileable_type === \App\Models\FilePool::class
+            && $file->fileable_type === FilePool::class
             && (int) $file->fileable_id === (int) $filePoolId;
     }
 
@@ -538,7 +539,7 @@ class PersonDetail extends PersonList
 
             if ($this->personRecord->filePool) {
                 $query->orWhere(function ($query): void {
-                    $query->where('fileable_type', \App\Models\FilePool::class)
+                    $query->where('fileable_type', FilePool::class)
                         ->where('fileable_id', $this->personRecord->filePool->id);
                 });
             }

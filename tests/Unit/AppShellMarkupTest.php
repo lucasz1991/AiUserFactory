@@ -123,6 +123,8 @@ class AppShellMarkupTest extends TestCase
         $this->assertStringContainsString('@keydown.arrow-down.prevent.stop', $dropdown);
         $this->assertStringContainsString('@keydown.arrow-up.prevent.stop', $dropdown);
         $this->assertStringContainsString('@keydown.escape.prevent.stop="hide(true)"', $dropdown);
+        $this->assertStringContainsString('@focusout="open', $dropdown);
+        $this->assertStringContainsString('&& hide(false)"', $dropdown);
         $this->assertStringContainsString('focus({ preventScroll: true })', $dropdown);
 
         $this->assertStringContainsString("'role' => 'menuitem'", $dropdownLink);

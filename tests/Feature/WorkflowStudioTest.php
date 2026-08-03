@@ -1174,6 +1174,10 @@ class WorkflowStudioTest extends TestCase
         $this->assertSame(1, $xpath->query('//*[@data-studio-definition-drawer]')->count());
         $this->assertSame(1, $xpath->query('//*[@data-studio-definition-drawer]//*[@data-studio-task-catalog]')->count());
         $this->assertSame(1, $xpath->query('//*[@data-studio-definition-drawer]//*[@data-studio-workflow-canvas]')->count());
+        $this->assertSame(1, $xpath->query(
+            '//*[@data-studio-task-layout]/*[@data-studio-task-catalog]'
+            .'/following-sibling::*[1][@data-studio-editor-canvas-panel]'
+        )->count());
 
         $editor
             ->set('newStepName', 'Overlay Liste')

@@ -259,7 +259,7 @@
             </div>
         @endif
 
-        <section class="min-h-[70dvh] overflow-hidden rounded-2xl border border-slate-200 bg-slate-100 shadow-[0_22px_60px_-42px_rgba(15,23,42,.45)] xl:h-[calc(100dvh-8.5rem)]" aria-label="Workflow-Standardeditor">
+        <section class="min-h-[70dvh] overflow-hidden rounded-2xl border border-slate-200 bg-slate-100 shadow-[0_22px_60px_-42px_rgba(15,23,42,.45)] lg:h-[calc(100dvh-8.5rem)]" aria-label="Workflow-Standardeditor">
             @include('livewire.admin.network.partials.workflow-definition-editor', [
                 'workflow' => $selectedWorkflow,
                 'activeRun' => null,

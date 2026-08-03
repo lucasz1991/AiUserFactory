@@ -41,12 +41,27 @@ class WorkflowTaskLibraryMarkupTest extends TestCase
         $manager = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-manager.blade.php');
 
         $this->assertStringContainsString('grid-cols-[minmax(0,1fr)]', $source);
+        $this->assertStringContainsString('lg:grid-cols-[330px_minmax(0,1fr)]', $source);
+        $this->assertStringContainsString('x-on:transitionend.self="if ($event.propertyName === \'grid-template-columns\') queueRouteRefresh()"', $source);
+        $this->assertStringContainsString("mobilePanel === 'catalog' ? 'flex' : 'hidden lg:flex'", $source);
+        $this->assertStringContainsString("mobilePanel === 'canvas' ? 'flex' : 'hidden lg:flex'", $source);
+        $this->assertStringContainsString("desktopSidebar: window.matchMedia('(min-width: 960px)').matches", $source);
+        $this->assertStringContainsString('x-bind:inert="! libraryExpanded && desktopSidebar"', $source);
+        $this->assertStringNotContainsString('hidden xl:flex', $source);
         $this->assertStringContainsString('x-bind:data-library-expanded="libraryExpanded', $source);
+        $this->assertStringContainsString('@media (min-width: 960px)', $styles);
         $this->assertStringContainsString('[data-studio-task-layout][data-library-expanded] {', $styles);
+        $this->assertStringContainsString('grid-template-columns: 350px minmax(0, 1fr) !important;', $styles);
+        $this->assertStringContainsString('transition: grid-template-columns 280ms var(--ff-ease) !important;', $styles);
         $this->assertStringContainsString("[data-studio-task-layout][data-library-expanded='false']", $styles);
         $this->assertStringContainsString('grid-template-columns: 0 minmax(0, 1fr) !important;', $styles);
         $this->assertStringContainsString('visibility: hidden;', $styles);
+        $this->assertStringContainsString('transform: translateX(-1rem);', $styles);
         $this->assertStringContainsString('pointer-events: none;', $styles);
+        $this->assertStringContainsString('@media (min-width: 960px) and (prefers-reduced-motion: reduce)', $styles);
+        $this->assertStringContainsString('transition: none !important;', $styles);
+        $this->assertStringContainsString('@media (max-width: 959px)', $styles);
+        $this->assertStringNotContainsString('@media (max-width: 1279px)', $styles);
         $this->assertStringContainsString("window.localStorage.getItem('followflow.workflow-library-expanded')", $source);
         $this->assertStringContainsString('x-on:click="toggleLibrary()"', $source);
         $this->assertStringContainsString('Task-Bibliothek einklappen', $source);
@@ -69,6 +84,7 @@ class WorkflowTaskLibraryMarkupTest extends TestCase
         $this->assertStringContainsString('min-h-[64px]', $source);
         $this->assertStringContainsString('wire:key="{{ $fieldIdPrefix }}-task-library-', $source);
         $this->assertStringContainsString('wire:target.except="taskSearch,selectTaskGroup,catalogTargetStepId"', $manager);
+        $this->assertStringContainsString('lg:h-[calc(100dvh-8.5rem)]', $manager);
         $this->assertStringContainsString('data-task-library-group="{{ $taskDefinition[\'library_group\'] }}"', $source);
         $this->assertStringNotContainsString("collect(\$taskDefinitions)->where('kind', \$taskGroup)", $source);
         $this->assertStringContainsString("\$el.closest('.jetstream-modal')?.querySelector", $source);
