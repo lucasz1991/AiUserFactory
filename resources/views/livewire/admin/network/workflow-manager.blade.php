@@ -140,7 +140,7 @@
             const shell = this.$refs.workflowWorkbench;
             if (! shell) return;
 
-            const childDialog = Array.from(shell.querySelectorAll('.jetstream-modal, [role="dialog"][aria-modal="true"]'))
+            const childDialog = Array.from(shell.querySelectorAll('.jetstream-modal, [role=dialog][aria-modal=true]'))
                 .reverse()
                 .find((dialog) => dialog !== shell && this.elementIsVisible(dialog));
             const openMenu = Array.from(shell.querySelectorAll('.ff-menu'))
@@ -150,7 +150,7 @@
             // Workbench darf denselben Tastendruck nicht ebenfalls auswerten.
             if (childDialog || openMenu) return;
 
-            const mobileLibrary = shell.querySelector('[data-workflow-mobile-library][data-open="true"]');
+            const mobileLibrary = shell.querySelector('[data-workflow-mobile-library][data-open=true]');
             if (mobileLibrary && this.elementIsVisible(mobileLibrary)) {
                 event.preventDefault();
                 event.stopImmediatePropagation();
