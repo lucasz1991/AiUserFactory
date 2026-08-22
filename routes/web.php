@@ -8,8 +8,8 @@ use App\Http\Controllers\Ai\AssistantAudioInputTranscriptionController;
 use App\Http\Controllers\Ai\AssistantAudioOutputStreamController;
 use App\Http\Controllers\PushSubscriptionController;
 use App\Http\Controllers\PwaIconController;
-use App\Http\Controllers\Workflows\WorkflowRunArtifactController;
 use App\Http\Controllers\Workflows\WorkflowAssistancePreviewController;
+use App\Http\Controllers\Workflows\WorkflowRunArtifactController;
 use App\Livewire\Admin\ClientController\Dashboard as ClientControllerDashboard;
 use App\Livewire\Admin\ClientController\NodeDetail as ClientControllerNodeDetail;
 use App\Livewire\Admin\ClientController\NodeIndex as ClientControllerNodeIndex;
@@ -18,10 +18,12 @@ use App\Livewire\Admin\Config\SettingsPage;
 use App\Livewire\Admin\Network\ActionsPage;
 use App\Livewire\Admin\Network\AutomationIndex;
 use App\Livewire\Admin\Network\PersonFactoryIndex;
+use App\Livewire\Admin\Network\PortalProfiles;
 use App\Livewire\Admin\Network\WorkflowAssistanceInbox;
 use App\Livewire\Admin\Network\WorkflowManager;
 use App\Livewire\Admin\Network\WorkflowsIndex;
 use App\Livewire\Admin\Network\WorkflowStudio;
+use App\Livewire\Admin\OperationsDashboard;
 use App\Livewire\Admin\Processes\ProcessMonitor;
 use App\Livewire\AdminConfig;
 use App\Livewire\AdminDashboard;
@@ -85,6 +87,7 @@ Route::middleware(['auth:sanctum', config('jetstream.auth_session')])->group(fun
         Route::get('/netzwerk/automatisierung', AutomationIndex::class)->name('network.automation');
         Route::get('/netzwerk/personen-fabrik', PersonFactoryIndex::class)->name('network.person-factory');
         Route::get('/netzwerk/workflows', WorkflowsIndex::class)->name('network.workflows');
+        Route::get('/netzwerk/portal-profile', PortalProfiles::class)->name('network.portal-profiles');
         Route::get('/netzwerk/workflows/{workflow}/studio', WorkflowStudio::class)->name('network.workflows.studio');
         Route::get('/netzwerk/workflows/{workflow}', WorkflowManager::class)->name('network.workflows.manage');
         Route::get('/workflow-runs/{run}/artifacts/{artifact}', [WorkflowRunArtifactController::class, 'show'])->name('workflow-run-artifacts.show');
@@ -96,6 +99,7 @@ Route::middleware(['auth:sanctum', config('jetstream.auth_session')])->group(fun
             ->middleware('throttle:assistant-tts')
             ->name('assistant.audio-output.stream');
         Route::get('/prozesse', ProcessMonitor::class)->name('processes.index');
+        Route::get('/betrieb', OperationsDashboard::class)->name('operations.dashboard');
         Route::get('/einstellungen/{tab?}', SettingsPage::class)->name('admin.settings');
 
         Route::prefix('client-controller')->name('client-controller.')->group(function (): void {

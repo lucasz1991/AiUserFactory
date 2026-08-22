@@ -23,6 +23,7 @@ use App\Services\Workflows\WorkflowCopilotSupervisorService;
 use App\Services\Workflows\WorkflowExecutionService;
 use App\Services\Workflows\WorkflowRouteMapPresenter;
 use App\Services\Workflows\WorkflowRouteTargetAutoRepairService;
+use App\Services\Workflows\WorkflowRouteTargetMapper;
 use App\Services\Workflows\WorkflowRunDebugPackageService;
 use App\Services\Workflows\WorkflowSelectorSyntaxService;
 use App\Services\Workflows\WorkflowStudioControlService;
@@ -4520,67 +4521,17 @@ class WorkflowManager extends Component
 
     protected function routeTargetFromValue(string $value): ?array
     {
-        $value = trim($value);
+        return app(WorkflowRouteTargetMapper::class)->fromValue(
+            $value,
+            function (string $actionKey): ?WorkflowStep {
+                $workflow = $this->selectedWorkflow();
 
-        if ($value === '') {
-            return null;
-        }
-
-        if ($value === 'end') {
-            return ['type' => 'end', 'step' => 'end', 'label' => 'Workflow abschliessen'];
-        }
-
-        if ($value === 'fail') {
-            return ['type' => 'fail', 'step' => 'fail', 'label' => 'Fehlerroute'];
-        }
-
-        if (str_starts_with($value, 'step:')) {
-            $actionKey = trim(substr($value, 5));
-            $workflow = $this->selectedWorkflow();
-            $target = $workflow
-                ? $workflow->steps()->where('action_key', $actionKey)->first()
-                : null;
-
-            if (! $target) {
-                return null;
-            }
-
-            return [
-                'type' => 'step',
-                'action_key' => $target->action_key,
-                'step' => $target->action_key,
-                'label' => $target->name,
-            ];
-        }
-
-        if (str_starts_with($value, 'card:')) {
-            $parts = explode(':', $value, 3);
-            $stepId = (int) ($parts[1] ?? 0);
-            $taskKey = trim((string) ($parts[2] ?? ''));
-            $targetStep = $this->stepForSelectedWorkflow($stepId);
-
-            if (! $targetStep || $taskKey === '') {
-                return null;
-            }
-
-            $targetTask = collect($targetStep->task_cards)
-                ->first(fn (array $task): bool => (string) ($task['key'] ?? '') === $taskKey);
-
-            if (! $targetTask) {
-                return null;
-            }
-
-            return [
-                'type' => 'card',
-                'action_key' => $targetStep->action_key,
-                'step' => $targetStep->action_key,
-                'card_key' => $taskKey,
-                'card' => $taskKey,
-                'label' => $targetStep->name.' / '.(string) ($targetTask['title'] ?? $taskKey),
-            ];
-        }
-
-        return null;
+                return $workflow
+                    ? $workflow->steps()->where('action_key', $actionKey)->first()
+                    : null;
+            },
+            fn (int $stepId): ?WorkflowStep => $this->stepForSelectedWorkflow($stepId),
+        );
     }
 
     protected function taskRouteTargetFromValue(
@@ -4593,119 +4544,43 @@ class WorkflowManager extends Component
             return $this->routeTargetFromValue($value);
         }
 
-        $tasks = collect($sourceStep->task_cards)->values();
-        $nextTask = null;
+        return app(WorkflowRouteTargetMapper::class)->nextTarget(
+            $sourceStep,
+            $sourceTaskKey,
+            $insertPosition,
+            function (): Collection {
+                $workflow = $this->selectedWorkflow();
 
-        if ($sourceTaskKey !== null) {
-            $sourceIndex = $tasks->search(
-                fn (array $task): bool => (string) ($task['key'] ?? '') === $sourceTaskKey,
-            );
-            $nextTask = $sourceIndex !== false ? $tasks->get($sourceIndex + 1) : null;
-        } elseif ($insertPosition !== null) {
-            $nextTask = $tasks->get(max(0, $insertPosition));
-        }
-
-        if (is_array($nextTask)) {
-            $taskKey = trim((string) ($nextTask['key'] ?? ''));
-
-            if ($taskKey !== '') {
-                return [
-                    'type' => 'card',
-                    'action_key' => $sourceStep->action_key,
-                    'step' => $sourceStep->action_key,
-                    'card_key' => $taskKey,
-                    'card' => $taskKey,
-                    'label' => 'Naechste Karte',
-                ];
-            }
-        }
-
-        $workflow = $this->selectedWorkflow();
-        $steps = $workflow ? $workflow->steps()->ordered()->get()->values() : collect();
-        $sourceStepIndex = $steps->search(fn (WorkflowStep $step): bool => (int) $step->id === (int) $sourceStep->id);
-        $nextStep = $sourceStepIndex !== false ? $steps->get($sourceStepIndex + 1) : null;
-
-        if (! $nextStep) {
-            return ['type' => 'end', 'step' => 'end', 'label' => 'Workflow abschliessen'];
-        }
-
-        $firstTask = collect($nextStep->task_cards)->first();
-        $firstTaskKey = is_array($firstTask) ? trim((string) ($firstTask['key'] ?? '')) : '';
-
-        if ($firstTaskKey !== '') {
-            return [
-                'type' => 'card',
-                'action_key' => $nextStep->action_key,
-                'step' => $nextStep->action_key,
-                'card_key' => $firstTaskKey,
-                'card' => $firstTaskKey,
-                'label' => 'Naechste Karte',
-            ];
-        }
-
-        return [
-            'type' => 'step',
-            'action_key' => $nextStep->action_key,
-            'step' => $nextStep->action_key,
-            'label' => $nextStep->name,
-        ];
+                return $workflow
+                    ? $workflow->steps()->ordered()->get()
+                    : collect();
+            },
+        );
     }
 
     protected function setRoute(array $routes, string $outcome, string $value, string $reason = '', int $maxAttempts = 0): array
     {
-        $route = $this->routeTargetFromValue($value);
-
-        if ($route) {
-            $reason = trim($reason);
-
-            if ($reason !== '') {
-                $route['reason'] = $reason;
-            } else {
-                unset($route['reason']);
-            }
-
-            if ($outcome === 'failed' && $maxAttempts > 0) {
-                $route['max_attempts'] = $maxAttempts;
-            } else {
-                unset($route['max_attempts']);
-            }
-
-            $routes[$outcome] = $route;
-        } else {
-            unset($routes[$outcome]);
-        }
-
-        return $routes;
+        return app(WorkflowRouteTargetMapper::class)->withRoute(
+            $routes,
+            $outcome,
+            $this->routeTargetFromValue($value),
+            $reason,
+            $maxAttempts,
+        );
     }
 
     protected function routeValueFromTarget(mixed $route): string
     {
-        if (! is_array($route)) {
-            return '';
-        }
+        return app(WorkflowRouteTargetMapper::class)->toValue(
+            $route,
+            function (string $actionKey): ?WorkflowStep {
+                $workflow = $this->selectedWorkflow();
 
-        $type = trim((string) ($route['type'] ?? ''));
-        $step = trim((string) ($route['action_key'] ?? $route['step'] ?? ''));
-        $card = trim((string) ($route['card_key'] ?? $route['card'] ?? ''));
-
-        if ($type === 'end' || $step === 'end') {
-            return 'end';
-        }
-
-        if ($type === 'fail' || $step === 'fail') {
-            return 'fail';
-        }
-
-        if ($card !== '') {
-            $workflow = $this->selectedWorkflow();
-            $targetStep = $workflow
-                ? $workflow->steps()->where('action_key', $step)->first()
-                : null;
-
-            return $targetStep ? 'card:'.$targetStep->id.':'.$card : '';
-        }
-
-        return $step !== '' && $step !== 'next' ? 'step:'.$step : '';
+                return $workflow
+                    ? $workflow->steps()->where('action_key', $actionKey)->first()
+                    : null;
+            },
+        );
     }
 
     protected function payloadFromInput(string $value): mixed

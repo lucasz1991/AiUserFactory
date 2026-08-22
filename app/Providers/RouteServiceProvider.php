@@ -58,6 +58,32 @@ class RouteServiceProvider extends ServiceProvider
             ];
         });
 
+        RateLimiter::for('ai-proxy', function (Request $request) {
+            $actor = $request->user()?->id ?: $request->ip();
+
+            return [
+                Limit::perMinute(10)->by('ai-proxy-minute:'.$actor),
+                Limit::perHour(100)->by('ai-proxy-hour:'.$actor),
+                Limit::perMinute(60)->by('ai-proxy-global'),
+            ];
+        });
+
+        RateLimiter::for('client-controller-enrollment', function (Request $request) {
+            return [
+                Limit::perMinute(5)->by('client-controller-enrollment-ip:'.$request->ip()),
+                Limit::perHour(30)->by('client-controller-enrollment-global'),
+            ];
+        });
+
+        RateLimiter::for('client-controller-node', function (Request $request) {
+            $credentialFingerprint = hash('sha256', trim((string) $request->header('X-NODE-API-KEY')));
+
+            return [
+                Limit::perMinute(240)->by('client-controller-node:'.$credentialFingerprint),
+                Limit::perMinute(3000)->by('client-controller-node-global'),
+            ];
+        });
+
         $this->routes(function () {
             Route::middleware('api')
                 ->prefix('api')

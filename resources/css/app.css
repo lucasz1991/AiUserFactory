@@ -1,10 +1,6 @@
 @import './workflow-experience.css';
 @import './person-profile.css';
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
 @font-face {
   font-family: 'Quicksand';
   src: url('@fonts/Quicksand-VariableFont_wght.ttf') format('truetype');

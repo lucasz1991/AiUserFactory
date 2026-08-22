@@ -2,9 +2,12 @@
 
 namespace App\Livewire\Admin\Config;
 
+use App\Enums\WorkflowCopilotPermissionMode;
 use App\Models\Setting;
 use App\Services\Ai\AiConnectionService;
 use App\Services\Ai\LocalAssistantVoiceService;
+use App\Services\ClientController\NodeEnrollmentService;
+use Illuminate\Support\Facades\Auth;
 use Livewire\Component;
 use Livewire\WithFileUploads;
 use Throwable;
@@ -107,7 +110,7 @@ class SettingsPage extends Component
 
     public int $ccJobTimeoutSeconds = 180;
 
-    public string $ccBootstrapApiKey = 'followflow-default-node-key-change-me';
+    public ?string $ccEnrollmentTokenOnce = null;
 
     public function mount(string $tab = 'scraper-transfer'): void
     {
@@ -418,7 +421,6 @@ class SettingsPage extends Component
             'ccAllowServerRebind' => ['boolean'],
             'ccHeartbeatIntervalSeconds' => ['required', 'integer', 'min:5', 'max:3600'],
             'ccJobTimeoutSeconds' => ['required', 'integer', 'min:5', 'max:86400'],
-            'ccBootstrapApiKey' => ['required', 'string', 'min:16', 'max:255'],
         ]);
 
         Setting::setValue('client_controller', 'server', [
@@ -430,12 +432,35 @@ class SettingsPage extends Component
             'default_job_timeout_seconds' => (int) $validated['ccJobTimeoutSeconds'],
         ]);
 
-        Setting::setValue('client_controller', 'security', [
-            'bootstrap_api_key' => trim($validated['ccBootstrapApiKey']),
-        ]);
+        $legacySecurity = Setting::getValue('client_controller', 'security');
+
+        if (is_array($legacySecurity) && array_key_exists('bootstrap_api_key', $legacySecurity)) {
+            unset($legacySecurity['bootstrap_api_key']);
+
+            if ($legacySecurity === []) {
+                Setting::query()
+                    ->where('type', 'client_controller')
+                    ->where('key', 'security')
+                    ->delete();
+            } else {
+                Setting::setValue('client_controller', 'security', $legacySecurity);
+            }
+        }
 
         session()->flash('success', 'ClientController-Einstellungen wurden gespeichert.');
         $this->dispatch('showAlert', 'ClientController Einstellungen gespeichert.', 'success');
+    }
+
+    public function issueClientControllerEnrollmentToken(NodeEnrollmentService $enrollments): void
+    {
+        $this->ccEnrollmentTokenOnce = $enrollments->issue(
+            null,
+            Auth::user(),
+            'admin-new-node-enrollment',
+        );
+
+        session()->flash('success', 'Ein einmaliges Enrollment-Token wurde erzeugt und wird nur in dieser Ansicht angezeigt.');
+        $this->dispatch('showAlert', 'Enrollment-Token erzeugt.', 'success');
     }
 
     public function render()
@@ -525,7 +550,7 @@ class SettingsPage extends Component
             $optimizationDefaults['auto_execute_workflow_actions'] ?? true,
             FILTER_VALIDATE_BOOL,
         );
-        $this->assistantCopilotPermissionMode = \App\Enums\WorkflowCopilotPermissionMode::normalize(
+        $this->assistantCopilotPermissionMode = WorkflowCopilotPermissionMode::normalize(
             $optimizationDefaults['permission_mode']
                 ?? ($this->assistantCopilotAutoExecute ? 'ask_critical' : 'ask_all'),
         )->value;
@@ -536,16 +561,13 @@ class SettingsPage extends Component
         $server = Setting::getValue('client_controller', 'server');
         $server = is_array($server) ? $server : [];
 
-        $security = Setting::getValue('client_controller', 'security');
-        $security = is_array($security) ? $security : [];
-
         $this->ccServerDomain = trim((string) ($server['server_domain'] ?? config('app.url')));
         $this->ccFallbackServerDomain = trim((string) ($server['fallback_server_domain'] ?? ''));
         $this->ccRequireSignedJobs = (bool) ($server['require_signed_jobs'] ?? true);
         $this->ccAllowServerRebind = (bool) ($server['allow_server_rebind'] ?? true);
         $this->ccHeartbeatIntervalSeconds = (int) ($server['default_heartbeat_interval_seconds'] ?? 30);
         $this->ccJobTimeoutSeconds = (int) ($server['default_job_timeout_seconds'] ?? 180);
-        $this->ccBootstrapApiKey = trim((string) ($security['bootstrap_api_key'] ?? 'followflow-default-node-key-change-me'));
+        $this->ccEnrollmentTokenOnce = null;
     }
 
     protected function normalizeTab(string $tab): string

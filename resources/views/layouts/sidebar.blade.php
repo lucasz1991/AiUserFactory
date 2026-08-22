@@ -40,6 +40,14 @@
                         >
                             Prozesse
                         </x-menu.sidebar-nav-link>
+
+                        <x-menu.sidebar-nav-link
+                            :href="route('operations.dashboard')"
+                            icon="activity"
+                            :active="request()->routeIs('operations.*')"
+                        >
+                            Betrieb &amp; SLOs
+                        </x-menu.sidebar-nav-link>
                     </x-menu.sidebar-nav>
 
                     <x-menu.sidebar-nav label="Automation">
@@ -89,6 +97,13 @@
                                 nested
                             >
                                 Workflows
+                            </x-menu.sidebar-nav-link>
+                            <x-menu.sidebar-nav-link
+                                :href="route('network.portal-profiles')"
+                                :active="request()->routeIs('network.portal-profiles')"
+                                nested
+                            >
+                                Portal-Profile
                             </x-menu.sidebar-nav-link>
                         </x-menu.sidebar-nav-group>
 

@@ -81,6 +81,7 @@ class WorkflowCopilotRepairService
         protected WorkflowTaskOrderingService $taskOrdering,
         protected WorkflowCopilotPromptContextService $promptContexts,
         protected WorkflowSelectorProbeService $selectorProbes,
+        protected WorkflowPortalSelectorLearningService $portalSelectorLearning,
         protected WorkflowCopilotSessionService $sessions,
     ) {}
 
@@ -1170,11 +1171,14 @@ class WorkflowCopilotRepairService
             return [];
         }
 
+        $portalContext = $this->portalSelectorLearning->contextFor($task, $observation);
+        $preferredSelectors = $this->portalSelectorLearning->preferredSelectors($task, $observation, $rejectedSelectors);
         $candidate = $this->selectorProbes->bestCandidate(
             $task,
             $observation,
             $rejectedSelectors,
             $requiredElementRefs,
+            $preferredSelectors,
         );
 
         if ($candidate === []) {
@@ -1194,6 +1198,10 @@ class WorkflowCopilotRepairService
         $taskKey = (string) ($task['key'] ?? '');
         $previousSelector = (string) $candidate['previous_selector'];
 
+        $candidateSource = (bool) ($candidate['portal_profile_match'] ?? false)
+            ? 'portal_profile_confirmed_by_dom'
+            : 'dom_observation';
+
         $this->sessions->appendEvent(
             $session,
             'repair.selector_probe_applied',
@@ -1205,8 +1213,9 @@ class WorkflowCopilotRepairService
                 'failure_class' => $failureClass,
                 'previous_selector' => $previousSelector,
                 'new_selector' => $selector,
-                'candidate_source' => 'dom_observation',
+                'candidate_source' => $candidateSource,
                 'matches' => $candidate['matches'],
+                'portal_profile_context' => $portalContext,
             ],
             'repairing',
             'info',
@@ -1227,10 +1236,11 @@ class WorkflowCopilotRepairService
                 .' diesen Selector aktualisiert und vor der Revision als Probe verifiziert.',
             'selector_candidates' => [$selector],
             'original_task_key' => $taskKey,
+            'portal_profile_context' => $portalContext,
             'evidence' => [
                 'class' => 'selector_probe',
                 'previous_selector' => $previousSelector,
-                'candidate_source' => 'dom_observation',
+                'candidate_source' => $candidateSource,
                 'matches' => $candidate['matches'],
             ],
             'decision_trace' => [

@@ -4,7 +4,6 @@ namespace Tests\Feature;
 
 use App\Models\NetworkJob;
 use App\Models\NetworkJobProgressEvent;
-use App\Models\NetworkNode;
 use App\Models\Workflow;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowStep;
@@ -13,15 +12,17 @@ use App\Services\Workflows\WorkflowExecutionService;
 use App\Services\Workflows\WorkflowRuntimeFingerprint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
+use Tests\Concerns\CreatesNetworkNodes;
 use Tests\TestCase;
 
 class ClientControllerReliableWorkflowTest extends TestCase
 {
+    use CreatesNetworkNodes;
     use RefreshDatabase;
 
     public function test_protocol_two_uses_a_lease_and_deduplicates_sequences(): void
     {
-        $node = NetworkNode::query()->create([
+        $node = $this->createNetworkNode([
             'name' => 'Reliable node',
             'node_uuid' => 'reliable-node',
             'api_key' => 'reliable-key',
@@ -37,19 +38,22 @@ class ClientControllerReliableWorkflowTest extends TestCase
             'queued_at' => now(),
         ]);
 
-        $pull = $this->withHeader('X-NODE-API-KEY', $node->api_key)
+        $pull = $this->withHeader('X-NODE-API-KEY', $this->networkNodeApiKey($node))
             ->postJson('/api/client-controller/pull-jobs', ['protocol_version' => 2])
             ->assertOk()
             ->assertJsonPath('jobs.0.payload_version', 1);
         $leaseToken = (string) $pull->json('jobs.0.lease_token');
         $this->assertNotSame('', $leaseToken);
+        $job->refresh();
+        $this->assertNotNull($job->pulled_at);
+        $this->assertNull($job->started_at);
 
-        $this->withHeader('X-NODE-API-KEY', $node->api_key)
+        $this->withHeader('X-NODE-API-KEY', $this->networkNodeApiKey($node))
             ->postJson('/api/client-controller/pull-jobs', ['protocol_version' => 2])
             ->assertOk()
             ->assertJsonCount(0, 'jobs');
 
-        $resume = $this->withHeader('X-NODE-API-KEY', $node->api_key)
+        $resume = $this->withHeader('X-NODE-API-KEY', $this->networkNodeApiKey($node))
             ->postJson('/api/client-controller/pull-jobs', [
                 'protocol_version' => 2,
                 'resume_job_uuids' => [$job->job_uuid],
@@ -58,7 +62,7 @@ class ClientControllerReliableWorkflowTest extends TestCase
             ->assertJsonPath('jobs.0.job_uuid', $job->job_uuid);
         $leaseToken = (string) $resume->json('jobs.0.lease_token');
 
-        $this->withHeader('X-NODE-API-KEY', $node->api_key)
+        $this->withHeader('X-NODE-API-KEY', $this->networkNodeApiKey($node))
             ->post('/api/client-controller/job-progress', [
                 'job_uuid' => $job->job_uuid,
                 'lease_token' => $leaseToken,
@@ -68,7 +72,9 @@ class ClientControllerReliableWorkflowTest extends TestCase
             ->assertOk()
             ->assertJsonPath('acknowledged_sequence', 1);
 
-        $this->withHeader('X-NODE-API-KEY', $node->api_key)
+        $this->assertNotNull($job->fresh()->started_at);
+
+        $this->withHeader('X-NODE-API-KEY', $this->networkNodeApiKey($node))
             ->post('/api/client-controller/job-progress', [
                 'job_uuid' => $job->job_uuid,
                 'lease_token' => $leaseToken,
@@ -81,7 +87,7 @@ class ClientControllerReliableWorkflowTest extends TestCase
         $this->assertSame('first', $job->fresh()->result_json['message']);
         $this->assertSame(1, NetworkJobProgressEvent::query()->where('network_job_id', $job->id)->count());
 
-        $this->withHeader('X-NODE-API-KEY', $node->api_key)
+        $this->withHeader('X-NODE-API-KEY', $this->networkNodeApiKey($node))
             ->post('/api/client-controller/job-progress', [
                 'job_uuid' => $job->job_uuid,
                 'lease_token' => 'wrong-token',
@@ -90,7 +96,7 @@ class ClientControllerReliableWorkflowTest extends TestCase
             ])
             ->assertStatus(409);
 
-        $this->withHeader('X-NODE-API-KEY', $node->api_key)
+        $this->withHeader('X-NODE-API-KEY', $this->networkNodeApiKey($node))
             ->postJson('/api/client-controller/job-result', [
                 'job_uuid' => $job->job_uuid,
                 'lease_token' => $leaseToken,
@@ -106,7 +112,7 @@ class ClientControllerReliableWorkflowTest extends TestCase
 
     public function test_capable_node_receives_one_portable_full_workflow_job(): void
     {
-        $node = NetworkNode::query()->create([
+        $node = $this->createNetworkNode([
             'name' => 'Bundle node',
             'node_uuid' => 'bundle-node',
             'api_key' => 'bundle-key',
@@ -175,7 +181,7 @@ class ClientControllerReliableWorkflowTest extends TestCase
         $this->assertSame(2, $run->stepRuns()->count());
         $this->assertSame($first->id, $run->fresh()->current_workflow_step_id);
 
-        $pull = $this->withHeader('X-NODE-API-KEY', $node->api_key)
+        $pull = $this->withHeader('X-NODE-API-KEY', $this->networkNodeApiKey($node))
             ->postJson('/api/client-controller/pull-jobs', ['protocol_version' => 2])
             ->assertOk();
         $leaseToken = (string) $pull->json('jobs.0.lease_token');
@@ -199,7 +205,7 @@ class ClientControllerReliableWorkflowTest extends TestCase
             ],
         ];
 
-        $this->withHeader('X-NODE-API-KEY', $node->api_key)
+        $this->withHeader('X-NODE-API-KEY', $this->networkNodeApiKey($node))
             ->post('/api/client-controller/job-progress', [
                 'job_uuid' => $job->job_uuid,
                 'lease_token' => $leaseToken,
@@ -215,7 +221,7 @@ class ClientControllerReliableWorkflowTest extends TestCase
         $this->assertSame('completed', $stepRuns[0]->fresh()->status);
         $this->assertSame('waiting', $stepRuns[1]->fresh()->status);
 
-        $this->withHeader('X-NODE-API-KEY', $node->api_key)
+        $this->withHeader('X-NODE-API-KEY', $this->networkNodeApiKey($node))
             ->postJson('/api/client-controller/job-result', [
                 'job_uuid' => $job->job_uuid,
                 'lease_token' => $leaseToken,
@@ -237,7 +243,7 @@ class ClientControllerReliableWorkflowTest extends TestCase
 
     public function test_pending_workflow_jobs_are_pullable_even_with_legacy_expiry(): void
     {
-        $node = NetworkNode::query()->create([
+        $node = $this->createNetworkNode([
             'name' => 'Legacy expiry node',
             'node_uuid' => 'legacy-expiry-node',
             'api_key' => 'legacy-expiry-key',
@@ -254,7 +260,7 @@ class ClientControllerReliableWorkflowTest extends TestCase
             'expires_at' => now()->subMinute(),
         ]);
 
-        $this->withHeader('X-NODE-API-KEY', $node->api_key)
+        $this->withHeader('X-NODE-API-KEY', $this->networkNodeApiKey($node))
             ->postJson('/api/client-controller/pull-jobs', ['protocol_version' => 2])
             ->assertOk()
             ->assertJsonPath('jobs.0.job_uuid', $job->job_uuid);
@@ -262,7 +268,7 @@ class ClientControllerReliableWorkflowTest extends TestCase
 
     public function test_factory_does_not_stop_workflow_jobs_on_expires_and_waits_for_authoritative_client_result(): void
     {
-        $node = NetworkNode::query()->create([
+        $node = $this->createNetworkNode([
             'name' => 'Timeout node',
             'node_uuid' => 'timeout-node',
             'api_key' => 'timeout-key',
@@ -325,7 +331,7 @@ class ClientControllerReliableWorkflowTest extends TestCase
         $this->assertSame('running', $run->fresh()->status);
         $this->assertNull($run->fresh()->finished_at);
 
-        $this->withHeader('X-NODE-API-KEY', $node->api_key)
+        $this->withHeader('X-NODE-API-KEY', $this->networkNodeApiKey($node))
             ->post('/api/client-controller/job-progress', [
                 'job_uuid' => $job->job_uuid,
                 'lease_token' => $leaseToken,
@@ -335,7 +341,7 @@ class ClientControllerReliableWorkflowTest extends TestCase
             ->assertOk()
             ->assertJsonMissingPath('control.command');
 
-        $this->withHeader('X-NODE-API-KEY', $node->api_key)
+        $this->withHeader('X-NODE-API-KEY', $this->networkNodeApiKey($node))
             ->postJson('/api/client-controller/job-result', [
                 'job_uuid' => $job->job_uuid,
                 'lease_token' => $leaseToken,
@@ -357,7 +363,7 @@ class ClientControllerReliableWorkflowTest extends TestCase
 
     public function test_single_step_result_for_full_client_workflow_is_treated_as_progress(): void
     {
-        $node = NetworkNode::query()->create([
+        $node = $this->createNetworkNode([
             'name' => 'Partial bundle node',
             'node_uuid' => 'partial-bundle-node',
             'api_key' => 'partial-bundle-key',
@@ -432,7 +438,7 @@ class ClientControllerReliableWorkflowTest extends TestCase
             'lease_expires_at' => now()->addMinute(),
         ]);
 
-        $this->withHeader('X-NODE-API-KEY', $node->api_key)
+        $this->withHeader('X-NODE-API-KEY', $this->networkNodeApiKey($node))
             ->postJson('/api/client-controller/job-result', [
                 'job_uuid' => $job->job_uuid,
                 'lease_token' => $leaseToken,
@@ -466,7 +472,7 @@ class ClientControllerReliableWorkflowTest extends TestCase
 
     public function test_unassigned_client_run_uses_a_free_node_instead_of_a_busy_node(): void
     {
-        $busyNode = NetworkNode::query()->create([
+        $busyNode = $this->createNetworkNode([
             'name' => 'Busy node',
             'node_uuid' => 'busy-node',
             'api_key' => 'busy-key',
@@ -475,7 +481,7 @@ class ClientControllerReliableWorkflowTest extends TestCase
             'last_seen_at' => now(),
             'capabilities_json' => ['workflow_bundle_v1' => true],
         ]);
-        $freeNode = NetworkNode::query()->create([
+        $freeNode = $this->createNetworkNode([
             'name' => 'Free node',
             'node_uuid' => 'free-node',
             'api_key' => 'free-key',
@@ -537,7 +543,7 @@ class ClientControllerReliableWorkflowTest extends TestCase
 
     public function test_force_termination_requests_a_complete_client_process_tree_stop(): void
     {
-        $node = NetworkNode::query()->create([
+        $node = $this->createNetworkNode([
             'name' => 'Force stop node',
             'node_uuid' => 'force-stop-node',
             'api_key' => 'force-stop-key',

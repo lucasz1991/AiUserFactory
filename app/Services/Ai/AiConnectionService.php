@@ -100,15 +100,30 @@ class AiConnectionService
 
     public function text(string $prompt, ?string $system = null, array $options = []): string
     {
+        return (string) $this->textWithUsage($prompt, $system, $options)->data;
+    }
+
+    public function textWithUsage(string $prompt, ?string $system = null, array $options = []): AiProviderResult
+    {
         $response = $this->request([
             'messages' => $this->messages($prompt, $system),
             ...$options,
         ], 'text');
 
-        return (string) data_get($response, 'choices.0.message.content', '');
+        return AiProviderResult::fromResponse(
+            $response,
+            (string) data_get($response, 'choices.0.message.content', ''),
+        );
     }
 
     public function json(string $prompt, ?string $system = null, array $options = []): array
+    {
+        $result = $this->jsonWithUsage($prompt, $system, $options)->data;
+
+        return is_array($result) ? $result : [];
+    }
+
+    public function jsonWithUsage(string $prompt, ?string $system = null, array $options = []): AiProviderResult
     {
         $response = $this->request([
             'messages' => $this->messages($prompt, $system),
@@ -122,15 +137,14 @@ class AiConnectionService
         $decoded = json_decode($content, true);
 
         if (json_last_error() !== JSON_ERROR_NONE || ! is_array($decoded)) {
-            Log::error('AI returned invalid JSON', [
-                'content' => $content,
+            Log::warning('AI provider returned invalid JSON.', [
                 'json_error' => json_last_error_msg(),
             ]);
 
-            throw new RuntimeException('AI returned invalid JSON: '.json_last_error_msg());
+            throw new AiProviderException;
         }
 
-        return $decoded;
+        return AiProviderResult::fromResponse($response, $decoded);
     }
 
     public function stream(array $payload, ?string $profile = null): StreamedResponse
@@ -202,10 +216,8 @@ class AiConnectionService
             $model = is_string($event['model'] ?? null) ? $event['model'] : $model;
             $provider = is_string($event['provider'] ?? null) ? $event['provider'] : $provider;
 
-            $providerError = data_get($event, 'error.message');
-
-            if (is_string($providerError) && $providerError !== '') {
-                throw new RuntimeException('AI streaming error: '.$providerError);
+            if (filled(data_get($event, 'error'))) {
+                throw new AiProviderException;
             }
 
             $choice = data_get($event, 'choices.0', []);
@@ -319,10 +331,17 @@ class AiConnectionService
 
     public function imageGeneration(string $prompt, array $options = []): array
     {
+        $result = $this->imageGenerationWithUsage($prompt, $options)->data;
+
+        return is_array($result) ? $result : [];
+    }
+
+    public function imageGenerationWithUsage(string $prompt, array $options = []): AiProviderResult
+    {
         $referenceImages = $options['reference_images'] ?? [];
         unset($options['reference_images']);
 
-        return $this->request([
+        $response = $this->request([
             '_timeout' => $options['_timeout'] ?? (int) $this->setting('image_generation_timeout', 600),
             'messages' => [
                 [
@@ -333,6 +352,8 @@ class AiConnectionService
             'modalities' => $options['modalities'] ?? ['image', 'text'],
             ...$options,
         ], 'image_generation');
+
+        return AiProviderResult::fromResponse($response, $response);
     }
 
     public function generatedImageUrls(array $response): array
@@ -565,14 +586,11 @@ class AiConnectionService
             return;
         }
 
-        Log::error('AI connection failed', [
+        Log::warning('AI provider request failed.', [
             'status' => $response->status(),
-            'body' => $response->body(),
         ]);
 
-        throw new RuntimeException(
-            'AI connection failed with status '.$response->status().': '.$response->body()
-        );
+        throw new AiProviderException($response->status());
     }
 
     protected function recordCopilotUsage(array $request, array $response, ?string $profile): void

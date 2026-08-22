@@ -16,10 +16,10 @@ class WorkflowWorkbenchUiSafetyMarkupTest extends TestCase
         $stepCard = file_get_contents($root.'/resources/views/components/workflows/step-card.blade.php');
         $taskCard = file_get_contents($root.'/resources/views/components/workflows/task-card.blade.php');
 
-        $this->assertStringContainsString("shell.querySelectorAll('.jetstream-modal, [role=\"dialog\"][aria-modal=\"true\"]')", $manager);
+        $this->assertStringContainsString("shell.querySelectorAll('.jetstream-modal, [role=dialog][aria-modal=true]')", $manager);
         $this->assertStringContainsString('if (childDialog || openMenu) return;', $manager);
         $this->assertLessThan(
-            strpos($manager, '[data-workflow-mobile-library][data-open="true"]'),
+            strpos($manager, '[data-workflow-mobile-library][data-open=true]'),
             strpos($manager, 'if (childDialog || openMenu) return;')
         );
 
@@ -106,7 +106,7 @@ class WorkflowWorkbenchUiSafetyMarkupTest extends TestCase
         $this->assertStringContainsString("querySelector(':scope > button[aria-expanded]')", $manager);
 
         $this->assertStringContainsString("\$managerWorkbenchPollEnabled = \$workbenchSurface === 'definition';", $manager);
-        $this->assertStringContainsString("? 2\n        : 15;", $manager);
+        $this->assertMatchesRegularExpression('/\?\s*2\s*:\s*15;/', $manager);
         $this->assertStringContainsString('data-workflow-manager-poll=', $manager);
         $this->assertStringContainsString('wire:target.except="taskSearch,selectTaskGroup,catalogTargetStepId,refreshWorkbenchContext"', $manager);
         $this->assertSame(0, substr_count($manager, 'wire:poll.visible.2s="refreshWorkbenchContext"'));

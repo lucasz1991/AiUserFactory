@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\ClientController\RegisterNetworkNodeRequest;
 use App\Jobs\MonitorWorkflowStepRunJob;
 use App\Models\Device;
 use App\Models\NetworkJob;
@@ -14,9 +15,13 @@ use App\Models\NodeServerBinding;
 use App\Models\Setting;
 use App\Models\WorkflowStepRun;
 use App\Services\ClientController\ClientControllerReleaseService;
+use App\Services\ClientController\NetworkNodeCredentialService;
+use App\Services\ClientController\NodeEnrollmentException;
+use App\Services\ClientController\NodeEnrollmentService;
 use App\Services\Workflows\WorkflowExecutionService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -24,55 +29,39 @@ use Illuminate\Support\Str;
 
 class ClientControllerApiController extends Controller
 {
-    public function registerNode(Request $request): JsonResponse
-    {
-        $bootstrapFromRequest = trim((string) $request->header('X-BOOTSTRAP-API-KEY', $request->input('bootstrap_api_key', $request->input('api_key', ''))));
-        $expectedBootstrap = trim((string) data_get(Setting::getValue('client_controller', 'security'), 'bootstrap_api_key', 'followflow-default-node-key-change-me'));
+    public function __construct(
+        private readonly NetworkNodeCredentialService $credentials,
+        private readonly NodeEnrollmentService $enrollments,
+    ) {}
 
-        if ($expectedBootstrap === '' || ! hash_equals($expectedBootstrap, $bootstrapFromRequest)) {
+    public function registerNode(RegisterNetworkNodeRequest $request): JsonResponse
+    {
+        $enrollmentToken = trim((string) $request->header(
+            'X-NODE-ENROLLMENT-TOKEN',
+            $request->header('X-BOOTSTRAP-API-KEY', '')
+        ));
+
+        if ($enrollmentToken === '') {
             return response()->json([
                 'success' => false,
-                'message' => 'Invalid bootstrap API key.',
+                'message' => 'A valid enrollment token header is required.',
             ], 401);
         }
 
-        $validated = $request->validate([
-            'name' => ['required', 'string', 'max:255'],
-            'node_uuid' => ['required', 'string', 'max:120'],
-            'version' => ['nullable', 'string', 'max:120'],
-            'os' => ['nullable', 'string', 'max:120'],
-            'public_ip' => ['nullable', 'string', 'max:64'],
-            'country' => ['nullable', 'string', 'max:120'],
-            'city' => ['nullable', 'string', 'max:120'],
-            'current_server_domain' => ['nullable', 'string', 'max:255'],
-            'last_successful_server_domain' => ['nullable', 'string', 'max:255'],
-            'capabilities' => ['nullable', 'array'],
-        ]);
-
-        $node = NetworkNode::query()->firstOrNew([
-            'node_uuid' => $validated['node_uuid'],
-        ]);
-
-        if (! $node->exists) {
-            $node->api_key = Str::random(60);
-            $node->node_secret = Str::random(60);
+        try {
+            $enrollment = $this->enrollments->consume(
+                $enrollmentToken,
+                $request->validated(),
+                $request,
+            );
+        } catch (NodeEnrollmentException $exception) {
+            return response()->json([
+                'success' => false,
+                'message' => $exception->getMessage(),
+            ], $exception->statusCode);
         }
 
-        $node->fill([
-            'name' => $node->exists ? $node->name : $validated['name'],
-            'version' => $validated['version'] ?? $node->version,
-            'os' => $validated['os'] ?? $node->os,
-            'public_ip' => $validated['public_ip'] ?? $request->ip() ?? $node->public_ip,
-            'country' => $validated['country'] ?? $node->country,
-            'city' => $validated['city'] ?? $node->city,
-            'current_server_domain' => $validated['current_server_domain'] ?? $node->current_server_domain,
-            'last_successful_server_domain' => $validated['last_successful_server_domain'] ?? $node->last_successful_server_domain,
-            'capabilities_json' => $validated['capabilities'] ?? $node->capabilities_json,
-            'is_online' => true,
-            'last_seen_at' => now(),
-        ]);
-
-        $node->save();
+        $node = $enrollment['node'];
         $this->reconcileNodeUpdate($node);
 
         NodeServerBinding::query()->firstOrCreate(
@@ -93,7 +82,9 @@ class ClientControllerApiController extends Controller
                 'id' => $node->id,
                 'name' => $node->name,
                 'node_uuid' => $node->node_uuid,
-                'api_key' => $node->api_key,
+                // Der Klartext-Key wird ausschliesslich in dieser erfolgreichen
+                // Einmal-Antwort ausgegeben und ist danach nicht abrufbar.
+                'api_key' => $enrollment['api_key'],
                 'allow_server_rebind' => (bool) $node->allow_server_rebind,
                 'current_server_domain' => $node->current_server_domain,
                 'last_successful_server_domain' => $node->last_successful_server_domain,
@@ -114,8 +105,8 @@ class ClientControllerApiController extends Controller
 
         $validated = $request->validate([
             'status' => ['nullable', 'string', 'max:50'],
-            'payload' => ['nullable', 'array'],
-            'capabilities' => ['nullable', 'array'],
+            'payload' => ['nullable', 'array', 'max:50'],
+            'capabilities' => ['nullable', 'array', 'max:50'],
             'public_ip' => ['nullable', 'string', 'max:64'],
             'version' => ['nullable', 'string', 'max:120'],
             'os' => ['nullable', 'string', 'max:120'],
@@ -184,13 +175,13 @@ class ClientControllerApiController extends Controller
         }
 
         $validated = $request->validate([
-            'devices' => ['required', 'array'],
+            'devices' => ['required', 'array', 'max:200'],
             'devices.*.name' => ['required', 'string', 'max:255'],
             'devices.*.platform' => ['required', 'string', 'max:50'],
             'devices.*.device_uuid' => ['required', 'string', 'max:191'],
             'devices.*.adb_serial' => ['nullable', 'string', 'max:191'],
             'devices.*.status' => ['nullable', 'string', 'in:offline,online,busy,error'],
-            'devices.*.settings_json' => ['nullable', 'array'],
+            'devices.*.settings_json' => ['nullable', 'array', 'max:100'],
         ]);
 
         $synced = 0;
@@ -299,6 +290,7 @@ class ClientControllerApiController extends Controller
                 $job->forceFill([
                     'status' => $job->status === 'stop_requested' ? 'stop_requested' : 'dispatched',
                     'dispatched_at' => now(),
+                    'pulled_at' => $job->pulled_at ?? now(),
                     'lease_token_hash' => $leaseToken ? hash('sha256', $leaseToken) : null,
                     'lease_expires_at' => $leaseToken ? now()->addSeconds(120) : null,
                     'attempt_count' => ((int) $job->attempt_count) + 1,
@@ -348,8 +340,8 @@ class ClientControllerApiController extends Controller
         $validated = $request->validate([
             'job_uuid' => ['required', 'string', 'max:120'],
             'status' => ['required', 'string', 'in:success,failed,cancelled,timed_out'],
-            'result' => ['nullable', 'array'],
-            'error_message' => ['nullable', 'string'],
+            'result' => ['nullable', 'array', 'max:200'],
+            'error_message' => ['nullable', 'string', 'max:20000'],
             'lease_token' => ['nullable', 'string', 'max:255'],
             'sequence' => ['nullable', 'integer', 'min:1'],
         ]);
@@ -437,6 +429,7 @@ class ClientControllerApiController extends Controller
                 'status' => $job->status === 'unreachable' ? 'dispatched' : $job->status,
                 'result_json' => $result,
                 'last_progress_at' => now(),
+                'started_at' => $job->started_at ?? now(),
                 'last_sequence' => $sequence,
                 'lease_expires_at' => $job->lease_token_hash ? now()->addSeconds(120) : null,
                 'unreachable_at' => null,
@@ -474,6 +467,7 @@ class ClientControllerApiController extends Controller
             'error_message' => $validated['error_message'] ?? null,
             'completed_at' => now(),
             'last_progress_at' => now(),
+            'started_at' => $job->started_at ?? now(),
             'last_sequence' => $sequence,
             'lease_expires_at' => null,
             'control_acknowledged_at' => $job->control_command ? now() : $job->control_acknowledged_at,
@@ -624,6 +618,7 @@ class ClientControllerApiController extends Controller
             'status' => $job->status === 'unreachable' ? 'dispatched' : $job->status,
             'result_json' => $progress,
             'last_progress_at' => now(),
+            'started_at' => $job->started_at ?? now(),
             'last_sequence' => $sequence,
             'lease_expires_at' => $job->lease_token_hash ? now()->addSeconds(120) : null,
             'unreachable_at' => null,
@@ -676,21 +671,26 @@ class ClientControllerApiController extends Controller
         }
 
         $validated = $request->validate([
-            'new_server_domain' => ['required', 'string', 'max:255'],
+            'new_server_domain' => ['required', 'url', 'max:255'],
             'expires_at' => ['required', 'date'],
-            'signature' => ['required', 'string'],
+            'signature' => ['required', 'string', 'size:64'],
             'requested_by' => ['nullable', 'string', 'max:255'],
             'force' => ['nullable', 'boolean'],
         ]);
 
-        if (! $node->allow_server_rebind && ! ($validated['force'] ?? false)) {
+        $serverSecurity = Setting::getValue('client_controller', 'server');
+        $globalRebindAllowed = (bool) data_get($serverSecurity, 'allow_server_rebind', false);
+
+        if (! $globalRebindAllowed || ! $node->allow_server_rebind) {
             return response()->json([
                 'success' => false,
                 'message' => 'Server rebind is disabled for this node.',
             ], 422);
         }
 
-        if (now()->greaterThan($validated['expires_at'])) {
+        $expiresAt = Carbon::parse($validated['expires_at']);
+
+        if (now()->greaterThan($expiresAt) || $expiresAt->greaterThan(now()->addMinutes(5))) {
             NodeRebindLog::query()->create([
                 'network_node_id' => $node->id,
                 'old_server_domain' => $node->current_server_domain,
@@ -706,6 +706,23 @@ class ClientControllerApiController extends Controller
                 'success' => false,
                 'message' => 'Rebind request expired.',
             ], 422);
+        }
+
+        $expectedSignature = hash_hmac(
+            'sha256',
+            implode("\n", [
+                (string) $node->node_uuid,
+                (string) $validated['new_server_domain'],
+                $expiresAt->toIso8601String(),
+            ]),
+            $this->credentials->signingSecret($node),
+        );
+
+        if (! hash_equals($expectedSignature, strtolower((string) $validated['signature']))) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Invalid rebind signature.',
+            ], 401);
         }
 
         NodeRebindLog::query()->create([
@@ -740,15 +757,9 @@ class ClientControllerApiController extends Controller
 
     protected function resolveNodeFromApiKey(Request $request): ?NetworkNode
     {
-        $apiKey = trim((string) $request->header('X-NODE-API-KEY', $request->input('api_key', '')));
-
-        if ($apiKey === '') {
-            return null;
-        }
-
-        return NetworkNode::query()
-            ->where('api_key', $apiKey)
-            ->first();
+        return $this->credentials->authenticate(
+            $request->header('X-NODE-API-KEY')
+        );
     }
 
     protected function validLease(Request $request, NetworkJob $job): bool

@@ -14,6 +14,7 @@ use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Str;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 /**
@@ -67,9 +68,7 @@ class PersonWorkflowDispatcherTest extends TestCase
         $this->assertSame(0, WorkflowRun::query()->count());
     }
 
-    /**
-     * @dataProvider rejectionProvider
-     */
+    #[DataProvider('rejectionProvider')]
     public function test_the_check_chain_rejects_with_a_reason(array $personAttributes, string $expected): void
     {
         $person = $this->makePerson($personAttributes);

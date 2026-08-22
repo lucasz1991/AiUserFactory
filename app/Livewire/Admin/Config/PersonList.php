@@ -2,19 +2,20 @@
 
 namespace App\Livewire\Admin\Config;
 
-use Illuminate\Encryption\Encrypter;
 use App\Models\File as StoredFile;
 use App\Models\ManagedProcess;
 use App\Models\Person;
 use App\Models\Setting;
 use App\Services\Base\ScraperProfileSyncClient;
 use App\Services\Scraper\ScraperProfileDatabaseStore;
+use App\Services\Security\CookieFilePathPolicy;
+use Illuminate\Encryption\Encrypter;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 use Livewire\Component;
 
@@ -2123,7 +2124,7 @@ class PersonList extends Component
             // weil Chrome sonst mit "browser is already running for ... userDataDir" sperrt.
             'persistentProfileEnabled' => false,
             'browserProfilePath' => $this->resolveStorageAwarePath($storedSettings['browser_profile_path'] ?? 'browser-profiles/instagram/default'),
-            'cookieFilePath' => $this->resolveStorageAwarePath($storedSettings['cookie_file_path'] ?? 'cookies/instagram-cookies.json'),
+            'cookieFilePath' => $this->resolvePrivateCookieFilePath($storedSettings['cookie_file_path'] ?? 'cookies/instagram-cookies.json'),
             'headlessEnabled' => false,
             'autoLoginEnabled' => (bool) ($storedSettings['auto_login_enabled'] ?? false),
             'loginUsername' => trim((string) ($storedSettings['login_username'] ?? '')),
@@ -2180,6 +2181,22 @@ class PersonList extends Component
             str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $configuredPath),
             DIRECTORY_SEPARATOR
         ));
+    }
+
+    protected function resolvePrivateCookieFilePath(mixed $configuredPath): string
+    {
+        $path = app(CookieFilePathPolicy::class)->resolve(
+            $configuredPath,
+            storage_path('app'),
+        );
+
+        if ($path === null) {
+            throw new \RuntimeException(
+                'Die Cookie-Datei muss innerhalb des privaten Storage oder einer explizit erlaubten privaten Root liegen.',
+            );
+        }
+
+        return $path;
     }
 
     protected function resolveBaseStorageRootOrNull(): ?string
@@ -2313,6 +2330,3 @@ class PersonList extends Component
             || preg_match('/^[A-Za-z]:\//', $path) === 1;
     }
 }
-
-
-

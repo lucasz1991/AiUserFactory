@@ -14,8 +14,6 @@ class NetworkNode extends Model
     protected $fillable = [
         'name',
         'node_uuid',
-        'api_key',
-        'node_secret',
         'current_server_domain',
         'last_successful_server_domain',
         'public_ip',
@@ -37,6 +35,13 @@ class NetworkNode extends Model
         'workflow_reservation_run_id',
     ];
 
+    protected $hidden = [
+        'api_key',
+        'api_key_hash',
+        'node_secret',
+        'signing_secret_encrypted',
+    ];
+
     protected $casts = [
         'is_online' => 'boolean',
         'allow_server_rebind' => 'boolean',
@@ -45,6 +50,10 @@ class NetworkNode extends Model
         'update_installed_at' => 'datetime',
         'capabilities_json' => 'array',
         'settings_json' => 'array',
+        'signing_secret_encrypted' => 'encrypted',
+        'api_key_rotated_at' => 'datetime',
+        'api_key_revoked_at' => 'datetime',
+        'last_authenticated_at' => 'datetime',
     ];
 
     public static function heartbeatTimeoutSeconds(): int

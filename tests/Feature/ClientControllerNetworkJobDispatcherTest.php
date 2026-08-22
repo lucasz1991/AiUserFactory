@@ -3,18 +3,19 @@
 namespace Tests\Feature;
 
 use App\Models\Device;
-use App\Models\NetworkNode;
 use App\Services\ClientController\NetworkJobDispatcher;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Tests\Concerns\CreatesNetworkNodes;
 use Tests\TestCase;
 
 class ClientControllerNetworkJobDispatcherTest extends TestCase
 {
+    use CreatesNetworkNodes;
     use RefreshDatabase;
 
     public function test_it_creates_a_node_job_with_a_canonical_hmac_signature(): void
     {
-        $node = NetworkNode::query()->create([
+        $node = $this->createNetworkNode([
             'name' => 'Test node',
             'node_uuid' => 'node-test-1',
             'api_key' => 'node-secret-api-key',
@@ -25,20 +26,20 @@ class ClientControllerNetworkJobDispatcherTest extends TestCase
         $job = app(NetworkJobDispatcher::class)->dispatch($node, 'workflow_task', $payload);
 
         $canonical = '{"nested":{"a":1,"b":2},"z":1}';
-        $this->assertSame(hash_hmac('sha256', $canonical, $node->api_key), $job->signature);
+        $this->assertSame(hash_hmac('sha256', $canonical, $this->networkNodeApiKey($node)), $job->signature);
         $this->assertSame('pending', $job->status);
         $this->assertNull($job->device_id);
     }
 
     public function test_it_rejects_a_device_from_another_node(): void
     {
-        $first = NetworkNode::query()->create([
+        $first = $this->createNetworkNode([
             'name' => 'First',
             'node_uuid' => 'node-test-2',
             'api_key' => 'first-key',
             'status' => 'active',
         ]);
-        $second = NetworkNode::query()->create([
+        $second = $this->createNetworkNode([
             'name' => 'Second',
             'node_uuid' => 'node-test-3',
             'api_key' => 'second-key',

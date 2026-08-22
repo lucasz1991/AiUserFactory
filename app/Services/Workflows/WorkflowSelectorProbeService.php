@@ -111,6 +111,7 @@ class WorkflowSelectorProbeService
         array $observation,
         array $rejectedSelectors = [],
         array $requiredElementRefs = [],
+        array $preferredSelectors = [],
     ): array {
         $previousSelector = trim((string) ($task['selector'] ?? $task['element_selector'] ?? ''));
 
@@ -154,6 +155,10 @@ class WorkflowSelectorProbeService
         }
 
         $candidates = [];
+        $preferredRanks = collect($preferredSelectors)
+            ->mapWithKeys(fn (mixed $selector, int $index): array => [trim((string) $selector) => $index])
+            ->filter(fn (int $index, string $selector): bool => $selector !== '')
+            ->all();
 
         foreach ($candidateElements as $element) {
             $elementRef = trim((string) ($element['element_ref'] ?? $element['ref'] ?? ''));
@@ -175,8 +180,10 @@ class WorkflowSelectorProbeService
                     $candidates[$selector] = [
                         'selector' => $selector,
                         'stability' => $this->stabilityPriority($selector),
+                        'portal_rank' => $preferredRanks[$selector] ?? null,
                         'element_refs' => [],
                         'element_count' => 0,
+                        'exact_match_confirmed' => false,
                     ];
                 }
 
@@ -184,6 +191,16 @@ class WorkflowSelectorProbeService
 
                 if ($elementRef !== '' && ! in_array($elementRef, $candidates[$selector]['element_refs'], true)) {
                     $candidates[$selector]['element_refs'][] = $elementRef;
+                }
+
+                $evidence = collect(is_array($element['selector_evidence'] ?? null) ? $element['selector_evidence'] : [])
+                    ->first(fn (mixed $entry): bool => is_array($entry)
+                        && trim((string) ($entry['selector'] ?? '')) === $selector);
+
+                if (is_array($evidence)
+                    && (bool) ($evidence['unique'] ?? false)
+                    && (int) ($evidence['match_count'] ?? 0) === 1) {
+                    $candidates[$selector]['exact_match_confirmed'] = true;
                 }
             }
         }
@@ -206,7 +223,11 @@ class WorkflowSelectorProbeService
                     ->filter()
                     ->unique();
 
-                return $matchingRefs->count() === 1;
+                return $matchingRefs->count() === 1
+                    && (! collect($elements)->contains(fn (array $element): bool => collect($element['selector_evidence'] ?? [])
+                        ->contains(fn (mixed $entry): bool => is_array($entry)
+                            && trim((string) ($entry['selector'] ?? '')) === $selector))
+                        || (bool) ($candidate['exact_match_confirmed'] ?? false));
             });
 
             if ($candidates === []) {
@@ -215,13 +236,35 @@ class WorkflowSelectorProbeService
         }
 
         $ranked = collect($candidates)
-            ->sortByDesc(fn (array $candidate): int => (int) $candidate['stability'])
+            ->sort(function (array $left, array $right): int {
+                $leftPortal = $left['portal_rank'];
+                $rightPortal = $right['portal_rank'];
+
+                if ($leftPortal !== null || $rightPortal !== null) {
+                    if ($leftPortal === null) {
+                        return 1;
+                    }
+
+                    if ($rightPortal === null) {
+                        return -1;
+                    }
+
+                    if (($portal = ((int) $leftPortal) <=> ((int) $rightPortal)) !== 0) {
+                        return $portal;
+                    }
+                }
+
+                return ((int) $right['stability']) <=> ((int) $left['stability']);
+            })
             ->values();
         $best = $ranked->first();
         $runnerUp = $ranked->get(1);
 
         if (! is_array($best)
-            || (is_array($runnerUp) && (int) $runnerUp['stability'] >= (int) $best['stability'])) {
+            || (is_array($runnerUp)
+                && $best['portal_rank'] === null
+                && $runnerUp['portal_rank'] === null
+                && (int) $runnerUp['stability'] >= (int) $best['stability'])) {
             return [];
         }
 
@@ -231,7 +274,52 @@ class WorkflowSelectorProbeService
             'expected_tags' => $expectedTags,
             'candidate_count' => $ranked->count(),
             'matches' => $ranked->take(6)->all(),
+            'portal_profile_match' => $best['portal_rank'] !== null,
         ];
+    }
+
+    public function semanticRoleForTask(array $task): string
+    {
+        $catalogKey = trim((string) ($task['task_key'] ?? ''));
+        $selector = Str::lower(trim((string) ($task['selector'] ?? $task['element_selector'] ?? '')));
+        $text = Str::lower(implode(' ', array_filter([
+            $task['title'] ?? null,
+            $task['description'] ?? null,
+            $selector,
+        ], static fn (mixed $value): bool => is_scalar($value))));
+
+        if (preg_match('/(?:consent|cookie|ablehnen|reject|decline|refuse)/u', $text) === 1) {
+            return 'consent_reject';
+        }
+
+        if (preg_match('/(?:akzeptieren|accept|allow)/u', $text) === 1) {
+            return 'consent_accept';
+        }
+
+        if ($catalogKey === 'input.fill_field') {
+            return match (true) {
+                str_contains($selector, '[name="q"]'), str_contains($text, 'such') => 'search_input',
+                str_contains($selector, 'password'), str_contains($text, 'passwort') => 'password_input',
+                str_contains($selector, 'email'), str_contains($text, 'e-mail') => 'email_input',
+                default => 'form_input',
+            };
+        }
+
+        if (in_array($catalogKey, ['loop.for_each_element', 'browser.read_searchengine_result'], true)
+            || preg_match('/(?:suchergebnis|search\s*result|result_link)/u', $text) === 1) {
+            return 'result_link';
+        }
+
+        if ($catalogKey === 'input.submit') {
+            return str_contains($text, 'such') ? 'search_submit' : 'form_submit';
+        }
+
+        return match ($catalogKey) {
+            'browser.click' => 'action_button',
+            'browser.hover' => 'hover_target',
+            'wait.selector' => 'wait_target',
+            default => str_replace('.', '_', $catalogKey),
+        };
     }
 
     /**

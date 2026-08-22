@@ -30,6 +30,8 @@
                     </button>
                     <div x-cloak x-show="open" x-transition.origin.top.right x-on:click.outside="open = false" class="ff-menu absolute right-0 z-50 mt-2 w-56 p-1.5">
                         <a href="{{ route('network.actions') }}" class="block rounded-md px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">Aktionsplanung öffnen</a>
+                        <a href="{{ route('network.portal-profiles') }}" class="block rounded-md px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">Portal-Profile prüfen</a>
+                        <a href="{{ route('operations.dashboard') }}" class="block rounded-md px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">Betriebsmetriken öffnen</a>
                         <a href="{{ route('processes.index') }}" class="block rounded-md px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">Prozesse öffnen</a>
                     </div>
                 </div>

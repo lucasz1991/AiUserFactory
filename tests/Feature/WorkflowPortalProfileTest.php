@@ -2,11 +2,15 @@
 
 namespace Tests\Feature;
 
+use App\Livewire\Admin\Network\PortalProfiles;
 use App\Models\WorkflowPortalProfile;
 use App\Services\Workflows\WorkflowPortalProfileService;
+use App\Services\Workflows\WorkflowPortalSelectorLearningService;
+use App\Services\Workflows\WorkflowSelectorProbeService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use InvalidArgumentException;
+use Livewire\Livewire;
 use Tests\TestCase;
 
 /**
@@ -159,6 +163,121 @@ class WorkflowPortalProfileTest extends TestCase
         $this->assertSame('#search a:has(h3)', $service->bestFor('google.de', 'result_link'));
         $this->assertNull($service->bestFor('duckduckgo.com', 'search_input'));
         $this->assertNull($service->bestFor('google.de', 'gibt_es_nicht'));
+    }
+
+    public function test_portal_memory_prioritizes_only_a_selector_confirmed_by_the_current_dom(): void
+    {
+        $profile = $this->service();
+        $learning = app(WorkflowPortalSelectorLearningService::class);
+        $probes = app(WorkflowSelectorProbeService::class);
+        $task = [
+            'task_key' => 'input.fill_field',
+            'title' => 'Suchbegriff eingeben',
+            'selector' => 'input.legacy-search',
+        ];
+        $profile->remember('example.test', 'search_input', 'input[name="q"]');
+        $observation = [
+            'page' => ['url' => 'https://example.test/search'],
+            'interaction_map' => [[
+                'element_ref' => 'el_search',
+                'tag' => 'input',
+                'visible' => true,
+                'enabled' => true,
+                'selector_candidates' => ['input[name="query"]', 'input[name="q"]'],
+                'selector_evidence' => [[
+                    'selector' => 'input[name="query"]',
+                    'unique' => true,
+                    'match_count' => 1,
+                ], [
+                    'selector' => 'input[name="q"]',
+                    'unique' => true,
+                    'match_count' => 1,
+                ]],
+            ]],
+        ];
+        $preferred = $learning->preferredSelectors($task, $observation);
+
+        $candidate = $probes->bestCandidate($task, $observation, [], ['el_search'], $preferred);
+
+        $this->assertSame(['input[name="q"]'], $preferred);
+        $this->assertSame('input[name="q"]', data_get($candidate, 'selector'));
+        $this->assertTrue((bool) data_get($candidate, 'portal_profile_match'));
+
+        data_set($observation, 'interaction_map.0.selector_candidates', ['input[name="query"]']);
+        data_set($observation, 'interaction_map.0.selector_evidence', [[
+            'selector' => 'input[name="query"]',
+            'unique' => true,
+            'match_count' => 1,
+        ]]);
+        $currentDomOnly = $probes->bestCandidate($task, $observation, [], ['el_search'], $preferred);
+
+        $this->assertSame('input[name="query"]', data_get($currentDomOnly, 'selector'));
+        $this->assertFalse((bool) data_get($currentDomOnly, 'portal_profile_match'));
+    }
+
+    public function test_probe_outcome_updates_the_matching_portal_profile(): void
+    {
+        $learning = app(WorkflowPortalSelectorLearningService::class);
+        $plan = [
+            'portal_profile_context' => ['domain' => 'example.test', 'role' => 'search_input'],
+            'changes' => ['selector' => 'input[name="q"]'],
+        ];
+
+        $learning->rememberSuccessfulProbe($plan);
+        $learning->recordFailedProbe($plan);
+
+        $stored = WorkflowPortalProfile::query()->firstOrFail();
+        $this->assertSame('example.test', $stored->domain);
+        $this->assertSame('search_input', $stored->role);
+        $this->assertSame(1, $stored->hit_count);
+        $this->assertSame(1, $stored->miss_count);
+        $this->assertSame('copilot_probe', $stored->source);
+        $this->assertSame(1, $stored->profile_version);
+        $this->assertSame(1, data_get($stored->evidence_json, 'match_count'));
+        $this->assertNotEmpty(data_get($stored->evidence_json, 'observed_at'));
+    }
+
+    public function test_manual_rollback_excludes_a_profile_until_an_explicit_approval(): void
+    {
+        $service = $this->service();
+        $profile = $service->remember('example.test', 'search_input', 'input[name="q"]');
+
+        $rolledBack = $service->rollback($profile, null, 'Selector ist nach Portal-Update falsch.');
+
+        $this->assertFalse($rolledBack->is_active);
+        $this->assertNotNull($rolledBack->disabled_at);
+        $this->assertSame('Selector ist nach Portal-Update falsch.', $rolledBack->disable_reason);
+        $this->assertSame(2, $rolledBack->profile_version);
+        $this->assertNull($service->bestFor('example.test', 'search_input'));
+
+        // Ein spaeterer Lauf darf einen bewussten Rollback nicht still aufheben.
+        $service->remember('example.test', 'search_input', 'input[name="q"]', 'copilot_probe');
+        $this->assertNull($service->bestFor('example.test', 'search_input'));
+
+        $approved = $service->approve($rolledBack->fresh());
+
+        $this->assertTrue($approved->is_active);
+        $this->assertTrue($approved->is_approved);
+        $this->assertNull($approved->disabled_at);
+        $this->assertSame('input[name="q"]', $service->bestFor('example.test', 'search_input'));
+    }
+
+    public function test_admin_dashboard_exposes_conflicts_and_can_rollback_the_losing_selector(): void
+    {
+        $service = $this->service();
+        $preferred = $service->remember('example.test', 'search_input', 'input[name="q"]');
+        $losing = $service->remember('example.test', 'search_input', 'input[name="query"]');
+
+        Livewire::test(PortalProfiles::class)
+            ->set('status', 'conflicts')
+            ->assertSee('input[name=&quot;q&quot;]', false)
+            ->assertSee('input[name=&quot;query&quot;]', false)
+            ->call('rollbackProfile', $losing->id)
+            ->assertSee('wurde zurückgerollt');
+
+        $this->assertTrue($preferred->fresh()->is_active);
+        $this->assertFalse($losing->fresh()->is_active);
+        $this->assertSame('input[name="q"]', $service->bestFor('example.test', 'search_input'));
     }
 
     public function test_normalize_domain_reduces_urls_to_the_stored_host(): void

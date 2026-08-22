@@ -472,6 +472,7 @@ class WorkflowCopilotObservationService
             ? $this->redactedInputValue($candidate)
             : $this->safeString($candidate['text'] ?? $candidate['label'] ?? $candidate['visible_text'] ?? $candidate['visibleText'] ?? '', 240);
         $selectors = $this->selectorCandidates($candidate, $tag, $role, $type, $aria, $title, $placeholder, $name, $label, $text);
+        $selectorEvidence = $this->selectorEvidence($candidate, $selectors);
         $frame = $this->safeString($candidate['frame'] ?? $candidate['frame_url'] ?? $candidate['frameUrl'] ?? '', 240);
         $window = $this->safeString($candidate['window'] ?? $candidate['browser_window'] ?? $candidate['browserWindow'] ?? $defaultWindow, 120) ?: 'main';
 
@@ -519,6 +520,7 @@ class WorkflowCopilotObservationService
             'selected' => $this->boolOrNull($candidate['selected'] ?? $candidate['checked'] ?? $candidate['is_selected'] ?? null),
             'bounding_box' => $this->normalizeBoundingBox($candidate['bounding_box'] ?? $candidate['boundingBox'] ?? $candidate['rect'] ?? $candidate['box'] ?? null),
             'selector_candidates' => $selectors,
+            'selector_evidence' => $selectorEvidence,
             'frame' => $frame ?: null,
             'window' => $window,
         ];
@@ -552,6 +554,10 @@ class WorkflowCopilotObservationService
         $ranked = [];
         $sequence = 0;
         $add = function (mixed $selector, ?int $priority = null) use (&$ranked, &$sequence): void {
+            if (is_array($selector)) {
+                $selector = $selector['selector'] ?? '';
+            }
+
             $selector = preg_replace('/\s*\/\*.*?\*\/\s*/s', '', trim((string) $selector)) ?: '';
 
             if (! $this->safeSelector($selector)) {
@@ -634,6 +640,50 @@ class WorkflowCopilotObservationService
             ->all();
     }
 
+    /**
+     * Bewahrt die vom echten DOM gemessene Eindeutigkeit eines Selectors auf.
+     * Reine, von aelteren Runtime-Versionen gelieferte String-Kandidaten bleiben
+     * kompatibel, erhalten aber bewusst keine behauptete Match-Anzahl.
+     *
+     * @param  list<string>  $normalizedSelectors
+     * @return list<array{selector:string, unique:bool, match_count:int, score:float}>
+     */
+    protected function selectorEvidence(array $candidate, array $normalizedSelectors): array
+    {
+        $allowed = array_fill_keys($normalizedSelectors, true);
+        $evidence = [];
+
+        foreach (['selector_candidates', 'selectorCandidates', 'selectors'] as $key) {
+            foreach (is_array($candidate[$key] ?? null) ? $candidate[$key] : [] as $raw) {
+                if (! is_array($raw)) {
+                    continue;
+                }
+
+                $selector = preg_replace('/\s*\/\*.*?\*\/\s*/s', '', trim((string) ($raw['selector'] ?? ''))) ?: '';
+
+                if ($selector === '' || ! isset($allowed[$selector]) || ! $this->safeSelector($selector)) {
+                    continue;
+                }
+
+                $matchCount = $raw['match_count'] ?? $raw['matchCount'] ?? null;
+                $score = $raw['score'] ?? 0;
+
+                if (! is_numeric($matchCount)) {
+                    continue;
+                }
+
+                $evidence[$selector] = [
+                    'selector' => Str::limit($selector, 300, ''),
+                    'unique' => filter_var($raw['unique'] ?? false, FILTER_VALIDATE_BOOL),
+                    'match_count' => max(0, (int) $matchCount),
+                    'score' => is_numeric($score) ? round(max(0, min(100, (float) $score)), 2) : 0.0,
+                ];
+            }
+        }
+
+        return array_values($evidence);
+    }
+
     protected function selectorStabilityPriority(string $selector): int
     {
         $lower = Str::lower($selector);
@@ -687,6 +737,17 @@ class WorkflowCopilotObservationService
                     ...($left[$key] ?? []),
                     ...($value ?? []),
                 ], 0, 8)));
+            } elseif ($key === 'selector_evidence') {
+                $merged = collect([
+                    ...($left[$key] ?? []),
+                    ...($value ?? []),
+                ])
+                    ->filter(fn (mixed $entry): bool => is_array($entry) && filled($entry['selector'] ?? null))
+                    ->keyBy(fn (array $entry): string => (string) $entry['selector'])
+                    ->take(8)
+                    ->values()
+                    ->all();
+                $left[$key] = $merged;
             } elseif (($left[$key] ?? null) === null && $value !== null) {
                 $left[$key] = $value;
             }

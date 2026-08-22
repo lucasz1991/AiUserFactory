@@ -8,28 +8,38 @@ use App\Models\NetworkJob;
 use App\Models\NetworkNode;
 use App\Models\Setting;
 use App\Services\ClientController\ClientControllerReleaseService;
+use App\Services\ClientController\NodeEnrollmentService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use Livewire\Livewire;
+use Tests\Concerns\CreatesNetworkNodes;
 use Tests\TestCase;
 
 class ClientControllerNodeManagementTest extends TestCase
 {
+    use CreatesNetworkNodes;
     use RefreshDatabase;
 
-    public function test_reregistration_returns_the_current_key_and_preserves_the_admin_name(): void
+    public function test_existing_node_requires_a_bound_one_time_token_and_receives_a_rotated_key(): void
     {
-        $node = NetworkNode::query()->create([
+        $node = $this->createNetworkNode([
             'name' => 'Büro-Node Berlin',
             'node_uuid' => 'node-reregister-1',
             'api_key' => 'current-server-api-key',
             'status' => 'active',
         ]);
 
+        $oldKey = $this->networkNodeApiKey($node);
+        $token = app(NodeEnrollmentService::class)->issue(
+            $node,
+            null,
+            'test-reenrollment',
+        );
+
         $response = $this->withHeaders([
-            'X-BOOTSTRAP-API-KEY' => 'followflow-default-node-key-change-me',
+            'X-BOOTSTRAP-API-KEY' => $token,
         ])->postJson('/api/client-controller/register-node', [
             'name' => 'ClientNode-node-reregister-1',
             'node_uuid' => $node->node_uuid,
@@ -40,8 +50,12 @@ class ClientControllerNodeManagementTest extends TestCase
 
         $response
             ->assertOk()
-            ->assertJsonPath('node.api_key', 'current-server-api-key')
             ->assertJsonPath('node.name', 'Büro-Node Berlin');
+
+        $newKey = (string) $response->json('node.api_key');
+        $this->assertNotSame('', $newKey);
+        $this->assertNotSame($oldKey, $newKey);
+        $this->assertNotSame($newKey, $node->fresh()->getRawOriginal('api_key'));
 
         $this->assertSame('127.0.0.1', $node->fresh()->public_ip);
         $this->assertTrue($node->fresh()->is_online);
@@ -49,7 +63,7 @@ class ClientControllerNodeManagementTest extends TestCase
 
     public function test_stale_heartbeat_marks_a_node_offline(): void
     {
-        $node = NetworkNode::query()->create([
+        $node = $this->createNetworkNode([
             'name' => 'Stale node',
             'node_uuid' => 'node-stale-1',
             'api_key' => 'stale-node-key',
@@ -67,7 +81,7 @@ class ClientControllerNodeManagementTest extends TestCase
     {
         Storage::fake('public');
 
-        $node = NetworkNode::query()->create([
+        $node = $this->createNetworkNode([
             'name' => 'Progress node',
             'node_uuid' => 'node-progress-1',
             'api_key' => 'progress-node-key',
@@ -94,7 +108,7 @@ class ClientControllerNodeManagementTest extends TestCase
             ]],
         ];
 
-        $this->withHeader('X-NODE-API-KEY', $node->api_key)
+        $this->withHeader('X-NODE-API-KEY', $this->networkNodeApiKey($node))
             ->post('/api/client-controller/job-progress', [
                 'job_uuid' => $job->job_uuid,
                 'progress' => json_encode($progress),
@@ -109,7 +123,7 @@ class ClientControllerNodeManagementTest extends TestCase
         $this->assertSame('task-started', $job->fresh()->result_json['stage']);
         $this->assertSame($relativePath, $job->fresh()->result_json['browserWindows'][0]['livePreviewRelativePath']);
 
-        $this->withHeader('X-NODE-API-KEY', $node->api_key)
+        $this->withHeader('X-NODE-API-KEY', $this->networkNodeApiKey($node))
             ->postJson('/api/client-controller/job-result', [
                 'job_uuid' => $job->job_uuid,
                 'status' => 'success',
@@ -129,7 +143,7 @@ class ClientControllerNodeManagementTest extends TestCase
     {
         Storage::fake('public');
 
-        $node = NetworkNode::query()->create([
+        $node = $this->createNetworkNode([
             'name' => 'Multi-window progress node',
             'node_uuid' => 'node-progress-multi-window',
             'api_key' => 'progress-node-multi-window-key',
@@ -164,7 +178,7 @@ class ClientControllerNodeManagementTest extends TestCase
             ],
         ];
 
-        $this->withHeader('X-NODE-API-KEY', $node->api_key)
+        $this->withHeader('X-NODE-API-KEY', $this->networkNodeApiKey($node))
             ->post('/api/client-controller/job-progress', [
                 'job_uuid' => $job->job_uuid,
                 'progress' => json_encode($progress),
@@ -179,7 +193,7 @@ class ClientControllerNodeManagementTest extends TestCase
         $this->assertSame($relativePath, $windows[0]['livePreviewRelativePath']);
         $this->assertArrayNotHasKey('livePreviewRelativePath', $windows[1]);
 
-        $this->withHeader('X-NODE-API-KEY', $node->api_key)
+        $this->withHeader('X-NODE-API-KEY', $this->networkNodeApiKey($node))
             ->postJson('/api/client-controller/job-result', [
                 'job_uuid' => $job->job_uuid,
                 'status' => 'success',
@@ -198,7 +212,7 @@ class ClientControllerNodeManagementTest extends TestCase
 
     public function test_detail_module_queues_only_one_active_remote_command(): void
     {
-        $node = NetworkNode::query()->create([
+        $node = $this->createNetworkNode([
             'name' => 'Remote node',
             'node_uuid' => 'node-remote-1',
             'api_key' => 'remote-node-key',
@@ -244,7 +258,7 @@ class ClientControllerNodeManagementTest extends TestCase
             'check_interval_minutes' => 15,
         ]);
 
-        $node = NetworkNode::query()->create([
+        $node = $this->createNetworkNode([
             'name' => 'Update node',
             'node_uuid' => 'node-update-1',
             'api_key' => 'update-node-key',
@@ -258,7 +272,7 @@ class ClientControllerNodeManagementTest extends TestCase
         $this->assertSame('0.2.0', $job->payload_json['target_version']);
         $this->assertSame('pending', $node->fresh()->update_status);
 
-        $this->withHeader('X-NODE-API-KEY', $node->api_key)
+        $this->withHeader('X-NODE-API-KEY', $this->networkNodeApiKey($node))
             ->postJson('/api/client-controller/pull-jobs')
             ->assertOk()
             ->assertJsonPath('jobs.0.type', 'node_update')
@@ -266,7 +280,7 @@ class ClientControllerNodeManagementTest extends TestCase
 
         $this->assertSame('installing', $node->fresh()->update_status);
 
-        $this->withHeader('X-NODE-API-KEY', $node->api_key)
+        $this->withHeader('X-NODE-API-KEY', $this->networkNodeApiKey($node))
             ->postJson('/api/client-controller/heartbeat', [
                 'status' => 'online',
                 'version' => '0.2.0',
@@ -294,7 +308,7 @@ class ClientControllerNodeManagementTest extends TestCase
             ]),
         ]);
 
-        NetworkNode::query()->create([
+        $this->createNetworkNode([
             'name' => 'Visible version node',
             'node_uuid' => 'node-visible-version',
             'api_key' => 'visible-version-key',

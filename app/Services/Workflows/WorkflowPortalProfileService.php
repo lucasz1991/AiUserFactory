@@ -5,6 +5,7 @@ namespace App\Services\Workflows;
 use App\Models\WorkflowPortalProfile;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 
 /**
@@ -34,8 +35,13 @@ class WorkflowPortalProfileService
     /**
      * Haelt fest, dass der Selector fuer diese Rolle funktioniert hat.
      */
-    public function remember(string $domain, string $role, string $selector, ?string $source = null): WorkflowPortalProfile
-    {
+    public function remember(
+        string $domain,
+        string $role,
+        string $selector,
+        ?string $source = null,
+        array $evidence = [],
+    ): WorkflowPortalProfile {
         $normalizedDomain = $this->requireDomain($domain);
         $normalizedRole = $this->requireRole($role);
         $normalizedSelector = $this->requireSelector($selector);
@@ -46,7 +52,14 @@ class WorkflowPortalProfileService
                 'role' => $normalizedRole,
                 'selector_hash' => $this->hashSelector($normalizedSelector),
             ],
-            ['hit_count' => 0, 'miss_count' => 0],
+            [
+                'hit_count' => 0,
+                'miss_count' => 0,
+                'profile_version' => 1,
+                'is_approved' => true,
+                'is_active' => true,
+                'approved_at' => Carbon::now(),
+            ],
         );
 
         $profile->selector = $normalizedSelector;
@@ -59,6 +72,11 @@ class WorkflowPortalProfileService
 
         if (($trimmedSource = trim((string) $source)) !== '') {
             $profile->source = mb_substr($trimmedSource, 0, self::MAX_SOURCE_LENGTH);
+        }
+
+        if ($evidence !== []) {
+            $profile->evidence_json = $this->boundedEvidence($evidence);
+            $profile->profile_version = max(1, (int) $profile->profile_version) + ($profile->exists ? 1 : 0);
         }
 
         try {
@@ -136,11 +154,49 @@ class WorkflowPortalProfileService
             ->forDomain($normalizedDomain)
             ->forRole($normalizedRole)
             ->get()
-            ->reject(fn (WorkflowPortalProfile $profile): bool => $profile->isExpired())
+            ->filter(fn (WorkflowPortalProfile $profile): bool => $profile->isUsable())
             ->sort(fn (WorkflowPortalProfile $left, WorkflowPortalProfile $right): int => $this->compareCandidates($left, $right))
             ->map(fn (WorkflowPortalProfile $profile): string => $profile->selector)
             ->values()
             ->all();
+    }
+
+    public function approve(WorkflowPortalProfile $profile, ?int $userId = null): WorkflowPortalProfile
+    {
+        return DB::transaction(function () use ($profile, $userId): WorkflowPortalProfile {
+            $profile->refresh();
+            $profile->forceFill([
+                'is_approved' => true,
+                'is_active' => true,
+                'approved_at' => Carbon::now(),
+                'approved_by' => $userId,
+                'disabled_at' => null,
+                'disabled_by' => null,
+                'disable_reason' => null,
+                'profile_version' => max(1, (int) $profile->profile_version) + 1,
+            ])->save();
+
+            return $profile->fresh() ?? $profile;
+        });
+    }
+
+    public function rollback(
+        WorkflowPortalProfile $profile,
+        ?int $userId = null,
+        string $reason = 'Manuell im Portal-Profil-Dashboard zurueckgerollt.',
+    ): WorkflowPortalProfile {
+        return DB::transaction(function () use ($profile, $userId, $reason): WorkflowPortalProfile {
+            $profile->refresh();
+            $profile->forceFill([
+                'is_active' => false,
+                'disabled_at' => Carbon::now(),
+                'disabled_by' => $userId,
+                'disable_reason' => mb_substr(trim($reason), 0, 500),
+                'profile_version' => max(1, (int) $profile->profile_version) + 1,
+            ])->save();
+
+            return $profile->fresh() ?? $profile;
+        });
     }
 
     /**
@@ -273,5 +329,31 @@ class WorkflowPortalProfileService
         }
 
         return $normalized;
+    }
+
+    /** @return array<string, mixed> */
+    private function boundedEvidence(array $evidence): array
+    {
+        $allowed = collect($evidence)
+            ->only([
+                'workflow_run_id',
+                'workflow_step_id',
+                'task_key',
+                'failure_class',
+                'decision_source',
+                'element_ref',
+                'match_count',
+                'observed_at',
+            ])
+            ->map(function (mixed $value): mixed {
+                if (is_bool($value) || is_int($value) || is_float($value) || $value === null) {
+                    return $value;
+                }
+
+                return mb_substr(trim((string) $value), 0, 500);
+            })
+            ->all();
+
+        return array_filter($allowed, static fn (mixed $value): bool => $value !== '' && $value !== null);
     }
 }

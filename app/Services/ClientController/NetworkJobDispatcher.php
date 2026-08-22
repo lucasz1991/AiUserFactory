@@ -11,6 +11,11 @@ use Illuminate\Support\Str;
 
 class NetworkJobDispatcher
 {
+    public function __construct(
+        private readonly NetworkNodeCredentialService $credentials,
+        private readonly NetworkJobDoorbellService $doorbells,
+    ) {}
+
     public function dispatch(
         NetworkNode $node,
         string $type,
@@ -28,7 +33,7 @@ class NetworkJobDispatcher
 
         $canonicalPayload = json_encode($this->canonicalize($payload), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
 
-        return NetworkJob::query()->create([
+        $job = NetworkJob::query()->create([
             'job_uuid' => (string) Str::uuid(),
             'network_node_id' => $node->id,
             'device_id' => $device?->id,
@@ -37,12 +42,16 @@ class NetworkJobDispatcher
             'type' => $type,
             'payload_version' => max(1, $payloadVersion),
             'payload_json' => $payload,
-            'signature' => hash_hmac('sha256', $canonicalPayload ?: '[]', (string) $node->api_key),
+            'signature' => hash_hmac('sha256', $canonicalPayload ?: '[]', $this->credentials->signingSecret($node)),
             'status' => 'pending',
             'queued_at' => now(),
             'expires_at' => $expiresAt,
             'requested_by' => $requestedBy,
         ]);
+
+        $this->doorbells->signal($job);
+
+        return $job;
     }
 
     protected function canonicalize(array $value): array

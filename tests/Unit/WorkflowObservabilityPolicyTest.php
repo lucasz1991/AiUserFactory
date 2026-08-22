@@ -3,6 +3,7 @@
 namespace Tests\Unit;
 
 use App\Models\Workflow;
+use App\Models\WorkflowCopilotSession;
 use App\Models\WorkflowRun;
 use App\Services\Workflows\WorkflowObservabilityPolicy;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -127,12 +128,22 @@ class WorkflowObservabilityPolicyTest extends TestCase
             'settings_json' => $devMode ? ['dev_mode' => true] : [],
         ]);
 
+        $copilotSession = $copilotSessionId > 0
+            ? WorkflowCopilotSession::query()->create([
+                'session_uuid' => (string) Str::uuid(),
+                'workflow_id' => $workflow->id,
+                'status' => WorkflowCopilotSession::STATUS_RUNNING,
+                'phase' => 'executing',
+                'execution_target' => WorkflowCopilotSession::EXECUTION_TARGET_SYSTEM,
+            ])
+            : null;
+
         $run = WorkflowRun::query()->create([
             'run_uuid' => (string) Str::uuid(),
             'workflow_id' => $workflow->id,
             'status' => 'running',
             'context_json' => $context,
-            'workflow_copilot_session_id' => $copilotSessionId ?: null,
+            'workflow_copilot_session_id' => $copilotSession?->id,
         ]);
 
         return $run->load('workflow');

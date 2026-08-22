@@ -143,6 +143,7 @@ test('embedded workflow true return follows the workflow task success route', ()
     'embedded-return',
     'embedded-boundary',
     'success-target',
+    '__automatic-browser-session-save',
   ]);
 });
 
@@ -400,7 +401,10 @@ test('embedded workflow false return fails at the workflow boundary', () => {
   assert.equal(result.workflow_return, false);
   assert.equal(result.workflow_return_ok, false);
   assert.equal(result.failedTaskKey, 'embedded-boundary');
-  assert.equal(result.tasks.at(-1).parent_task_key, 'embedded-workflow');
+  assert.equal(
+    result.tasks.find((task) => task.key === 'embedded-boundary')?.parent_task_key,
+    'embedded-workflow',
+  );
 });
 
 test('failed task follows a forward on_error route in the same Node run', () => {
@@ -419,6 +423,7 @@ test('failed task follows a forward on_error route in the same Node run', () => 
   assert.deepEqual(result.tasks.map((task) => task.key), [
     'mailbox-not-found',
     'check-postbox-button',
+    '__automatic-browser-session-save',
   ]);
   assert.ok(result.events.some((event) => (
     event.stage === 'task-error-route-followed'
@@ -491,6 +496,7 @@ test('unmatched condition follows on_error without marking the task as failed', 
   assert.deepEqual(result.tasks.map((task) => task.key), [
     'condition-not-met',
     'failure-target',
+    '__automatic-browser-session-save',
   ]);
   assert.ok(result.events.some((event) => event.stage === 'task-condition-not-met'));
   assert.ok(result.events.some((event) => event.stage === 'task-branch-route-followed'));
@@ -517,7 +523,8 @@ test('unmatched condition requests an external failure route without failing Nod
 
 test('unresolved embedded success route bubbles to the parent failure route', () => {
   const result = executeTasks([
-    waitTask('embedded-task', 'embedded-frame', {
+    captureInputTask('embedded-task', {
+      embedded_workflow_frame_key: 'embedded-frame',
       parent_task_key: 'embedded-workflow',
       route_source_task_key: 'embedded-workflow',
       embedded_workflow_boundary_key: 'embedded-boundary',
@@ -544,7 +551,10 @@ test('unresolved embedded success route bubbles to the parent failure route', ()
   assert.equal(result.routeOutcome, 'failed');
   assert.equal(result.completedTaskKey, 'embedded-workflow');
   assert.match(result.statusMessage, /Interne Erfolgsroute/);
-  assert.deepEqual(result.tasks.map((task) => task.key), ['embedded-task']);
+  assert.deepEqual(result.tasks.map((task) => task.key), [
+    'embedded-task',
+    '__automatic-browser-session-save',
+  ]);
 });
 
 test('backward success route stops after configured max attempts', () => {
@@ -614,7 +624,8 @@ test('forward on_error route stops after configured max attempts', () => {
 
 test('embedded workflow follows backward on_error routes until max attempts is reached', () => {
   const result = executeTasks([
-    waitTask('embedded-first', 'embedded-frame', {
+    captureInputTask('embedded-first', {
+      embedded_workflow_frame_key: 'embedded-frame',
       parent_task_key: 'embedded-workflow',
       embedded_workflow_boundary_key: 'embedded-boundary',
     }),

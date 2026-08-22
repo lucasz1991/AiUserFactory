@@ -1,16 +1,6 @@
 import { defineConfig } from 'vite';
 import laravel, { refreshPaths } from 'laravel-vite-plugin';
-import { viteStaticCopy } from 'vite-plugin-static-copy'
-
-import fs from 'fs-extra';
-import path from 'path';
-
-const folder = {
-    src: "resources/", // source files
-    src_assets: "resources/", // source assets files
-    dist: "public/", // build files
-    dist_assets: "public/build/" //build assets files
-};
+import { viteStaticCopy } from 'vite-plugin-static-copy';
 
 export default defineConfig({
     build: {
@@ -19,16 +9,12 @@ export default defineConfig({
         outDir: 'public/build/',
         cssCodeSplit: true,
         buildDirectory: '',
+        sourcemap: false,
         rollupOptions: {
             output: {
-                assetFileNames: (css) => {
-                    if (css.name.split('.').pop() == 'css') {
-                        return 'css/' + `[name]` + '.min.' + 'css';
-                    } else {
-                        return 'icons/' + css.name;
-                    }
-                },
-                entryFileNames: 'js/' + `[name]` + `.js`,
+                assetFileNames: 'assets/[name]-[hash][extname]',
+                chunkFileNames: 'assets/[name]-[hash].js',
+                entryFileNames: 'assets/[name]-[hash].js',
             },
         },
     },
@@ -49,48 +35,55 @@ export default defineConfig({
         viteStaticCopy({
             targets: [
                 {
-                    src: 'resources/fonts',
-                    dest: ''
+                    src: 'resources/images/error-img.png',
+                    dest: 'images',
                 },
                 {
-                    src: 'resources/images',
-                    dest: ''
+                    src: 'resources/images/logo-sm.svg',
+                    dest: 'images',
                 },
                 {
-                    src: 'resources/js',
-                    dest: ''
+                    src: 'resources/images/users/avatar-{1,2,3}.jpg',
+                    dest: 'images/users',
                 },
-            ]
+                {
+                    src: 'resources/js/pages/login.init.js',
+                    dest: 'js/pages',
+                },
+                {
+                    src: 'node_modules/@popperjs/core/dist/umd/popper.min.js',
+                    dest: 'libs/@popperjs/core/umd',
+                },
+                {
+                    src: 'node_modules/feather-icons/dist/feather.min.js',
+                    dest: 'libs/feather-icons',
+                },
+                {
+                    src: 'node_modules/metismenujs/dist/metismenujs.min.js',
+                    dest: 'libs/metismenujs',
+                },
+                {
+                    src: 'node_modules/simplebar/dist/simplebar.min.js',
+                    dest: 'libs/simplebar',
+                },
+                {
+                    src: 'node_modules/apexcharts/dist/apexcharts.min.js',
+                    dest: 'libs/apexcharts',
+                },
+                {
+                    src: 'node_modules/apexcharts/dist/apexcharts.css',
+                    dest: 'libs/apexcharts',
+                },
+                {
+                    src: 'node_modules/swiper/swiper-bundle.min.js',
+                    dest: 'libs/swiper',
+                },
+                {
+                    src: 'node_modules/swiper/swiper-bundle.min.css',
+                    dest: 'libs/swiper',
+                },
+            ],
         }),
-        {
-            name: 'copy-specific-packages',
-            async writeBundle() {
-                const outputPath = path.resolve(__dirname, folder.dist_assets); // Adjust the destination path
-                const configPath = path.resolve(__dirname, 'package-copy-config.json');
-
-                try {
-                    const configContent = await fs.readFile(configPath, 'utf-8');
-                    const { packagesToCopy } = JSON.parse(configContent);
-
-                    for (const packageName of packagesToCopy) {
-                        const destPackagePath = path.join(outputPath, 'libs', packageName);
-
-                        const sourcePath = (fs.existsSync(path.join(__dirname, 'node_modules', packageName + "/dist"))) ?
-                            path.join(__dirname, 'node_modules', packageName + "/dist")
-                            : path.join(__dirname, 'node_modules', packageName);
-
-                        try {
-                            await fs.access(sourcePath, fs.constants.F_OK);
-                            await fs.copy(sourcePath, destPackagePath);
-                        } catch (error) {
-                            console.error(`Package ${packageName} does not exist.`);
-                        }
-                    }
-                } catch (error) {
-                    console.error('Error copying and renaming packages:', error);
-                }
-            },
-        },
     ],
     resolve: {
         alias: {

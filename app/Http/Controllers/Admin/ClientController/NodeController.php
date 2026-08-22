@@ -4,6 +4,8 @@ namespace App\Http\Controllers\Admin\ClientController;
 
 use App\Http\Controllers\Controller;
 use App\Models\NetworkNode;
+use App\Services\ClientController\NetworkNodeCredentialService;
+use App\Services\ClientController\NodeEnrollmentService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
@@ -32,33 +34,39 @@ class NodeController extends Controller
         ]);
     }
 
-    public function store(Request $request): RedirectResponse
-    {
+    public function store(
+        Request $request,
+        NetworkNodeCredentialService $credentials,
+        NodeEnrollmentService $enrollments,
+    ): RedirectResponse {
         $validated = $request->validate([
-            'name' => ['required', 'string', 'max:255'],
-            'current_server_domain' => ['nullable', 'url', 'max:2048'],
+            'name' => ['required', 'string', 'max:191'],
+            'current_server_domain' => ['nullable', 'url', 'max:191'],
             'allow_server_rebind' => ['nullable', 'boolean'],
         ]);
 
-        NetworkNode::query()->create([
+        $node = new NetworkNode;
+        $node->forceFill([
             'name' => $validated['name'],
             'node_uuid' => (string) Str::uuid(),
-            'api_key' => Str::random(60),
-            'node_secret' => Str::random(60),
             'current_server_domain' => $validated['current_server_domain'] ?? null,
             'last_successful_server_domain' => $validated['current_server_domain'] ?? null,
             'allow_server_rebind' => (bool) ($validated['allow_server_rebind'] ?? true),
             'is_online' => false,
         ]);
+        $credentials->initializeRevoked($node);
+        $token = $enrollments->issue($node, $request->user(), 'admin-node-created');
 
-        return back()->with('success', 'Node wurde angelegt.');
+        return back()
+            ->with('success', 'Node wurde angelegt. Das Enrollment-Token wird nur jetzt angezeigt.')
+            ->with('node_enrollment_token', $token);
     }
 
     public function update(Request $request, NetworkNode $node): RedirectResponse
     {
         $validated = $request->validate([
-            'name' => ['required', 'string', 'max:255'],
-            'current_server_domain' => ['nullable', 'url', 'max:2048'],
+            'name' => ['required', 'string', 'max:191'],
+            'current_server_domain' => ['nullable', 'url', 'max:191'],
             'allow_server_rebind' => ['nullable', 'boolean'],
             'status' => ['required', 'string', 'in:active,paused,disabled'],
         ]);
@@ -73,14 +81,18 @@ class NodeController extends Controller
         return back()->with('success', 'Node wurde aktualisiert.');
     }
 
-    public function regenerateApiKey(NetworkNode $node): RedirectResponse
-    {
-        $node->update([
-            'api_key' => Str::random(60),
-            'node_secret' => Str::random(60),
-        ]);
+    public function regenerateApiKey(
+        Request $request,
+        NetworkNode $node,
+        NetworkNodeCredentialService $credentials,
+        NodeEnrollmentService $enrollments,
+    ): RedirectResponse {
+        $credentials->revoke($node, $request->user(), 'admin-reenrollment');
+        $token = $enrollments->issue($node, $request->user(), 'admin-reenrollment');
 
-        return back()->with('success', 'Node API-Key wurde neu erzeugt.');
+        return back()
+            ->with('success', 'Der bisherige Node-Key wurde widerrufen. Das Enrollment-Token wird nur jetzt angezeigt.')
+            ->with('node_enrollment_token', $token);
     }
 
     public function destroy(NetworkNode $node): RedirectResponse

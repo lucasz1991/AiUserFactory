@@ -4,9 +4,11 @@ namespace App\Console;
 
 use App\Jobs\ExpireWorkflowRunsJob;
 use App\Jobs\ReconcileWorkflowCopilotSessionsJob;
+use App\Jobs\RecordOperationsWorkerHeartbeat;
 use App\Jobs\SuperviseManagedProcessesJob;
 use App\Jobs\SyncManagedProcessesJob;
 use App\Models\NetworkNode;
+use App\Services\Operations\OperationalHeartbeatService;
 use App\Services\Simulation\NetworkActivityPlanningSettings;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Foundation\Console\Kernel as ConsoleKernel;
@@ -19,6 +21,18 @@ class Kernel extends ConsoleKernel
      */
     protected function schedule(Schedule $schedule): void
     {
+        $schedule->call(static function (): void {
+            app(OperationalHeartbeatService::class)->recordScheduler();
+            RecordOperationsWorkerHeartbeat::dispatch();
+        })
+            ->name('operations-heartbeat')
+            ->everyMinute()
+            ->withoutOverlapping(5);
+
+        $schedule->command('operations:alert')
+            ->everyFiveMinutes()
+            ->withoutOverlapping(10);
+
         // Prozess-Hygiene (Sync/Reaper/Expire/Reconcile) MUSS auch dann laufen,
         // wenn kein queue:work-Daemon aktiv oder der Worker vom Copilot-
         // Supervisor monopolisiert ist. Darum synchron im Scheduler-Prozess
@@ -85,6 +99,11 @@ class Kernel extends ConsoleKernel
         // nicht unbegrenzt wachsen.
         $schedule->command('workflow:prune-artifacts')
             ->dailyAt('04:20')
+            ->timezone(config('app.timezone', 'Europe/Berlin'))
+            ->withoutOverlapping(30);
+
+        $schedule->command('security:prune-cookie-sessions')
+            ->dailyAt('04:35')
             ->timezone(config('app.timezone', 'Europe/Berlin'))
             ->withoutOverlapping(30);
 

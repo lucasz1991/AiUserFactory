@@ -516,13 +516,22 @@
                             @error('ccJobTimeoutSeconds') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
                         </div>
 
-                        <div>
-                            <label for="cc-bootstrap-api-key" class="block text-sm font-medium text-gray-700">Bootstrap API-Key (ClientController)</label>
-                            <input id="cc-bootstrap-api-key" type="text" wire:model.defer="ccBootstrapApiKey" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500" />
-                            @error('ccBootstrapApiKey') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
-                            <p class="mt-1 text-xs text-gray-500">Dieser Key wird nur fuer die initiale Node-Registrierung verwendet (Bootstrap).</p>
+                        <div class="md:col-span-2 xl:col-span-1">
+                            <span class="block text-sm font-medium text-gray-700">Einmaliges Node-Enrollment</span>
+                            <button type="button" wire:click="issueClientControllerEnrollmentToken" class="mt-1 inline-flex w-full items-center justify-center rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900 hover:bg-amber-100">
+                                Token für neuen Node erzeugen
+                            </button>
+                            <p class="mt-1 text-xs text-gray-500">15 Minuten gültig, einmal verwendbar und nicht in den Settings gespeichert.</p>
                         </div>
                     </div>
+
+                    @if($ccEnrollmentTokenOnce)
+                        <div class="mt-5 rounded-lg border border-amber-300 bg-amber-50 p-4 text-amber-950" role="status">
+                            <p class="text-sm font-semibold">Enrollment-Token – jetzt kopieren</p>
+                            <code class="mt-2 block break-all rounded bg-white p-3 font-mono text-xs">{{ $ccEnrollmentTokenOnce }}</code>
+                            <p class="mt-2 text-xs">Im ClientController als Bootstrap-/Enrollment-Key eintragen. Nach der Registrierung oder nach 15 Minuten ist es ungültig.</p>
+                        </div>
+                    @endif
 
                     <div class="mt-6 grid gap-4 md:grid-cols-2">
                         <label class="inline-flex items-center gap-2 text-sm text-gray-700">
@@ -539,8 +548,8 @@
                 <div class="rounded-lg border border-slate-100 bg-slate-50 p-4 text-sm text-slate-600">
                     <p class="font-semibold">Gespeicherte Setting-Keys</p>
                     <p class="mt-1">
-                        Gruppe <code>client_controller</code> mit den Keys <code>server</code> und <code>security</code>.
-                        Der Bootstrap-Key liegt in <code>security.bootstrap_api_key</code>.
+                        Gruppe <code>client_controller</code> mit dem Key <code>server</code>.
+                        Enrollment-Tokens liegen ausschliesslich gehasht und mit Ablaufdatum in der Token-Tabelle.
                     </p>
                 </div>
 

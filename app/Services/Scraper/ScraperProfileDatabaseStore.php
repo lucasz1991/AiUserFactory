@@ -3,12 +3,18 @@
 namespace App\Services\Scraper;
 
 use App\Models\Person;
+use App\Services\Security\CookieFilePathPolicy;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Schema;
+use RuntimeException;
 
 class ScraperProfileDatabaseStore
 {
     private ?array $scraperProfileColumns = null;
+
+    public function __construct(
+        private readonly CookieFilePathPolicy $cookiePaths,
+    ) {}
 
     public function isAvailable(): bool
     {
@@ -167,8 +173,7 @@ class ScraperProfileDatabaseStore
                 continue;
             }
 
-            File::ensureDirectoryExists(dirname($cookieFilePath));
-            File::put($cookieFilePath, $record->cookie_payload);
+            $this->writeCookieFile($cookieFilePath, $record->cookie_payload);
         }
     }
 
@@ -202,9 +207,12 @@ class ScraperProfileDatabaseStore
 
         foreach ($this->runtimeProfiles($runtimeConfig) as $runtimeProfile) {
             $profileKey = trim((string) ($runtimeProfile['profileId'] ?? ''));
-            $cookieFilePath = trim((string) ($runtimeProfile['cookieFilePath'] ?? ''));
+            $cookieFilePath = $this->cookiePaths->resolve(
+                $runtimeProfile['cookieFilePath'] ?? null,
+                storage_path('app'),
+            );
 
-            if ($profileKey === '' || $cookieFilePath === '') {
+            if ($profileKey === '' || $cookieFilePath === null) {
                 continue;
             }
 
@@ -286,9 +294,12 @@ class ScraperProfileDatabaseStore
 
         foreach ($runtimeProfiles as $runtimeProfile) {
             $profileKey = trim((string) ($runtimeProfile['profileId'] ?? ''));
-            $cookieFilePath = trim((string) ($runtimeProfile['cookieFilePath'] ?? ''));
+            $cookieFilePath = $this->cookiePaths->resolve(
+                $runtimeProfile['cookieFilePath'] ?? null,
+                storage_path('app'),
+            );
 
-            if ($profileKey === '' || $cookieFilePath === '') {
+            if ($profileKey === '' || $cookieFilePath === null) {
                 continue;
             }
 
@@ -301,8 +312,7 @@ class ScraperProfileDatabaseStore
                 continue;
             }
 
-            File::ensureDirectoryExists(dirname($cookieFilePath));
-            File::put($cookieFilePath, $record->cookie_payload);
+            $this->writeCookieFile($cookieFilePath, $record->cookie_payload);
         }
     }
 
@@ -317,9 +327,13 @@ class ScraperProfileDatabaseStore
 
     private function syncCookiePayloadFromFilePath(Person $record, string $cookieFilePath): void
     {
-        if (! File::exists($cookieFilePath)) {
+        if (! File::exists($cookieFilePath)
+            || $this->pathContainsSymbolicLink($cookieFilePath)
+            || ! File::isFile($cookieFilePath)) {
             return;
         }
+
+        $this->hardenCookieFile($cookieFilePath);
 
         $payload = trim(File::get($cookieFilePath));
 
@@ -426,19 +440,58 @@ class ScraperProfileDatabaseStore
 
     private function resolveCookieFilePath(array $profile, ?string $storageRoot = null): ?string
     {
-        $cookieFilePath = trim((string) ($profile['cookie_file_path'] ?? ''));
+        return $this->cookiePaths->resolve(
+            $profile['cookie_file_path'] ?? null,
+            $storageRoot ?: storage_path('app'),
+        );
+    }
 
-        if ($cookieFilePath === '') {
-            return null;
+    private function writeCookieFile(string $path, string $payload): void
+    {
+        if ($this->pathContainsSymbolicLink($path)) {
+            throw new RuntimeException('Cookie-Dateien duerfen keine symbolischen Links sein.');
         }
 
-        if ($this->isAbsolutePath($cookieFilePath)) {
-            return $cookieFilePath;
+        $directory = dirname($path);
+        File::ensureDirectoryExists($directory, 0700, true);
+
+        if ($this->pathContainsSymbolicLink($path)) {
+            throw new RuntimeException('Cookie-Dateipfade duerfen keine symbolischen Links enthalten.');
         }
 
-        $storageRoot = $storageRoot ?: storage_path('app');
+        if (File::put($path, $payload, true) === false) {
+            throw new RuntimeException('Cookie-Datei konnte nicht sicher geschrieben werden.');
+        }
 
-        return rtrim($storageRoot, DIRECTORY_SEPARATOR).DIRECTORY_SEPARATOR.ltrim(str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $cookieFilePath), DIRECTORY_SEPARATOR);
+        $this->hardenCookieFile($path);
+    }
+
+    private function hardenCookieFile(string $path): void
+    {
+        // Windows verwaltet diese Rechte ueber ACLs; PHP-chmod bildet dort
+        // keine POSIX-Modi ab. Auf Linux/Plesk erzwingen wir 0700/0600.
+        if (DIRECTORY_SEPARATOR === '\\') {
+            return;
+        }
+
+        if (! chmod(dirname($path), 0700) || ! chmod($path, 0600)) {
+            throw new RuntimeException('Cookie-Dateirechte konnten nicht auf 0700/0600 gesetzt werden.');
+        }
+    }
+
+    private function pathContainsSymbolicLink(string $path): bool
+    {
+        $cursor = $path;
+
+        while ($cursor !== '' && $cursor !== dirname($cursor)) {
+            if (is_link($cursor)) {
+                return true;
+            }
+
+            $cursor = dirname($cursor);
+        }
+
+        return $cursor !== '' && is_link($cursor);
     }
 
     private function extractCookieArray(mixed $decoded): array
@@ -619,13 +672,6 @@ class ScraperProfileDatabaseStore
         }
 
         return $this->scraperProfileColumns = Schema::getColumnListing('persons');
-    }
-
-    private function isAbsolutePath(string $path): bool
-    {
-        return str_starts_with($path, DIRECTORY_SEPARATOR)
-            || preg_match('/^[A-Za-z]:\\\\/', $path) === 1
-            || preg_match('/^[A-Za-z]:\//', $path) === 1;
     }
 
     private function hasScrapeBlockColumns(): bool

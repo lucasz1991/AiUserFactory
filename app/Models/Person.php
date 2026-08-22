@@ -100,6 +100,7 @@ class Person extends Model
         'automation_enabled' => 'boolean',
         'approved_at' => 'datetime',
         'sort_order' => 'integer',
+        'cookie_payload' => 'encrypted',
         'cookie_count' => 'integer',
         'session_cookie_present' => 'boolean',
         'cookies_synced_at' => 'datetime',

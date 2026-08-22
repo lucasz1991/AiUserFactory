@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\ManagedProcess;
+use App\Services\Operations\OperationalHeartbeatService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\File;
@@ -25,7 +26,7 @@ class PruneWorkflowProcessArtifacts extends Command
 
     protected $description = 'Raeumt Prozess-Datensaetze sowie private, oeffentliche und Debug-Laufartefakte und Browser-Profile auf.';
 
-    public function handle(): int
+    public function handle(OperationalHeartbeatService $heartbeats): int
     {
         $dryRun = (bool) $this->option('dry-run');
         $runDays = max(1, (int) $this->option('run-days'));
@@ -55,6 +56,16 @@ class PruneWorkflowProcessArtifacts extends Command
             max(1, (int) $this->option('profile-days')),
             $dryRun,
         );
+
+        if (! $dryRun) {
+            $heartbeats->recordArtifactPrune([
+                'process_rows' => $processes,
+                'run_directories' => $runDirs,
+                'public_run_directories' => $publicRunDirs,
+                'debug_artifact_directories' => $debugArtifactDirs,
+                'browser_profiles' => $profiles,
+            ]);
+        }
 
         $this->info(sprintf(
             '%sProzess-Zeilen: %d, Lauf-Verzeichnisse: %d, oeffentliche Lauf-Verzeichnisse: %d, Debug-Artefakte: %d, Browser-Profile: %d.',

@@ -167,7 +167,11 @@ module.exports = {
   );
 
   assert.equal(result.ok, true);
-  assert.equal(result.tasks.length, 2);
+  assert.equal(
+    result.tasks.filter((task) => task.task_key === 'test.shared').length,
+    2,
+    'Automatische interne Abschluss-Tasks duerfen die Anzahl der Fach-Tasks nicht veraendern.',
+  );
   assert.deepEqual(
     inspected.loadMarker.trim().split(/\r?\n/),
     ['loaded'],

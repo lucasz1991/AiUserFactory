@@ -14,6 +14,13 @@
             </header>
 
             @if(session('success'))<div class="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">{{ session('success') }}</div>@endif
+            @if($issuedEnrollmentToken || session('node_enrollment_token'))
+                <div class="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950" role="status">
+                    <p class="font-semibold">Einmaliges Enrollment-Token (15 Minuten gültig)</p>
+                    <code class="mt-2 block break-all rounded-lg bg-white p-3 font-mono text-xs">{{ $issuedEnrollmentToken ?: session('node_enrollment_token') }}</code>
+                    <p class="mt-2 text-xs">Jetzt in ClientController als Bootstrap-/Enrollment-Key eintragen. Nach erfolgreicher Registrierung kann dieses Token nicht erneut verwendet werden.</p>
+                </div>
+            @endif
             @if($releaseError)<div class="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">{{ $releaseError }}</div>@endif
             @error('update')<div class="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">{{ $message }}</div>@enderror
 

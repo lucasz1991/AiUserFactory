@@ -40,7 +40,7 @@ class WorkflowDomInspectorMarkupTest extends TestCase
         $this->assertStringContainsString('selectorCandidates', $javascript);
         $this->assertStringNotContainsString('highlight: true', $javascript);
 
-        $this->assertStringContainsString("'canProbe' => ! \$autonomousMode && \$isPaused", $toolModal);
+        $this->assertStringContainsString("'canProbe' => ! \$autonomousMode && ! \$historicalRunView && \$isPaused", $toolModal);
         $this->assertStringContainsString("'canProbe' => \$selectableTasks && (string) \$workflowRun->status === 'paused'", $runPreview);
         $this->assertStringContainsString('data-workflow-browser-tool', $toolModal);
         $this->assertStringNotContainsString('<div class="grid gap-4 lg:grid-cols-2">', $toolModal);

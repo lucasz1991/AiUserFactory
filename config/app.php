@@ -1,5 +1,12 @@
 <?php
 
+use App\Providers\AppServiceProvider;
+use App\Providers\AuthServiceProvider;
+use App\Providers\BroadcastServiceProvider;
+use App\Providers\EventServiceProvider;
+use App\Providers\FortifyServiceProvider;
+use App\Providers\JetstreamServiceProvider;
+use App\Providers\RouteServiceProvider;
 use Illuminate\Support\Facades\Facade;
 use Illuminate\Support\ServiceProvider;
 
@@ -126,6 +133,13 @@ return [
 
     'cipher' => 'AES-256-CBC',
 
+    // Laravel entschluesselt waehrend einer kontrollierten Rotation auch mit
+    // diesen Alt-Keys; neue Ciphertexte werden immer mit APP_KEY geschrieben.
+    'previous_keys' => array_values(array_filter(array_map(
+        static fn (string $key): string => trim($key),
+        explode(',', (string) env('APP_PREVIOUS_KEYS', '')),
+    ))),
+
     /*
     |--------------------------------------------------------------------------
     | Maintenance Mode Driver
@@ -163,13 +177,13 @@ return [
         /*
          * Application Service Providers...
          */
-        App\Providers\AppServiceProvider::class,
-        App\Providers\AuthServiceProvider::class,
-        App\Providers\BroadcastServiceProvider::class,
-        App\Providers\EventServiceProvider::class,
-        App\Providers\RouteServiceProvider::class,
-        App\Providers\FortifyServiceProvider::class,
-        App\Providers\JetstreamServiceProvider::class,
+        AppServiceProvider::class,
+        AuthServiceProvider::class,
+        BroadcastServiceProvider::class,
+        EventServiceProvider::class,
+        RouteServiceProvider::class,
+        FortifyServiceProvider::class,
+        JetstreamServiceProvider::class,
     ])->toArray(),
 
     /*

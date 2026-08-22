@@ -14,6 +14,13 @@
             @if(session('success'))
                 <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">{{ session('success') }}</div>
             @endif
+            @if($issuedEnrollmentToken || session('node_enrollment_token'))
+                <div class="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950" role="status">
+                    <p class="font-semibold">Einmaliges Enrollment-Token (15 Minuten gültig)</p>
+                    <code class="mt-2 block break-all rounded bg-white p-3 font-mono text-xs">{{ $issuedEnrollmentToken ?: session('node_enrollment_token') }}</code>
+                    <p class="mt-2 text-xs">Jetzt im ClientController eintragen. Das Token wird nach der Registrierung endgültig verbraucht.</p>
+                </div>
+            @endif
             @if(session('info'))
                 <div class="rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">{{ session('info') }}</div>
             @endif
@@ -54,7 +61,7 @@
                     <div><label class="mb-1 block text-sm text-gray-700">Server</label><input wire:model="currentServerDomain" class="w-full rounded-md border border-gray-300 p-2 text-sm">@error('currentServerDomain')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror</div>
                     <div><label class="mb-1 block text-sm text-gray-700">Status</label><select wire:model="status" class="w-full rounded-md border border-gray-300 p-2 text-sm"><option value="active">Aktiv</option><option value="paused">Pausiert</option><option value="disabled">Deaktiviert</option></select></div>
                     <label class="inline-flex items-center gap-2 text-sm text-gray-700"><input type="checkbox" wire:model="allowServerRebind"> Server-Rebind erlauben</label>
-                    <div class="flex flex-wrap gap-2"><button class="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white" wire:loading.attr="disabled">Speichern</button><button type="button" wire:click="regenerateApiKey" wire:confirm="API-Key wirklich erneuern?" class="rounded-md border border-amber-300 px-4 py-2 text-sm text-amber-800">API-Key erneuern</button></div>
+                    <div class="flex flex-wrap gap-2"><button class="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white" wire:loading.attr="disabled">Speichern</button><button type="button" wire:click="regenerateApiKey" wire:confirm="Bisherigen API-Key widerrufen und neues Enrollment-Token erzeugen?" class="rounded-md border border-amber-300 px-4 py-2 text-sm text-amber-800">Key widerrufen</button></div>
                 </form>
 
                 <section class="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">

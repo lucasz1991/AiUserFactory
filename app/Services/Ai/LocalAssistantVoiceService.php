@@ -78,9 +78,6 @@ class LocalAssistantVoiceService
     public function transcribe(UploadedFile $audio, string $connectionId = ''): string
     {
         $this->assertReady('transcription');
-        $this->extendExecutionTime(
-            $this->timeout('ffmpeg', 60) + $this->timeout('whisper', 240) + 30,
-        );
         $directory = $this->createRequestDirectory();
 
         try {
@@ -162,7 +159,6 @@ class LocalAssistantVoiceService
     public function synthesize(string $text, float $speed = 1.0, string $connectionId = ''): string
     {
         $this->assertReady('synthesis');
-        $this->extendExecutionTime($this->timeout('piper', 120) + 30);
         $text = trim((string) preg_replace('/\s+/u', ' ', $text));
 
         if ($text === '') {
@@ -431,13 +427,6 @@ class LocalAssistantVoiceService
     private function timeout(string $component, int $default): int
     {
         return max(5, min(900, (int) config("services.local_assistant_voice.{$component}.timeout", $default)));
-    }
-
-    private function extendExecutionTime(int $seconds): void
-    {
-        if (function_exists('set_time_limit')) {
-            @set_time_limit(max(30, $seconds));
-        }
     }
 
     private function fileIsAvailable(string $path): bool

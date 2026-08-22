@@ -9,6 +9,7 @@
     <title>@yield('title') | FollowFlow · AI User Factory</title>
     <!-- css -->
     @include('layouts.head-css')
+    @yield('css')
     @livewireStyles
 </head>
 

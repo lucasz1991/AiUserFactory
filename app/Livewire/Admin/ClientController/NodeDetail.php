@@ -5,8 +5,9 @@ namespace App\Livewire\Admin\ClientController;
 use App\Models\NetworkNode;
 use App\Services\ClientController\ClientControllerReleaseService;
 use App\Services\ClientController\NetworkJobDispatcher;
+use App\Services\ClientController\NetworkNodeCredentialService;
+use App\Services\ClientController\NodeEnrollmentService;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Str;
 use Livewire\Component;
 use Throwable;
 
@@ -26,6 +27,8 @@ class NodeDetail extends Component
 
     public ?string $releaseError = null;
 
+    public ?string $issuedEnrollmentToken = null;
+
     public function mount(NetworkNode $node, ClientControllerReleaseService $releases): void
     {
         $this->node = $node;
@@ -41,10 +44,10 @@ class NodeDetail extends Component
     public function save(): void
     {
         $validated = $this->validate([
-            'name' => ['required', 'string', 'max:255'],
+            'name' => ['required', 'string', 'max:191'],
             'status' => ['required', 'in:active,paused,disabled'],
             'allowServerRebind' => ['boolean'],
-            'currentServerDomain' => ['nullable', 'url', 'max:2048'],
+            'currentServerDomain' => ['nullable', 'url', 'max:191'],
         ]);
 
         $this->node->update([
@@ -100,15 +103,18 @@ class NodeDetail extends Component
         session()->flash('success', $commands[$command].' wurde als Job '.$job->job_uuid.' eingeplant.');
     }
 
-    public function regenerateApiKey(): void
-    {
-        $this->node->update([
-            'api_key' => Str::random(60),
-            'node_secret' => Str::random(60),
-            'is_online' => false,
-        ]);
+    public function regenerateApiKey(
+        NetworkNodeCredentialService $credentials,
+        NodeEnrollmentService $enrollments,
+    ): void {
+        $credentials->revoke($this->node, Auth::user(), 'admin-reenrollment');
+        $this->issuedEnrollmentToken = $enrollments->issue(
+            $this->node,
+            Auth::user(),
+            'admin-reenrollment',
+        );
 
-        session()->flash('success', 'Der API-Key wurde erneuert. Der Autopilot registriert den Node beim nächsten 401 automatisch neu.');
+        session()->flash('success', 'Der bisherige Key wurde widerrufen. Trage das einmalige Enrollment-Token im Client ein; es wird nur jetzt angezeigt.');
     }
 
     public function queueUpdate(ClientControllerReleaseService $releases): void

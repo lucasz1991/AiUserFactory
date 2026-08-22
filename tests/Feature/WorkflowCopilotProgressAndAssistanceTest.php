@@ -14,6 +14,7 @@ use App\Services\Workflows\WorkflowCopilotRepairService;
 use App\Services\Workflows\WorkflowCopilotSessionService;
 use App\Services\Workflows\WorkflowCopilotSupervisorService;
 use App\Services\Workflows\WorkflowExecutionService;
+use App\Services\Workflows\WorkflowGoalProgressTracker;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
 use Mockery;
@@ -51,8 +52,12 @@ class WorkflowCopilotProgressAndAssistanceTest extends TestCase
         $this->assertSame('warning', $event->level);
         $this->assertStringContainsString('80 %', (string) $event->message);
         $this->assertStringContainsString('30 %', (string) $event->message);
-        $this->assertSame(0.3, data_get($session->state_json, 'last_goal_progress'));
-        $this->assertSame(1, data_get($session->state_json, 'progress_regressions'));
+        $scope = (string) data_get($event->payload_json, 'goal_progress_scope');
+        $this->assertNotSame('', $scope);
+        $this->assertSame(0.3, data_get($session->state_json, "goal_progress_scopes.{$scope}.value"));
+        $this->assertSame(1, data_get($session->state_json, "goal_progress_scopes.{$scope}.regressions"));
+        $this->assertArrayNotHasKey('last_goal_progress', $session->state_json);
+        $this->assertArrayNotHasKey('progress_regressions', $session->state_json);
         $this->assertNotSame(WorkflowCopilotSession::STATUS_BUDGET_EXHAUSTED, $session->status);
         $this->assertSame(WorkflowCopilotSession::STATUS_PAUSED, $session->status);
         $this->assertSame((int) $run->id, (int) data_get($event->payload_json, 'workflow_run_id'));
@@ -84,11 +89,12 @@ class WorkflowCopilotProgressAndAssistanceTest extends TestCase
 
         $session->refresh();
         $this->assertSame(WorkflowCopilotSession::STATUS_BUDGET_EXHAUSTED, $session->status);
-        $this->assertSame(3, data_get($session->state_json, 'progress_regressions'));
         $stop = $session->events()
             ->where('event_type', 'repair.no_progress')
             ->latest('sequence')
             ->firstOrFail();
+        $scope = (string) data_get($stop->payload_json, 'goal_progress_scope');
+        $this->assertSame(3, data_get($session->state_json, "goal_progress_scopes.{$scope}.regressions"));
         $this->assertSame('goal_progress_regressed', data_get($stop->payload_json, 'reason_code'));
         $this->assertSame(3, data_get($stop->payload_json, 'progress_regressions'));
         $this->assertStringContainsString('Zielfortschritt', (string) $stop->message);
@@ -158,8 +164,9 @@ class WorkflowCopilotProgressAndAssistanceTest extends TestCase
         app(WorkflowCopilotSupervisorService::class)->supervise($session->id);
 
         $session->refresh();
-        $this->assertSame(0.7, data_get($session->state_json, 'last_goal_progress'));
-        $this->assertSame(0, data_get($session->state_json, 'progress_regressions'));
+        $scope = array_values(data_get($session->state_json, 'goal_progress_scopes', []))[0] ?? [];
+        $this->assertSame(0.7, data_get($scope, 'value'));
+        $this->assertSame(0, data_get($scope, 'regressions'));
         $this->assertDatabaseMissing('workflow_copilot_events', [
             'workflow_copilot_session_id' => $session->id,
             'event_type' => 'repair.progress_regressed',
@@ -177,12 +184,38 @@ class WorkflowCopilotProgressAndAssistanceTest extends TestCase
         app(WorkflowCopilotSupervisorService::class)->supervise($session->id);
 
         $session->refresh();
-        $this->assertSame(0.46, data_get($session->state_json, 'last_goal_progress'));
-        $this->assertSame(0, data_get($session->state_json, 'progress_regressions'));
+        $scope = array_values(data_get($session->state_json, 'goal_progress_scopes', []))[0] ?? [];
+        $this->assertSame(0.46, data_get($scope, 'value'));
+        $this->assertSame(0, data_get($scope, 'regressions'));
         $this->assertDatabaseMissing('workflow_copilot_events', [
             'workflow_copilot_session_id' => $session->id,
             'event_type' => 'repair.progress_regressed',
         ]);
+    }
+
+    public function test_progress_is_compared_only_inside_the_same_task_and_page_scope(): void
+    {
+        [, $run] = $this->failedCheckpointSession();
+        $step = WorkflowStep::query()->findOrFail($run->current_workflow_step_id);
+        $tracker = app(WorkflowGoalProgressTracker::class);
+        $checkpoint = ['task_key' => 'login-click'];
+        $loginObservation = $this->observation();
+        $dashboardObservation = $loginObservation;
+        data_set($dashboardObservation, 'page.url', 'https://example.test/dashboard');
+        data_set($dashboardObservation, 'page.state', 'dashboard');
+
+        $login = $tracker->evaluate([], [], $run, $step, $checkpoint, $loginObservation, ['goal_progress' => 0.8]);
+        $dashboard = $tracker->evaluate($login['state'], $login['usage'], $run, $step, $checkpoint, $dashboardObservation, ['goal_progress' => 0.2]);
+
+        $this->assertFalse($dashboard['regressed']);
+        $this->assertNotSame($login['scope'], $dashboard['scope']);
+
+        $loginAgain = $tracker->evaluate($dashboard['state'], $dashboard['usage'], $run, $step, $checkpoint, $loginObservation, ['goal_progress' => 0.3]);
+
+        $this->assertTrue($loginAgain['regressed']);
+        $this->assertSame(1, $loginAgain['regressions']);
+        $this->assertSame(1, data_get($loginAgain, 'usage.progress_regressions_total'));
+        $this->assertCount(2, data_get($loginAgain, 'state.goal_progress_scopes'));
     }
 
     public function test_pause_without_trusted_element_reference_asks_a_question_with_candidates(): void

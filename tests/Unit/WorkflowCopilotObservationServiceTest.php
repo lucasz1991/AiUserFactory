@@ -345,6 +345,48 @@ HTML);
         );
     }
 
+    public function test_structured_runtime_selector_candidates_keep_exact_dom_match_evidence(): void
+    {
+        $run = (new WorkflowRun)->forceFill([
+            'id' => 5,
+            'result_json' => [
+                'interaction_map' => [[
+                    'tag' => 'button',
+                    'text' => 'Weiter',
+                    'visible' => true,
+                    'enabled' => true,
+                    'selectorCandidates' => [[
+                        'selector' => 'button[data-testid="continue"]',
+                        'unique' => true,
+                        'matchCount' => 1,
+                        'score' => 96.5,
+                    ], [
+                        'selector' => 'form button[type="submit"]',
+                        'unique' => false,
+                        'matchCount' => 3,
+                        'score' => 70,
+                    ]],
+                ]],
+            ],
+        ]);
+        $run->setRelation('stepRuns', collect());
+        $run->setRelation('artifacts', collect());
+
+        $observation = (new WorkflowCopilotObservationService(Mockery::mock(WorkflowDebugArtifactService::class)))->observe($run);
+
+        $this->assertContains('button[data-testid="continue"]', data_get($observation, 'interaction_map.0.selector_candidates'));
+        $this->assertSame([
+            'selector' => 'button[data-testid="continue"]',
+            'unique' => true,
+            'match_count' => 1,
+            'score' => 96.5,
+        ], collect(data_get($observation, 'interaction_map.0.selector_evidence'))->firstWhere('selector', 'button[data-testid="continue"]'));
+        $this->assertFalse((bool) data_get(
+            collect(data_get($observation, 'interaction_map.0.selector_evidence'))->firstWhere('selector', 'form button[type="submit"]'),
+            'unique',
+        ));
+    }
+
     public function test_google_search_field_uses_semantic_selectors_and_keeps_reference_when_generated_id_changes(): void
     {
         $run = (new WorkflowRun)->forceFill([

@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Carbon;
 
 /**
@@ -30,18 +31,33 @@ class WorkflowPortalProfile extends Model
         'role',
         'selector',
         'selector_hash',
+        'profile_version',
         'has_quality_warnings',
+        'is_approved',
+        'is_active',
         'hit_count',
         'miss_count',
         'last_confirmed_at',
         'source',
+        'evidence_json',
+        'approved_at',
+        'approved_by',
+        'disabled_at',
+        'disabled_by',
+        'disable_reason',
     ];
 
     protected $casts = [
         'has_quality_warnings' => 'boolean',
+        'is_approved' => 'boolean',
+        'is_active' => 'boolean',
+        'profile_version' => 'integer',
         'hit_count' => 'integer',
         'miss_count' => 'integer',
         'last_confirmed_at' => 'datetime',
+        'evidence_json' => 'array',
+        'approved_at' => 'datetime',
+        'disabled_at' => 'datetime',
     ];
 
     /**
@@ -94,5 +110,20 @@ class WorkflowPortalProfile extends Model
     public function isExpired(): bool
     {
         return $this->miss_count >= 2 && $this->miss_count > $this->hit_count;
+    }
+
+    public function isUsable(): bool
+    {
+        return $this->is_active && $this->is_approved && ! $this->isExpired();
+    }
+
+    public function approvedByUser(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'approved_by');
+    }
+
+    public function disabledByUser(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'disabled_by');
     }
 }

@@ -29,10 +29,6 @@ class WorkflowCopilotSupervisorService
 
     private const MIN_VERIFICATION_VISION_CONFIDENCE = 0.7;
 
-    // Kleine Schaetzunsicherheit des Bildmodells darf keinen Rueckschritt
-    // melden; erst ein deutlicher Abfall gilt als Regression.
-    private const GOAL_PROGRESS_REGRESSION_TOLERANCE = 0.05;
-
     private const MAX_ASSISTANCE_ELEMENT_CANDIDATES = 5;
 
     public function __construct(
@@ -45,6 +41,8 @@ class WorkflowCopilotSupervisorService
         protected WorkflowCopilotPreflightService $preflight,
         protected WorkflowCopilotPromptContextService $promptContexts,
         protected WorkflowRevisionService $revisions,
+        protected WorkflowPortalSelectorLearningService $portalSelectorLearning,
+        protected WorkflowGoalProgressTracker $goalProgress,
         protected WorkflowCopilotAiUsageTracker $aiUsage,
         protected WorkflowStudioAuthorizationService $studioAuthorization,
         protected WorkflowOptimizationPlanService $optimizationPlans,
@@ -545,31 +543,6 @@ class WorkflowCopilotSupervisorService
             $payload,
             JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE,
         ));
-    }
-
-    /**
-     * Liest `goal_progress` aus einer Vision-Antwort oder aus dem Sitzungszustand.
-     *
-     * Rueckgabe `null` bedeutet bewusst "keine Aussage" und nicht "0": Ein
-     * fehlender oder nicht numerischer Wert darf weder als Rueckschritt gewertet
-     * werden noch einen frueheren Referenzwert entwerten.
-     *
-     * @param  array<string, mixed>  $source
-     */
-    protected function goalProgressValue(array $source, string $key = 'goal_progress'): ?float
-    {
-        $value = $source[$key] ?? null;
-
-        if (! is_numeric($value)) {
-            return null;
-        }
-
-        return round(max(0.0, min(1.0, (float) $value)), 4);
-    }
-
-    protected function goalProgressLabel(?float $progress): string
-    {
-        return $progress === null ? 'unbekannt' : ((int) round($progress * 100)).' %';
     }
 
     protected function unresolvedRouteTargetFromError(string $error): ?string
@@ -1159,31 +1132,28 @@ class WorkflowCopilotSupervisorService
             // Protokollzeile. Als Regelgroesse macht er den Fall sichtbar, den
             // Fehlersignatur und Wiederholungszaehler nicht erfassen: Eine
             // Reparatur greift technisch, entfernt den Lauf aber vom Ziel.
-            $currentGoalProgress = $this->goalProgressValue($vision);
-            $previousGoalProgress = $this->goalProgressValue($state, 'last_goal_progress');
-            $progressRegressions = max(0, (int) ($state['progress_regressions'] ?? 0));
-            $progressRegressed = $currentGoalProgress !== null
-                && $previousGoalProgress !== null
-                && $currentGoalProgress < ($previousGoalProgress - self::GOAL_PROGRESS_REGRESSION_TOLERANCE);
-
-            if ($progressRegressed) {
-                $progressRegressions++;
-            }
+            $progress = $this->goalProgress->evaluate(
+                $state,
+                $usage,
+                $run,
+                $step,
+                $checkpoint,
+                $observation,
+                $vision,
+            );
+            $state = $progress['state'];
+            $usage = $progress['usage'];
+            $currentGoalProgress = $progress['current'];
+            $previousGoalProgress = $progress['previous'];
+            $progressRegressions = $progress['regressions'];
+            $progressRegressed = $progress['regressed'];
+            $goalProgressScope = $progress['scope'];
 
             $state['last_repair_failure_signature'] = $failureSignature;
             $state['repair_failure_repeats'] = $failureRepeats;
             $state['checkpoint_repairs_total'] = $checkpointRepairs;
             $usage['same_state_repeats'] = $failureRepeats;
             $usage['checkpoint_repairs_total'] = $checkpointRepairs;
-
-            // Ohne verwertbaren Fortschrittswert bleibt der Zustand unberuehrt:
-            // Ein fehlendes oder unbrauchbares Vision-Feld darf weder den
-            // Zaehler bewegen noch einen alten Referenzwert ueberschreiben.
-            if ($currentGoalProgress !== null) {
-                $state['last_goal_progress'] = $currentGoalProgress;
-                $state['progress_regressions'] = $progressRegressions;
-                $usage['progress_regressions'] = $progressRegressions;
-            }
 
             $session->forceFill([
                 'state_json' => $state,
@@ -1198,8 +1168,8 @@ class WorkflowCopilotSupervisorService
                     $session,
                     'repair.progress_regressed',
                     'Der gemeldete Zielfortschritt ist seit der letzten Reparatur von '
-                        .$this->goalProgressLabel($previousGoalProgress).' auf '
-                        .$this->goalProgressLabel($currentGoalProgress)
+                        .$this->goalProgress->label($previousGoalProgress).' auf '
+                        .$this->goalProgress->label($currentGoalProgress)
                         .' gesunken; die Reparatur laeuft weiter, entfernt den Lauf aber bisher vom Ziel.',
                     [
                         'workflow_run_id' => (int) $run->id,
@@ -1210,6 +1180,7 @@ class WorkflowCopilotSupervisorService
                         'goal_progress' => $currentGoalProgress,
                         'progress_regressions' => $progressRegressions,
                         'max_progress_regressions' => $maxProgressRegressions,
+                        'goal_progress_scope' => $goalProgressScope,
                     ],
                     'repairing',
                     'warning',
@@ -1237,6 +1208,7 @@ class WorkflowCopilotSupervisorService
                         'progress_regressions' => $progressRegressions,
                         'max_progress_regressions' => $maxProgressRegressions,
                         'reason_code' => 'goal_progress_regressed',
+                        'goal_progress_scope' => $goalProgressScope,
                     ],
                     'repairing',
                     'error',
@@ -1921,6 +1893,8 @@ class WorkflowCopilotSupervisorService
                 $rejected[] = $selector;
             }
 
+            $this->portalSelectorLearning->recordFailedProbe($plan);
+
             $state['rejected_selectors'] = array_values(array_unique($rejected));
             $session->forceFill(['state_json' => $state])->save();
             $this->sessions->appendEvent(
@@ -1946,6 +1920,8 @@ class WorkflowCopilotSupervisorService
 
             return;
         }
+
+        $this->portalSelectorLearning->rememberSuccessfulProbe($plan);
 
         [$revision, $session, $run] = $this->persistSuccessfulProbeRevision(
             $session,

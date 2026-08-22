@@ -4,6 +4,8 @@ namespace App\Livewire\Admin\ClientController;
 
 use App\Models\NetworkNode;
 use App\Services\ClientController\ClientControllerReleaseService;
+use App\Services\ClientController\NetworkNodeCredentialService;
+use App\Services\ClientController\NodeEnrollmentService;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Str;
 use Livewire\Component;
@@ -26,6 +28,8 @@ class NodeIndex extends Component
 
     public ?string $releaseError = null;
 
+    public ?string $issuedEnrollmentToken = null;
+
     protected $queryString = ['search' => ['except' => '']];
 
     public function mount(ClientControllerReleaseService $releases): void
@@ -38,39 +42,51 @@ class NodeIndex extends Component
         $this->resetPage();
     }
 
-    public function createNode(): void
-    {
+    public function createNode(
+        NetworkNodeCredentialService $credentials,
+        NodeEnrollmentService $enrollments,
+    ): void {
         $validated = $this->validate([
-            'name' => ['required', 'string', 'max:255'],
-            'currentServerDomain' => ['nullable', 'url', 'max:2048'],
+            'name' => ['required', 'string', 'max:191'],
+            'currentServerDomain' => ['nullable', 'url', 'max:191'],
             'allowServerRebind' => ['boolean'],
         ]);
 
-        NetworkNode::query()->create([
+        $node = new NetworkNode;
+        $node->forceFill([
             'name' => $validated['name'],
             'node_uuid' => (string) Str::uuid(),
-            'api_key' => Str::random(60),
-            'node_secret' => Str::random(60),
             'current_server_domain' => $validated['currentServerDomain'] ?: null,
             'last_successful_server_domain' => $validated['currentServerDomain'] ?: null,
             'allow_server_rebind' => $validated['allowServerRebind'],
             'is_online' => false,
         ]);
+        $credentials->initializeRevoked($node);
+        $this->issuedEnrollmentToken = $enrollments->issue(
+            $node,
+            Auth::user(),
+            'admin-node-created',
+        );
 
         $this->reset(['name', 'currentServerDomain']);
         $this->allowServerRebind = true;
-        session()->flash('success', 'Node wurde angelegt.');
+        session()->flash('success', 'Node wurde angelegt. Das Enrollment-Token wird nur in dieser Ansicht angezeigt.');
     }
 
-    public function regenerateApiKey(int $nodeId): void
-    {
-        NetworkNode::query()->findOrFail($nodeId)->update([
-            'api_key' => Str::random(60),
-            'node_secret' => Str::random(60),
-            'is_online' => false,
-        ]);
+    public function regenerateApiKey(
+        int $nodeId,
+        NetworkNodeCredentialService $credentials,
+        NodeEnrollmentService $enrollments,
+    ): void {
+        $node = NetworkNode::query()->findOrFail($nodeId);
+        $credentials->revoke($node, Auth::user(), 'admin-reenrollment');
+        $this->issuedEnrollmentToken = $enrollments->issue(
+            $node,
+            Auth::user(),
+            'admin-reenrollment',
+        );
 
-        session()->flash('success', 'Node API-Key wurde neu erzeugt.');
+        session()->flash('success', 'Der bisherige Key wurde widerrufen. Das Enrollment-Token wird nur in dieser Ansicht angezeigt.');
     }
 
     public function deleteNode(int $nodeId): void
