@@ -96,7 +96,8 @@
 @endphp
 <div
     class="workflow-experience space-y-5"
-    wire:loading.class="opacity-60 pointer-events-none"
+    wire:loading.class="cursor-wait"
+    wire:loading.attr="aria-busy"
     wire:target.except="taskSearch,selectTaskGroup,catalogTargetStepId,refreshWorkbenchContext"
     x-data="{
         taskInsertTarget: null,
@@ -121,6 +122,11 @@
         workbenchSurface: $wire.entangle('workbenchSurface').live,
         workbenchTrigger: null,
         workbenchCopilotPinned: false,
+        syncWorkbenchShell() {
+            const open = Boolean(this.workbenchOpen);
+            document.documentElement.classList.toggle('workflow-workbench-open', open);
+            document.body?.classList.toggle('workflow-workbench-open', open);
+        },
         rememberWorkbenchTrigger(element = null) {
             const requested = element || document.activeElement;
             const menuTrigger = requested?.closest?.('.ff-menu')
@@ -139,6 +145,9 @@
 
             const shell = this.$refs.workflowWorkbench;
             if (! shell) return;
+
+            const copilotPanel = document.querySelector('.ff-copilot-panel');
+            if (copilotPanel && this.elementIsVisible(copilotPanel)) return;
 
             const childDialog = Array.from(shell.querySelectorAll('.jetstream-modal, [role=dialog][aria-modal=true]'))
                 .reverse()
@@ -163,20 +172,26 @@
         },
         syncWorkbenchCopilot() {
             const shouldPin = this.workbenchOpen && this.workbenchSurface === 'test';
+            document.body?.classList.toggle('workflow-copilot-studio-pinned', shouldPin);
             if (shouldPin === this.workbenchCopilotPinned) return;
 
             this.workbenchCopilotPinned = shouldPin;
             this.$dispatch(shouldPin ? 'workflow-studio-pin-copilot' : 'workflow-studio-unpin-copilot');
         },
         destroy() {
+            document.documentElement.classList.remove('workflow-workbench-open');
+            document.body?.classList.remove('workflow-workbench-open', 'workflow-copilot-studio-pinned');
             if (this.workbenchCopilotPinned) {
                 this.$dispatch('workflow-studio-unpin-copilot');
             }
         },
     }"
     x-init="
+        syncWorkbenchShell();
+        syncWorkbenchCopilot();
         $wire.$watch('showTaskPanel', open => { if (! open) clearTaskInsert() });
         $watch('workbenchOpen', open => {
+            syncWorkbenchShell();
             syncWorkbenchCopilot();
             if (open) {
                 $nextTick(() => $refs.workbenchClose?.focus({ preventScroll: true }));
@@ -426,17 +441,18 @@
 
         @if($workbenchBooted && $workbenchStudioSessionId && $selectedWorkflow)
             <div
-                x-cloak
                 x-show.important="workbenchOpen"
                 x-ref="workflowWorkbench"
-                x-init="$nextTick(() => syncWorkbenchCopilot())"
+                x-init="$nextTick(() => { syncWorkbenchShell(); syncWorkbenchCopilot(); })"
                 x-trap.inert.noscroll="workbenchOpen"
                 @if($managerWorkbenchPollEnabled)
                     wire:poll.visible.{{ $managerWorkbenchPollSeconds }}s="refreshWorkbenchContext"
                 @endif
                 class="fixed inset-0 top-0 z-[70] !mt-0 flex h-[100dvh] min-h-0 w-full min-w-0 flex-col overflow-hidden bg-slate-100"
-                style="margin-top: 0 !important;"
+                style="margin-top: 0 !important;{{ $workbenchOpen ? '' : ' display: none !important;' }}"
                 data-workflow-workbench
+                data-open="{{ $workbenchOpen ? 'true' : 'false' }}"
+                x-bind:data-open="workbenchOpen ? 'true' : 'false'"
                 data-workflow-test-workbench
                 data-workflow-workbench-session="{{ $workbenchStudioSessionId }}"
                 data-workflow-workbench-run="{{ $workbenchRunId }}"

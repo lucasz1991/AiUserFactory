@@ -48,11 +48,21 @@ class WorkflowWorkbenchTest extends TestCase
         app(WorkflowStudioSessionService::class)->attachRun($session, $run);
 
         $manager
+            ->call('refreshWorkbenchContext')
+            ->assertSet('workbenchOpen', true)
+            ->assertSet('workbenchSurface', 'definition')
+            ->assertSet('workbenchStudioSessionId', $sessionId)
+            ->assertSet('testWorkbenchKey', $stableKey)
             ->call('openTestWorkbench', 'interactive', $run->id)
             ->assertSet('workbenchSurface', 'test')
             ->assertSet('workbenchStudioSessionId', $sessionId)
             ->assertSet('workbenchRunId', $run->id)
             ->assertSet('testWorkbenchRunId', $run->id)
+            ->assertSet('testWorkbenchKey', $stableKey)
+            ->call('refreshWorkbenchContext')
+            ->assertSet('workbenchOpen', true)
+            ->assertSet('workbenchSurface', 'test')
+            ->assertSet('workbenchStudioSessionId', $sessionId)
             ->assertSet('testWorkbenchKey', $stableKey)
             ->call('switchWorkbenchSurface', 'definition')
             ->assertSet('workbenchStudioSessionId', $sessionId)

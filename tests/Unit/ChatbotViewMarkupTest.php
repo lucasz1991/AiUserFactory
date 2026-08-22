@@ -62,10 +62,9 @@ class ChatbotViewMarkupTest extends TestCase
         $this->assertStringContainsString("isDesktopDocked: window.matchMedia('(min-width: 1140px)').matches", $definition);
         $this->assertStringContainsString("this.isDesktopDocked = window.matchMedia('(min-width: 1140px)').matches", $definition);
         $this->assertStringContainsString("window.matchMedia('(min-width: 1140px)')", $definition);
-        $this->assertStringContainsString(
-            'this.showChat = this.isDesktopDocked && (storedChatOpen || this.studioPinned);',
-            $definition,
-        );
+        $this->assertStringContainsString('studioChatDismissed: false', $definition);
+        $this->assertStringContainsString("sessionStorage.getItem('workflow-copilot-studio-dismissed') === '1'", $definition);
+        $this->assertStringContainsString('&& !this.studioChatDismissed', $definition);
         $this->assertStringEndsWith('}', trim($definition));
 
         $activeSpeechLabels = (new DOMXPath($document))->query(
@@ -130,6 +129,46 @@ class ChatbotViewMarkupTest extends TestCase
         $this->assertStringContainsString('data-copilot-activity-timer', $source);
         $this->assertStringContainsString('Keine Statusaenderung seit', $source);
         $this->assertStringContainsString('<template x-if="assistantActivityRunning() || copilotActivityRunning()">', $source);
+    }
+
+    public function test_pinned_studio_copilot_can_be_closed_and_stays_closed_across_repeated_pin_events(): void
+    {
+        $source = file_get_contents(dirname(__DIR__, 2).'/resources/views/livewire/tools/chatbot.blade.php');
+
+        $this->assertStringContainsString("document.body.classList.contains('workflow-copilot-studio-pinned')", $source);
+        $this->assertStringContainsString('[data-workflow-studio-shell]:not([data-workflow-studio-mode=hosted])', $source);
+        $this->assertStringContainsString('this.setStudioChatDismissed(true);', $source);
+        $this->assertStringContainsString('this.setStudioChatDismissed(false);', $source);
+        $this->assertStringContainsString('if (focusComposer) {', $source);
+        $this->assertStringContainsString('(this.studioPinned || this.workflowWorkbenchActive())', $source);
+        $this->assertStringContainsString("classList.contains('workflow-workbench-open')", $source);
+        $this->assertStringContainsString('if (this.desktopDocked() && !this.studioChatDismissed)', $source);
+        $this->assertStringContainsString('<template x-if="!showChat">', $source);
+        $this->assertStringContainsString(
+            "sessionStorage.setItem('workflow-copilot-studio-dismissed', this.studioChatDismissed ? '1' : '0')",
+            $source,
+        );
+        $this->assertDoesNotMatchRegularExpression(
+            '/closeChat\(\)\s*\{.*?studioPinned\s*&&\s*this\.desktopDocked\(\).*?return;/s',
+            $source,
+        );
+        $this->assertDoesNotMatchRegularExpression(
+            '/unpinStudioCopilot\(\)\s*\{.*?setStudioChatDismissed\(false\)/s',
+            $source,
+        );
+        $this->assertDoesNotMatchRegularExpression(
+            '/x-show\.important="!showChat"\s+x-cloak/',
+            $source,
+        );
+        $this->assertMatchesRegularExpression(
+            '/closeChat\(\)\s*\{.*?setStudioChatDismissed\(true\).*?this\.showChat\s*=\s*false;/s',
+            $source,
+        );
+        $this->assertStringContainsString('aria-label="Copilot schließen"', $source);
+        $this->assertStringContainsString(
+            'x-on:keydown.escape.window="if (showChat) { $event.preventDefault(); $event.stopImmediatePropagation(); closeChat(); }"',
+            $source,
+        );
     }
 
     public function test_audio_lifecycle_guards_against_reindexing_cancellation_and_teardown_races(): void

@@ -34,6 +34,32 @@
     --ff-layer-chat: 90;
 }
 
+/*
+ * Die Workflow-Workbench liegt im Livewire-Manager, muss sich visuell aber wie
+ * eine eigene Vollbildoberflaeche verhalten. Der explizite Dokumentzustand
+ * bleibt waehrend Morphs bestehen und verhindert, dass die App-Shell fuer einen
+ * Frame ueber der Workbench erscheint.
+ */
+html.workflow-workbench-open,
+body.workflow-workbench-open {
+    overflow: hidden !important;
+    overscroll-behavior: none;
+}
+
+body.workflow-workbench-open [data-ff-shell-topbar],
+body.workflow-workbench-open [data-ff-shell-sidebar],
+body.workflow-workbench-open [data-ff-sidebar-backdrop] {
+    visibility: hidden !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+    transition: none !important;
+}
+
+body.workflow-workbench-open [data-workflow-workbench] {
+    isolation: isolate;
+    opacity: 1 !important;
+}
+
 html {
     min-width: 320px;
     background: var(--ff-shell-canvas);

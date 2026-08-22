@@ -17,7 +17,13 @@ class WorkflowWorkbenchUiSafetyMarkupTest extends TestCase
         $taskCard = file_get_contents($root.'/resources/views/components/workflows/task-card.blade.php');
 
         $this->assertStringContainsString("shell.querySelectorAll('.jetstream-modal, [role=dialog][aria-modal=true]')", $manager);
+        $this->assertStringContainsString("document.querySelector('.ff-copilot-panel')", $manager);
+        $this->assertStringContainsString('if (copilotPanel && this.elementIsVisible(copilotPanel)) return;', $manager);
         $this->assertStringContainsString('if (childDialog || openMenu) return;', $manager);
+        $this->assertLessThan(
+            strpos($manager, "shell.querySelectorAll('.jetstream-modal, [role=dialog][aria-modal=true]')"),
+            strpos($manager, "document.querySelector('.ff-copilot-panel')")
+        );
         $this->assertLessThan(
             strpos($manager, '[data-workflow-mobile-library][data-open=true]'),
             strpos($manager, 'if (childDialog || openMenu) return;')
@@ -110,5 +116,25 @@ class WorkflowWorkbenchUiSafetyMarkupTest extends TestCase
         $this->assertStringContainsString('data-workflow-manager-poll=', $manager);
         $this->assertStringContainsString('wire:target.except="taskSearch,selectTaskGroup,catalogTargetStepId,refreshWorkbenchContext"', $manager);
         $this->assertSame(0, substr_count($manager, 'wire:poll.visible.2s="refreshWorkbenchContext"'));
+    }
+
+    public function test_parent_livewire_loading_never_makes_the_fullscreen_workbench_transparent(): void
+    {
+        $root = dirname(__DIR__, 2);
+        $manager = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-manager.blade.php');
+
+        $this->assertStringNotContainsString(
+            'wire:loading.class="opacity-60 pointer-events-none"',
+            $manager,
+        );
+        $this->assertStringContainsString('wire:loading.class="cursor-wait"', $manager);
+        $this->assertStringContainsString('wire:loading.attr="aria-busy"', $manager);
+        $this->assertStringContainsString("classList.toggle('workflow-workbench-open', open)", $manager);
+        $this->assertStringContainsString('data-open="{{ $workbenchOpen ? \'true\' : \'false\' }}"', $manager);
+        $this->assertStringContainsString('x-bind:data-open="workbenchOpen ? \'true\' : \'false\'"', $manager);
+        $this->assertStringContainsString("{{ \$workbenchOpen ? '' : ' display: none !important;' }}", $manager);
+        $this->assertDoesNotMatchRegularExpression('/x-cloak\s+x-show\.important="workbenchOpen"/', $manager);
+        $this->assertStringContainsString('fixed inset-0 top-0 z-[70]', $manager);
+        $this->assertStringContainsString('overflow-hidden bg-slate-100', $manager);
     }
 }

@@ -33,6 +33,7 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use Livewire\Attributes\Locked;
 use Livewire\Attributes\On;
 use Livewire\Component;
 use Throwable;
@@ -122,6 +123,9 @@ class WorkflowStudio extends Component
     public string $activeToolModal = '';
 
     public string $observedCursorSignature = '';
+
+    #[Locked]
+    public string $lastRunStatusDispatchSignature = '';
 
     public function mount(
         Workflow $workflow,
@@ -218,6 +222,8 @@ class WorkflowStudio extends Component
                 $this->selectTask((int) $firstTask['step_id'], (string) $firstTask['task_key']);
             }
         }
+
+        $this->lastRunStatusDispatchSignature = $this->runStatusDispatchSignature($activeRun);
     }
 
     public function setPermissionMode(): void
@@ -1306,12 +1312,39 @@ class WorkflowStudio extends Component
 
     private function dispatchRunStatusChanged(?WorkflowRun $run): void
     {
+        $signature = $this->runStatusDispatchSignature($run);
+
+        if ($signature === $this->lastRunStatusDispatchSignature) {
+            return;
+        }
+
+        $this->lastRunStatusDispatchSignature = $signature;
         $this->dispatch(
             'workflow-studio-run-status-changed',
             studioSessionId: $this->studioSessionId,
             runId: $run ? (int) $run->getKey() : null,
             status: (string) ($run?->status ?? 'idle'),
         );
+    }
+
+    private function runStatusDispatchSignature(?WorkflowRun $run): string
+    {
+        $session = $this->session();
+        $policy = app(WorkflowStudioDefinitionMutationPolicy::class)->inspect(
+            $this->workflow(),
+            $session,
+        );
+
+        return hash('sha256', json_encode([
+            'studio_session_id' => $this->studioSessionId,
+            'session_mode' => (string) $session->mode,
+            'session_active_run_id' => $session->active_workflow_run_id ? (int) $session->active_workflow_run_id : null,
+            'display_run_id' => $run?->getKey() ? (int) $run->getKey() : null,
+            'display_run_status' => (string) ($run?->status ?? 'idle'),
+            'definition_can_edit' => (bool) $policy['can_edit'],
+            'definition_can_pause' => (bool) $policy['can_pause_for_edit'],
+            'definition_lock_message' => (string) $policy['message'],
+        ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
     }
 
     private function dispatchStudioNotice(array $result, ?string $previousStatus = null): void

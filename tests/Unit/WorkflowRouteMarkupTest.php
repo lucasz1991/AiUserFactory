@@ -17,7 +17,8 @@ class WorkflowRouteMarkupTest extends TestCase
         $this->assertStringContainsString("window.matchMedia('(max-width: 767px)')", $surface);
         $this->assertStringContainsString('this.showAllRoutes = !event.matches', $surface);
         $this->assertStringContainsString('line.sourceNode === focusNode || line.targetNode === focusNode', $surface);
-        $this->assertStringContainsString("window.Livewire.hook('morph.updated'", $surface);
+        $this->assertStringContainsString("window.Livewire.hook('morphed'", $surface);
+        $this->assertStringNotContainsString("window.Livewire.hook('morph.updated'", $surface);
         $this->assertStringContainsString('new ResizeObserver(() => this.queueRouteRefresh())', $surface);
         $this->assertStringContainsString('workflowRouteSurface({', $editor);
         $this->assertStringContainsString('data-workflow-route-surface', $editor);

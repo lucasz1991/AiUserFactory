@@ -5,6 +5,7 @@
         isDesktopDocked: window.matchMedia('(min-width: 1140px)').matches,
         studioPinned: false,
         studioChatWasOpen: false,
+        studioChatDismissed: false,
         draft: @entangle('message'),
         isLoading: @entangle('isLoading'),
         chatHistory: @entangle('chatHistory'),
@@ -83,9 +84,14 @@
         },
         init() {
             const storedChatOpen = sessionStorage.getItem('workflow-copilot-open') === '1';
-            this.studioPinned = Boolean(document.querySelector('[data-workflow-studio-shell]'));
+            this.studioPinned = document.body.classList.contains('workflow-copilot-studio-pinned')
+                || Boolean(document.querySelector('[data-workflow-studio-shell]:not([data-workflow-studio-mode=hosted])'));
             this.studioChatWasOpen = storedChatOpen;
-            this.showChat = this.isDesktopDocked && (storedChatOpen || this.studioPinned);
+            this.studioChatDismissed = (this.studioPinned || this.workflowWorkbenchActive())
+                && sessionStorage.getItem('workflow-copilot-studio-dismissed') === '1';
+            this.showChat = this.isDesktopDocked
+                && !this.studioChatDismissed
+                && (storedChatOpen || this.studioPinned);
             this.showImportPanel = false;
             this.clearVoiceCaptureState();
             this.autoRead = this.readBool('workflow-copilot-auto-read', this.autoRead);
@@ -209,6 +215,9 @@
         setOpen(open, focusComposer = false) {
             this.showChat = Boolean(open);
             if (this.showChat) {
+                if (focusComposer) {
+                    this.setStudioChatDismissed(false);
+                }
                 this.clearVoiceCaptureState();
                 this.syncContext();
                 this.scrollMessages(false, true);
@@ -221,9 +230,9 @@
             }
         },
         closeChat() {
-            if (this.studioPinned && this.desktopDocked()) {
-                this.showChat = true;
-                return;
+            if (this.studioPinned || this.workflowWorkbenchActive()) {
+                this.studioChatWasOpen = false;
+                this.setStudioChatDismissed(true);
             }
             this.showChat = false;
             this.showImportPanel = false;
@@ -236,7 +245,7 @@
                 this.studioChatWasOpen = this.showChat;
             }
             this.studioPinned = true;
-            if (this.desktopDocked()) {
+            if (this.desktopDocked() && !this.studioChatDismissed) {
                 this.setOpen(true);
             } else {
                 this.syncDockLayout();
@@ -247,6 +256,14 @@
             this.studioPinned = false;
             this.showChat = restoreOpen;
             this.syncDockLayout();
+        },
+        setStudioChatDismissed(dismissed) {
+            this.studioChatDismissed = Boolean(dismissed);
+            sessionStorage.setItem('workflow-copilot-studio-dismissed', this.studioChatDismissed ? '1' : '0');
+        },
+        workflowWorkbenchActive() {
+            return document.documentElement.classList.contains('workflow-workbench-open')
+                || document.body.classList.contains('workflow-workbench-open');
         },
         desktopDocked() {
             return this.isDesktopDocked;
@@ -1526,7 +1543,7 @@
     x-on:workflow-studio-pin-copilot.window="pinStudioCopilot()"
     x-on:workflow-studio-unpin-copilot.window="unpinStudioCopilot()"
     x-on:assistant-reapply-workflow-improvements.window="queueImprovementHighlights()"
-    x-on:keydown.escape.window="if (showChat) closeChat()"
+    x-on:keydown.escape.window="if (showChat) { $event.preventDefault(); $event.stopImmediatePropagation(); closeChat(); }"
     class="workflow-copilot"
 >
     <style>
@@ -1588,20 +1605,20 @@
     @endif
 
     @if($assistantEnabled)
-        <button
-            type="button"
-            x-ref="chatLauncher"
-            x-show.important="!showChat"
-            x-cloak
-            x-on:click.stop.prevent="setOpen(true, true)"
-            class="ff-copilot-launcher fixed bottom-5 right-5 z-[80] flex h-14 items-center text-sm font-black"
-            aria-label="AI Workflow Copilot oeffnen"
-            title="AI Workflow Copilot oeffnen"
-        >
-            <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/10">AI</span>
-            <span class="ff-copilot-launcher-label text-xs font-bold">Copilot öffnen</span>
-            <span class="absolute -right-0.5 -top-0.5 h-3.5 w-3.5 rounded-full border-2 border-white bg-emerald-400"></span>
-        </button>
+        <template x-if="!showChat">
+            <button
+                type="button"
+                x-ref="chatLauncher"
+                x-on:click.stop.prevent="setOpen(true, true)"
+                class="ff-copilot-launcher fixed bottom-5 right-5 z-[80] flex h-14 items-center text-sm font-black"
+                aria-label="AI Workflow Copilot oeffnen"
+                title="AI Workflow Copilot oeffnen"
+            >
+                <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/10">AI</span>
+                <span class="ff-copilot-launcher-label text-xs font-bold">Copilot öffnen</span>
+                <span class="absolute -right-0.5 -top-0.5 h-3.5 w-3.5 rounded-full border-2 border-white bg-emerald-400"></span>
+            </button>
+        </template>
 
         <template x-if="showChat">
             <div>

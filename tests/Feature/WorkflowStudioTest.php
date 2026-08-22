@@ -1045,6 +1045,49 @@ class WorkflowStudioTest extends TestCase
         ]);
     }
 
+    public function test_refresh_studio_only_dispatches_run_status_when_the_visible_state_changes(): void
+    {
+        [$workflow, $step] = $this->workflow();
+        $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
+        $session = app(WorkflowStudioSessionService::class)->open($workflow, $admin, 'interactive', 'ask_critical');
+        $run = WorkflowRun::query()->create([
+            'run_uuid' => (string) str()->uuid(),
+            'workflow_id' => $workflow->id,
+            'workflow_studio_session_id' => $session->id,
+            'workflow_revision' => 0,
+            'current_workflow_step_id' => $step->id,
+            'status' => 'running',
+            'requested_by' => 'workflow-studio',
+            'queued_at' => now(),
+            'started_at' => now(),
+            'context_json' => ['next_task_key' => 'first-task'],
+            'result_json' => [],
+        ]);
+        app(WorkflowStudioSessionService::class)->attachRun($session, $run);
+        $this->actingAs($admin);
+
+        $studio = Livewire::test(WorkflowStudio::class, [
+            'workflow' => $workflow,
+            'hosted' => true,
+            'studioSessionId' => $session->id,
+            'runId' => $run->id,
+        ]);
+
+        $studio
+            ->call('refreshStudio')
+            ->assertNotDispatched('workflow-studio-run-status-changed');
+
+        $run->forceFill(['status' => 'paused'])->save();
+
+        $studio
+            ->call('refreshStudio')
+            ->assertDispatched('workflow-studio-run-status-changed', function (string $name, array $parameters) use ($session, $run): bool {
+                return (int) ($parameters['studioSessionId'] ?? 0) === (int) $session->id
+                    && (int) ($parameters['runId'] ?? 0) === (int) $run->id
+                    && ($parameters['status'] ?? null) === 'paused';
+            });
+    }
+
     public function test_autonomous_task_modal_is_read_only_and_cannot_request_an_edit_pause(): void
     {
         [$workflow, $step] = $this->workflow();

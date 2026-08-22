@@ -147,6 +147,24 @@ class AppShellMarkupTest extends TestCase
         );
     }
 
+    public function test_open_workbench_hides_the_shell_without_transitions_during_livewire_morphs(): void
+    {
+        $styles = file_get_contents(dirname(__DIR__, 2).'/resources/css/app-shell.css');
+
+        $this->assertStringContainsString('html.workflow-workbench-open,', $styles);
+        $this->assertStringContainsString('body.workflow-workbench-open [data-ff-shell-topbar],', $styles);
+        $this->assertStringContainsString('body.workflow-workbench-open [data-ff-shell-sidebar],', $styles);
+        $this->assertStringContainsString('body.workflow-workbench-open [data-ff-sidebar-backdrop]', $styles);
+        $this->assertMatchesRegularExpression(
+            '/body\.workflow-workbench-open \[data-ff-shell-topbar\].*?visibility:\s*hidden\s*!important;.*?opacity:\s*0\s*!important;.*?pointer-events:\s*none\s*!important;.*?transition:\s*none\s*!important;/s',
+            $styles,
+        );
+        $this->assertMatchesRegularExpression(
+            '/body\.workflow-workbench-open \[data-workflow-workbench\]\s*\{[^}]*isolation:\s*isolate;[^}]*opacity:\s*1\s*!important;/s',
+            $styles,
+        );
+    }
+
     /**
      * Die Regel blendet Untermenues aus, solange die Desktop-Sidebar
      * eingeklappt ist. `data-sidebar-expanded` wird aber nur von

@@ -77,7 +77,7 @@ export function workflowRouteSurface(config = {}) {
             window.addEventListener('orientationchange', this._routeWindowRefresh, { passive: true });
 
             if (window.Livewire?.hook) {
-                this._routeLivewireCleanup = window.Livewire.hook('morph.updated', ({ el }) => {
+                this._routeLivewireCleanup = window.Livewire.hook('morphed', ({ el }) => {
                     if (this.$root?.contains(el) || el?.contains?.(this.$root)) {
                         this.queueRouteRefresh();
                     }

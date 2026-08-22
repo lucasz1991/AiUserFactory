@@ -1569,8 +1569,22 @@ class WorkflowManager extends Component
         string $status = 'idle',
     ): void {
         if ($this->workbenchStudioSessionId !== $studioSessionId) {
+            $this->skipRender();
+
             return;
         }
+
+        $previousUiState = [
+            $this->workbenchSessionMode,
+            $this->testWorkbenchMode,
+            $this->workbenchRunId,
+            $this->testWorkbenchRunId,
+            $this->workbenchRunStatus,
+            $this->workbenchHistoricalRun,
+            $this->workbenchDefinitionCanEdit,
+            $this->workbenchPauseRequested,
+            $this->workbenchSurface,
+        ];
 
         $workflow = $this->selectedWorkflow();
 
@@ -1618,7 +1632,7 @@ class WorkflowManager extends Component
         );
         $this->workbenchDefinitionCanEdit = (bool) $policy['can_edit'];
 
-        if ($previousDefinitionCanEdit !== $this->workbenchDefinitionCanEdit || $this->workbenchPauseRequested) {
+        if ($previousDefinitionCanEdit !== $this->workbenchDefinitionCanEdit) {
             $this->dispatchDefinitionAccessRefresh();
         }
 
@@ -1626,6 +1640,22 @@ class WorkflowManager extends Component
             $this->workbenchPauseRequested = false;
             $this->workbenchSurface = 'definition';
             $this->dispatchDefinitionWorkbenchEntered();
+        }
+
+        $currentUiState = [
+            $this->workbenchSessionMode,
+            $this->testWorkbenchMode,
+            $this->workbenchRunId,
+            $this->testWorkbenchRunId,
+            $this->workbenchRunStatus,
+            $this->workbenchHistoricalRun,
+            $this->workbenchDefinitionCanEdit,
+            $this->workbenchPauseRequested,
+            $this->workbenchSurface,
+        ];
+
+        if ($previousUiState === $currentUiState) {
+            $this->skipRender();
         }
     }
 
