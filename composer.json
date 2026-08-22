@@ -21,7 +21,7 @@
         "livewire/livewire": "^3.0",
         "paypal/paypal-server-sdk": "^0.6.1",
         "php-webdriver/webdriver": "^1.1",
-        "picqer/php-barcode-generator": "^2.4",
+        "picqer/php-barcode-generator": "^3.2",
         "plesk/ext-laravel-integration": "^7.0",
         "spatie/laravel-activitylog": "^4.9",
         "symfony/panther": "^2.2"
