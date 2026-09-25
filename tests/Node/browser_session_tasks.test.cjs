@@ -2,9 +2,14 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const openBrowserSessionTask = require('../../node/workflows/tasks/browser/open_browser_session.cjs');
 const openWebmailSessionTask = require('../../node/workflows/tasks/browser/open_webmail_session.cjs');
+const persistBrowserSessionTask = require('../../node/workflows/tasks/data/persist_browser_session.cjs');
+const deleteBrowserSessionTask = require('../../node/workflows/tasks/data/delete_browser_session.cjs');
 
 test('saved browser session restores cookies and opens the stored final URL', async () => {
   const calls = [];
@@ -97,6 +102,207 @@ test('missing requested browser session opens only the configured fallback URL',
   assert.equal(result.sessionFound, false);
   assert.equal(result.browserSessionAutoLoaded, true);
   assert.deepEqual(calls, ['https://mail.example.test/login']);
+});
+
+test('domain lookup never falls back to a newer session from another domain', async () => {
+  const calls = [];
+  const page = {
+    currentUrl: 'about:blank',
+    async setCookie(cookie) {
+      calls.push(['setCookie', cookie]);
+    },
+    async goto(url) {
+      this.currentUrl = url;
+      calls.push(['goto', url]);
+    },
+    url() {
+      return this.currentUrl;
+    },
+  };
+  const result = await openBrowserSessionTask.run({
+    page,
+    input: { target_domain: 'wanted.example.test' },
+    browser_sessions: {
+      newer: {
+        session_key: 'newer',
+        final_url: 'https://unrelated.example.test/account',
+        domain: 'unrelated.example.test',
+        cookies: [{ name: 'sid', value: 'wrong', domain: '.unrelated.example.test', path: '/' }],
+      },
+    },
+  });
+
+  assert.equal(result.sessionFound, false);
+  assert.deepEqual(calls, []);
+});
+
+test('explicit browser session key rejects a conflicting target domain', async () => {
+  const calls = [];
+  const page = {
+    currentUrl: 'about:blank',
+    async setCookie(cookie) {
+      calls.push(['setCookie', cookie]);
+    },
+    async goto(url) {
+      this.currentUrl = url;
+      calls.push(['goto', url]);
+    },
+    url() {
+      return this.currentUrl;
+    },
+  };
+  const result = await openBrowserSessionTask.run({
+    page,
+    input: { session_key: 'shop', target_domain: 'mail.example.test' },
+    browser_sessions: {
+      shop: {
+        session_key: 'shop',
+        final_url: 'https://shop.example.test/account',
+        domain: 'shop.example.test',
+        cookies: [{ name: 'sid', value: 'shop-only', domain: '.shop.example.test', path: '/' }],
+      },
+    },
+  });
+
+  assert.equal(result.sessionFound, false);
+  assert.deepEqual(calls, []);
+});
+
+test('automatic session owner lookup selects only that owner and requested domain', async () => {
+  const calls = [];
+  const page = {
+    currentUrl: 'about:blank',
+    async setCookie(cookie) {
+      calls.push(['setCookie', cookie.value]);
+    },
+    async goto(url) {
+      this.currentUrl = url;
+      calls.push(['goto', url]);
+    },
+    async evaluate(_callback, payload) {
+      calls.push(['storage', payload]);
+      return true;
+    },
+    async reload() {},
+    url() {
+      return this.currentUrl;
+    },
+  };
+  const result = await openBrowserSessionTask.run({
+    page,
+    input: { session_key: 'person-9-account-3', target_domain: 'two.example.test' },
+    browser_sessions: {
+      'person-9-account-3--one.example.test': {
+        session_key: 'person-9-account-3--one.example.test',
+        owner_session_key: 'person-9-account-3',
+        domain: 'one.example.test',
+        final_url: 'https://one.example.test/account',
+        cookies: [{ name: 'sid', value: 'wrong-owner-domain', domain: '.one.example.test', path: '/' }],
+      },
+      'person-9-account-3--two.example.test': {
+        session_key: 'person-9-account-3--two.example.test',
+        owner_session_key: 'person-9-account-3',
+        domain: 'two.example.test',
+        final_url: 'https://two.example.test/inbox',
+        cookies: [{ name: 'sid', value: 'right-owner-domain', domain: '.two.example.test', path: '/' }],
+      },
+      'person-10-account-3--two.example.test': {
+        session_key: 'person-10-account-3--two.example.test',
+        owner_session_key: 'person-10-account-3',
+        domain: 'two.example.test',
+        final_url: 'https://two.example.test/other-account',
+        cookies: [{ name: 'sid', value: 'wrong-owner', domain: '.two.example.test', path: '/' }],
+      },
+    },
+  });
+
+  assert.equal(result.sessionFound, true);
+  assert.equal(result.sessionKey, 'person-9-account-3--two.example.test');
+  assert.deepEqual(calls[0], ['setCookie', 'right-owner-domain']);
+  assert.equal(page.url(), 'https://two.example.test/inbox');
+});
+
+test('automatic snapshots use stable owner identity and retain one entry per domain', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'followflow-session-test-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+
+  const makeContext = (domain) => {
+    const url = `https://${domain}/account`;
+    const page = {
+      url: () => url,
+      frames: () => [{
+        async evaluate() {
+          return {
+            origin: `https://${domain}`,
+            url,
+            localStorage: { token: `storage-${domain}` },
+            sessionStorage: {},
+          };
+        },
+      }],
+      target: () => ({
+        async createCDPSession() {
+          return {
+            async send() {
+              return { cookies: [{ name: 'sid', value: `cookie-${domain}`, domain: `.${domain}`, path: '/' }] };
+            },
+            async detach() {},
+          };
+        },
+      }),
+    };
+
+    return {
+      page,
+      input: {
+        automatic_browser_session: true,
+        session_key: 'person-9-account-3',
+        target_domain: domain,
+      },
+      browserSessionAutomation: {
+        configured_session_key: '',
+        effective_session_key: 'person-9-account-3',
+      },
+      workflowTaskRunDirectory: directory,
+      observabilityLevel: 'off',
+    };
+  };
+
+  const one = await persistBrowserSessionTask.run(makeContext('one.example.test'));
+  const two = await persistBrowserSessionTask.run(makeContext('two.example.test'));
+
+  assert.equal(one.sessionKey, 'person-9-account-3--one.example.test');
+  assert.equal(two.sessionKey, 'person-9-account-3--two.example.test');
+  assert.equal(one.ownerSessionKey, 'person-9-account-3');
+  assert.equal(two.ownerSessionKey, 'person-9-account-3');
+});
+
+test('delete session honors false flags and leaves the active unrelated origin untouched', async () => {
+  const calls = [];
+  const page = {
+    async cookies() {
+      calls.push('cookies');
+      return [{ name: 'sid', value: 'active', domain: '.one.example.test', path: '/' }];
+    },
+    async evaluate() {
+      calls.push('evaluate');
+      return true;
+    },
+    url: () => 'https://one.example.test/account',
+  };
+  const result = await deleteBrowserSessionTask.run({
+    page,
+    input: {
+      target_domain: 'two.example.test',
+      clear_cookies: false,
+      clear_storage: false,
+    },
+    observabilityLevel: 'off',
+  });
+
+  assert.equal(result.clearCookies, false);
+  assert.equal(result.clearStorage, false);
+  assert.deepEqual(calls, []);
 });
 
 test('automatic browser session load without session or fallback is a non-blocking no-op', async () => {

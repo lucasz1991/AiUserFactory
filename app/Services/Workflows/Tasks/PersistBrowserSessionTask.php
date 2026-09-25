@@ -4,6 +4,7 @@ namespace App\Services\Workflows\Tasks;
 
 use App\Models\Person;
 use App\Services\Mail\MailAccountRegistrationRunner;
+use Illuminate\Support\Facades\DB;
 
 class PersistBrowserSessionTask
 {
@@ -19,13 +20,15 @@ class PersistBrowserSessionTask
             ];
         }
 
-        $metadata = is_array($person->metadata) ? $person->metadata : [];
-        $sessions = is_array($metadata['browser_sessions'] ?? null) ? $metadata['browser_sessions'] : [];
         [$sessionKey, $session] = $this->sessionRecord($result, $encryptedPayload);
-        $sessions[$sessionKey] = $session;
-
-        $metadata['browser_sessions'] = $sessions;
-        $person->forceFill(['metadata' => $metadata])->save();
+        DB::transaction(function () use ($person, $sessionKey, $session): void {
+            $lockedPerson = Person::query()->lockForUpdate()->findOrFail($person->getKey());
+            $metadata = is_array($lockedPerson->metadata) ? $lockedPerson->metadata : [];
+            $sessions = is_array($metadata['browser_sessions'] ?? null) ? $metadata['browser_sessions'] : [];
+            $sessions[$sessionKey] = $session;
+            $metadata['browser_sessions'] = $sessions;
+            $lockedPerson->forceFill(['metadata' => $metadata])->save();
+        });
 
         return [
             'ok' => true,
@@ -71,12 +74,16 @@ class PersistBrowserSessionTask
 
     public function delete(Person $person, array $result): array
     {
-        $metadata = is_array($person->metadata) ? $person->metadata : [];
-        $sessions = is_array($metadata['browser_sessions'] ?? null) ? $metadata['browser_sessions'] : [];
-        [$sessions, $deletedKeys, $domain, $sessionKey] = $this->deleteFromSessions($sessions, $result);
+        [$deletedKeys, $domain, $sessionKey] = DB::transaction(function () use ($person, $result): array {
+            $lockedPerson = Person::query()->lockForUpdate()->findOrFail($person->getKey());
+            $metadata = is_array($lockedPerson->metadata) ? $lockedPerson->metadata : [];
+            $sessions = is_array($metadata['browser_sessions'] ?? null) ? $metadata['browser_sessions'] : [];
+            [$sessions, $deletedKeys, $domain, $sessionKey] = $this->deleteFromSessions($sessions, $result);
+            $metadata['browser_sessions'] = $sessions;
+            $lockedPerson->forceFill(['metadata' => $metadata])->save();
 
-        $metadata['browser_sessions'] = $sessions;
-        $person->forceFill(['metadata' => $metadata])->save();
+            return [$deletedKeys, $domain, $sessionKey];
+        });
 
         return [
             'ok' => true,
@@ -118,11 +125,13 @@ class PersistBrowserSessionTask
         $summary = $this->summary($result);
         $domain = $this->normalizeDomain($summary['domain'] ?? $result['domain'] ?? $result['sessionDomain'] ?? '');
         $sessionKey = $this->sessionKey($result['sessionKey'] ?? $summary['sessionKey'] ?? $domain);
+        $ownerSessionKey = $this->sessionKey($result['ownerSessionKey'] ?? $summary['ownerSessionKey'] ?? $sessionKey);
 
         return [$sessionKey, [
             'payload_encrypted' => $encryptedPayload,
             'payload_hash' => (string) ($result['browserSessionPayloadHash'] ?? $result['sessionPayloadHash'] ?? ''),
             'session_key' => $sessionKey,
+            'owner_session_key' => $ownerSessionKey,
             'label' => (string) ($result['sessionLabel'] ?? $summary['label'] ?? $sessionKey),
             'domain' => $domain,
             'domains' => $this->stringList($summary['domains'] ?? $result['domains'] ?? []),
@@ -140,20 +149,25 @@ class PersistBrowserSessionTask
     protected function deleteFromSessions(array $sessions, array $result): array
     {
         $domain = $this->normalizeDomain($result['sessionDomain'] ?? $result['domain'] ?? '');
-        $sessionKey = $this->sessionKey($result['sessionKey'] ?? $domain);
+        $requestedKey = trim((string) ($result['sessionKey'] ?? $result['session_key'] ?? ''));
+        $sessionKey = $this->sessionKey($requestedKey !== '' ? $requestedKey : $domain);
         $deletedKeys = [];
 
         foreach ($sessions as $key => $session) {
             $storedDomain = $this->normalizeDomain(is_array($session) ? ($session['domain'] ?? '') : '');
             $storedDomains = is_array($session['domains'] ?? null) ? $session['domains'] : [];
-            $storedCookieDomains = is_array($session['cookie_domains'] ?? null) ? $session['cookie_domains'] : [];
-            $matchesKey = $sessionKey !== '' && (string) $key === $sessionKey;
+            $storedOwnerKey = $this->sessionKey(is_array($session) ? ($session['owner_session_key'] ?? '') : '');
+            $matchesKey = $sessionKey !== '' && ((string) $key === $sessionKey || $storedOwnerKey === $sessionKey);
             $matchesDomain = $domain !== '' && (
-                $this->domainMatches($storedDomain, $domain)
-                || collect([...$storedDomains, ...$storedCookieDomains])->contains(fn ($candidate) => $this->domainMatches((string) $candidate, $domain))
+                $storedDomain === $domain
+                || collect($storedDomains)->contains(fn ($candidate) => $this->normalizeDomain((string) $candidate) === $domain)
             );
 
-            if (! $matchesKey && ! $matchesDomain) {
+            $matchesTarget = $requestedKey !== ''
+                ? ($matchesKey && ($domain === '' || $matchesDomain))
+                : ($domain !== '' ? $matchesDomain : $matchesKey);
+
+            if (! $matchesTarget) {
                 continue;
             }
 
@@ -215,17 +229,4 @@ class PersistBrowserSessionTask
         return trim($value, " \t\n\r\0\x0B.");
     }
 
-    protected function domainMatches(string $candidate, string $target): bool
-    {
-        $candidate = $this->normalizeDomain($candidate);
-        $target = $this->normalizeDomain($target);
-
-        if ($candidate === '' || $target === '') {
-            return false;
-        }
-
-        return $candidate === $target
-            || str_ends_with($candidate, '.'.$target)
-            || str_ends_with($target, '.'.$candidate);
-    }
 }

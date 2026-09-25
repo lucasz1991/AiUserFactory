@@ -1,7 +1,7 @@
 'use strict';
 
 const { captureTaskPreview } = require('../lib/preview.cjs');
-const { cookieMatchesDomains, domainFromUrl, normalizeDomain } = require('../lib/webmail_session_capture.cjs');
+const { domainFromUrl, normalizeDomain } = require('../lib/webmail_session_capture.cjs');
 
 function normalizeText(value) {
   return String(value ?? '').trim();
@@ -150,7 +150,7 @@ function storageOriginsForDomain(page, targetUrl, targetDomain) {
   const urls = uniqueValues([targetUrl, ...frameUrls]);
 
   return uniqueValues(urls
-    .filter((url) => domainFromUrl(url) !== '' && cookieMatchesDomains({ domain: domainFromUrl(url), name: 'origin-match' }, [targetDomain]))
+    .filter((url) => domainFromUrl(url) === targetDomain)
     .map(originFromUrl));
 }
 
@@ -177,7 +177,12 @@ async function clearStorage(page, client, targetUrl, targetDomain, clearStorageE
     }
   }
 
-  if (!page || typeof page.evaluate !== 'function') {
+  const currentOrigin = originFromUrl(typeof page?.url === 'function' ? page.url() : '');
+
+  // Never clear the active tab's storage just because a different target
+  // domain was requested. CDP may clear allowed related origins above; the
+  // page fallback is only valid when its exact origin was one of those targets.
+  if (!page || typeof page.evaluate !== 'function' || !origins.includes(currentOrigin)) {
     return clearedByCdp;
   }
 
@@ -228,8 +233,8 @@ async function run(context = {}) {
     || sessionDomain,
   );
   const sessionKey = configuredSessionKey || (targetDomain !== '' ? sessionKeyFromDomain(targetDomain) : '');
-  const clearCookies = boolValue(input.clear_cookies || input.clearCookies, true);
-  const clearStorageEnabled = boolValue(input.clear_storage || input.clearStorage, true);
+  const clearCookies = boolValue(input.clear_cookies ?? input.clearCookies, true);
+  const clearStorageEnabled = boolValue(input.clear_storage ?? input.clearStorage, true);
 
   if (!page || typeof page.url !== 'function') {
     return { ok: false, status: 'failed', statusMessage: 'Kein Page-Handle zum Loeschen der Browser-Session vorhanden.' };
@@ -272,7 +277,7 @@ async function run(context = {}) {
 
   if (clearCookies) {
     const cookies = await allCookies(page, client);
-    const matchingCookies = cookies.filter((cookie) => cookieMatchesDomains(cookie, [targetDomain]));
+    const matchingCookies = cookies.filter((cookie) => normalizeDomain(cookie.domain || cookie.url || '') === targetDomain);
 
     for (const cookie of matchingCookies) {
       if (await deleteCookie(client, cookie)) {

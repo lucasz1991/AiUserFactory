@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\NetworkJob;
 use App\Models\NetworkJobProgressEvent;
+use App\Models\Person;
 use App\Models\Workflow;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowStep;
@@ -11,6 +12,7 @@ use App\Models\WorkflowStepRun;
 use App\Services\Workflows\WorkflowExecutionService;
 use App\Services\Workflows\WorkflowRuntimeFingerprint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Str;
 use Tests\Concerns\CreatesNetworkNodes;
 use Tests\TestCase;
@@ -108,6 +110,168 @@ class ClientControllerReliableWorkflowTest extends TestCase
             ->assertJsonPath('acknowledged_sequence', 2);
 
         $this->assertSame(2, NetworkJobProgressEvent::query()->where('network_job_id', $job->id)->count());
+    }
+
+    public function test_nested_client_session_artifacts_are_redacted_from_progress_and_results(): void
+    {
+        $node = $this->createNetworkNode([
+            'name' => 'Session redaction node',
+            'node_uuid' => 'session-redaction-node',
+            'api_key' => 'session-redaction-key',
+            'status' => 'active',
+        ]);
+        $leaseToken = Str::random(64);
+        $job = NetworkJob::query()->create([
+            'job_uuid' => (string) Str::uuid(),
+            'network_node_id' => $node->id,
+            'type' => 'workflow_task',
+            'payload_version' => 2,
+            'payload_json' => ['runtime' => []],
+            'status' => 'dispatched',
+            'queued_at' => now(),
+            'dispatched_at' => now(),
+            'lease_expires_at' => now()->addMinute(),
+            'lease_token_hash' => hash('sha256', $leaseToken),
+        ]);
+        $headers = ['X-NODE-API-KEY' => $this->networkNodeApiKey($node)];
+        $sessionPayload = '{"cookies":[{"name":"sid","value":"synthetic-session-secret"}]}';
+
+        $this->withHeaders($headers)->post('/api/client-controller/job-progress', [
+            'job_uuid' => $job->job_uuid,
+            'lease_token' => $leaseToken,
+            'sequence' => 1,
+            'progress' => json_encode([
+                'state' => 'running',
+                'workflow' => ['steps' => [['tasks' => [[
+                    'remoteBrowserSessionPayload' => $sessionPayload,
+                    'encryptedSessionPayload' => 'encrypted-synthetic-session-secret',
+                ]]]]],
+            ], JSON_THROW_ON_ERROR),
+        ])->assertOk();
+
+        $this->withHeaders($headers)->postJson('/api/client-controller/job-result', [
+            'job_uuid' => $job->job_uuid,
+            'lease_token' => $leaseToken,
+            'sequence' => 2,
+            'status' => 'success',
+            'result' => [
+                'ok' => true,
+                'remoteBrowserSessionPayload' => $sessionPayload,
+                'workflow' => ['steps' => [['tasks' => [[
+                    'browserSessionPayload' => $sessionPayload,
+                    'webmailSession' => ['payload_encrypted' => 'synthetic-session-secret'],
+                ]]]]],
+                'browserCleanup' => ['browserSessions' => ['session' => $sessionPayload]],
+            ],
+        ])->assertOk();
+
+        $job->refresh();
+        $storedValues = json_encode([
+            'result' => $job->result_json,
+            'events' => $job->progressEvents()->pluck('payload_json')->all(),
+        ], JSON_THROW_ON_ERROR);
+
+        $this->assertStringNotContainsString('synthetic-session-secret', $storedValues);
+        $this->assertStringNotContainsString('remoteBrowserSessionPayload', $storedValues);
+        $this->assertStringNotContainsString('encryptedSessionPayload', $storedValues);
+        $this->assertStringNotContainsString('browserSessions', $storedValues);
+    }
+
+    public function test_nested_client_browser_session_is_encrypted_and_persisted_before_redaction(): void
+    {
+        $node = $this->createNetworkNode([
+            'name' => 'Nested session node',
+            'node_uuid' => 'nested-session-node',
+            'api_key' => 'nested-session-key',
+            'status' => 'active',
+        ]);
+        $person = Person::query()->create([
+            'platform' => 'instagram',
+            'profile_key' => 'nested-session-'.str()->random(8),
+            'profile_label' => 'Nested session test',
+            'metadata' => ['browser_sessions' => []],
+        ]);
+        $workflow = Workflow::query()->create([
+            'name' => 'Nested session workflow',
+            'slug' => 'nested-session-'.str()->random(8),
+            'is_active' => true,
+        ]);
+        $step = WorkflowStep::query()->create([
+            'workflow_id' => $workflow->id,
+            'name' => 'Persist session',
+            'type' => WorkflowStep::TYPE_BROWSER_CONTROL,
+            'action_key' => 'persist-session',
+            'position' => 10,
+            'is_enabled' => true,
+            'config_json' => [],
+        ]);
+        $run = WorkflowRun::query()->create([
+            'run_uuid' => (string) Str::uuid(),
+            'workflow_id' => $workflow->id,
+            'status' => 'running',
+            'started_at' => now(),
+            'context_json' => ['person_id' => $person->id, 'execution_target' => 'client_controller'],
+            'result_json' => [],
+        ]);
+        $jobUuid = (string) Str::uuid();
+        WorkflowStepRun::query()->create([
+            'workflow_run_id' => $run->id,
+            'workflow_step_id' => $step->id,
+            'status' => 'waiting',
+            'external_run_type' => 'client-controller-workflow-task',
+            'external_run_id' => $jobUuid,
+            'started_at' => now(),
+            'result_json' => [],
+        ]);
+        $leaseToken = Str::random(64);
+        $job = NetworkJob::query()->create([
+            'job_uuid' => $jobUuid,
+            'network_node_id' => $node->id,
+            'workflow_run_id' => $run->id,
+            'type' => 'workflow_task',
+            'payload_version' => 2,
+            'payload_json' => ['runtime' => []],
+            'status' => 'dispatched',
+            'queued_at' => now(),
+            'dispatched_at' => now(),
+            'lease_expires_at' => now()->addMinute(),
+            'lease_token_hash' => hash('sha256', $leaseToken),
+        ]);
+        $sessionPayload = json_encode([
+            'cookies' => [['name' => 'sid', 'value' => 'nested-synthetic-secret', 'domain' => '.example.test']],
+        ], JSON_THROW_ON_ERROR);
+
+        $this->withHeader('X-NODE-API-KEY', $this->networkNodeApiKey($node))
+            ->postJson('/api/client-controller/job-result', [
+                'job_uuid' => $job->job_uuid,
+                'lease_token' => $leaseToken,
+                'sequence' => 1,
+                'status' => 'success',
+                'result' => [
+                    'ok' => true,
+                    'status' => 'success',
+                    'workflow' => ['steps' => [['tasks' => [[
+                        'remoteBrowserSessionPayload' => $sessionPayload,
+                        'sessionKey' => 'person-'.$person->id.'-account-primary--example.test',
+                        'ownerSessionKey' => 'person-'.$person->id.'-account-primary',
+                        'browserSessionSummary' => [
+                            'domain' => 'example.test',
+                            'finalUrl' => 'https://example.test/account',
+                            'domains' => ['example.test'],
+                        ],
+                    ]]]]],
+                ],
+            ])->assertOk();
+
+        $storedSession = $person->fresh()->metadata['browser_sessions']['person-'.$person->id.'-account-primary--example.test'];
+        $this->assertSame($sessionPayload, Crypt::decryptString($storedSession['payload_encrypted']));
+        $storedValues = json_encode([
+            'job' => $job->fresh()->result_json,
+            'events' => $job->fresh()->progressEvents()->pluck('payload_json')->all(),
+        ], JSON_THROW_ON_ERROR);
+        $this->assertStringNotContainsString('nested-synthetic-secret', $storedValues);
+        $this->assertStringNotContainsString('encryptedBrowserSessionPayload', $storedValues);
+        $this->assertStringNotContainsString('remoteBrowserSessionPayload', $storedValues);
     }
 
     public function test_capable_node_receives_one_portable_full_workflow_job(): void

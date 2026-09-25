@@ -386,13 +386,22 @@ class ClientControllerApiController extends Controller
         $result = $this->attachStoredLivePreview($job, $validated['result'] ?? []);
         $workflowService = app(WorkflowExecutionService::class);
 
+        // Older clients may put the session artifact below workflow/steps/tasks.
+        // Lift one payload into the private server-side processing copy before
+        // removing all session material from the stored/progress projection.
+
         foreach ([
             'remoteWebmailSessionPayload',
             'remoteBrowserSessionPayload',
+            'sessionPayloadHash',
+            'sessionSummary',
             'browserSessionPayloadHash',
             'browserSessionSummary',
             'sessionKey',
             'sessionLabel',
+            'ownerSessionKey',
+            'mailboxEmail',
+            'mailboxSource',
             'domain',
             'domains',
             'cookieDomains',
@@ -402,7 +411,8 @@ class ClientControllerApiController extends Controller
             'scriptVersion',
         ] as $sessionField) {
             if (! array_key_exists($sessionField, $result)) {
-                $workflowValue = data_get($result, 'workflow.'.$sessionField);
+                $workflowValue = data_get($result, 'workflow.'.$sessionField)
+                    ?? $this->findNestedClientSessionField($result, $sessionField);
 
                 if ($workflowValue !== null) {
                     $result[$sessionField] = $workflowValue;
@@ -421,6 +431,20 @@ class ClientControllerApiController extends Controller
             }
 
             unset($result[$plainKey]);
+        }
+
+        $workflowResult = $result;
+        $result = $this->redactClientSessionArtifacts($result);
+
+        if ($job->type === 'workflow_task') {
+            $stepRun = WorkflowStepRun::query()
+                ->where('external_run_type', 'client-controller-workflow-task')
+                ->where('external_run_id', $job->job_uuid)
+                ->first();
+
+            if ($stepRun) {
+                $workflowService->persistClientControllerTaskSessionArtifacts($stepRun, $workflowResult);
+            }
         }
 
         if ($job->type === 'workflow_run'
@@ -506,7 +530,7 @@ class ClientControllerApiController extends Controller
         if ($job->type === 'workflow_run') {
             $workflowService->completeClientWorkflowRun(
                 $job,
-                $result,
+                $workflowResult,
                 $validated['status'],
                 $validated['error_message'] ?? null,
             );
@@ -607,6 +631,7 @@ class ClientControllerApiController extends Controller
         }
 
         $progress = $this->attachStoredLivePreview($job, $progress);
+        $progress = $this->redactClientSessionArtifacts($progress);
         $progress['clientControllerReportedAt'] = now()->toIso8601String();
 
         $controlAcknowledged = $job->control_command !== null && (
@@ -823,6 +848,72 @@ class ClientControllerApiController extends Controller
             'latestEvent' => is_array($latestEvent) ? $latestEvent : null,
             'reportedAt' => $progress['clientControllerReportedAt'] ?? $progress['at'] ?? null,
         ], fn (mixed $value): bool => $value !== null && $value !== '');
+    }
+
+    /**
+     * Removes browser credentials/session snapshots from every persisted client
+     * projection. The unredacted result remains request-local long enough for
+     * WorkflowExecutionService to encrypt and persist the session artifact.
+     *
+     * @param  array<string, mixed>  $value
+     * @return array<string, mixed>
+     */
+    protected function redactClientSessionArtifacts(array $value): array
+    {
+        $sensitiveKeys = [
+            'remotebrowsersessionpayload',
+            'remotewebmailsessionpayload',
+            'encryptedbrowsersessionpayload',
+            'encryptedsessionpayload',
+            'browsersessionpayload',
+            'webmailsessionpayload',
+            'browsersessionfilepath',
+            'webmailsessionfilepath',
+            'payloadencrypted',
+            'browsersessions',
+            'webmailsession',
+        ];
+
+        $redact = function (mixed $item) use (&$redact, $sensitiveKeys): mixed {
+            if (! is_array($item)) {
+                return $item;
+            }
+
+            $safe = [];
+
+            foreach ($item as $key => $child) {
+                $normalized = strtolower((string) preg_replace('/[^a-z0-9]/i', '', (string) $key));
+
+                if (in_array($normalized, $sensitiveKeys, true)) {
+                    continue;
+                }
+
+                $safe[$key] = $redact($child);
+            }
+
+            return $safe;
+        };
+
+        return $redact($value);
+    }
+
+    protected function findNestedClientSessionField(array $value, string $field): mixed
+    {
+        foreach ($value as $key => $child) {
+            if (strcasecmp((string) $key, $field) === 0 && $child !== null && $child !== '') {
+                return $child;
+            }
+
+            if (is_array($child)) {
+                $nested = $this->findNestedClientSessionField($child, $field);
+
+                if ($nested !== null && $nested !== '') {
+                    return $nested;
+                }
+            }
+        }
+
+        return null;
     }
 
     protected function attachStoredLivePreview(NetworkJob $job, array $payload): array

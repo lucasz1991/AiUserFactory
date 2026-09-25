@@ -3,6 +3,7 @@
 namespace App\Services\Workflows;
 
 use App\Models\Person;
+use App\Models\PersonEmailAccount;
 use App\Models\Workflow;
 use App\Models\WorkflowStep;
 use App\Services\Mail\MailAccountRegistrationRunner;
@@ -47,9 +48,16 @@ class WorkflowBrowserSessionService
     {
         $settings = $this->settings($workflow);
         $configuredKey = $this->normalizeSessionKey($settings['session_key']);
+        $accountId = $personId !== null
+            ? PersonEmailAccount::query()
+                ->where('person_id', $personId)
+                ->orderByDesc('is_primary')
+                ->orderBy('id')
+                ->value('id')
+            : null;
         $effectiveKey = $configuredKey !== ''
             ? $configuredKey
-            : $this->defaultSessionKey((int) $workflow->getKey(), $personId);
+            : $this->defaultSessionKey((int) $workflow->getKey(), $personId, $accountId ? (int) $accountId : null);
 
         return [
             ...$settings,
@@ -57,6 +65,8 @@ class WorkflowBrowserSessionService
             'effective_session_key' => $effectiveKey,
             'workflow_id' => (int) $workflow->getKey(),
             'person_id' => $personId,
+            'account_id' => $accountId ? (int) $accountId : null,
+            'identity_key' => $effectiveKey,
             'scope' => $personId === null ? 'verification' : 'person',
         ];
     }
@@ -86,9 +96,13 @@ class WorkflowBrowserSessionService
         ];
     }
 
-    public function defaultSessionKey(int $workflowId, ?int $personId): string
+    public function defaultSessionKey(int $workflowId, ?int $personId, ?int $accountId = null): string
     {
-        return 'workflow-'.$workflowId.'-person-'.($personId === null ? 'null' : $personId);
+        if ($personId === null) {
+            return 'verification-mailbox';
+        }
+
+        return 'person-'.$personId.'-account-'.($accountId ?: 'primary');
     }
 
     public function storeSettings(Workflow $workflow, array $browserSessionSettings): void

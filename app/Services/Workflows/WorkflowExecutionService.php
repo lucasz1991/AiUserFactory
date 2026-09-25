@@ -12,6 +12,7 @@ use App\Models\ManagedProcess;
 use App\Models\NetworkJob;
 use App\Models\NetworkNode;
 use App\Models\Person;
+use App\Models\PersonEmailAccount;
 use App\Models\Workflow;
 use App\Models\WorkflowCopilotSession;
 use App\Models\WorkflowRun;
@@ -3983,6 +3984,28 @@ class WorkflowExecutionService
         return $result;
     }
 
+    /**
+     * Persist a ClientController session artifact before its diagnostic result
+     * is redacted for durable NetworkJob/progress storage.
+     */
+    public function persistClientControllerTaskSessionArtifacts(WorkflowStepRun $stepRun, array $result): void
+    {
+        $result = $this->prepareExternalResult($stepRun, $result);
+
+        if (trim((string) data_get($result, 'encryptedSessionPayload', '')) !== '') {
+            $this->applyWebmailSessionResult($stepRun->workflowRun, $result);
+        }
+
+        if (trim((string) data_get($result, 'encryptedBrowserSessionPayload', '')) !== '') {
+            $this->applyBrowserSessionResult($stepRun->workflowRun, $result);
+        }
+
+        if ((bool) data_get($result, 'browserSessionDeleted', false)
+            || (bool) data_get($result, 'deletedBrowserSession', false)) {
+            $this->applyBrowserSessionDeletionResult($stepRun->workflowRun, $result);
+        }
+    }
+
     protected function applyWorkflowVariablesResult(WorkflowRun $run, array $result): void
     {
         $variables = [
@@ -4420,9 +4443,16 @@ class WorkflowExecutionService
 
     protected function personForRun(WorkflowRun $run, ?WorkflowStep $step = null): ?Person
     {
+        $runPersonId = (int) (data_get($run->context_json, 'person_id') ?: 0);
+        $stepPersonId = (int) (data_get($step?->config_json, 'person_id') ?: 0);
+
+        if ($runPersonId > 0 && $stepPersonId > 0 && $runPersonId !== $stepPersonId) {
+            throw new \RuntimeException('Der Workflow-Step verweist auf eine andere Person als der unveraenderliche Workflow-Lauf.');
+        }
+
         $personId = (int) (
-            data_get($step?->config_json, 'person_id')
-            ?: data_get($run->context_json, 'person_id')
+            $runPersonId
+            ?: $stepPersonId
             ?: 0
         );
 
@@ -4434,9 +4464,13 @@ class WorkflowExecutionService
         $person = $this->personForRun($run, $step);
         $settings = $this->mailRegistration->settings();
         $verificationMailbox = $this->workflowVerificationMailbox($settings['verification_mailbox'] ?? []);
-        $emailAccount = $person && is_array(data_get($person->metadata, 'email_account'))
-            ? data_get($person->metadata, 'email_account')
-            : [];
+        $canonicalEmailAccount = $person
+            ? ($person->emailAccounts()->where('is_primary', true)->first() ?? $person->emailAccounts()->first())
+            : null;
+        $emailAccount = $canonicalEmailAccount?->toMetadataAccount()
+            ?? ($person && is_array(data_get($person->metadata, 'email_account'))
+                ? data_get($person->metadata, 'email_account')
+                : []);
         $accountEmail = trim((string) ($emailAccount['email'] ?? $person?->person_email ?? ''));
         $accountUsername = trim((string) ($emailAccount['username'] ?? $accountEmail));
         $accountProvider = (string) ($emailAccount['provider'] ?? 'proton');
@@ -4456,6 +4490,7 @@ class WorkflowExecutionService
                 ? $verificationMailbox['browser_sessions']
                 : []);
         $accountPayload = [
+            'id' => $canonicalEmailAccount?->id,
             'provider' => $accountProvider,
             'email' => $accountEmail,
             'username' => $accountUsername,
@@ -4585,6 +4620,7 @@ class WorkflowExecutionService
             'copilotTransientTask' => data_get($run->context_json, 'copilot_transient_task'),
             'copilot_transient_task' => data_get($run->context_json, 'copilot_transient_task'),
             'personId' => data_get($run->context_json, 'person_id'),
+            'personAccountId' => $canonicalEmailAccount?->id,
             'browserWindows' => $browserWindows,
             'browser_windows' => $browserWindows,
             'browser' => $browserRuntime,

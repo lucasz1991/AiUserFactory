@@ -94,7 +94,16 @@ function sessionMatchesDomain(session = {}, targetDomain = '') {
 
 function selectSession(sessions = [], input = {}) {
   const requestedKey = sessionKey(input.session_key || input.sessionKey || input.value || '');
-  const targetDomain = normalizeDomain(input.target_domain || input.targetDomain || input.domain || input.url || '');
+  const targetDomain = normalizeDomain(input.target_domain || input.targetDomain || input.domain || input.url || input.fallback_url || input.fallbackUrl || '');
+  const newestFirst = (candidates) => [...candidates].sort((left, right) => {
+    const timestampDifference = sessionTimestamp(right) - sessionTimestamp(left);
+
+    if (timestampDifference !== 0) {
+      return timestampDifference;
+    }
+
+    return sessionKey(left.sessionKey || left.session_key || '').localeCompare(sessionKey(right.sessionKey || right.session_key || ''));
+  });
 
   if (requestedKey !== '') {
     const keyed = sessions.find((session) => {
@@ -104,21 +113,27 @@ function selectSession(sessions = [], input = {}) {
     });
 
     if (keyed) {
-      return keyed;
+      return targetDomain !== '' && !sessionMatchesDomain(keyed, targetDomain) ? null : keyed;
     }
 
-    return null;
+    const scoped = newestFirst(sessions.filter((session) => {
+      const ownerKey = sessionKey(session.ownerSessionKey || session.owner_session_key || '');
+
+      return ownerKey === requestedKey && (targetDomain === '' || sessionMatchesDomain(session, targetDomain));
+    }));
+
+    // Without a domain, only use an owner scope if it identifies exactly one
+    // stored domain snapshot. Never guess among multiple account/domain entries.
+    return targetDomain === '' && scoped.length !== 1 ? null : (scoped[0] || null);
   }
 
   if (targetDomain !== '') {
-    const domainMatch = sessions.find((session) => sessionMatchesDomain(session, targetDomain));
+    const domainMatch = newestFirst(sessions.filter((session) => sessionMatchesDomain(session, targetDomain)))[0];
 
-    if (domainMatch) {
-      return domainMatch;
-    }
+    return domainMatch || null;
   }
 
-  return [...sessions].sort((left, right) => sessionTimestamp(right) - sessionTimestamp(left))[0] || null;
+  return null;
 }
 
 async function run(context = {}) {

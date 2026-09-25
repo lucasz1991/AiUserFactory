@@ -11,6 +11,10 @@ function sessionKeyFromDomain(domain) {
   return normalizeDomain(domain).replace(/[^a-z0-9.-]+/g, '-').replace(/^-+|-+$/g, '') || 'browser-session';
 }
 
+function normalizeSessionKey(value) {
+  return normalizeText(value).toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'browser-session';
+}
+
 async function run(context = {}) {
   const page = context.page;
   const input = context.input || {};
@@ -18,13 +22,22 @@ async function run(context = {}) {
   const automatic = input.automatic_browser_session === true || input.automaticBrowserSession === true;
   const finalUrl = page && typeof page.url === 'function' ? page.url() : '';
   const targetDomain = normalizeDomain(input.target_domain || input.targetDomain || input.domain || input.value || finalUrl);
-  const sessionKey = sessionKeyFromDomain(
-    input.session_key
-    || input.sessionKey
-    || automation.effective_session_key
-    || automation.effectiveSessionKey
+  const effectiveKey = normalizeText(automation.effective_session_key || automation.effectiveSessionKey);
+  const explicitlyConfiguredKey = normalizeText(automation.configured_session_key || automation.configuredSessionKey);
+  const inputKey = normalizeText(input.session_key || input.sessionKey);
+  const inputKeyIsAutomaticScope = automatic && explicitlyConfiguredKey === '' && inputKey !== '' && inputKey === effectiveKey;
+  const configuredKey = explicitlyConfiguredKey || (inputKeyIsAutomaticScope ? '' : inputKey);
+  const ownerSessionKey = normalizeSessionKey(
+    configuredKey
+    || effectiveKey
     || targetDomain,
   );
+  const domainScopedAutomaticKey = configuredKey === ''
+    && effectiveKey !== ''
+    && targetDomain !== '';
+  const sessionKey = domainScopedAutomaticKey
+    ? `${ownerSessionKey}--${sessionKeyFromDomain(targetDomain)}`
+    : ownerSessionKey;
   const label = normalizeText(input.label || input.session_label || input.sessionLabel || sessionKey);
 
   if (!page || typeof page.url !== 'function') {
@@ -39,6 +52,7 @@ async function run(context = {}) {
         statusMessage: 'Keine gueltige Browserseite geoeffnet; es wurde keine automatische Browser-Session gespeichert.',
         finalUrl,
         sessionKey,
+        ownerSessionKey,
         automaticBrowserSession: true,
       };
     }
@@ -78,6 +92,7 @@ async function run(context = {}) {
         finalUrl: session.finalUrl,
         domain: session.domain,
         sessionKey,
+        ownerSessionKey,
         automaticBrowserSession: true,
       };
     }
@@ -89,6 +104,7 @@ async function run(context = {}) {
       finalUrl: session.finalUrl,
       domain: session.domain,
       sessionKey,
+      ownerSessionKey,
     };
   }
 
@@ -109,12 +125,14 @@ async function run(context = {}) {
       cookieCount,
       storageOriginCount,
       sessionKey,
+      ownerSessionKey,
       label,
     },
     domain: session.domain,
     domains: session.domains,
     cookieDomains: session.cookieDomains,
     sessionKey,
+    ownerSessionKey,
     sessionLabel: label,
     cookieCount,
     finalUrl: session.finalUrl,

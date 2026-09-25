@@ -1350,20 +1350,26 @@ class WorkflowTaskRunner
         $mailboxSource = is_array($mailboxSource)
             ? strtolower(trim((string) ($mailboxSource['script_person_source'] ?? $mailboxSource['mailbox_source'] ?? 'person')))
             : 'person';
-        $account = in_array($mailboxSource, ['verification', 'verification_mailbox', 'veri-account', 'veri_account', 'main', 'master'], true)
-            ? data_get($runtimeContext, 'verificationMailbox', data_get($runtimeContext, 'verification_mailbox', []))
-            : data_get($runtimeContext, 'account', []);
-        $identity = strtolower(trim((string) data_get($account, 'email', data_get($account, 'username', ''))));
-
-        if ($identity !== '') {
-            return 'mailbox-'.substr(hash('sha256', $identity), 0, 24);
+        if (in_array($mailboxSource, ['verification', 'verification_mailbox', 'veri-account', 'veri_account', 'main', 'master'], true)
+            || data_get($runtimeContext, 'browserSessionAutomation.scope') === 'verification'
+            || data_get($runtimeContext, 'browser_session_automation.scope') === 'verification') {
+            return 'verification-mailbox';
         }
 
         $personId = (int) (data_get($runtimeContext, 'personId') ?: data_get($run->context_json, 'person_id'));
+        $accountId = (int) (
+            data_get($runtimeContext, 'account.id')
+            ?: data_get($runtimeContext, 'personAccountId')
+            ?: data_get($runtimeContext, 'browserSessionAutomation.account_id')
+            ?: data_get($runtimeContext, 'browser_session_automation.account_id')
+            ?: 0
+        );
 
-        return $personId > 0
-            ? 'person-'.$personId
-            : 'workflow-'.((int) $run->workflow_id ?: 'anonymous');
+        if ($personId > 0) {
+            return 'person-'.$personId.'-account-'.($accountId > 0 ? $accountId : 'primary');
+        }
+
+        return 'workflow-'.((int) $run->workflow_id ?: 'anonymous');
     }
 
     protected function devDebugRuntimeConfig(WorkflowRun $run, WorkflowStep $step, WorkflowStepRun $stepRun, bool $localArtifacts = true): array

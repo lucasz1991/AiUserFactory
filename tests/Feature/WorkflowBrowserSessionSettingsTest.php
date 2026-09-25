@@ -4,7 +4,10 @@ namespace Tests\Feature;
 
 use App\Models\Workflow;
 use App\Models\WorkflowStep;
+use App\Models\Person;
+use App\Models\PersonEmailAccount;
 use App\Services\Workflows\Tasks\PersistBrowserSessionTask;
+use App\Services\Workflows\Tasks\PersistWebmailSessionTask;
 use App\Services\Workflows\WorkflowBrowserSessionService;
 use App\Services\Workflows\WorkflowTaskCatalog;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -29,8 +32,8 @@ class WorkflowBrowserSessionSettingsTest extends TestCase
             'browser_window' => 'main',
             'session_label' => '',
         ], $service->settings($workflow));
-        $this->assertSame('workflow-'.$workflow->id.'-person-17', $service->runtimeConfig($workflow, 17)['effective_session_key']);
-        $this->assertSame('workflow-'.$workflow->id.'-person-null', $service->runtimeConfig($workflow, null)['effective_session_key']);
+        $this->assertSame('person-17-account-primary', $service->runtimeConfig($workflow, 17)['effective_session_key']);
+        $this->assertSame('verification-mailbox', $service->runtimeConfig($workflow, null)['effective_session_key']);
 
         $service->storeSettings($workflow, [
             'enabled' => true,
@@ -181,6 +184,73 @@ class WorkflowBrowserSessionSettingsTest extends TestCase
         $this->assertSame(['shared-mail'], $deleted['deletedSessionKeys']);
         $settings = app(\App\Services\Mail\MailAccountRegistrationRunner::class)->settings();
         $this->assertSame([], data_get($settings, 'verification_mailbox.browser_sessions'));
+    }
+
+    public function test_browser_session_delete_requires_both_an_explicit_key_and_domain_to_match(): void
+    {
+        $person = Person::query()->create([
+            'platform' => 'instagram',
+            'profile_key' => 'session-delete-'.str()->random(8),
+            'profile_label' => 'Session delete test',
+            'metadata' => ['browser_sessions' => [
+                'first' => ['domain' => 'one.example.test', 'domains' => ['one.example.test']],
+                'second' => ['domain' => 'two.example.test', 'domains' => ['two.example.test']],
+            ]],
+        ]);
+
+        $conflict = app(PersistBrowserSessionTask::class)->delete($person, [
+            'sessionKey' => 'first',
+            'domain' => 'two.example.test',
+        ]);
+
+        $this->assertSame([], $conflict['deletedSessionKeys']);
+        $this->assertSame(['first', 'second'], array_keys($person->fresh()->metadata['browser_sessions']));
+
+        $deleted = app(PersistBrowserSessionTask::class)->delete($person, ['sessionKey' => 'first']);
+
+        $this->assertSame(['first'], $deleted['deletedSessionKeys']);
+        $this->assertSame(['second'], array_keys($person->fresh()->metadata['browser_sessions']));
+    }
+
+    public function test_webmail_session_write_updates_canonical_account_and_primary_mirror(): void
+    {
+        $person = Person::query()->create([
+            'platform' => 'instagram',
+            'profile_key' => 'session-save-'.str()->random(8),
+            'profile_label' => 'Session save test',
+            'person_email' => 'primary@example.test',
+            'metadata' => ['email_account' => ['email' => 'primary@example.test']],
+        ]);
+        $primary = PersonEmailAccount::query()->create([
+            'person_id' => $person->id,
+            'email' => 'primary@example.test',
+            'is_primary' => true,
+            'webmail_session' => ['payload_encrypted' => 'old'],
+        ]);
+        $secondary = PersonEmailAccount::query()->create([
+            'person_id' => $person->id,
+            'email' => 'secondary@example.test',
+            'is_primary' => false,
+            'webmail_session' => ['payload_encrypted' => 'secondary-old'],
+        ]);
+
+        $result = app(PersistWebmailSessionTask::class)->handle($person, [
+            'encryptedSessionPayload' => 'encrypted-primary',
+            'mailboxEmail' => 'PRIMARY@example.test',
+        ]);
+
+        $this->assertTrue($result['ok']);
+        $this->assertSame('encrypted-primary', data_get($primary->fresh()->webmail_session, 'payload_encrypted'));
+        $this->assertSame('encrypted-primary', data_get($person->fresh()->metadata, 'email_account.webmail_session.payload_encrypted'));
+
+        $secondaryResult = app(PersistWebmailSessionTask::class)->handle($person->fresh(), [
+            'encryptedSessionPayload' => 'encrypted-secondary',
+            'mailboxEmail' => 'secondary@example.test',
+        ]);
+
+        $this->assertTrue($secondaryResult['ok']);
+        $this->assertSame('encrypted-secondary', data_get($secondary->fresh()->webmail_session, 'payload_encrypted'));
+        $this->assertSame('encrypted-primary', data_get($person->fresh()->metadata, 'email_account.webmail_session.payload_encrypted'));
     }
 
     protected function workflow(): Workflow

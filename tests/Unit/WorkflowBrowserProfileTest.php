@@ -16,7 +16,7 @@ class WorkflowBrowserProfileTest extends TestCase
         $firstRun = $this->workflowRun('11111111-1111-1111-1111-111111111111');
         $secondRun = $this->workflowRun('22222222-2222-2222-2222-222222222222');
         $step = $this->webmailStep('person');
-        $context = ['account' => ['email' => 'Person@Example.test']];
+        $context = ['account' => ['id' => 52, 'email' => 'Person@Example.test']];
 
         $this->assertSame(
             $this->profileKey($firstRun, $step, $context),
@@ -24,14 +24,27 @@ class WorkflowBrowserProfileTest extends TestCase
         );
     }
 
-    public function test_different_mailboxes_use_separate_profiles(): void
+    public function test_two_accounts_of_one_person_use_separate_profiles_even_on_the_same_domain(): void
     {
         $run = $this->workflowRun('11111111-1111-1111-1111-111111111111');
         $step = $this->webmailStep('person');
 
         $this->assertNotSame(
-            $this->profileKey($run, $step, ['account' => ['email' => 'first@example.test']]),
-            $this->profileKey($run, $step, ['account' => ['email' => 'second@example.test']]),
+            $this->profileKey($run, $step, ['account' => ['id' => 17, 'email' => 'same@example.test']]),
+            $this->profileKey($run, $step, ['account' => ['id' => 18, 'email' => 'same@example.test']]),
+        );
+    }
+
+    public function test_different_people_with_the_same_email_use_separate_profiles(): void
+    {
+        $first = $this->workflowRun('11111111-1111-1111-1111-111111111111', true, 12);
+        $second = $this->workflowRun('22222222-2222-2222-2222-222222222222', true, 13);
+        $step = $this->webmailStep('person');
+        $context = ['account' => ['id' => 52, 'email' => 'same@example.test']];
+
+        $this->assertNotSame(
+            $this->profileKey($first, $step, $context),
+            $this->profileKey($second, $step, $context),
         );
     }
 
@@ -80,7 +93,7 @@ class WorkflowBrowserProfileTest extends TestCase
         );
     }
 
-    protected function workflowRun(string $uuid, bool $persistent = true): WorkflowRun
+    protected function workflowRun(string $uuid, bool $persistent = true, int $personId = 12): WorkflowRun
     {
         $workflow = new Workflow([
             'settings_json' => ['persistent_browser_profile' => $persistent],
@@ -89,7 +102,7 @@ class WorkflowBrowserProfileTest extends TestCase
         $run = new WorkflowRun([
             'run_uuid' => $uuid,
             'workflow_id' => 4,
-            'context_json' => ['person_id' => 12],
+            'context_json' => ['person_id' => $personId],
         ]);
         $run->setRelation('workflow', $workflow);
 
