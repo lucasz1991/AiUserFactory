@@ -2201,20 +2201,21 @@ class WorkflowCopilotSupervisorService
             return $session;
         }
 
+        $expectedRevision = (int) $session->current_revision;
+        $plannedSnapshotHash = $this->workflowSnapshotHash($workflow);
         $this->sessions->appendEvent(
             $session,
             'planning.started',
             'Der leere Workflow wird aus Ziel, Eingaben und Task-Katalog vollstaendig mit Listen, Tasks und Routen aufgebaut.',
             [
                 'workflow_id' => (int) $workflow->id,
-                'expected_revision' => (int) $session->current_revision,
-                'snapshot_hash' => $this->workflowSnapshotHash($workflow),
+                'expected_revision' => $expectedRevision,
+                'snapshot_hash' => $plannedSnapshotHash,
             ],
             'planning',
             'info',
             true,
         );
-        $plannedSnapshotHash = $this->workflowSnapshotHash($workflow);
         $plan = $this->captureCopilotAiUsage(
             $session,
             fn (): array => $this->planning->plan(
@@ -2229,7 +2230,6 @@ class WorkflowCopilotSupervisorService
             'initial_planning',
         );
         $session = $session->fresh(['workflow.steps']) ?? $session;
-        $expectedRevision = (int) $session->current_revision;
         $revision = $this->revisions->apply(
             $session,
             $expectedRevision,
