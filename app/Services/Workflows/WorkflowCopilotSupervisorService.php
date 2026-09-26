@@ -186,12 +186,12 @@ class WorkflowCopilotSupervisorService
             }
 
             if ($advance['finalized']) {
-                $this->startVerification($session->fresh() ?? $session, $run);
+                $this->startVerificationSafely($session->fresh() ?? $session, $run);
 
                 return;
             }
 
-            $this->startVerification($session, $run);
+            $this->startVerificationSafely($session, $run);
 
             return;
         }
@@ -395,6 +395,15 @@ class WorkflowCopilotSupervisorService
      */
     protected function handleTechnicalRunFailure(WorkflowCopilotSession $session, WorkflowRun $run): void
     {
+        if ($this->pauseBeforeReplayIfUnsafe(
+            $session,
+            $run,
+            'run.restart_blocked_after_possible_side_effect',
+            'Der technische Fehllauf wird nicht blind neu gestartet: mindestens ein ausgefuehrter Task ist nicht als wiederholbar belegt.',
+        )) {
+            return;
+        }
+
         $state = is_array($session->state_json) ? $session->state_json : [];
         $usage = is_array($session->usage_json) ? $session->usage_json : [];
         $budget = is_array($session->budget_json) ? $session->budget_json : [];
@@ -1438,9 +1447,23 @@ class WorkflowCopilotSupervisorService
         }
 
         if ($plan['action'] === 'retry') {
+            $taskKey = (string) ($plan['task_key'] ?? '');
+            $taskAssessment = app(WorkflowReplaySafetyService::class)->classifyTaskKey($taskKey);
+
+            if ($taskAssessment['classification'] !== 'replay_safe'
+                && $this->pauseBeforeReplayIfUnsafe(
+                    $session,
+                    $run,
+                    'repair.retry_blocked_after_possible_side_effect',
+                    'Der fehlgeschlagene Task ist nicht als wiederholbar belegt; ein Retry koennte eine externe Aktion doppelt ausfuehren.',
+                    ['safe' => false, 'blocked' => [$taskAssessment]],
+                )) {
+                return;
+            }
+
             $this->sessions->appendEvent($session, 'repair.retry', $plan['reason'], $plan, 'repairing', 'info', true);
             $this->sessions->transition($session, WorkflowCopilotSession::STATUS_RUNNING, 'executing');
-            $this->execution->retryCopilotTask($run, (string) $plan['task_key']);
+            $this->execution->retryCopilotTask($run, $taskKey);
             $this->markContinuationApplied($session, $checkpoint, 'retry');
 
             return;
@@ -1449,6 +1472,7 @@ class WorkflowCopilotSupervisorService
         if ($plan['action'] === 'restart_with_workflow_changes') {
             $operations = is_array($plan['operations'] ?? null) ? $plan['operations'] : [];
             $recordedSideEffects = $this->recordedRunSideEffects($session, $run);
+            $replaySafety = app(WorkflowReplaySafetyService::class)->analyze($run);
 
             if ($operations === []) {
                 $this->sessions->pause($session, 'Die strukturelle Reparatur enthielt keine gueltige Workflow-Aenderung.');
@@ -1456,7 +1480,7 @@ class WorkflowCopilotSupervisorService
                 return;
             }
 
-            if ($recordedSideEffects !== []) {
+            if ($recordedSideEffects !== [] || ! $replaySafety['safe']) {
                 $this->sessions->appendEvent(
                     $session,
                     'repair.restart_blocked_after_side_effect',
@@ -1464,6 +1488,7 @@ class WorkflowCopilotSupervisorService
                     [
                         'workflow_run_id' => (int) $run->id,
                         'side_effect_ledger' => $recordedSideEffects,
+                        'replay_safety' => $replaySafety,
                         'external_side_effects_reverted' => false,
                     ],
                     'repairing',
@@ -2180,46 +2205,60 @@ class WorkflowCopilotSupervisorService
             $session,
             'planning.started',
             'Der leere Workflow wird aus Ziel, Eingaben und Task-Katalog vollstaendig mit Listen, Tasks und Routen aufgebaut.',
-            ['workflow_id' => (int) $workflow->id],
+            [
+                'workflow_id' => (int) $workflow->id,
+                'expected_revision' => (int) $session->current_revision,
+                'snapshot_hash' => $this->workflowSnapshotHash($workflow),
+            ],
             'planning',
             'info',
             true,
         );
-        $plan = [];
-        $revision = $this->captureCopilotAiUsage(
+        $plannedSnapshotHash = $this->workflowSnapshotHash($workflow);
+        $plan = $this->captureCopilotAiUsage(
             $session,
-            function () use ($session, &$plan): array {
-                $revision = $this->revisions->apply(
-                    $session,
-                    (int) $session->current_revision,
-                    'Vollstaendige kataloggebundene Erstdefinition fuer den leeren Workflow.',
-                    function (Workflow $workflow) use ($session, &$plan): void {
-                        $plan = $this->planning->planAndApply(
-                            $workflow,
-                            (string) $session->goal,
-                            is_array($session->success_criteria_json) ? $session->success_criteria_json : [],
-                            is_array($session->workflow_inputs_json) ? $session->workflow_inputs_json : [],
-                            is_array(data_get($session->state_json, 'history_preflight'))
-                                ? data_get($session->state_json, 'history_preflight')
-                                : [],
-                        );
-                    },
-                );
-
-                return [
-                    'workflow_revision_id' => (int) $revision->id,
-                    'revision_number' => (int) $revision->revision_number,
-                ];
-            },
+            fn (): array => $this->planning->plan(
+                $workflow,
+                (string) $session->goal,
+                is_array($session->success_criteria_json) ? $session->success_criteria_json : [],
+                is_array($session->workflow_inputs_json) ? $session->workflow_inputs_json : [],
+                is_array(data_get($session->state_json, 'history_preflight'))
+                    ? data_get($session->state_json, 'history_preflight')
+                    : [],
+            ),
             'initial_planning',
         );
         $session = $session->fresh(['workflow.steps']) ?? $session;
+        $expectedRevision = (int) $session->current_revision;
+        $revision = $this->revisions->apply(
+            $session,
+            $expectedRevision,
+            'Vollstaendige kataloggebundene Erstdefinition fuer den leeren Workflow.',
+            function (Workflow $lockedWorkflow) use ($session, $plan, $plannedSnapshotHash): void {
+                $currentWorkflow = $lockedWorkflow->fresh(['steps']) ?? $lockedWorkflow;
+
+                if (! hash_equals($plannedSnapshotHash, $this->workflowSnapshotHash($currentWorkflow))) {
+                    throw new \DomainException('Der Workflow wurde waehrend der Erstplanung geaendert; der Plan wurde verworfen.');
+                }
+
+                $this->planning->applyPlan(
+                    $lockedWorkflow,
+                    (string) $session->goal,
+                    $plan,
+                    is_array($session->success_criteria_json) ? $session->success_criteria_json : [],
+                    is_array($session->workflow_inputs_json) ? $session->workflow_inputs_json : [],
+                );
+            },
+        );
+
         $this->sessions->appendEvent(
             $session,
             'planning.completed',
             'Der leere Workflow wurde als ausfuehrbare Erstdefinition gespeichert; der erste System-Test startet jetzt.',
             [
-                ...$revision,
+                'workflow_revision_id' => (int) $revision->id,
+                'revision_number' => (int) $revision->revision_number,
+                'plan_snapshot_hash' => $plannedSnapshotHash,
                 'step_count' => count($plan['steps'] ?? []),
                 'task_count' => (int) ($plan['task_count'] ?? 0),
                 'summary' => $plan['summary'] ?? null,
@@ -2331,6 +2370,66 @@ class WorkflowCopilotSupervisorService
             'info',
             true,
         );
+    }
+
+    protected function startVerificationSafely(WorkflowCopilotSession $session, WorkflowRun $repairRun): void
+    {
+        if ($this->pauseBeforeReplayIfUnsafe(
+            $session,
+            $repairRun,
+            'verification.blocked_after_possible_side_effect',
+            'Der Kontrolllauf wuerde bereits ausgefuehrte, nicht idempotente oder unbekannte Aktionen erneut starten. Die fachliche Abnahme benoetigt einen sicheren Read-only-Kontrollpfad oder eine bestaetigte Benutzerentscheidung.',
+        )) {
+            return;
+        }
+
+        $this->startVerification($session, $repairRun);
+    }
+
+    /**
+     * Fail closed when task receipts show an external or unclassified effect.
+     * Empty legacy side-effect ledgers are not treated as proof of replay safety.
+     *
+     * @param  array<string, mixed>|null  $assessmentOverride
+     */
+    protected function pauseBeforeReplayIfUnsafe(
+        WorkflowCopilotSession $session,
+        WorkflowRun $run,
+        string $eventType,
+        string $message,
+        ?array $assessmentOverride = null,
+    ): bool {
+        $assessment = $assessmentOverride ?? app(WorkflowReplaySafetyService::class)->analyze($run);
+
+        if ((bool) ($assessment['safe'] ?? false)) {
+            return false;
+        }
+
+        $alreadyReported = $session->events()
+            ->where('event_type', $eventType)
+            ->where('payload_json->workflow_run_id', (int) $run->id)
+            ->exists();
+
+        if (! $alreadyReported) {
+            $this->sessions->appendEvent(
+                $session,
+                $eventType,
+                $message,
+                [
+                    'workflow_run_id' => (int) $run->id,
+                    'run_status' => (string) $run->status,
+                    'replay_safety' => $assessment,
+                    'external_side_effects_reverted' => false,
+                ],
+                'repairing',
+                'warning',
+                true,
+            );
+        }
+
+        $this->sessions->pause($session->fresh() ?? $session, $message);
+
+        return true;
     }
 
     protected function finishVerification(WorkflowCopilotSession $session, WorkflowRun $run): void

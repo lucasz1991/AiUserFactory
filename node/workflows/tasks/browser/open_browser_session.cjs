@@ -142,6 +142,7 @@ async function run(context = {}) {
   const timeout = Number(input.timeoutMs || context.timeoutMs || 120000);
   const automatic = input.automatic_browser_session === true || input.automaticBrowserSession === true;
   const alreadyLoaded = context.browserSessionAutoLoaded === true || context.browser_session_auto_loaded === true;
+  const automation = context.browserSessionAutomation || context.browser_session_automation || {};
 
   if (!page || typeof page.goto !== 'function') {
     return { ok: false, status: 'failed', statusMessage: 'Kein Page-Handle zum Laden der Browser-Session vorhanden.' };
@@ -206,9 +207,11 @@ async function run(context = {}) {
   const restored = await restoreBrowserSession(page, session, targetUrl, {
     timeout,
     waitUntil: input.waitUntil || 'domcontentloaded',
+    windowId: input.browser_window || input.browserWindow || automation.browser_window || automation.browserWindow || '',
   });
 
-  if (restored.cookieAttemptCount > 0 && restored.cookieCount === 0 && restored.storageOriginCount === 0) {
+  if ((restored.cookieAttemptCount > 0 || restored.storageOriginCount + restored.storageOriginFailureCount > 0)
+    && restored.cookieCount === 0 && restored.storageOriginCount === 0) {
     return {
       ok: false,
       status: 'failed',
@@ -217,6 +220,7 @@ async function run(context = {}) {
       cookieAttemptCount: restored.cookieAttemptCount,
       cookieFailureCount: restored.cookieFailureCount,
       storageOriginFailureCount: restored.storageOriginFailureCount,
+      sessionStorageFailureCount: restored.sessionStorageFailureCount,
     };
   }
 
@@ -226,9 +230,11 @@ async function run(context = {}) {
   return captureTaskPreview(context, {
     ok: true,
     status: 'success',
-    statusMessage: redirected
-      ? 'Browser-Session wurde geladen; die gespeicherte URL hat auf eine andere Seite weitergeleitet.'
-      : 'Browser-Session wurde geladen und die letzte URL wurde geoeffnet.',
+    statusMessage: restored.sessionStorageFailureCount > 0
+      ? 'Browser-Cookies und verfuegbarer Storage wurden wiederhergestellt; tabgebundener Storage anderer Fenster ist nicht wiederhergestellt. Eine Anmeldung wird dadurch nicht bestaetigt.'
+      : (redirected
+        ? 'Browser-Sessiondaten wurden geladen; die gespeicherte URL hat weitergeleitet. Eine Anmeldung wird dadurch nicht bestaetigt.'
+        : 'Browser-Sessiondaten wurden geladen und die letzte URL wurde geoeffnet. Eine Anmeldung wird dadurch nicht bestaetigt.'),
     url: actualUrl,
     finalUrl: targetUrl,
     requestedUrl: targetUrl,
@@ -241,6 +247,9 @@ async function run(context = {}) {
     cookieFailureCount: restored.cookieFailureCount,
     storageOriginCount: restored.storageOriginCount,
     storageOriginFailureCount: restored.storageOriginFailureCount,
+    sessionStorageEntryCount: restored.sessionStorageEntryCount,
+    sessionStorageRestoredCount: restored.sessionStorageRestoredCount,
+    sessionStorageFailureCount: restored.sessionStorageFailureCount,
     storageStrategy: restored.storageStrategy,
     sessionFound: true,
     fallbackUrl,

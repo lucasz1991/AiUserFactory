@@ -15,10 +15,15 @@ use Illuminate\Support\Str;
 class MailAccountRegistrationRunner
 {
     public const SETTINGS_TYPE = 'mail';
+
     public const SETTINGS_KEY = 'account_registration';
+
     public const PROVIDER_MODE_OBSERVED_MANUAL = 'observed_manual';
+
     public const PROVIDER_MODE_PROTON_USERNAME_CHECK = 'proton_username_check';
+
     public const MAIL_ACCOUNT_SCRIPT_VERSION = 3;
+
     public const BROWSER_LAUNCHER_SCRIPT_VERSION = 2;
 
     public function settings(): array
@@ -347,7 +352,7 @@ class MailAccountRegistrationRunner
                 $status['stage'] = $status['stage'] ?? 'verification-webmail-check-scheduled';
                 $status['message'] = (string) ($status['message'] ?? $result['statusMessage'] ?? '');
             }
-        } elseif (is_array($result) && in_array($state, ['queued', 'starting', 'running'], true)) {
+        } elseif (is_array($result) && in_array($state, ['queued', 'starting', 'running', 'waiting'], true)) {
             $state = ($result['ok'] ?? false) ? 'completed' : 'failed';
             $status['state'] = $state;
             $status['stage'] = $state;
@@ -361,7 +366,7 @@ class MailAccountRegistrationRunner
         $status['livePreviewIntervalSeconds'] = (int) ($status['livePreviewIntervalSeconds'] ?? $settings['live_preview_interval_seconds'] ?? 3);
         $status['livePreviewPollIntervalSeconds'] = (int) ($status['livePreviewPollIntervalSeconds'] ?? $settings['live_preview_interval_seconds'] ?? 3);
         $status['browserActivityCheckEnabled'] = (bool) ($status['browserActivityCheckEnabled'] ?? $settings['browser_activity_check_enabled'] ?? true);
-        $status['isRunning'] = in_array((string) ($status['state'] ?? ''), ['queued', 'starting', 'running'], true)
+        $status['isRunning'] = in_array((string) ($status['state'] ?? ''), ['queued', 'starting', 'running', 'waiting'], true)
             || ($webmailCheckPending && ($status['state'] ?? null) !== 'failed');
         $status['screenshotUrl'] = $this->screenshotUrl($runId);
         $status['webmailScreenshotUrl'] = $this->webmailScreenshotUrl($runId);
@@ -383,9 +388,7 @@ class MailAccountRegistrationRunner
         $status['result'] = $this->resultSummary($result);
         $status['processHeartbeatStatus'] = $this->processHeartbeatStatus($status);
 
-        if ($this->isBrowserProfileLockFailure($status)) {
-            $status = $this->queueSupervisorJobIfNeeded($runId, $status, true, 'Browser-Profil ist gesperrt; Supervisor startet den Run mit neuem Profilordner neu.');
-        } elseif (($status['processHeartbeatStatus']['stale'] ?? false) === true) {
+        if (($status['processHeartbeatStatus']['stale'] ?? false) === true) {
             $status = $this->queueSupervisorJobIfNeeded($runId, $status);
         } elseif (($status['webmailWindowStatus']['stale'] ?? false) === true && ($status['webmailWindowStatus']['hasScreenshot'] ?? false) === true) {
             $status = $this->queueSupervisorJobIfNeeded($runId, $status, true, 'Webmail-Fenster liefert keine aktuellen Screenshots mehr; Supervisor-Restart wird angefordert.');
@@ -621,32 +624,6 @@ class MailAccountRegistrationRunner
         }
 
         return now()->addMinutes(5);
-    }
-
-    protected function isBrowserProfileLockFailure(array $status): bool
-    {
-        $state = Str::lower(trim((string) ($status['state'] ?? '')));
-        $stage = Str::lower(trim((string) ($status['stage'] ?? '')));
-        $message = Str::lower(trim((string) ($status['message'] ?? '')));
-
-        if ($state !== 'failed' && ! str_contains($stage, 'failed') && ! str_contains($message, 'failed to launch')) {
-            return false;
-        }
-
-        $events = is_array($status['events'] ?? null) ? $status['events'] : [];
-        $latestEvent = $events === [] ? null : end($events);
-        $text = Str::lower(json_encode([
-            'stage' => $status['stage'] ?? null,
-            'message' => $status['message'] ?? null,
-            'latestEvent' => is_array($latestEvent) ? $latestEvent : null,
-        ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?: '');
-
-        return str_contains($text, 'singletonlock')
-            || str_contains($text, 'processsingleton')
-            || str_contains($text, 'process singleton')
-            || str_contains($text, 'profile directory')
-            || str_contains($text, 'profile is in use')
-            || str_contains($text, 'user data directory');
     }
 
     protected function statusWithEvent(array $status, string $state, string $stage, string $message, array $data = []): array
@@ -1013,7 +990,7 @@ class MailAccountRegistrationRunner
     {
         $intervalSeconds = max(1, (int) ($status['livePreviewIntervalSeconds'] ?? $status['livePreviewPollIntervalSeconds'] ?? 3));
         $staleAfterSeconds = max(30, $intervalSeconds * 5);
-        $isRunning = in_array((string) ($status['state'] ?? ''), ['queued', 'starting', 'running'], true);
+        $isRunning = in_array((string) ($status['state'] ?? ''), ['queued', 'starting', 'running', 'waiting'], true);
         $heartbeatAt = $this->parseStatusTimestamp($status['heartbeatAt'] ?? $status['at'] ?? null);
         $ageSeconds = $heartbeatAt ? (int) $heartbeatAt->diffInSeconds(now()) : null;
         $stale = $isRunning && ($heartbeatAt === null || $ageSeconds > $staleAfterSeconds);
@@ -1129,7 +1106,7 @@ class MailAccountRegistrationRunner
     protected function writeJsonFile(string $path, array $payload): void
     {
         File::ensureDirectoryExists(dirname($path));
-        File::put($path, json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+        File::replace($path, json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
     }
 
     protected function readJsonFile(string $path): ?array

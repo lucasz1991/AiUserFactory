@@ -67,8 +67,12 @@ async function run(context = {}) {
 
   const session = await captureBrowserSession(page, {
     domain: targetDomain,
+    authorizedOrigins: input.authorized_origins || input.authorizedOrigins
+      || automation.authorized_origins || automation.authorizedOrigins || [],
     label,
     type: 'browser-session',
+    windowId: context.activeBrowserWindow || context.browserWindow || automation.browser_window || automation.browserWindow || 'main',
+    browserWindows: context.browserWindows || context.browser_windows || context.windows || [],
   });
   const cookieCount = Array.isArray(session.cookies) ? session.cookies.length : 0;
   const storageOriginCount = Array.isArray(session.origins) ? session.origins.length : 0;

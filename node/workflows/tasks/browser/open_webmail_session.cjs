@@ -115,9 +115,11 @@ async function run(context = {}) {
   const restored = await restoreBrowserSession(page, session, targetUrl, {
     timeout,
     waitUntil: input.waitUntil || 'domcontentloaded',
+    windowId: input.browser_window || input.browserWindow || context.activeBrowserWindow || context.browserWindow || '',
   });
 
-  if (restored.cookieAttemptCount > 0 && restored.cookieCount === 0 && restored.storageOriginCount === 0) {
+  if ((restored.cookieAttemptCount > 0 || restored.storageOriginCount + restored.storageOriginFailureCount > 0)
+    && restored.cookieCount === 0 && restored.storageOriginCount === 0) {
     return {
       ok: false,
       status: 'failed',
@@ -126,6 +128,7 @@ async function run(context = {}) {
       cookieAttemptCount: restored.cookieAttemptCount,
       cookieFailureCount: restored.cookieFailureCount,
       storageOriginFailureCount: restored.storageOriginFailureCount,
+      sessionStorageFailureCount: restored.sessionStorageFailureCount,
     };
   }
 
@@ -135,9 +138,11 @@ async function run(context = {}) {
   return captureTaskPreview(context, {
     ok: true,
     status: 'success',
-    statusMessage: redirected
-      ? 'Webmail-Session wurde geladen; die gespeicherte URL hat auf eine andere Seite weitergeleitet.'
-      : 'Webmail-Session wurde geladen und die zuletzt aktive URL wurde geoeffnet.',
+    statusMessage: restored.sessionStorageFailureCount > 0
+      ? 'Webmail-Cookies und verfuegbarer Storage wurden wiederhergestellt; tabgebundener Storage anderer Fenster ist nicht wiederhergestellt. Eine Anmeldung wird dadurch nicht bestaetigt.'
+      : (redirected
+        ? 'Webmail-Sessiondaten wurden geladen; die gespeicherte URL hat weitergeleitet. Eine Anmeldung wird dadurch nicht bestaetigt.'
+        : 'Webmail-Sessiondaten wurden geladen und die zuletzt aktive URL wurde geoeffnet. Eine Anmeldung wird dadurch nicht bestaetigt.'),
     url: actualUrl,
     finalUrl: targetUrl,
     requestedUrl: targetUrl,
@@ -154,6 +159,9 @@ async function run(context = {}) {
     storageRestored: restored.storageOriginCount > 0,
     storageOriginCount: restored.storageOriginCount,
     storageOriginFailureCount: restored.storageOriginFailureCount,
+    sessionStorageEntryCount: restored.sessionStorageEntryCount,
+    sessionStorageRestoredCount: restored.sessionStorageRestoredCount,
+    sessionStorageFailureCount: restored.sessionStorageFailureCount,
     storageStrategy: restored.storageStrategy,
   });
 }

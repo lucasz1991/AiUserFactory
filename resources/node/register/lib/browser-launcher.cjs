@@ -5,7 +5,7 @@ const childProcess = require('child_process');
 const BROWSER_ENGINE_CHROME = 'chrome';
 const BROWSER_ENGINE_CLOAK = 'cloak';
 const BROWSER_ENGINE_CLOAK_WITH_FALLBACK = 'cloak-with-chrome-fallback';
-const BROWSER_LAUNCHER_SCRIPT_VERSION = 2;
+const BROWSER_LAUNCHER_SCRIPT_VERSION = 3;
 
 function normalizeBrowserEngine(value = '') {
   const normalized = String(value || '').trim().toLowerCase();
@@ -51,23 +51,11 @@ function chromiumSandboxArgs(runtimeConfig = {}) {
     : [];
 }
 
-function retryBrowserProfilePath(browserProfilePath = '') {
-  const profilePath = normalizeText(browserProfilePath);
-
-  if (!profilePath) {
-    return '';
-  }
-
-  return path.join(
-    path.dirname(profilePath),
-    `${path.basename(profilePath)}-retry-${Date.now()}-${process.pid}`,
-  );
-}
-
 async function launchConfiguredBrowserWithProfileRetry({
   puppeteer,
   runtimeConfig = {},
   launchOptions = {},
+  onProfileWait = null,
   onProfileRetry = null,
 }) {
   try {
@@ -83,27 +71,54 @@ async function launchConfiguredBrowserWithProfileRetry({
       throw error;
     }
 
-    const nextProfilePath = retryBrowserProfilePath(previousProfilePath);
+    const configuredDelays = runtimeConfig.browserProfileLockRetryDelaysMs
+      ?? runtimeConfig.browser_profile_lock_retry_delays_ms;
+    const delays = Array.isArray(configuredDelays)
+      ? configuredDelays.slice(0, 5).map((value) => Math.max(0, Math.min(30000, Number(value) || 0)))
+      : [1000, 3000, 7000];
+    const waitCallback = typeof onProfileWait === 'function' ? onProfileWait : onProfileRetry;
+    let lastError = error;
 
-    runtimeConfig.previousBrowserProfilePath = previousProfilePath;
-    runtimeConfig.browserProfilePath = nextProfilePath;
-    runtimeConfig.browserProfileRetryCount = Number(runtimeConfig.browserProfileRetryCount || 0) + 1;
-    launchOptions.userDataDir = nextProfilePath;
-    fs.mkdirSync(nextProfilePath, { recursive: true });
+    for (const [index, delayMs] of delays.entries()) {
+      const attempt = index + 1;
 
-    if (typeof onProfileRetry === 'function') {
-      await onProfileRetry({
-        previousProfilePath,
-        nextProfilePath,
-        error,
-      });
+      if (typeof waitCallback === 'function') {
+        await waitCallback({
+          profilePath: previousProfilePath,
+          previousProfilePath,
+          nextProfilePath: previousProfilePath,
+          attempt,
+          maxAttempts: delays.length,
+          delayMs,
+          error: lastError,
+        });
+      }
+
+      if (delayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+
+      runtimeConfig.browserProfileRetryCount = Number(runtimeConfig.browserProfileRetryCount || 0) + 1;
+
+      try {
+        return await launchConfiguredBrowser({ puppeteer, runtimeConfig, launchOptions });
+      } catch (retryError) {
+        if (!isBrowserProfileLockError(retryError)) {
+          throw retryError;
+        }
+
+        lastError = retryError;
+      }
     }
 
-    return launchConfiguredBrowser({
-      puppeteer,
-      runtimeConfig,
-      launchOptions,
-    });
+    const blockedError = new Error(
+      `BROWSER_PROFILE_IN_USE: Chromium-Profil blieb nach ${delays.length} Warteversuchen gesperrt; `
+      +'es wurde kein Ersatzprofil gestartet. Bitte den Besitzer beenden oder den Profil-Lease freigeben.',
+      { cause: lastError },
+    );
+    blockedError.code = 'BROWSER_PROFILE_IN_USE';
+    blockedError.profilePath = previousProfilePath;
+    throw blockedError;
   }
 }
 

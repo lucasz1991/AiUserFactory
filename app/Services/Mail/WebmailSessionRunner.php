@@ -13,6 +13,7 @@ use Illuminate\Support\Str;
 class WebmailSessionRunner
 {
     public const PROVIDER_PROTON = 'proton';
+
     public const PROVIDER_GMX = 'gmx';
 
     public function start(array $account, string $scope = 'webmail', array $workflowContext = []): array
@@ -118,7 +119,7 @@ class WebmailSessionRunner
         if (is_array($result)) {
             $result = $this->finalizeRunResult($runId, $result);
 
-            if (in_array($state, ['queued', 'starting', 'running'], true)) {
+            if (in_array($state, ['queued', 'starting', 'running', 'waiting'], true)) {
                 $state = ($result['ok'] ?? false) ? 'completed' : 'failed';
                 $status['state'] = $state;
                 $status['stage'] = $state;
@@ -128,7 +129,7 @@ class WebmailSessionRunner
         }
 
         $status['runId'] = $runId;
-        $status['isRunning'] = in_array((string) ($status['state'] ?? ''), ['queued', 'starting', 'running'], true);
+        $status['isRunning'] = in_array((string) ($status['state'] ?? ''), ['queued', 'starting', 'running', 'waiting'], true);
         $status['livePreviewIntervalSeconds'] = (int) ($status['livePreviewIntervalSeconds'] ?? 3);
         $status['livePreviewPollIntervalSeconds'] = (int) ($status['livePreviewPollIntervalSeconds'] ?? $status['livePreviewIntervalSeconds']);
         $status['screenshotUrl'] = $this->runScreenshotUrl($runId);
@@ -138,9 +139,7 @@ class WebmailSessionRunner
         $status['result'] = $result;
         $status['processHeartbeatStatus'] = $this->processHeartbeatStatus($status);
 
-        if ($this->isBrowserProfileLockFailure($status)) {
-            $status = $this->queueSupervisorJobIfNeeded($runId, $status, true, 'Browser-Profil ist gesperrt; Supervisor startet den Webmail-Lauf mit neuem Profilordner neu.');
-        } elseif (($status['processHeartbeatStatus']['stale'] ?? false) === true) {
+        if (($status['processHeartbeatStatus']['stale'] ?? false) === true) {
             $status = $this->queueSupervisorJobIfNeeded($runId, $status);
         } elseif (($status['windowStatus']['stale'] ?? false) === true && ($status['windowStatus']['hasScreenshot'] ?? false) === true) {
             $status = $this->queueSupervisorJobIfNeeded($runId, $status, true, 'Webmail-Fenster liefert keine aktuellen Screenshots mehr; Supervisor-Restart wird angefordert.');
@@ -460,7 +459,7 @@ class WebmailSessionRunner
         $ageSeconds = null;
         $livePreviewEnabled = (bool) ($status['livePreviewEnabled'] ?? true);
         $intervalSeconds = max(1, (int) ($status['livePreviewIntervalSeconds'] ?? $status['livePreviewPollIntervalSeconds'] ?? 3));
-        $isRunning = in_array((string) ($status['state'] ?? ''), ['queued', 'starting', 'running'], true);
+        $isRunning = in_array((string) ($status['state'] ?? ''), ['queued', 'starting', 'running', 'waiting'], true);
         $aliveThreshold = max(10, ($intervalSeconds * 3) + 5);
 
         if ($hasScreenshot) {
@@ -503,7 +502,7 @@ class WebmailSessionRunner
     {
         $intervalSeconds = max(1, (int) ($status['livePreviewIntervalSeconds'] ?? $status['livePreviewPollIntervalSeconds'] ?? 3));
         $staleAfterSeconds = max(30, $intervalSeconds * 5);
-        $isRunning = in_array((string) ($status['state'] ?? ''), ['queued', 'starting', 'running'], true);
+        $isRunning = in_array((string) ($status['state'] ?? ''), ['queued', 'starting', 'running', 'waiting'], true);
         $heartbeatAt = $this->parseStatusTimestamp($status['heartbeatAt'] ?? $status['at'] ?? null);
         $ageSeconds = $heartbeatAt ? (int) $heartbeatAt->diffInSeconds(now()) : null;
         $stale = $isRunning && ($heartbeatAt === null || $ageSeconds > $staleAfterSeconds);
@@ -567,32 +566,6 @@ class WebmailSessionRunner
         }
     }
 
-    protected function isBrowserProfileLockFailure(array $status): bool
-    {
-        $state = Str::lower(trim((string) ($status['state'] ?? '')));
-        $stage = Str::lower(trim((string) ($status['stage'] ?? '')));
-        $message = Str::lower(trim((string) ($status['message'] ?? '')));
-
-        if ($state !== 'failed' && ! str_contains($stage, 'failed') && ! str_contains($message, 'failed to launch')) {
-            return false;
-        }
-
-        $events = is_array($status['events'] ?? null) ? $status['events'] : [];
-        $latestEvent = $events === [] ? null : end($events);
-        $text = Str::lower(json_encode([
-            'stage' => $status['stage'] ?? null,
-            'message' => $status['message'] ?? null,
-            'latestEvent' => is_array($latestEvent) ? $latestEvent : null,
-        ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?: '');
-
-        return str_contains($text, 'singletonlock')
-            || str_contains($text, 'processsingleton')
-            || str_contains($text, 'process singleton')
-            || str_contains($text, 'profile directory')
-            || str_contains($text, 'profile is in use')
-            || str_contains($text, 'user data directory');
-    }
-
     protected function debugDomUrl(string $runId, array $status): ?string
     {
         $debugDom = $this->latestDebugDom($status);
@@ -635,7 +608,7 @@ class WebmailSessionRunner
     protected function writeJsonFile(string $path, array $payload): void
     {
         File::ensureDirectoryExists(dirname($path));
-        File::put($path, json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+        File::replace($path, json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
     }
 
     protected function readJsonFile(string $path): ?array

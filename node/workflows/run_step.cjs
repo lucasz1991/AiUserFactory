@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { writeJsonFile } = require('../../resources/node/register/lib/runtime-utils.cjs');
 const { captureTaskPreview, stopTaskPreview } = require('./tasks/lib/preview.cjs');
 const { parseExtendedSelector } = require('./lib/selector.cjs');
 const { createWorkflowInputResolver } = require('./lib/workflow-input-resolver.cjs');
@@ -94,8 +95,7 @@ function now() {
 }
 
 function writeJson(filePath, payload) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(payload, null, 2));
+  writeJsonFile(filePath, payload);
 }
 
 function readJson(filePath) {
@@ -352,7 +352,7 @@ function statusPayload(state, stage, message, extra = {}) {
     stage,
     message,
     observabilityLevel: effectiveObservabilityLevel(),
-    isRunning: ['queued', 'starting', 'running'].includes(state),
+    isRunning: ['queued', 'starting', 'running', 'waiting'].includes(state),
     startedAt,
     at: now(),
     livePreviewEnabled: effectiveLivePreviewEnabled(),
@@ -2054,13 +2054,20 @@ async function loadBrowser() {
     puppeteer,
     runtimeConfig: runtime,
     launchOptions,
-    onProfileRetry: ({ previousProfilePath, nextProfilePath, error }) => {
-      pushEvent('browser-profile-lock-retry', 'Browser-Profil war gesperrt; neuer Profilordner wird verwendet.', {
-        previousBrowserProfilePath: previousProfilePath,
-        browserProfilePath: nextProfilePath,
+    onProfileWait: ({ attempt, maxAttempts, delayMs, error }) => {
+      pushEvent('browser-profile-wait', 'Browser-Profil ist belegt; der Lauf wartet auf dieselbe Profilidentitaet.', {
+        browserProfileKey: runtime.browserProfileKey || null,
+        attempt,
+        maxAttempts,
+        retryInMs: delayMs,
         profileLockError: String(error?.message || error).slice(0, 1200),
       });
-      writeStatus('starting', 'browser-profile-lock-retry', 'Browser-Profil war gesperrt; neuer Profilordner wird verwendet.');
+      writeStatus('waiting', 'waiting_for_profile', 'Browser-Profil ist belegt; es wird auf die Freigabe derselben Profilidentitaet gewartet.', {
+        browserProfileKey: runtime.browserProfileKey || null,
+        attempt,
+        maxAttempts,
+        retryInMs: delayMs,
+      });
     },
   });
 

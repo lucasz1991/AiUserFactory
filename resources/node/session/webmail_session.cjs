@@ -1212,13 +1212,15 @@ async function main() {
       puppeteer,
       runtimeConfig,
       launchOptions,
-      onProfileRetry: ({ previousProfilePath, nextProfilePath, error }) => {
-        progress(runtimeConfig, 'browser-profile-lock-retry', 'Browser-Profil war gesperrt; ein neuer Profilordner wird fuer diesen Webmail-Lauf verwendet.', {
-          previousBrowserProfilePath: previousProfilePath,
-          browserProfilePath: nextProfilePath,
+      onProfileWait: ({ attempt, maxAttempts, delayMs, error }) => {
+        progress(runtimeConfig, 'browser-profile-wait', 'Browser-Profil ist belegt; Webmail wartet auf dieselbe Profilidentitaet.', {
+          browserProfileKey: runtimeConfig.browserProfileKey || null,
+          attempt,
+          maxAttempts,
+          retryInMs: delayMs,
           profileLockError: normalizeText(error?.message || String(error)).slice(0, 1200),
           requestedBrowserEngine,
-        }, 'starting');
+        }, 'waiting');
       },
     });
 

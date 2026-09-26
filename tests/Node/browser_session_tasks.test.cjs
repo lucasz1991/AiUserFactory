@@ -10,6 +10,84 @@ const openBrowserSessionTask = require('../../node/workflows/tasks/browser/open_
 const openWebmailSessionTask = require('../../node/workflows/tasks/browser/open_webmail_session.cjs');
 const persistBrowserSessionTask = require('../../node/workflows/tasks/data/persist_browser_session.cjs');
 const deleteBrowserSessionTask = require('../../node/workflows/tasks/data/delete_browser_session.cjs');
+const { captureBrowserSession } = require('../../node/workflows/tasks/lib/webmail_session_capture.cjs');
+
+test('session capture scopes open tabs to authorized origins and keeps per-tab session storage', async () => {
+  const makePage = (url, values) => ({
+    url: () => url,
+    frames: () => [{ evaluate: async () => ({ url, origin: new URL(url).origin, ...values }) }],
+  });
+  const active = makePage('https://app.example.test/home', {
+    localStorage: { shared: 'app' },
+    sessionStorage: { tab: 'main' },
+  });
+  const auth = makePage('https://auth.example.test/sso', {
+    localStorage: { auth: 'shared' },
+    sessionStorage: { tab: 'auth-window' },
+  });
+  const unrelated = makePage('https://private.example.test/inbox', {
+    localStorage: { private: 'must-not-capture' },
+    sessionStorage: { privateTab: 'must-not-capture' },
+  });
+  const context = { pages: async () => [active, auth, unrelated] };
+  [active, auth, unrelated].forEach((page) => { page.browserContext = () => context; });
+  active.cookies = async () => [];
+
+  const session = await captureBrowserSession(active, {
+    authorizedOrigins: ['https://auth.example.test/login'],
+    windowId: 'main',
+  });
+
+  assert.deepEqual(session.origins.map((entry) => entry.origin), [
+    'https://app.example.test',
+    'https://auth.example.test',
+  ]);
+  assert.deepEqual(session.windows.map((window) => window.windowId), ['main', 'tab-2']);
+  assert.deepEqual(session.windows[0].origins[0].sessionStorage, { tab: 'main' });
+  assert.deepEqual(session.windows[1].origins[0].sessionStorage, { tab: 'auth-window' });
+  assert.equal(JSON.stringify(session).includes('must-not-capture'), false);
+});
+
+test('capture and restore retain partitioned-cookie identity and declare unsupported storage types', async () => {
+  const partitionKey = {
+    topLevelSite: 'https://top.example.test',
+    hasCrossSiteAncestor: true,
+  };
+  const page = {
+    url: () => 'https://app.example.test/account',
+    frames: () => [{ evaluate: async () => ({
+      url: 'https://app.example.test/account',
+      origin: 'https://app.example.test',
+      localStorage: {},
+      sessionStorage: {},
+    }) }],
+    cookies: async () => [{
+      name: 'partitioned',
+      value: 'synthetic',
+      domain: 'app.example.test',
+      path: '/',
+      partitionKey,
+    }],
+    target: () => ({ createCDPSession: async () => { throw new Error('use page cookie fallback'); } }),
+    async setCookie(cookie) {
+      this.restoredCookie = cookie;
+    },
+    async goto(url) {
+      this.currentUrl = url;
+    },
+    browserContext: () => ({ pages: async () => [page] }),
+  };
+  const captured = await captureBrowserSession(page);
+
+  assert.deepEqual(captured.cookies[0].partitionKey, partitionKey);
+  assert.equal(captured.capabilities.cookiePartitionKeys, 'preserved_when_present');
+  assert.equal(captured.capabilities.indexedDb, 'not_captured');
+
+  await require('../../node/workflows/tasks/lib/browser_session_restore.cjs')
+    .restoreBrowserSession(page, captured, 'https://app.example.test/account');
+
+  assert.deepEqual(page.restoredCookie.partitionKey, partitionKey);
+});
 
 test('saved browser session restores cookies and opens the stored final URL', async () => {
   const calls = [];
@@ -24,7 +102,10 @@ test('saved browser session restores cookies and opens the stored final URL', as
     },
     async evaluate(_callback, payload) {
       calls.push(['evaluate', payload]);
-      return true;
+      return {
+        localStorageRestored: Object.keys(payload.localStorage || {}).length > 0,
+        sessionStorageRestored: Object.keys(payload.sessionStorage || {}).length > 0,
+      };
     },
     async reload() {
       calls.push(['reload']);
@@ -181,7 +262,10 @@ test('automatic session owner lookup selects only that owner and requested domai
     },
     async evaluate(_callback, payload) {
       calls.push(['storage', payload]);
-      return true;
+      return {
+        localStorageRestored: Object.keys(payload.localStorage || {}).length > 0,
+        sessionStorageRestored: Object.keys(payload.sessionStorage || {}).length > 0,
+      };
     },
     async reload() {},
     url() {
@@ -338,6 +422,12 @@ test('webmail session prepares stored origin storage before opening snake-case f
     },
     async removeScriptToEvaluateOnNewDocument(identifier) {
       calls.push(['removeScriptToEvaluateOnNewDocument', identifier]);
+    },
+    async evaluate(_callback, payload) {
+      return {
+        localStorageRestored: Object.keys(payload.localStorage || {}).length > 0,
+        sessionStorageRestored: Object.keys(payload.sessionStorage || {}).length > 0,
+      };
     },
     async goto(url) {
       this.currentUrl = url;

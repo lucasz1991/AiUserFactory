@@ -45,17 +45,19 @@ function hasStorage(values = {}) {
     || Object.keys(values.sessionStorage || {}).length > 0;
 }
 
-function storageEntries(session = {}) {
+function storageEntries(session = {}, windowId = '') {
   const byOrigin = new Map();
-  const add = (value = {}) => {
+  const addLocalStorage = (value = {}, includeLegacySessionStorage = false) => {
     if (!isObject(value)) {
       return;
     }
 
     const origin = text(value.origin || originFromUrl(value.url));
     const values = storageValues(value);
+    const sessionStorageValues = includeLegacySessionStorage ? values.sessionStorage : {};
 
-    if (!/^https?:\/\//i.test(origin) || !hasStorage(values)) {
+    if (!/^https?:\/\//i.test(origin)
+      || (Object.keys(values.localStorage).length === 0 && Object.keys(sessionStorageValues).length === 0)) {
       return;
     }
 
@@ -65,19 +67,39 @@ function storageEntries(session = {}) {
       sessionStorage: {},
     };
     current.localStorage = { ...current.localStorage, ...values.localStorage };
-    current.sessionStorage = { ...current.sessionStorage, ...values.sessionStorage };
+    current.sessionStorage = { ...current.sessionStorage, ...sessionStorageValues };
     byOrigin.set(origin, current);
   };
 
+  const windows = Array.isArray(session.windows) ? session.windows.filter(isObject) : [];
+  const selectedWindow = windows.find((entry) => windowId !== '' && text(entry.windowId || entry.window_id) === windowId)
+    || windows.find((entry) => entry.active === true || entry.isActive === true)
+    || windows[0]
+    || null;
+
   for (const entry of Array.isArray(session.origins) ? session.origins : []) {
-    add(entry);
+    addLocalStorage(entry, windows.length === 0);
+  }
+
+  if (selectedWindow) {
+    for (const entry of Array.isArray(selectedWindow.origins) ? selectedWindow.origins : []) {
+      const origin = text(entry.origin || originFromUrl(entry.url));
+
+      if (!/^https?:\/\//i.test(origin)) {
+        continue;
+      }
+
+      const current = byOrigin.get(origin) || { origin, localStorage: {}, sessionStorage: {} };
+      current.sessionStorage = { ...storageValues(entry).sessionStorage };
+      byOrigin.set(origin, current);
+    }
   }
 
   const primaryValues = storageValues(session);
   const primaryOrigin = text(session.origin || originFromUrl(sessionFinalUrl(session)));
 
-  if (hasStorage(primaryValues) && primaryOrigin !== '') {
-    add({ origin: primaryOrigin, ...primaryValues });
+  if (windows.length === 0 && hasStorage(primaryValues) && primaryOrigin !== '') {
+    addLocalStorage({ origin: primaryOrigin, ...primaryValues }, true);
   }
 
   return Array.from(byOrigin.values());
@@ -102,6 +124,23 @@ function safeCookie(cookie = {}) {
   for (const key of ['httpOnly', 'secure']) {
     if (typeof cookie[key] === 'boolean') {
       normalized[key] = cookie[key];
+    }
+  }
+
+  if (isObject(cookie.partitionKey)) {
+    const partitionKey = {};
+    const topLevelSite = text(cookie.partitionKey.topLevelSite);
+
+    if (topLevelSite !== '') {
+      partitionKey.topLevelSite = topLevelSite;
+    }
+
+    if (typeof cookie.partitionKey.hasCrossSiteAncestor === 'boolean') {
+      partitionKey.hasCrossSiteAncestor = cookie.partitionKey.hasCrossSiteAncestor;
+    }
+
+    if (Object.keys(partitionKey).length > 0) {
+      normalized.partitionKey = partitionKey;
     }
   }
 
@@ -204,43 +243,171 @@ async function restoreStorageFallback(page, entries = [], timeout = 120000, wait
   return restored;
 }
 
+async function applyStorageEntry(page, entry, timeout, waitUntil, includeSessionStorage = false) {
+  await page.goto(entry.origin, { waitUntil, timeout });
+  const actualOrigin = typeof page.url === 'function' ? originFromUrl(page.url()) : entry.origin;
+
+  if (actualOrigin !== entry.origin) {
+    return { localStorageRestored: false, sessionStorageRestored: false };
+  }
+
+  const applied = await page.evaluate((payload) => {
+    for (const [key, value] of Object.entries(payload.localStorage || {})) {
+      window.localStorage.setItem(key, String(value));
+    }
+
+    for (const [key, value] of Object.entries(payload.sessionStorage || {})) {
+      window.sessionStorage.setItem(key, String(value));
+    }
+
+    return {
+      localStorageRestored: Object.keys(payload.localStorage || {}).length > 0
+        && Object.entries(payload.localStorage || {}).every(([key, value]) => window.localStorage.getItem(key) === String(value)),
+      sessionStorageRestored: Object.keys(payload.sessionStorage || {}).length > 0
+        && Object.entries(payload.sessionStorage || {}).every(([key, value]) => window.sessionStorage.getItem(key) === String(value)),
+    };
+  }, {
+    localStorage: entry.localStorage || {},
+    sessionStorage: includeSessionStorage ? (entry.sessionStorage || {}) : {},
+  });
+
+  return isObject(applied) ? applied : { localStorageRestored: false, sessionStorageRestored: false };
+}
+
+async function verifyStorageEntry(page, entry) {
+  if (!page || typeof page.evaluate !== 'function') {
+    return { localStorageRestored: false, sessionStorageRestored: false };
+  }
+
+  const verified = await page.evaluate((payload) => {
+    if (window.location.origin !== payload.origin) {
+      return { localStorageRestored: false, sessionStorageRestored: false };
+    }
+
+    return {
+      localStorageRestored: Object.keys(payload.localStorage || {}).length > 0
+        && Object.entries(payload.localStorage || {}).every(([key, value]) => window.localStorage.getItem(key) === String(value)),
+      sessionStorageRestored: Object.keys(payload.sessionStorage || {}).length > 0
+        && Object.entries(payload.sessionStorage || {}).every(([key, value]) => window.sessionStorage.getItem(key) === String(value)),
+    };
+  }, entry);
+
+  return isObject(verified) ? verified : { localStorageRestored: false, sessionStorageRestored: false };
+}
+
 async function restoreBrowserSession(page, session = {}, targetUrl = '', options = {}) {
   const timeout = Number(options.timeout || 120000);
   const waitUntil = text(options.waitUntil || 'domcontentloaded') || 'domcontentloaded';
   const cookies = await restoreCookies(page, session.cookies);
-  const entries = storageEntries(session);
-  let storageOriginCount = 0;
-  let storageStrategy = 'none';
-  let preloadIdentifier = null;
+  const entries = storageEntries(session, text(options.windowId || options.window_id || ''));
+  const targetOrigin = originFromUrl(targetUrl);
+  const targetEntry = entries.find((entry) => entry.origin === targetOrigin) || null;
+  const otherEntries = entries.filter((entry) => entry.origin !== targetOrigin);
+  const savedWindowStorage = (Array.isArray(session.windows) ? session.windows : [])
+    .flatMap((window) => Array.isArray(window?.origins) ? window.origins : [])
+    .filter((entry) => Object.keys(storageValues(entry).sessionStorage).length > 0);
+  const legacySessionStorageEntries = Array.isArray(session.windows) && session.windows.length > 0
+    ? []
+    : entries.filter((entry) => Object.keys(entry.sessionStorage || {}).length > 0);
+  const sessionStorageEntryCount = savedWindowStorage.length || legacySessionStorageEntries.length;
+  let localStorageRestoredCount = 0;
+  let sessionStorageRestoredCount = 0;
+  let storageStrategy = entries.length === 0 ? 'none' : 'context-pages';
+  let targetNavigated = false;
 
-  try {
-    preloadIdentifier = await installStoragePreload(page, entries);
-  } catch {
-    preloadIdentifier = null;
-  }
+  if (targetEntry) {
+    if (entries.length === 1 && typeof page.evaluateOnNewDocument === 'function') {
+      let preloadIdentifier = null;
 
-  if (preloadIdentifier !== null) {
-    storageOriginCount = entries.length;
-    storageStrategy = 'preload';
-  } else if (entries.length > 0) {
-    storageOriginCount = await restoreStorageFallback(page, entries, timeout, waitUntil);
-    storageStrategy = 'origin-navigation';
-  }
+      try {
+        preloadIdentifier = await installStoragePreload(page, entries);
+      } catch {
+        preloadIdentifier = null;
+      }
 
-  try {
-    await page.goto(targetUrl, { waitUntil, timeout });
-  } finally {
-    if (preloadIdentifier !== null && typeof page.removeScriptToEvaluateOnNewDocument === 'function') {
-      await page.removeScriptToEvaluateOnNewDocument(preloadIdentifier).catch(() => {});
+      if (preloadIdentifier !== null) {
+        try {
+          await page.goto(targetUrl, { waitUntil, timeout });
+          targetNavigated = true;
+          storageStrategy = 'preload';
+        } finally {
+          if (typeof page.removeScriptToEvaluateOnNewDocument === 'function') {
+            await page.removeScriptToEvaluateOnNewDocument(preloadIdentifier).catch(() => {});
+          }
+        }
+      }
     }
+
+    if (!targetNavigated) {
+      const targetState = await applyStorageEntry(page, targetEntry, timeout, waitUntil, true).catch(() => ({
+        localStorageRestored: false,
+        sessionStorageRestored: false,
+      }));
+
+      if (targetState.localStorageRestored || targetState.sessionStorageRestored) localStorageRestoredCount++;
+      if (targetState.sessionStorageRestored) sessionStorageRestoredCount++;
+      if (targetState.localStorageRestored || targetState.sessionStorageRestored) storageStrategy = 'origin-navigation';
+    } else {
+      const targetState = await verifyStorageEntry(page, targetEntry).catch(() => ({
+        localStorageRestored: false,
+        sessionStorageRestored: false,
+      }));
+
+      if (targetState.localStorageRestored || targetState.sessionStorageRestored) localStorageRestoredCount++;
+      if (targetState.sessionStorageRestored) sessionStorageRestoredCount++;
+    }
+  }
+
+  const browserContext = typeof page.browserContext === 'function' ? page.browserContext() : null;
+
+  for (const entry of otherEntries) {
+    const hasSessionStorage = Object.keys(entry.sessionStorage || {}).length > 0;
+
+    if (browserContext && typeof browserContext.newPage === 'function') {
+      let helperPage = null;
+
+      try {
+        helperPage = await browserContext.newPage();
+        const restored = await applyStorageEntry(helperPage, entry, timeout, waitUntil, false);
+
+        if (restored.localStorageRestored) localStorageRestoredCount++;
+      } catch {
+        // Keep trying the remaining allowed origins.
+      } finally {
+        if (helperPage && helperPage !== page && typeof helperPage.close === 'function') {
+          await helperPage.close().catch(() => {});
+        }
+      }
+
+      // sessionStorage belongs to a specific tab. A closed helper page cannot
+      // faithfully recreate another saved tab, so report this as unsupported.
+      if (hasSessionStorage) {
+        continue;
+      }
+    } else {
+      try {
+        const restored = await applyStorageEntry(page, entry, timeout, waitUntil, false);
+
+        if (restored.localStorageRestored) localStorageRestoredCount++;
+      } catch {
+        // Keep trying the remaining allowed origins.
+      }
+    }
+  }
+
+  if (!targetNavigated) {
+    await page.goto(targetUrl, { waitUntil, timeout });
   }
 
   return {
     cookieAttemptCount: cookies.attempted,
     cookieCount: cookies.restored,
     cookieFailureCount: cookies.failed,
-    storageOriginCount,
-    storageOriginFailureCount: Math.max(0, entries.length - storageOriginCount),
+    storageOriginCount: localStorageRestoredCount,
+    storageOriginFailureCount: Math.max(0, entries.length - localStorageRestoredCount),
+    sessionStorageEntryCount,
+    sessionStorageRestoredCount,
+    sessionStorageFailureCount: Math.max(0, sessionStorageEntryCount - sessionStorageRestoredCount),
     storageStrategy,
   };
 }

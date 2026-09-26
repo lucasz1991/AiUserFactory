@@ -72,14 +72,6 @@ class ManagedProcessSupervisor
             }
         }
 
-        if ($checked === 0 && $force && $runId !== null && trim($runId) !== '') {
-            $checked++;
-
-            if ($this->restartMissingRun(trim($runId))) {
-                $restarted++;
-            }
-        }
-
         $terminated = $this->cleanupObsoleteProcesses($runId);
 
         return [
@@ -308,10 +300,12 @@ class ManagedProcessSupervisor
         $runState = trim((string) ($status['state'] ?? ''));
         $profileLockFailure = $this->isBrowserProfileLockFailure($status);
 
+        if ($profileLockFailure) {
+            return false;
+        }
+
         if (! in_array($runState, ['queued', 'starting', 'running'], true)) {
-            if (! ($force && $profileLockFailure)) {
-                return false;
-            }
+            return false;
         }
 
         if (($runtime['supervisor']['enabled'] ?? true) === false) {
@@ -324,7 +318,7 @@ class ManagedProcessSupervisor
             return false;
         }
 
-        if ($force || $profileLockFailure) {
+        if ($force) {
             return true;
         }
 
@@ -382,8 +376,7 @@ class ManagedProcessSupervisor
                 $this->stopProcessTree((int) $process->pid);
             }
 
-            $profileRotation = $this->rotateLockedBrowserProfile($runtimeConfigPath, $runtime, (string) $process->status_path);
-            $this->writeSupervisorStatus((string) $process->status_path, $process, $profileRotation);
+            $this->writeSupervisorStatus((string) $process->status_path, $process);
 
             $runDirectory = dirname($runtimeConfigPath);
             $timestamp = now()->format('YmdHis');
@@ -418,17 +411,14 @@ class ManagedProcessSupervisor
         return true;
     }
 
-    protected function writeSupervisorStatus(string $statusPath, ManagedProcess $process, array $profileRotation = []): void
+    protected function writeSupervisorStatus(string $statusPath, ManagedProcess $process): void
     {
         if ($statusPath === '') {
             return;
         }
 
         $status = $this->readJsonFile($statusPath);
-        $profileRotated = (bool) ($profileRotation['rotated'] ?? false);
-        $message = $profileRotated
-            ? 'Supervisor startet den Node-Prozess mit neuem Browser-Profilordner neu.'
-            : 'Supervisor startet den Node-Prozess neu.';
+        $message = 'Supervisor startet den Node-Prozess mit derselben Browser-Profilidentitaet neu.';
         $events = is_array($status['events'] ?? null) ? $status['events'] : [];
         $events[] = [
             'at' => now()->toIso8601String(),
@@ -436,8 +426,6 @@ class ManagedProcessSupervisor
             'message' => $message,
             'previousPid' => $process->pid,
             'restartCount' => ((int) $process->restart_count) + 1,
-            'previousBrowserProfilePath' => $profileRotation['previousBrowserProfilePath'] ?? null,
-            'browserProfilePath' => $profileRotation['browserProfilePath'] ?? null,
         ];
 
         if (count($events) > 80) {
@@ -449,111 +437,6 @@ class ManagedProcessSupervisor
         $status['message'] = $message;
         $status['at'] = now()->toIso8601String();
         $status['heartbeatAt'] = now()->toIso8601String();
-        $status['previousBrowserProfilePath'] = $profileRotation['previousBrowserProfilePath'] ?? ($status['previousBrowserProfilePath'] ?? null);
-        $status['browserProfilePath'] = $profileRotation['browserProfilePath'] ?? ($status['browserProfilePath'] ?? null);
-        $status['events'] = $events;
-
-        $this->writeJsonFile($statusPath, $status);
-    }
-
-    protected function restartMissingRun(string $runId): bool
-    {
-        foreach ($this->runtimeCandidatesForRun($runId) as $runType => $runtimeConfigPath) {
-            if (! File::exists($runtimeConfigPath)) {
-                continue;
-            }
-
-            $runtime = $this->readJsonFile($runtimeConfigPath);
-            $statusPath = trim((string) ($runtime['statusPath'] ?? dirname($runtimeConfigPath).DIRECTORY_SEPARATOR.'status.json'));
-            $status = $this->readJsonFile($statusPath);
-
-            if (! $this->isBrowserProfileLockFailure($status)) {
-                continue;
-            }
-
-            $maxRestarts = max(0, (int) data_get($runtime, 'supervisor.maxRestarts', 2));
-            $restartCount = (int) ($status['supervisorRestartCount'] ?? 0);
-
-            if ($restartCount >= $maxRestarts) {
-                continue;
-            }
-
-            $scriptPath = $this->resolveScriptPathForRunType($runType, $runtime);
-
-            if ($scriptPath === null || ! File::exists($scriptPath)) {
-                continue;
-            }
-
-            try {
-                $profileRotation = $this->rotateLockedBrowserProfile($runtimeConfigPath, $runtime, $statusPath);
-                $this->writeMissingRunSupervisorStatus($statusPath, $status, $profileRotation);
-
-                $runDirectory = dirname($runtimeConfigPath);
-                $timestamp = now()->format('YmdHis');
-                $stdoutPath = $runDirectory.DIRECTORY_SEPARATOR.'supervisor-'.$timestamp.'.stdout.log';
-                $stderrPath = $runDirectory.DIRECTORY_SEPARATOR.'supervisor-'.$timestamp.'.stderr.log';
-                $pid = $this->spawnDetachedProcess([
-                    $this->resolveNodeBinary(),
-                    $scriptPath,
-                    $runtimeConfigPath,
-                ], base_path(), $stdoutPath, $stderrPath, $this->nodeProcessEnvironment($runtime));
-
-                $latestStatus = $this->readJsonFile($statusPath);
-                $latestStatus['pid'] = $pid;
-                $latestStatus['supervisorRestartCount'] = $restartCount + 1;
-                $latestStatus['supervisorRestartedAt'] = now()->toIso8601String();
-                $this->writeJsonFile($statusPath, $latestStatus);
-
-                return true;
-            } catch (\Throwable $exception) {
-                $status = $this->readJsonFile($statusPath);
-                $status['state'] = 'failed';
-                $status['stage'] = 'supervisor-restart-failed';
-                $status['message'] = 'Supervisor-Restart ohne Prozessdatensatz fehlgeschlagen: '.$exception->getMessage();
-                $status['at'] = now()->toIso8601String();
-                $this->writeJsonFile($statusPath, $status);
-
-                return false;
-            }
-        }
-
-        return false;
-    }
-
-    protected function runtimeCandidatesForRun(string $runId): array
-    {
-        return [
-            'mail-registration' => storage_path('app/mail-registration/runs/'.$runId.'/runtime.json'),
-            'webmail-session' => storage_path('app/webmail-session/runs/'.$runId.'/runtime.json'),
-        ];
-    }
-
-    protected function writeMissingRunSupervisorStatus(string $statusPath, array $status, array $profileRotation = []): void
-    {
-        $profileRotated = (bool) ($profileRotation['rotated'] ?? false);
-        $message = $profileRotated
-            ? 'Supervisor startet den Run ohne aktiven Prozessdatensatz mit neuem Browser-Profilordner neu.'
-            : 'Supervisor startet den Run ohne aktiven Prozessdatensatz neu.';
-        $events = is_array($status['events'] ?? null) ? $status['events'] : [];
-        $events[] = [
-            'at' => now()->toIso8601String(),
-            'stage' => 'supervisor-restarting-missing-run',
-            'message' => $message,
-            'previousBrowserProfilePath' => $profileRotation['previousBrowserProfilePath'] ?? null,
-            'browserProfilePath' => $profileRotation['browserProfilePath'] ?? null,
-        ];
-
-        if (count($events) > 80) {
-            $events = array_slice($events, -80);
-        }
-
-        $status['state'] = 'starting';
-        $status['stage'] = 'supervisor-restarting-missing-run';
-        $status['message'] = $message;
-        $status['at'] = now()->toIso8601String();
-        $status['heartbeatAt'] = now()->toIso8601String();
-        $status['previousBrowserProfilePath'] = $profileRotation['previousBrowserProfilePath'] ?? ($status['previousBrowserProfilePath'] ?? null);
-        $status['browserProfilePath'] = $profileRotation['browserProfilePath'] ?? ($status['browserProfilePath'] ?? null);
         $status['events'] = $events;
 
         $this->writeJsonFile($statusPath, $status);
@@ -605,54 +488,6 @@ class ManagedProcessSupervisor
         } catch (\Throwable) {
             return null;
         }
-    }
-
-    protected function rotateLockedBrowserProfile(string $runtimeConfigPath, array $runtime, string $statusPath): array
-    {
-        $profilePath = trim((string) ($runtime['browserProfilePath'] ?? ''));
-
-        if ($profilePath === '') {
-            return ['rotated' => false];
-        }
-
-        $status = $this->readJsonFile($statusPath);
-
-        if (! $this->profileHasSingletonLock($profilePath) && ! $this->isBrowserProfileLockFailure($status)) {
-            return ['rotated' => false];
-        }
-
-        $runDirectory = dirname($runtimeConfigPath);
-        $nextProfilePath = $runDirectory.DIRECTORY_SEPARATOR.'browser-profile-restart-'.now()->format('YmdHis').'-'.Str::lower(Str::random(6));
-
-        $runtime['previousBrowserProfilePath'] = $profilePath;
-        $runtime['browserProfilePath'] = $nextProfilePath;
-        $runtime['browserProfileRestartedAt'] = now()->toIso8601String();
-        $runtime['browserProfileRestartReason'] = 'browser-profile-lock';
-        $runtime['browserProfileRetryCount'] = ((int) ($runtime['browserProfileRetryCount'] ?? 0)) + 1;
-
-        File::ensureDirectoryExists($nextProfilePath);
-        $this->writeJsonFile($runtimeConfigPath, $runtime);
-
-        return [
-            'rotated' => true,
-            'previousBrowserProfilePath' => $profilePath,
-            'browserProfilePath' => $nextProfilePath,
-        ];
-    }
-
-    protected function profileHasSingletonLock(string $profilePath): bool
-    {
-        if ($profilePath === '' || ! File::isDirectory($profilePath)) {
-            return false;
-        }
-
-        foreach (['SingletonLock', 'SingletonCookie', 'SingletonSocket'] as $lockFile) {
-            if (File::exists($profilePath.DIRECTORY_SEPARATOR.$lockFile)) {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     protected function isBrowserProfileLockFailure(array $status): bool
@@ -787,7 +622,7 @@ class ManagedProcessSupervisor
     protected function writeJsonFile(string $path, array $payload): void
     {
         File::ensureDirectoryExists(dirname($path));
-        File::put($path, json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+        File::replace($path, json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
     }
 
     protected function resolveNodeBinary(): string

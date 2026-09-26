@@ -1,7 +1,7 @@
 # Session-Wiederverwendung und Workflow-Optimierung: Audit und Umsetzungsplan
 
-Stand: 25.09.2026. AiUserFactory `8879a06`, ClientController `9f848ec`.
-Status: Analyse abgeschlossen; Implementierung laeuft. AP01/AP03-Persistenzkorrekturen sind teilweise umgesetzt und werden mit Sollverhaltenstests abgesichert; die restlichen Pakete bleiben offen.
+Audit-Baseline: 25.09.2026. Implementierungsstand: 27.09.2026. AiUserFactory `8879a06`, ClientController `9f848ec`.
+Status: Teilumsetzung verifiziert. Gezielte Fixes liegen in AP01/AP03/AP04/AP05/AP07/AP08; atomare Statusdatei-Schreibpfade (AP09) und lockfreie Erstplanung mit Snapshot-Hash (AP11) sind teilweise umgesetzt. Client-Outbox/ACK, vollstaendiger Runtimevertrag, persistente Profil-Leases, Authentifizierungspruefung sowie weitere Teile von AP06–AP15 bleiben offen.
 
 ## 1. Ergebnis für die Produktentscheidung
 
@@ -10,9 +10,9 @@ Status: Analyse abgeschlossen; Implementierung laeuft. AP01/AP03-Persistenzkorre
 Die wichtigsten Lücken:
 
 1. Profile werden bevorzugt nach Mailadresse statt nach Person und Account benannt. Unterschiedliche Personen mit gleicher Mailbox können denselben Profilordner benutzen. Snapshots werden dagegen standardmäßig nach Workflow und Person benannt; ein anderer Workflow findet sie nicht automatisch unter seinem eigenen Standardschlüssel.
-2. Erfasst werden Cookies und Storage der ausgewählten Seite/Frames, nicht vollständig aller zugehörigen Tabs oder Authentifizierungsdomains. Ein Multi-Origin-Restore kann mehr wiederhergestellte Origins melden, als tatsächlich initialisiert wurden.
+2. Capture/Restore ist inzwischen für den explizit freigegebenen aktiven Origin plus freigegebene Auth-Origins multi-tab-faehig; localStorage wird originbezogen angewandt. sessionStorage bleibt fenstergebunden und wird fuer andere Fenster sichtbar als nicht wiederhergestellt gemeldet. Ein Auth-/Accountnachweis ist weiterhin nicht enthalten.
 3. „Session geladen“ wird nicht verlässlich von „angemeldet“ und „richtiger Account“ getrennt. Eine Login-Seite kann als erfolgreiche Webmail-Session gelten.
-4. Zwei bereits geladene Personenmodelle können beim Speichern unterschiedliche Sessions gegenseitig überschreiben. Webmail-Persistenz aktualisiert außerdem einen Metadatenspiegel, aber nicht die vorhandene primäre Mailbox-Zeile.
+4. Zwei bereits geladene Personenmodelle konnten beim Speichern unterschiedliche Sessions gegenseitig überschreiben. Browser-/Webmail- und Mailaccount-Workflowwrites laden inzwischen innerhalb einer Transaktion frisch und aktualisieren die kanonische Mailbox-Zeile samt abgeleitetem Primärspiegel. Revisionen/optimistische Konflikterkennung und der mehrverbindige Produktions-DB-Test fehlen noch.
 5. Session-Löschung kann die falsche Domain betreffen; explizite boolesche `false`-Optionen werden derzeit ignoriert.
 6. Im vollständigen Client-Bundle können Sessiondaten trotz Top-Level-Verschlüsselung als verschachtelte Klartextkopien in Ergebnissen/Events landen. Das ist ein statisch nachvollziehbarer Datenpfad, kein Nachweis eines produktiven Datenabflusses.
 
@@ -199,7 +199,7 @@ Reihenfolge und Abhängigkeiten stehen in Abschnitt 7. Für jedes Paket zuerst d
 
 - [ ] Realistisches verschachteltes Bundle mit synthetischen Cookie-/Token-Sentinels erstellen: Top-Level, `workflow`, `steps`, `tasks`, `browserCleanup`, Progress und Retry-Outbox.
 - [ ] Geheimnishaltigen Transport von Diagnoseobjekten trennen. Snapshot nur einmal in einem geschützten Artifactkanal über authentifizierten Transport senden; im Ergebnis nur ID/Hash/zulässige Metadaten behalten. Bestehendes Top-Level-Protokoll übergangsweise sicher adaptieren.
-- [ ] Vor jeder Persistenz/Projektion rekursiv redigieren; nicht nur vor ZIP-Export. Resultat-, Progress- und Fehlermeldungspfade einschließlich Nested-JSON-Strings berücksichtigen. Auch URLs auf sensible Querywerte prüfen.
+- [ ] Vor jeder Persistenz/Projektion rekursiv redigieren; nicht nur vor ZIP-Export. Resultat- und Progress-Projektionen fuer verschachtelte Sessionfelder werden vor Speicherung bereinigt. Nested-JSON-Strings, alle Fehlerpfade und URLs mit sensiblen Querywerten sowie Rust-Outbox/Logs sind noch nicht vollstaendig abgedeckt.
 - [ ] Lokale Runtimeartefakte mit minimalen Dateirechten und definierter Lebensdauer behandeln. Verschlüsselungsstrategie für Outbox/Checkpoint mit verfügbarer Schlüsselverwaltung festlegen; Schlüssel nicht daneben speichern. Tempdateien nur solange erforderlich entschlüsselt halten.
 - [ ] Vorhandene historische Raw-Daten zunächst über einen redigierten Inventar-/Dry-run-Bericht identifizieren. Keine stillen Änderungen des append-only Auditlogs. Bereinigung, Re-Encryption oder Tokenrotation nur als separat freigegebene Bestandsmaßnahme planen.
 
@@ -213,8 +213,8 @@ Reihenfolge und Abhängigkeiten stehen in Abschnitt 7. Für jedes Paket zuerst d
 
 - [ ] Zielvertrag aus 5.1 typisiert/versioniert einführen. Person-/Accountauflösung einmal beim Runstart; Identität danach unveränderlich weiterreichen.
 - [ ] Server, Client-Fallback und vollständiges Bundle denselben fachlichen Kontext bauen lassen. Nur Pfade, unterstützte Capabilities und Transportadapter dürfen abweichen.
-- [ ] Profilkey aus stabilen IDs statt nur E-Mail erzeugen; gemeinsamen Verifikationsscope ausdrücklich modellieren. Ungültige Personen-ID nicht still als globalen Scope behandeln.
-- [ ] Widerspruch zwischen Step- und Run-Person vor Browserstart ablehnen. Falls Step-Identitätswechsel später fachlich nötig sind, als eigenen isolierten Kontext implementieren, nicht implizit überschreiben.
+- [x] Profilkey aus stabiler Personen- und Account-ID statt nur E-Mail erzeugen; gemeinsamen Verifikationsscope ausdruecklich modellieren. Ungueltige Personen-ID nicht still als globalen Scope behandeln.
+- [x] Widerspruch zwischen Step- und Run-Person vor Browserstart ablehnen. Falls Step-Identitaetswechsel spaeter fachlich noetig sind, als eigenen isolierten Kontext implementieren, nicht implizit ueberschreiben.
 - [ ] Cross-Workflow-Sessionreuse für denselben Account/Scope ermöglichen; Legacy-Workflowkeys nur über explizite Migration/Zuordnung übernehmen. Alte Mailbox-Hash-Profile bei mehrdeutiger Besitzzuordnung quarantänisieren statt beiden Personen zuzuweisen.
 
 **Abnahme:** Gleiche E-Mail bei A/B ergibt getrennte Profile; derselbe Account mit geänderter Mailadresse bleibt stabil; zwei Accounts derselben Person/Domain sind getrennt; drei Ausführungsziele liefern dieselbe fachliche Identität; widersprüchlicher Step startet nicht. Gemeinsame Verifikation funktioniert nur bei explizitem Scope.
@@ -225,10 +225,10 @@ Reihenfolge und Abhängigkeiten stehen in Abschnitt 7. Für jedes Paket zuerst d
 
 **Dateien:** `open_browser_session.cjs`, `delete_browser_session.cjs`, `PersistBrowserSessionTask`, zugehörige Node-/PHP-Tests.
 
-- [ ] Kein passender Key/Account/Domain → `session_not_found`; kein Fallback auf fachlich unzulässigen Kandidaten. Expliziter Key mit widersprüchlichem Domain-/Accountconstraint → erklärter Konflikt.
+- [x] Kein passender Key/Account/Domain → kein Fallback auf fachlich unzulaessige Kandidaten. Expliziter Key mit widerspruechlicher Domain wird nicht geladen. (Einheitlicher maschinenlesbarer Konfliktcode und Account-ID-Constraint bleiben offen.)
 - [ ] Innerhalb zulässiger Kandidaten deterministisch nach Revision/Bestätigung auswählen, nicht nach zufälliger Array-Reihenfolge.
-- [ ] Boolean-Aliase nullish auswerten; `false`, `'false'` und fehlend getrennt testen.
-- [ ] Löschauftrag in explizite erlaubte Cookie-Scopes und Origins auflösen. Aktuelle Seite/Frames nur dann leeren, wenn sie Ziel und Identität entsprechen. Domain-Eltern-/Subdomainmatch nicht als pauschale Löschfreigabe behandeln.
+- [x] Boolean-Aliase nullish auswerten; `false` wird als No-op getestet.
+- [x] Loeschauftrag auf exakten Key/Domain-Scope begrenzen. Aktuelle Seite/Frames werden bei nicht passenden Zielen oder deaktivierten Flags nicht geleert; keine pauschale Eltern-/Subdomainloeschung.
 - [ ] Persistenter Snapshot, aktiver Browserzustand und natives Profil sind getrennte Löschziele. Ergebnis nennt für jedes Ziel `deleted/not_found/failed`; Teilerfolg niemals als vollständige Abmeldung darstellen.
 - [ ] Bewussten Logout/Delete als Widerruf mit Tombstone/Revision führen, einschließlich Sperre des last-good-Fallbacks. Später eintreffende veraltete Save-Ergebnisse nicht als neue Anmeldung akzeptieren.
 
@@ -241,11 +241,12 @@ Reihenfolge und Abhängigkeiten stehen in Abschnitt 7. Für jedes Paket zuerst d
 **Dateien:** `webmail_session_capture.cjs`, `browser_session_restore.cjs`, Browser-/Webmail-Open und Check-Tasks, `resources/node/session/webmail_session.cjs`, `WorkflowTaskCatalog`, Runtime-Capabilityvertrag.
 
 - [ ] Snapshot-v2 gemäß 5.2 implementieren; v1 lesen, fehlende Capabilities ausdrücklich markieren. v1 nicht still als vollständig migriert deklarieren.
-- [ ] Nur zum aktuellen Accountkontext gehörende Tabs/Frames erfassen. localStorage je Origin, sessionStorage je logischem Fenster und Origin speichern. Auth-Origin-Allowlist/SSO-Manifeste berücksichtigen; keine beliebigen offenen Tabs einsammeln.
-- [ ] Restore zentralisieren, auch im Webmail-Check und älteren Sessionpfad. Vor Storageinjektion exakten Origin prüfen; Redirect auf fremden Origin erhält keine Tokens.
+- [ ] Nur zum aktuellen Accountkontext gehörende Tabs/Frames erfassen. Freigegebene Origins werden exakt gefiltert, localStorage je Origin und sessionStorage je logischem Fenster/Origin getrennt gespeichert; accountbezogene Tabzuordnung und produktiver SSO-Allowlist-Editor fehlen.
+- [x] Browser- und Webmail-Open teilen einen Restorepfad. Storage wird nur auf exaktem Origin angewandt; Redirect auf fremden Origin erhaelt keine Tokens. Webmail-Check und aeltere Sessionpfade sind noch separat zu pruefen.
 - [ ] localStorage je Browserkontext + Origin + Restoregeneration, sessionStorage je Tab/Fenster + Origin + Restoregeneration genau einmal initialisieren; `prepared/applied/readback_verified/failed` getrennt zählen. Preload nur bis zur gezielten Anwendung behalten; nicht bei späteren Navigationen veraltete Werte wieder einsetzen.
 - [ ] Kontrollierten Replace-vs-Merge-Modus definieren. Alte Accountdaten im erlaubten Scope entfernen oder frischen accountgebundenen Kontext nutzen; niemals fremde Scopes pauschal leeren.
-- [ ] Cookieattribute einschließlich Partitionierungsidentität über Runtimeadapter erhalten; abgelaufene/abgewiesene Cookies zählen und durch Readback prüfen. IndexedDB-Portabilität als eigenes Capability-Inkrement entscheiden, nicht implizit versprechen.
+- [x] Cookie-`partitionKey` bleibt im v2-Snapshot erhalten und wird an `page.setCookie` weitergegeben; nicht portable IndexedDB- und Service-Worker-Daten werden im Snapshot ausdrücklich als nicht erfasst markiert.
+- [ ] Partitionierte/abgelaufene/abgewiesene Cookies in echtem Chromium durch Readback verifizieren und konkrete Runtime-/Puppeteer-Versionen abnehmen. `partitionKey`-Unit-Test ist kein Produktionsbeleg.
 - [ ] Auth-Prüfung mit positiven Accountsignalen sowie negativen Login-/Challengeindikatoren. Accountkennung muss zur erwarteten Identität passen. Vision kann unklare UI ergänzen, aber ein generisches Wort wie „E-Mail“ darf keine Authentifizierung beweisen.
 
 **Abnahme:** Zwei Origins, zwei Tabs gleichen Origins mit verschiedenem sessionStorage, SSO-Zwischenseite und verzögertes Iframe funktionieren gemäß Manifest. Login/Logout/abgelaufene Session/falscher Account/Challenge werden getrennt erkannt. Unbekannte Origins bleiben unangetastet. UI zeigt begrenzte Snapshot-Capabilities.
@@ -256,10 +257,10 @@ Reihenfolge und Abhängigkeiten stehen in Abschnitt 7. Für jedes Paket zuerst d
 
 **Dateien:** `PersistBrowserSessionTask`, `PersistWebmailSessionTask`, `PersistMailAccountTask`, `PersonAccountRegistry`, `PersonEmailAccountSettings`, `PersonEmailAccount`; additive Migrationen und neuer zentraler Sessionstore.
 
-- [ ] Kurzfristig betroffene Metadaten in kurzer Transaktion frisch laden/sperren und nur eigenes Feld ändern. Keine bereits geladene veraltete Modelinstanz als Schreibbasis verwenden; Settingspfad ebenfalls absichern.
+- [ ] Workflow-Session- und Mailaccount-Writes laden Person/Account in Transaktion frisch und aktualisieren nur die betroffenen Felder. Settingspfad und alle anderen Metadatenwriter sind noch nicht durchgehend abgesichert.
 - [ ] Langfristig Sessiondatensätze mit eindeutigem Identity-Key, Revision, verschlüsselter Payload, Authzustand, `last_used_at` und validierter Herkunft normalisieren. Unique-Index so gestalten, dass `NULL`-Semantik keine doppelten Scopes erlaubt.
 - [ ] Conditional Update auf erwartete Revision; ältere/doppelte Updates dürfen neueren Stand nicht verdrängen. Konflikt als fachliches Resultat, nicht stilles Last-write-wins.
-- [ ] Mailboxänderungen durch einen Service auf dem konkreten `PersonEmailAccount` ausführen. Metadatenspiegel nur noch abgeleitet bedienen; kein automatisches Zurückspiegeln alter Sessiondaten. Gemeinsame Verifikation bleibt eigener Store/Owner.
+- [x] Workflow-Mailboxänderungen werden auf dem konkreten kanonischen `PersonEmailAccount` gespeichert; `persons.metadata.email_account` und `person_email` werden aus dem primaeren Tabellenkonto abgeleitet. Settingspfad/Verifikationsstore bleiben getrennte Folgearbeit.
 - [ ] Bestehende Einträge verlustarm migrieren, Identitätskonflikte melden, Decrypt-/Schemafehler sichtbar kennzeichnen. Nicht lesbare Payload nicht still verschwinden lassen und nicht als leere gültige Session speichern.
 
 **Abnahme:** Zwei konkurrierende Saves für A/B bleiben beide erhalten; same-key Konflikt liefert eindeutige Revision; paralleles Profilmetadatenupdate bleibt erhalten; Table/Mirror stimmt überein; stale UI-Save überschreibt keine aktuelle Session. Zusätzlich echte Mehrverbindungsabnahme gegen dieselbe DB-Engine wie Produktion, nicht nur SQLite.
@@ -287,7 +288,7 @@ Reihenfolge und Abhängigkeiten stehen in Abschnitt 7. Für jedes Paket zuerst d
 **Dateien:** `WorkflowExecutionService::start/advanceRun/startWorkflowTaskStep`, `PersonWorkflowDispatcher`, `WorkflowTaskRunner`, Browserlauncher, Rust-Start/Recovery, `PruneWorkflowProcessArtifacts`; neue Claim-/Lease-Persistenz.
 
 - [ ] Alle Startwege über dieselbe Profilreservierung führen. Besitzer, Host, Run, Generation/Fencing-Token, Ablauf und Heartbeat erfassen. Leaseverlust verhindert weitere geschützte Writes.
-- [ ] Chromium-Lock nicht durch stillen neuen Identity-Ordner umgehen. `waiting_for_profile` mit Grund, begrenztem Backoff und sichtbarem Besitzer; bewusst frischer Testkontext nur als expliziter Modus.
+- [ ] Chromium-Lock wird nicht mehr durch stillen neuen Identity-Ordner umgangen. Launcher wartet begrenzt unter derselben Profilidentitaet und meldet `waiting_for_profile`; Launcher-, Mailrunner- und Prozess-Supervisor-Fallbacks auf Ersatzprofile sind entfernt. Persistenter Profil-Lease mit Besitzer/Host/Fencing-Token und bewusstem frischen Testkontext fehlen.
 - [ ] Run-Cursor/Taskversuch in kurzer DB-Transaktion claimen; Prozess erst nach erfolgreichem Claim starten. Externe Start-ID dauerhaft festhalten; Absturz zwischen Claim und Start/ACK über Reconciliation behandeln, nicht blind zweiten Prozess starten.
 - [ ] Globale Kapazitätsreservierung sowie Host-/Profilkapazität atomar prüfen. Vorhandene Copilot-Leases weiterverwenden, Zuständigkeiten klar abgrenzen.
 - [ ] Cleanup an Lease, `last_used_at`, Lifecycle und explizite Retention koppeln. Kein Löschen aktiver Profile. Crash-/verwaiste Locks kontrolliert erkennen; keine globale Entfernung von Chromium-Lockdateien.
@@ -300,6 +301,7 @@ Reihenfolge und Abhängigkeiten stehen in Abschnitt 7. Für jedes Paket zuerst d
 
 **Dateien:** `WorkflowTaskCatalog`, Node-Taskresultate/Executor, `WorkflowCopilotSupervisorService` (Probe, Restart, technische Wiederholung, Endverifikation), bestehender Ledger; neue EffectPolicy-/Reconciliation-Komponente.
 
+- [x] Fail-closed Replay-Bewertung ist an Taskretry, technischen Run-Neustart, Strukturreparatur und Endverifikation angebunden. Nur eine feste Read-only-Task-Allowlist gilt als sicher; `click`, `submit`, generische Tasten und unbekannte/fehlende Taskbelege blockieren automatische Wiederholung.
 - [ ] Katalog um Wirkungsklasse `read_only/local_state/external_write/unknown` und Wiederholungsvertrag erweitern. Generischer Klick standardmäßig nicht als risikolos einstufen; fachlicher Kontext entscheidet.
 - [ ] Vor potenzieller Wirkung dauerhaft `pending` mit Operation-/Versuchs-ID speichern, nachher `confirmed` oder `unknown`. API-Idempotenzschlüssel nutzen, soweit Anbieter sie unterstützen; nicht bloß nachträglich einen Erfolgslog schreiben.
 - [ ] Alle Wiederholungseinstiege auf denselben Gate-Service führen. Unbekannter Ausgang nach Submit/Timeout verlangt fachlichen Abgleich; nicht blind wiederholen. Ohne bestätigbare Idempotenz keine universelle Exactly-once-Garantie behaupten.
@@ -314,7 +316,7 @@ Reihenfolge und Abhängigkeiten stehen in Abschnitt 7. Für jedes Paket zuerst d
 
 **Dateien:** `run_step.cjs::writeJson`, `WorkflowTaskRunner::writeJsonFile/readRun`, Monitoring in `WorkflowExecutionService`, Rust-Checkpoint-/Resultatleser.
 
-- [ ] Gemeinsames Schreibmuster: private Tempdatei im selben Verzeichnis, vollständiger Write, erforderlichenfalls Flush, atomisches Replace. Fehlerpfade und Windows-Dateisemantik separat testen.
+- [x] JSON-Status-/Ergebniswrites verwenden in den PHP-Workflow-/Mailrunnern und `ManagedProcessSupervisor` atomisches Replace; Node-Workflowstatus und -ergebnisse schreiben ueber einen privaten, eindeutigen Tempnamen und atomisches Rename. Ein Flush pro haeufigem Statusupdate wurde nach einem 5.000-Loop-Stresstest bewusst nicht aktiviert (starke Laufzeitregression). Windows-Rename-Semantik bleibt separat zu verifizieren.
 - [ ] Snapshotversion, monotone Sequenz, Writer-/Run-/Attempt-ID und expliziter Lifecycle. Pro Datei genau ein autoritativer Writer.
 - [ ] Reader unterscheidet fehlend, ungültig, veraltet, laufend, terminal. Kurzfristig kaputter Status behält letzten gültigen Stand und löst begrenzten Retry aus, nicht sofort fachlichen Fehler.
 - [ ] Callback und Polling vereinheitlicht idempotent anwenden; ältere Sequenzen ignorieren. Terminaler Zustand braucht validiertes Ergebnis beziehungsweise ausdrücklichen, reconcilierten Prozessausfall.
@@ -341,7 +343,7 @@ Reihenfolge und Abhängigkeiten stehen in Abschnitt 7. Für jedes Paket zuerst d
 
 **Dateien:** `WorkflowCopilotPlanningService`, `WorkflowRevisionService`, Erstplanungszweig des Supervisors; gezielte Lock-/Revisionskonflikttests.
 
-- [ ] Bereits vorhandene Methoden `plan()` und `applyPlan()` im Supervisor entkoppelt aufrufen: `plan()` außerhalb von `revisions->apply()`, innerhalb nur die validierte Anwendung. Normalisierten Plan mit Snapshot-Hash, erwarteter Revision und tatsächlicher Provider-Usage persistieren.
+- [x] Der Supervisor-Erstplanungsfallback ruft `plan()` ausserhalb von `revisions->apply()` auf, bindet den normalisierten Plan an einen Workflow-Snapshot-Hash und ruft innerhalb der Revisionstransaktion nur noch `applyPlan()` auf. Provider-Usage wird getrennt erfasst; Revisionsservice prueft weiterhin Owner, aktive Sitzung und erwartete Revision. Snapshot-Hash und erwartete Revision stehen im Auditereignis.
 - [ ] Unter kurzer Transaktion erneut Status, Eigentümer, Sessionlease und Revision prüfen; nur validierte Mutation anwenden. Zwischenzeitlicher Stop/Pause verhindert Apply und Start.
 - [ ] Konflikte nachvollziehbar verwerfen oder neu planen; niemals neuere Änderungen überschreiben. Retry eines bereits gültig gespeicherten Plans darf nicht unnötig einen zweiten Modellaufruf auslösen.
 - [ ] Vision → strukturierter Befund → Datenanalyse/Planung als bestehende Rollenverteilung erhalten. Dieselben Katalog-/Routing-/Variablenregeln und redigierte Beobachtungen verwenden.

@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 function normalizeText(value) {
   return String(value || '').trim();
@@ -28,9 +29,22 @@ function readJsonFile(filePath, fallback = {}) {
 
 function writeJsonFile(filePath, payload) {
   ensureDirectory(path.dirname(filePath));
-  const temporaryPath = `${filePath}.${process.pid}.tmp`;
-  fs.writeFileSync(temporaryPath, JSON.stringify(payload, null, 2), 'utf8');
-  fs.renameSync(temporaryPath, filePath);
+  const temporaryPath = `${filePath}.${process.pid}.${crypto.randomBytes(8).toString('hex')}.tmp`;
+  let descriptor = null;
+
+  try {
+    descriptor = fs.openSync(temporaryPath, 'wx', 0o600);
+    fs.writeFileSync(descriptor, JSON.stringify(payload, null, 2), 'utf8');
+    fs.closeSync(descriptor);
+    descriptor = null;
+    fs.renameSync(temporaryPath, filePath);
+  } catch (error) {
+    if (descriptor !== null) {
+      fs.closeSync(descriptor);
+    }
+    fs.rmSync(temporaryPath, { force: true });
+    throw error;
+  }
 }
 
 function sleep(ms) {

@@ -2,11 +2,12 @@
 
 namespace Tests\Feature;
 
-use App\Models\Workflow;
-use App\Models\WorkflowStep;
 use App\Models\Person;
 use App\Models\PersonEmailAccount;
+use App\Models\Workflow;
+use App\Models\WorkflowStep;
 use App\Services\Workflows\Tasks\PersistBrowserSessionTask;
+use App\Services\Workflows\Tasks\PersistMailAccountTask;
 use App\Services\Workflows\Tasks\PersistWebmailSessionTask;
 use App\Services\Workflows\WorkflowBrowserSessionService;
 use App\Services\Workflows\WorkflowTaskCatalog;
@@ -251,6 +252,60 @@ class WorkflowBrowserSessionSettingsTest extends TestCase
         $this->assertTrue($secondaryResult['ok']);
         $this->assertSame('encrypted-secondary', data_get($secondary->fresh()->webmail_session, 'payload_encrypted'));
         $this->assertSame('encrypted-primary', data_get($person->fresh()->metadata, 'email_account.webmail_session.payload_encrypted'));
+    }
+
+    public function test_persist_mail_account_updates_canonical_secondary_and_preserves_primary_mirror(): void
+    {
+        $person = Person::query()->create([
+            'platform' => 'instagram',
+            'profile_key' => 'account-save-'.str()->random(8),
+            'profile_label' => 'Account save test',
+            'person_email' => 'primary@example.test',
+            'metadata' => [
+                'other_key' => 'preserve-me',
+                'email_account' => ['email' => 'primary@example.test', 'provider' => 'proton'],
+            ],
+        ]);
+        $primary = PersonEmailAccount::query()->create([
+            'person_id' => $person->id,
+            'email' => 'primary@example.test',
+            'provider' => 'proton',
+            'is_primary' => true,
+            'sort_order' => 0,
+        ]);
+
+        // Simulate a stale model snapshot before a concurrent metadata change.
+        $stalePerson = Person::query()->findOrFail($person->id);
+        $person->forceFill(['metadata' => [...$person->metadata, 'concurrent_key' => 'preserve-too']])->save();
+
+        $saved = app(PersistMailAccountTask::class)->handle($stalePerson, [
+            'email' => 'secondary@example.test',
+            'provider' => 'gmx',
+            'password' => 'synthetic-secret',
+            'recoveryEmail' => 'recovery@example.test',
+            'is_primary' => false,
+        ]);
+
+        $secondary = PersonEmailAccount::query()->findOrFail($saved['accountId']);
+        $this->assertSame('secondary@example.test', $secondary->email);
+        $this->assertSame('gmx', $secondary->provider);
+        $this->assertFalse($secondary->is_primary);
+        $this->assertSame('synthetic-secret', \Illuminate\Support\Facades\Crypt::decryptString($secondary->password_encrypted));
+        $this->assertSame('recovery@example.test', $secondary->recovery_email);
+        $this->assertSame('primary@example.test', $primary->fresh()->email);
+        $this->assertSame('primary@example.test', $person->fresh()->person_email);
+        $this->assertSame('primary@example.test', data_get($person->fresh()->metadata, 'email_account.email'));
+        $this->assertSame('preserve-me', data_get($person->fresh()->metadata, 'other_key'));
+        $this->assertSame('preserve-too', data_get($person->fresh()->metadata, 'concurrent_key'));
+
+        $updated = app(PersistMailAccountTask::class)->handle($stalePerson, [
+            'email' => 'SECONDARY@example.test',
+            'password' => 'updated-secret',
+        ]);
+
+        $this->assertSame($saved['accountId'], $updated['accountId']);
+        $this->assertSame(2, PersonEmailAccount::query()->where('person_id', $person->id)->count());
+        $this->assertSame('updated-secret', \Illuminate\Support\Facades\Crypt::decryptString($secondary->fresh()->password_encrypted));
     }
 
     protected function workflow(): Workflow

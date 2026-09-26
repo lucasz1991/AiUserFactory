@@ -269,7 +269,7 @@ class WorkflowTaskRunner
         $status = $this->readJsonFile($statusPath) ?: [];
         $result = $this->readResult($runId);
 
-        if (is_array($result) && in_array((string) ($status['state'] ?? ''), ['queued', 'starting', 'running'], true)) {
+        if (is_array($result) && in_array((string) ($status['state'] ?? ''), ['queued', 'starting', 'running', 'waiting'], true)) {
             $status['state'] = ($result['ok'] ?? false) ? 'completed' : 'failed';
             $status['stage'] = $status['state'];
             $status['message'] = (string) ($result['statusMessage'] ?? $status['message'] ?? '');
@@ -277,7 +277,7 @@ class WorkflowTaskRunner
         }
 
         $status['runId'] = $runId;
-        $status['isRunning'] = in_array((string) ($status['state'] ?? ''), ['queued', 'starting', 'running'], true);
+        $status['isRunning'] = in_array((string) ($status['state'] ?? ''), ['queued', 'starting', 'running', 'waiting'], true);
         $status['livePreviewIntervalSeconds'] = (int) ($status['livePreviewIntervalSeconds'] ?? 3);
         $status['livePreviewPollIntervalSeconds'] = (int) ($status['livePreviewPollIntervalSeconds'] ?? $status['livePreviewIntervalSeconds']);
         $status['result'] = $result;
@@ -1638,7 +1638,7 @@ class WorkflowTaskRunner
     protected function writeJsonFile(string $path, array $payload): void
     {
         File::ensureDirectoryExists(dirname($path));
-        File::put($path, json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+        File::replace($path, json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
     }
 
     protected function readJsonFile(string $path): ?array
