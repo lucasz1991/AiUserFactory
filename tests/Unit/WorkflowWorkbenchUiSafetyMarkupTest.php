@@ -30,9 +30,12 @@ class WorkflowWorkbenchUiSafetyMarkupTest extends TestCase
         );
 
         foreach ([$definition, $studio, $toolModal] as $markup) {
-            $this->assertStringContainsString('x-on:keydown.escape.prevent.stop=', $markup);
-            $this->assertStringContainsString('x-trap.inert.noscroll="true"', $markup);
+            $this->assertStringContainsString('<x-ui.modal', $markup);
         }
+        $modal = file_get_contents($root.'/resources/views/components/ui/modal.blade.php');
+        $this->assertStringContainsString('x-on:keydown.escape.prevent.stop="closeModal()"', $modal);
+        $this->assertStringContainsString('x-trap.inert.noscroll="show"', $modal);
+        $this->assertStringContainsString('x-show.important="show"', $modal);
 
         foreach ([$stepCard, $taskCard] as $markup) {
             $this->assertStringContainsString('x-on:keydown.escape.stop.prevent=', $markup);

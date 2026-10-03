@@ -160,33 +160,24 @@
     x-on:resize.window="desktopSidebar = window.matchMedia('(min-width: 720px)').matches; if (desktopSidebar) mobileLibraryOpen = false; queueRouteRefresh()"
 >
     @if($showDefinitionSurface)
-    @if($modalOnly)
-    {{-- Overlay-Huelle nur fuer das Studio; die zugehoerigen schliessenden Tags stehen am Ende dieses Blocks.
-         Nur Klassen der Standard-z-Skala und aus dem bestehenden CSS-Build, damit die Huelle auch ohne
-         frischen Tailwind-Build ueber der Studio-Oberflaeche liegt. --}}
-    <div
+    <x-ui.modal
+        :render-dialog="$modalOnly"
+        :id="$routeMarkerId.'-definition-drawer'"
         wire:key="{{ $routeMarkerId }}-definition-drawer"
         data-studio-definition-drawer
-        class="fixed inset-0 z-50 flex flex-col bg-slate-950/45 p-3 backdrop-blur-sm sm:p-6"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="{{ $routeMarkerId }}-definition-drawer-title"
-        x-on:keydown.escape.prevent.stop="await $wire.closeDefinitionDrawer(); $nextTick(() => document.querySelector('[data-workflow-studio-builder-trigger]')?.focus({ preventScroll: true }))"
+        :open="true"
+        close-action="closeDefinitionDrawer"
+        return-focus="[data-workflow-studio-builder-trigger]"
+        max-width="screen"
+        panel-class="h-full"
+        body-class="flex flex-col"
     >
-        <section
-            class="flex min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-white/70 bg-slate-100 shadow-2xl"
-            x-trap.inert.noscroll="true"
-            x-init="$nextTick(() => $refs.definitionDrawerClose?.focus({ preventScroll: true }))"
-        >
-            <header class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3 sm:px-5">
-                <div class="min-w-0">
-                    <p class="text-[9px] font-black uppercase tracking-[0.18em] text-blue-700">Workflow aufbauen</p>
-                    <h2 id="{{ $routeMarkerId }}-definition-drawer-title" class="mt-1 truncate text-base font-bold text-slate-950">Listen und Tasks bearbeiten</h2>
-                    <p class="mt-1 text-xs text-slate-500">{{ $revisionMode ? 'Jede Änderung wird als neue Workflow-Revision gespeichert.' : 'Listen, Tasks und Routen dieses Workflows bearbeiten.' }}</p>
-                </div>
-                <button x-ref="definitionDrawerClose" type="button" wire:click="closeDefinitionDrawer" data-studio-definition-drawer-close class="inline-flex h-11 shrink-0 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 transition hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-cyan-500">Schließen <span aria-hidden="true">×</span></button>
-            </header>
-            <div class="min-h-0 w-full min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain bg-slate-100 md:overflow-hidden">
+        <x-slot name="title">
+            <h2 class="text-base font-bold text-slate-950">Listen und Tasks bearbeiten</h2>
+            <p class="mt-1 text-xs font-normal text-slate-500">{{ $revisionMode ? 'Jede Änderung wird als neue Workflow-Revision gespeichert.' : 'Listen, Tasks und Routen dieses Workflows bearbeiten.' }}</p>
+        </x-slot>
+    @if($modalOnly)
+        <div class="min-h-0 w-full min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain bg-slate-100 md:overflow-hidden">
     @endif
     <button
         type="button"
@@ -573,10 +564,9 @@
         </aside>
     </div>
     @if($modalOnly)
-            </div>
-        </section>
-    </div>
+        </div>
     @endif
+    </x-ui.modal>
     @endif
 
     @if($showDefinitionSurface)

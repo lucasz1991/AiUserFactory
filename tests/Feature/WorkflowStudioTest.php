@@ -1217,7 +1217,7 @@ class WorkflowStudioTest extends TestCase
             ->call('openDefinitionDrawer', $session->id, $step->id, 'first-task')
             ->assertSet('showDefinitionDrawer', true)
             ->assertSeeHtml('data-studio-definition-drawer')
-            ->assertSeeHtml('wire:click="closeDefinitionDrawer"')
+            ->assertSeeHtml('x-on:click="closeModal()"')
             ->assertSee('Task-Bibliothek')
             ->assertSee('Neue Liste');
 

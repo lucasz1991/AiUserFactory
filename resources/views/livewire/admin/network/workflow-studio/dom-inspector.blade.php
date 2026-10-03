@@ -32,6 +32,8 @@
     }
 
     $inspectorPayload = [
+        'interactive' => (bool) ($interactive ?? true),
+        'canProbe' => (bool) ($canProbe ?? false),
         'windowKey' => (string) ($panel['windowKey'] ?? $panel['name'] ?? $panel['title'] ?? 'main'),
         'targetId' => (string) ($panel['targetId'] ?? $panel['target_id'] ?? ''),
         'viewport' => is_array($inspectorTree['viewport'] ?? null) ? $inspectorTree['viewport'] : null,
@@ -66,7 +68,7 @@
 @endonce
 
 <div
-    wire:key="workflow-dom-inspector-{{ md5($inspectorStorageKey.':'.($inspectorTree['capturedAt'] ?? '').':'.data_get($inspectorPayload, 'cursor.sequence', '')) }}"
+    wire:key="workflow-dom-inspector-{{ md5(($inspectorInstance ?? 'preview').':'.$inspectorStorageKey) }}"
     data-workflow-dom-inspector
     x-data="workflowDomInspector({
         interactive: @js($inspectorInteractive),

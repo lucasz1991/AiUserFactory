@@ -133,7 +133,7 @@ class WorkflowCopilotUiMarkupTest extends TestCase
         // dann auf z-index:auto zurueck und geraten hinter die Diagramm-Tasks.
         $this->assertStringNotContainsString('z-[64]', $studio.$toolModal);
         $this->assertStringNotContainsString('z-[65]', $studio.$toolModal);
-        $this->assertStringContainsString('z-40', $toolModal);
+        $this->assertStringContainsString('<x-ui.modal', $toolModal);
         $this->assertStringContainsString('relative isolate', $studio);
 
         // Die interaktive Toolbar muss die Personen-Auswahl fuer den Teststart anbieten.

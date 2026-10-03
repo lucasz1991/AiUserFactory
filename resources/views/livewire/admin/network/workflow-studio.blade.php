@@ -263,29 +263,11 @@
     @endif
 
     @if($showRouteRepairModal)
-        <div
-            wire:key="workflow-studio-route-repair"
-            x-on:click.self="const studioShell = $el.closest('[data-workflow-studio-shell]'); await $wire.closeRouteRepairModal(); $nextTick(() => studioShell?.querySelector('[data-studio-run-start-trigger]')?.focus({ preventScroll: true }))"
-            x-on:keydown.escape.prevent.stop="const studioShell = $el.closest('[data-workflow-studio-shell]'); await $wire.closeRouteRepairModal(); $nextTick(() => studioShell?.querySelector('[data-studio-run-start-trigger]')?.focus({ preventScroll: true }))"
-            class="absolute inset-0 z-[70] flex items-center justify-center bg-slate-950/45 p-3 backdrop-blur-sm sm:p-6"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Fehlende Verzweigungen"
-        >
-            <section
-                class="flex max-h-full w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-white/70 bg-white shadow-2xl"
-                x-trap.inert.noscroll="true"
-                x-init="$nextTick(() => $refs.routeRepairClose?.focus({ preventScroll: true }))"
-            >
-                <header class="flex shrink-0 items-start justify-between gap-4 border-b border-slate-200 px-4 py-3 sm:px-5">
-                    <div>
-                        <p class="text-[9px] font-black uppercase tracking-[0.18em] text-amber-700">Workflow-Struktur</p>
-                        <h2 class="mt-1 text-base font-bold text-slate-950">{{ count($routeRepairFindings) }} Verzweigung(en) ohne gültiges Ziel</h2>
-                        <p class="mt-1 text-xs text-slate-500">Die Zielkarte oder Zielliste wurde gelöscht. Sie können die betroffenen Verzweigungen auf die Standardroute setzen und den Test direkt starten.</p>
-                    </div>
-                    <button x-ref="routeRepairClose" type="button" x-on:click="const studioShell = $el.closest('[data-workflow-studio-shell]'); await $wire.closeRouteRepairModal(); $nextTick(() => studioShell?.querySelector('[data-studio-run-start-trigger]')?.focus({ preventScroll: true }))" class="h-9 shrink-0 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 hover:bg-slate-100">Schließen ×</button>
-                </header>
-
+        <x-ui.modal id="studio-route-repair-{{ $session->id }}" wire:key="workflow-studio-route-repair" :open="true" close-action="closeRouteRepairModal" return-focus="[data-studio-run-start-trigger]" max-width="2xl">
+            <x-slot name="title">
+                <h2 class="text-base font-bold">{{ count($routeRepairFindings) }} Verzweigung(en) ohne gültiges Ziel</h2>
+                <p class="mt-1 text-xs font-normal text-slate-500">Die Zielkarte oder Zielliste wurde gelöscht. Auf die Standardroute setzen und den Test erneut starten.</p>
+            </x-slot>
                 <div class="min-h-0 flex-1 overflow-y-auto px-4 py-3 sm:px-5">
                     <ul class="space-y-2">
                         @foreach($routeRepairFindings as $finding)
@@ -320,37 +302,23 @@
                     @endif
                 </div>
 
-                <footer class="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-slate-200 bg-slate-50 px-4 py-3 sm:px-5">
-                    <button type="button" x-on:click="const studioShell = $el.closest('[data-workflow-studio-shell]'); await $wire.closeRouteRepairModal(); $nextTick(() => studioShell?.querySelector('[data-studio-run-start-trigger]')?.focus({ preventScroll: true }))" class="h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 hover:bg-slate-100">Schließen</button>
+                <x-slot name="actions">
+                    <button type="button" x-on:click="$dispatch('close')" class="h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 hover:bg-slate-100">Schließen</button>
                     <button type="button" wire:click="applyRouteRepairAndStart" @disabled($historicalRunView || $routeRepairBlockingMessages !== []) class="h-9 rounded-lg bg-slate-900 px-3.5 text-xs font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40">
                         Auf Standardroute setzen und Test starten
                     </button>
-                </footer>
-            </section>
-        </div>
+                </x-slot>
+        </x-ui.modal>
     @endif
 
     @if($showCopilotSettingsModal && ! $historicalRunView)
-        <div
-            wire:key="workflow-studio-copilot-settings"
-            x-on:click.self="const studioShell = $el.closest('[data-workflow-studio-shell]'); await $wire.set('showCopilotSettingsModal', false); $nextTick(() => studioShell?.querySelector('[data-studio-copilot-settings-trigger]')?.focus({ preventScroll: true }))"
-            x-on:keydown.escape.prevent.stop="const studioShell = $el.closest('[data-workflow-studio-shell]'); await $wire.set('showCopilotSettingsModal', false); $nextTick(() => studioShell?.querySelector('[data-studio-copilot-settings-trigger]')?.focus({ preventScroll: true }))"
-            class="absolute inset-0 z-40 flex items-center justify-center bg-slate-950/35 p-3 backdrop-blur-sm sm:p-6"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Copilot-Einstellungen"
-        >
-            <section
-                class="flex max-h-full w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-white/70 bg-white shadow-2xl"
-                x-trap.inert.noscroll="true"
-                x-init="$nextTick(() => $refs.copilotSettingsClose?.focus({ preventScroll: true }))"
-            >
-                <header class="flex shrink-0 items-center justify-between gap-4 border-b border-slate-200 px-4 py-3 sm:px-5"><div><p class="text-[9px] font-black uppercase tracking-[0.18em] text-cyan-700">Workflow-Copilot</p><h2 class="mt-1 text-base font-bold text-slate-950">Einstellungen und Start</h2><p class="mt-1 text-xs text-slate-500">Ziel, Testkontext und Berechtigungen dieser Studio-Sitzung.</p></div><button x-ref="copilotSettingsClose" type="button" x-on:click="const studioShell = $el.closest('[data-workflow-studio-shell]'); await $wire.set('showCopilotSettingsModal', false); $nextTick(() => studioShell?.querySelector('[data-studio-copilot-settings-trigger]')?.focus({ preventScroll: true }))" class="h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 hover:bg-slate-100">Schließen ×</button></header>
-                <div class="min-h-0 flex-1 overflow-y-auto">
-                    @include('livewire.admin.network.workflow-studio.copilot-rail')
-                </div>
-            </section>
-        </div>
+        <x-ui.modal id="studio-copilot-settings-{{ $session->id }}" wire:key="workflow-studio-copilot-settings" wire:model="showCopilotSettingsModal" return-focus="[data-studio-copilot-settings-trigger]" max-width="xl">
+            <x-slot name="title">
+                <h2 class="text-base font-bold">Einstellungen und Start</h2>
+                <p class="mt-1 text-xs font-normal text-slate-500">Ziel, Testkontext und Berechtigungen dieser Studio-Sitzung.</p>
+            </x-slot>
+            @include('livewire.admin.network.workflow-studio.copilot-rail')
+        </x-ui.modal>
     @endif
 
     @unless($hosted)

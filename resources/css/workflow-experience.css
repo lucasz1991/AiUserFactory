@@ -800,7 +800,7 @@
   border-color: var(--ff-accent-line) !important;
   background: var(--ff-accent-soft) !important;
   box-shadow: 0 14px 32px -26px rgba(37, 99, 235, .55) !important;
-  transform: translateY(-2px);
+  /* Browser coordinates remain stable while interacting with screenshots. */
 }
 
 .ff-tool-dock {
@@ -1472,27 +1472,35 @@
   }
 }
 
+/* Editing targets must not drift when focus moves during a Livewire update. */
+[data-workflow-definition-editor] :is(.ff-step-column, .ff-task-card):is(:hover, :focus-within) {
+  transform: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   :is(
     .workflow-experience,
     [data-workflow-manager-root],
     [data-workflow-studio-shell],
     [data-workflow-copilot-root],
-    [data-workflow-run-preview]
+    [data-workflow-run-preview],
+    .jetstream-modal
   ) *,
   :is(
     .workflow-experience,
     [data-workflow-manager-root],
     [data-workflow-studio-shell],
     [data-workflow-copilot-root],
-    [data-workflow-run-preview]
+    [data-workflow-run-preview],
+    .jetstream-modal
   ) *::before,
   :is(
     .workflow-experience,
     [data-workflow-manager-root],
     [data-workflow-studio-shell],
     [data-workflow-copilot-root],
-    [data-workflow-run-preview]
+    [data-workflow-run-preview],
+    .jetstream-modal
   ) *::after {
     scroll-behavior: auto !important;
     animation-duration: .01ms !important;

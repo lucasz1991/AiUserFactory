@@ -39,7 +39,7 @@ class WorkflowStudioDefinitionDrawerMarkupTest extends TestCase
         $this->assertStringContainsString('$definitionDrawerOpen = (bool) ($definitionDrawerOpen ?? false);', $source);
         $this->assertStringContainsString('$showDefinitionSurface = ! $modalOnly || $definitionDrawerOpen;', $source);
         $this->assertStringContainsString('data-studio-definition-drawer', $source);
-        $this->assertStringContainsString('wire:click="closeDefinitionDrawer"', $source);
+        $this->assertStringContainsString('close-action="closeDefinitionDrawer"', $source);
         $this->assertStringContainsString("'definitionDrawerOpen' => \$definitionDrawerOpen ?? false,", $wrapper);
 
         // Der Manager-Pfad darf keine Overlay-Huelle bekommen: die Drawer-Chrome haengt

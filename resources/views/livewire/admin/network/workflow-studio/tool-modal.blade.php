@@ -13,35 +13,24 @@
     [$toolTitle, $toolDescription] = $toolMeta[$activeToolModal] ?? ['Werkzeug', 'Workflow-Diagnose'];
 @endphp
 
-<div
+<x-ui.modal
+    id="workflow-studio-tool-{{ $session->id }}"
     wire:key="workflow-studio-tool-modal-{{ $activeToolModal }}"
-    x-on:click.self="const studioShell = $el.closest('[data-workflow-studio-shell]'); await $wire.closeToolModal(); $nextTick(() => studioShell?.querySelector('[data-studio-tool-trigger=&quot;{{ $activeToolModal }}&quot;]')?.focus({ preventScroll: true }))"
-    x-on:keydown.escape.prevent.stop="const studioShell = $el.closest('[data-workflow-studio-shell]'); await $wire.closeToolModal(); $nextTick(() => studioShell?.querySelector('[data-studio-tool-trigger=&quot;{{ $activeToolModal }}&quot;]')?.focus({ preventScroll: true }))"
-    {{-- Standard-z-Skala statt Arbitrary-Klasse: z-40 existiert in jedem (auch alten/gecachten) CSS-Build --}}
-    class="absolute inset-0 z-40 flex items-center justify-center bg-slate-950/35 p-3 backdrop-blur-sm sm:p-6"
-    role="dialog"
-    aria-modal="true"
-    aria-label="{{ $toolTitle }}"
+    :open="true"
+    close-action="closeToolModal"
+    :return-focus="'[data-workflow-studio-shell] [data-studio-tool-trigger='.$activeToolModal.']'"
+    :max-width="$activeToolModal === 'browser' ? 'screen' : '6xl'"
 >
-    <section
-        class="flex max-h-[calc(100vh-1.5rem)] w-full {{ $activeToolModal === 'browser' ? 'max-w-[96rem]' : 'max-w-6xl' }} flex-col overflow-hidden rounded-2xl border border-white/70 bg-white shadow-2xl"
-        x-trap.inert.noscroll="true"
-        x-init="$nextTick(() => $refs.toolModalClose?.focus({ preventScroll: true }))"
-    >
-        <header class="flex shrink-0 items-center justify-between gap-4 border-b border-slate-200 bg-white px-4 py-3 sm:px-5">
-            <div class="min-w-0">
-                <p class="text-[9px] font-black uppercase tracking-[0.18em] text-cyan-700">Testwerkzeug</p>
-                <h2 class="mt-1 truncate text-base font-bold text-slate-950">{{ $toolTitle }}</h2>
-                <p class="mt-1 text-xs text-slate-500">{{ $toolDescription }}</p>
-            </div>
-            <button x-ref="toolModalClose" type="button" x-on:click="const studioShell = $el.closest('[data-workflow-studio-shell]'); await $wire.closeToolModal(); $nextTick(() => studioShell?.querySelector('[data-studio-tool-trigger=&quot;{{ $activeToolModal }}&quot;]')?.focus({ preventScroll: true }))" class="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 transition hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-cyan-500">Schließen <span aria-hidden="true">×</span></button>
-        </header>
-
+    <x-slot name="title">
+        <p class="text-[9px] font-black uppercase tracking-[0.18em] text-cyan-700">Testwerkzeug</p>
+        <h2 class="mt-1 text-base font-bold text-slate-950">{{ $toolTitle }}</h2>
+        <p class="mt-1 text-xs font-normal text-slate-500">{{ $toolDescription }}</p>
+    </x-slot>
         <div class="min-h-0 flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-5">
             @if($activeToolModal === 'browser')
                 <div class="space-y-5" data-workflow-browser-tool>
                     @foreach($browserWindows as $window)
-                        <article class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                        <article wire:key="studio-browser-window-{{ $session->id }}-{{ $window['name'] }}" class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
                             <div class="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 px-4 py-3">
                                 <div class="min-w-0">
                                     <div class="flex items-center gap-2"><span class="h-2.5 w-2.5 rounded-full {{ $window['connected'] ? 'bg-emerald-500' : 'bg-slate-300' }}"></span><h3 class="truncate text-sm font-bold text-slate-900">{{ $window['name'] }}</h3>@if($window['active'])<span class="rounded bg-cyan-100 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wide text-cyan-800">aktiv</span>@endif</div>
@@ -60,6 +49,7 @@
                                 @endif
                             </div>
                             @include('livewire.admin.network.workflow-studio.dom-inspector', [
+                                'inspectorInstance' => 'tool-'.$session->id,
                                 'panel' => [
                                     'title' => $window['name'],
                                     'windowKey' => $window['name'],
@@ -147,5 +137,4 @@
                 </div>
             @endif
         </div>
-    </section>
-</div>
+</x-ui.modal>

@@ -125,6 +125,10 @@ Arbeitsprotokoll aktualisieren.
 
 ### Arbeitsprotokoll
 
+2026-10-03 | Codex | in_arbeit: Livewire-Animationsschleifen im Workflow-Editor/Studio beseitigen; Browser- und Studio-Modale auf gemeinsame ui.modal-Komponente vereinheitlichen. Scope: workflow-motion.js, ui/modal, Studio-Views, fokussierte UI-Verifikation.
+
+2026-10-03 | Codex | verifiziert: Globale Morph-Reanimation und Kennzahl-Tweens entfernt; Browser-Inspektor mit stabilem Key, inkrementeller Payload und Cursor-Deduplizierung. Studio-Dialoge teilen ui.modal mit Body-Teleport, Fokus/Escape, reduzierter Bewegung und mobilem Scrollbereich. 83 PHP-Tests / 955 Assertions, 2 Node-Tests, Vite-Build und authentifizierter Browser (Desktop/390px) gruen; echte Livewire-Refreshes ohne Positions-/Fokusverlust, temporaere DOM-Datenwechsel ohne Such-/Scrollverlust. Kein Deployment oder externer Portal-Test. Details: ../.lmzdev/artifacts/reports/workflow-ui-stability-2026-10-03.md.
+
 Statuswerte: `geplant`, `in_arbeit`, `verifiziert`, `blockiert`.
 
 | Datum | Agent | Status | Aenderung | Verifikation | Naechster Schritt |

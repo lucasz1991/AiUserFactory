@@ -211,17 +211,51 @@ export function workflowDomInspector(config = {}) {
         interactive: config.interactive === true,
         canProbe: config.canProbe === true,
         storageKey: normalizedString(config.storageKey),
+        _payloadObserver: null,
+        _lastPayload: null,
+        _lastNodes: null,
+        _cursorFrame: null,
+        _destroyed: false,
 
         init() {
+            this.refreshPayload(true);
+            this._payloadObserver = new MutationObserver(() => this.refreshPayload(false));
+            this._payloadObserver.observe(this.$refs.payload, { childList: true, characterData: true, subtree: true });
+        },
+
+        destroy() {
+            this._destroyed = true;
+            this._payloadObserver?.disconnect();
+            if (this._cursorFrame !== null) window.cancelAnimationFrame(this._cursorFrame);
+        },
+
+        refreshPayload(initial = false) {
+            const serialized = this.$refs.payload.textContent || '{}';
+            if (serialized === this._lastPayload) return;
             let payload = {};
 
             try {
-                payload = JSON.parse(this.$refs.payload.textContent || '{}');
+                payload = JSON.parse(serialized);
             } catch {
-                payload = {};
+                return;
             }
+            this._lastPayload = serialized;
+            const previousCursor = JSON.stringify(this.cursor);
+            this.interactive = payload.interactive ?? this.interactive;
+            this.canProbe = payload.canProbe ?? this.canProbe;
+            this.viewport = payload.viewport || null;
+            this.cursor = payload.cursor || null;
+            this.snapshotTruncated = ['nodes', 'depth', 'bytes']
+                .some((key) => payload.truncated?.[key] === true);
+            this.windowKey = normalizedString(payload.windowKey) || 'main';
 
             const rawNodes = Array.isArray(payload.nodes) ? payload.nodes : [];
+            const nodesSignature = JSON.stringify(rawNodes);
+            if (!initial && nodesSignature === this._lastNodes) {
+                if (previousCursor !== JSON.stringify(this.cursor)) this.animateCursor();
+                return;
+            }
+            this._lastNodes = nodesSignature;
             const normalizedNodes = rawNodes.map((node, index) => {
                 const frameRef = normalizedString(node.frameRef) || 'main';
                 const nodeRef = normalizedString(node.nodeRef) || `${frameRef}:snapshot:${index}`;
@@ -267,21 +301,16 @@ export function workflowDomInspector(config = {}) {
                 this.childrenByParent[node.parentRef] ||= [];
                 this.childrenByParent[node.parentRef].push(node.nodeRef);
             }
-            this.viewport = payload.viewport || null;
-            this.cursor = payload.cursor || null;
-            this.snapshotTruncated = ['nodes', 'depth', 'bytes']
-                .some((key) => payload.truncated?.[key] === true);
-            this.windowKey = normalizedString(payload.windowKey) || 'main';
             this.buildSearchFrames();
 
-            const remembered = this.readState();
+            const remembered = initial ? this.readState() : { query: this.query, selectedRef: this.selectedRef };
             this.query = normalizedString(remembered.query);
             this.selectedRef = remembered.selectedRef && this.nodeIndex[remembered.selectedRef]
                 ? remembered.selectedRef
                 : null;
 
             if (this.query !== '') {
-                this.search();
+                this.search(initial);
             }
 
             if (!this.selectedRef && this.query === '') {
@@ -299,8 +328,8 @@ export function workflowDomInspector(config = {}) {
                 this.refreshSuggestions();
             }
 
-            this.animateCursor();
-            this.$nextTick(() => this.scrollSelectedIntoView('auto'));
+            if (previousCursor !== JSON.stringify(this.cursor)) this.animateCursor();
+            if (initial) this.$nextTick(() => this.scrollSelectedIntoView('auto'));
         },
 
         readState() {
@@ -995,7 +1024,10 @@ export function workflowDomInspector(config = {}) {
         },
 
         animateCursor() {
+            if (this._cursorFrame !== null) window.cancelAnimationFrame(this._cursorFrame);
+            this.cursorClicked = false;
             if (!this.cursor) {
+                this.cursorPoint = null;
                 return;
             }
 
@@ -1004,7 +1036,9 @@ export function workflowDomInspector(config = {}) {
                 y: Number(this.cursor.fromY || 0),
             };
             this.$nextTick(() => {
-                window.requestAnimationFrame(() => {
+                if (this._destroyed) return;
+                this._cursorFrame = window.requestAnimationFrame(() => {
+                    this._cursorFrame = null;
                     this.cursorPoint = {
                         x: Number(this.cursor.toX || 0),
                         y: Number(this.cursor.toY || 0),
