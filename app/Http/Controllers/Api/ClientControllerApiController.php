@@ -13,6 +13,7 @@ use App\Models\NodeHeartbeat;
 use App\Models\NodeRebindLog;
 use App\Models\NodeServerBinding;
 use App\Models\Setting;
+use App\Models\WorkflowRun;
 use App\Models\WorkflowStepRun;
 use App\Services\ClientController\ClientControllerReleaseService;
 use App\Services\ClientController\NetworkNodeCredentialService;
@@ -826,11 +827,33 @@ class ClientControllerApiController extends Controller
             ->values()
             ->all();
 
-        $stepRun->forceFill([
-            'status' => 'waiting',
-            'result_json' => $snapshot,
-            'logs_json' => $events,
-        ])->save();
+        // Lock in orchestration order and re-read both rows: the model resolved
+        // before this projection may have completed or changed attempts meanwhile.
+        DB::transaction(function () use ($stepRun, $snapshot, $events): void {
+            $run = WorkflowRun::query()->lockForUpdate()->find($stepRun->workflow_run_id);
+
+            if (! $run || in_array($run->status, ['paused', 'stop_requested', 'completed', 'failed', 'cancelled', 'timed_out'], true)) {
+                return;
+            }
+
+            $current = WorkflowStepRun::query()
+                ->where('workflow_run_id', $run->id)
+                ->lockForUpdate()
+                ->find($stepRun->id);
+
+            if (! $current
+                || ! in_array($current->status, ['running', 'waiting'], true)
+                || $current->external_run_type !== $stepRun->external_run_type
+                || $current->external_run_id !== $stepRun->external_run_id) {
+                return;
+            }
+
+            $current->forceFill([
+                'status' => 'waiting',
+                'result_json' => $snapshot,
+                'logs_json' => $events,
+            ])->save();
+        }, 3);
     }
 
     protected function compactProgressEvent(array $progress): array

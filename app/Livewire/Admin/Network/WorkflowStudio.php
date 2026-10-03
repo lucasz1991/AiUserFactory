@@ -1410,7 +1410,9 @@ class WorkflowStudio extends Component
 
     private function assertCheckpointRunIsSafe(WorkflowRun $run, bool $requirePaused = false): void
     {
-        $run->refresh();
+        $current = WorkflowRun::query()->lockForUpdate()->findOrFail($run->getKey());
+        $run->setRawAttributes($current->getAttributes(), true);
+        $run->unsetRelations();
         $session = $this->session();
         if ((int) $run->workflow_id !== $this->workflowId
             || (int) $run->workflow_studio_session_id !== $this->studioSessionId
@@ -1436,7 +1438,7 @@ class WorkflowStudio extends Component
 
     private function checkpointActionParameters(WorkflowStudioCheckpoint $checkpoint, ?WorkflowRun $run = null): array
     {
-        $checkpoint = $this->session()->checkpoints()->findOrFail($checkpoint->getKey());
+        $checkpoint = $this->session()->checkpoints()->lockForUpdate()->findOrFail($checkpoint->getKey());
         $run = ($run ?? $this->activeRun())?->fresh();
         $state = $run ? [
             'status' => $run->status,

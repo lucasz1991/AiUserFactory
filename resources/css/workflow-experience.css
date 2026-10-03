@@ -156,6 +156,10 @@
   .ff-workflow-index-bar__actions { position: relative; }
   .ff-workflow-index-bar__actions > div { position: static !important; }
   .ff-workflow-index-bar__actions .ff-menu { top: 100%; max-width: calc(100vw - 3rem); }
+  .ff-workflow-manager-bar .ff-workflow-index-bar__stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .ff-workflow-manager-bar .ff-workflow-index-bar__actions { width: 100%; flex-wrap: wrap; justify-content: flex-end; }
+  .ff-workflow-manager-bar .ff-workflow-index-bar__actions > div > button { padding-left: .5rem !important; padding-right: .5rem !important; font-size: .75rem !important; gap: .25rem !important; }
+  .ff-workflow-manager-bar .ff-workflow-index-bar__actions > div > button > span[aria-hidden] { display: none !important; }
 }
 
 .ff-kicker {

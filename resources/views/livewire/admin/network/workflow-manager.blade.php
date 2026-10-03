@@ -224,33 +224,33 @@
     "
     x-on:keydown.escape.window="handleWorkbenchEscape($event)"
 >
-    <section class="ff-command-surface overflow-visible px-4 py-5 sm:px-6 sm:py-6" aria-labelledby="workflow-manager-title">
-        <div class="relative z-10 flex flex-wrap items-start justify-between gap-5">
-            <div class="min-w-0">
-                <div class="flex flex-wrap items-center gap-2">
-                    <a href="{{ route('network.workflows') }}" class="ff-kicker transition hover:text-blue-800">Workflow Management</a>
-                    <span class="text-xs text-slate-300" aria-hidden="true">/</span>
-                    <span class="text-xs font-semibold text-slate-500">Editor</span>
-                </div>
-                <div class="mt-2 flex items-center gap-2">
-                    <h1 id="workflow-manager-title" class="ff-page-title">{{ $selectedWorkflow?->name ?? 'Workflow Management' }}</h1>
-                    @if($workflowLocked)
+    <section class="ff-command-surface overflow-visible ff-workflow-index-bar ff-workflow-manager-bar" aria-labelledby="workflow-manager-title" data-workflow-manager-toolbar title="{{ $selectedWorkflow?->name }}">
+        <h1 id="workflow-manager-title" class="sr-only">{{ $selectedWorkflow?->name ?? 'Workflow Management' }}</h1>
+        @if($selectedWorkflow)
+            <dl class="ff-workflow-index-bar__stats" aria-label="Workflow-Statistik">
+                        @foreach([
+                            ['Aufgaben', $summary['actions']],
+                            ['Listen', $summary['lists']],
+                            ['Tasks', $summary['task_cards']],
+                            ['Testläufe', $summary['runs']],
+                            ['Erfolgreich', $summary['successful_runs']],
+                            ['Fehlerhaft', $summary['failed_runs']],
+                        ] as [$label, $value])
+                            <div >
+                                <dt>{{ $label }}</dt>
+                                <dd>{{ $value }}</dd>
+                            </div>
+                        @endforeach
+                    </dl>
+            @if($workflowLocked)
                         <span title="{{ $selectedWorkflow->lock_reason }}" class="inline-flex h-7 w-7 items-center justify-center rounded-full bg-amber-100 text-amber-700" aria-label="Workflow gesperrt">
                             <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                                 <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 0 0-9 0v3.75m-.75 0h10.5A2.25 2.25 0 0 1 19.5 12.75v6A2.25 2.25 0 0 1 17.25 21H6.75a2.25 2.25 0 0 1-2.25-2.25v-6A2.25 2.25 0 0 1 6.75 10.5Z" />
                             </svg>
                         </span>
                     @endif
-                </div>
-                <p class="ff-page-copy mt-2 text-sm">
-                    Listen strukturieren den Ablauf. Tasks lassen sich direkt platzieren, verbinden und anschließend schrittweise testen.
-                </p>
-            </div>
-
-            @if($selectedWorkflow)
-                <div class="ml-auto flex max-w-full flex-col items-end gap-3">
-                    <div class="flex flex-wrap justify-end gap-2">
-                        <div class="relative" x-data="{ open: false }" x-on:keydown.escape.window="open = false">
+            <div class="ff-workflow-index-bar__actions">
+                <div class="relative" x-data="{ open: false }" x-on:keydown.escape.window="open = false">
                             <button type="button" x-on:click="rememberWorkbenchTrigger($el); open = ! open" x-bind:aria-expanded="open" class="ff-action-trigger ff-action-trigger--primary inline-flex min-h-11 items-center gap-2 px-4 py-2 text-sm font-semibold">
                                 <span class="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-white/10" aria-hidden="true">▶</span>
                                 Testen
@@ -310,6 +310,7 @@
                                 </button>
                                 <div class="my-1 border-t border-slate-100"></div>
                                 <button type="button" wire:click="exportWorkflow" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-blue-700 hover:bg-blue-50">Als ZIP exportieren</button>
+                                <a href="{{ route('network.workflows') }}" class="block rounded-md px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">Alle Workflows</a>
                                 <a href="{{ route('processes.index') }}" class="block rounded-md px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">Prozesse öffnen</a>
                                 @if(! $workflowLocked)
                                     <div class="my-1 border-t border-slate-100"></div>
@@ -317,26 +318,8 @@
                                 @endif
                             </div>
                         </div>
-                    </div>
-
-                    <dl class="ff-metric-rail" aria-label="Workflow-Statistik">
-                        @foreach([
-                            ['Aufgaben', $summary['actions']],
-                            ['Listen', $summary['lists']],
-                            ['Tasks', $summary['task_cards']],
-                            ['Testläufe', $summary['runs']],
-                            ['Erfolgreich', $summary['successful_runs']],
-                            ['Fehlerhaft', $summary['failed_runs']],
-                        ] as [$label, $value])
-                            <div class="ff-metric">
-                                <dt>{{ $label }}</dt>
-                                <dd>{{ $value }}</dd>
-                            </div>
-                        @endforeach
-                    </dl>
-                </div>
-            @endif
-        </div>
+            </div>
+        @endif
     </section>
 
     @if (session()->has('success'))

@@ -599,6 +599,8 @@ class WorkflowCopilotSupervisorService
             return;
         }
 
+        $expectedObservationDecision = app(WorkflowCopilotDecisionGuard::class)->snapshot($session);
+
         $this->sessions->appendEvent(
             $session,
             'observation.started',
@@ -615,6 +617,7 @@ class WorkflowCopilotSupervisorService
         );
         $session = $session->fresh() ?? $session;
         $observation = $this->observations->observe($run, $stepRun);
+        app(WorkflowCopilotDecisionGuard::class)->assertCurrent($session, $expectedObservationDecision);
         $vision = [];
         $runContext = is_array($run->context_json) ? $run->context_json : [];
         $isVerificationCheckpoint = (bool) ($runContext['copilot_verification_run'] ?? false)
@@ -656,6 +659,7 @@ class WorkflowCopilotSupervisorService
             );
         }
 
+        app(WorkflowCopilotDecisionGuard::class)->assertCurrent($session, $expectedObservationDecision);
         [$attempt, $storedCheckpoint] = $this->storeCheckpoint(
             $session,
             $run,
@@ -1131,6 +1135,7 @@ class WorkflowCopilotSupervisorService
         array $observation,
         array $vision,
     ): void {
+        $expectedDecision = app(WorkflowCopilotDecisionGuard::class)->snapshot($session);
         $runtimeCheckpointId = $this->runtimeCheckpointId($run, $checkpoint);
         $state = is_array($session->state_json) ? $session->state_json : [];
         $usage = is_array($session->usage_json) ? $session->usage_json : [];
@@ -1420,45 +1425,49 @@ class WorkflowCopilotSupervisorService
         }
 
         if ($plan['action'] === 'skip_resolved_obstacle') {
-            $this->sessions->appendEvent(
-                $session,
-                'repair.obstacle_resolved',
-                (string) $plan['reason'],
-                $plan,
-                'repairing',
-                'success',
-                true,
-            );
-            $this->sessions->transition($session, WorkflowCopilotSession::STATUS_RUNNING, 'executing');
+            $this->withCurrentDecision($session, $expectedDecision, function (WorkflowCopilotSession $session) use ($run, $plan, $checkpoint): void {
+                $this->sessions->appendEvent(
+                    $session,
+                    'repair.obstacle_resolved',
+                    (string) $plan['reason'],
+                    $plan,
+                    'repairing',
+                    'success',
+                    true,
+                );
+                $this->sessions->transition($session, WorkflowCopilotSession::STATUS_RUNNING, 'executing');
 
-            if ($this->execution->skipResolvedCopilotTask($run, (string) $plan['task_key'])) {
-                $this->markContinuationApplied($session, $checkpoint, 'skip_resolved_obstacle');
-            }
+                if ($this->execution->skipResolvedCopilotTask($run, (string) $plan['task_key'])) {
+                    $this->markContinuationApplied($session, $checkpoint, 'skip_resolved_obstacle');
+                }
+            });
 
             return;
         }
 
         if ($plan['action'] === 'continue_route') {
-            if (! (bool) ($plan['resume_checkpoint'] ?? false)) {
-                $context = is_array($run->context_json) ? $run->context_json : [];
-                $pending = is_array($context['copilot_checkpoint'] ?? null) ? $context['copilot_checkpoint'] : [];
-                $pending['next_action'] = 'complete_step';
+            $this->withCurrentDecision($session, $expectedDecision, function (WorkflowCopilotSession $session) use ($run, $plan, $checkpoint): void {
+                if (! (bool) ($plan['resume_checkpoint'] ?? false)) {
+                    $context = is_array($run->context_json) ? $run->context_json : [];
+                    $pending = is_array($context['copilot_checkpoint'] ?? null) ? $context['copilot_checkpoint'] : [];
+                    $pending['next_action'] = 'complete_step';
 
-                if (is_array($plan['configured_route'] ?? null)) {
-                    $pendingResult = is_array($pending['result'] ?? null) ? $pending['result'] : [];
-                    $pendingResult['failedTaskKey'] = (string) ($plan['task_key'] ?? $checkpoint['task_key'] ?? '');
-                    $pendingResult['failed_task_key'] = $pendingResult['failedTaskKey'];
-                    $pending['result'] = $pendingResult;
+                    if (is_array($plan['configured_route'] ?? null)) {
+                        $pendingResult = is_array($pending['result'] ?? null) ? $pending['result'] : [];
+                        $pendingResult['failedTaskKey'] = (string) ($plan['task_key'] ?? $checkpoint['task_key'] ?? '');
+                        $pendingResult['failed_task_key'] = $pendingResult['failedTaskKey'];
+                        $pending['result'] = $pendingResult;
+                    }
+
+                    $context['copilot_checkpoint'] = $pending;
+                    $run->forceFill(['context_json' => $context])->save();
                 }
-
-                $context['copilot_checkpoint'] = $pending;
-                $run->forceFill(['context_json' => $context])->save();
-            }
-            $this->sessions->appendEvent($session, 'repair.route_selected', $plan['reason'], $plan, 'repairing', 'info', true);
-            $this->sessions->transition($session, WorkflowCopilotSession::STATUS_RUNNING, 'executing');
-            if ($this->execution->resumeCopilotCheckpoint($run)) {
-                $this->markContinuationApplied($session, $checkpoint, 'continue_route');
-            }
+                $this->sessions->appendEvent($session, 'repair.route_selected', $plan['reason'], $plan, 'repairing', 'info', true);
+                $this->sessions->transition($session, WorkflowCopilotSession::STATUS_RUNNING, 'executing');
+                if ($this->execution->resumeCopilotCheckpoint($run)) {
+                    $this->markContinuationApplied($session, $checkpoint, 'continue_route');
+                }
+            });
 
             return;
         }
@@ -1478,10 +1487,12 @@ class WorkflowCopilotSupervisorService
                 return;
             }
 
-            $this->sessions->appendEvent($session, 'repair.retry', $plan['reason'], $plan, 'repairing', 'info', true);
-            $this->sessions->transition($session, WorkflowCopilotSession::STATUS_RUNNING, 'executing');
-            $this->execution->retryCopilotTask($run, $taskKey);
-            $this->markContinuationApplied($session, $checkpoint, 'retry');
+            $this->withCurrentDecision($session, $expectedDecision, function (WorkflowCopilotSession $session) use ($run, $plan, $checkpoint, $taskKey): void {
+                $this->sessions->appendEvent($session, 'repair.retry', $plan['reason'], $plan, 'repairing', 'info', true);
+                $this->sessions->transition($session, WorkflowCopilotSession::STATUS_RUNNING, 'executing');
+                $this->execution->retryCopilotTask($run, $taskKey);
+                $this->markContinuationApplied($session, $checkpoint, 'retry');
+            });
 
             return;
         }
@@ -1522,7 +1533,8 @@ class WorkflowCopilotSupervisorService
                     $session,
                     (int) $session->current_revision,
                     (string) ($plan['reason'] ?? 'Kataloggebundene strukturelle Workflow-Reparatur.'),
-                    function (Workflow $workflow) use ($operations, $session, $observation, $checkpoint, $vision): void {
+                    function (Workflow $workflow) use ($operations, $session, $observation, $checkpoint, $vision, $expectedDecision): void {
+                        app(WorkflowCopilotDecisionGuard::class)->assertCurrent($session, $expectedDecision);
                         $this->repairs->applyStructuralOperations(
                             $workflow,
                             $operations,
@@ -1534,6 +1546,8 @@ class WorkflowCopilotSupervisorService
                         );
                     },
                 );
+            } catch (WorkflowSupervisorInterruptedException $exception) {
+                throw $exception;
             } catch (Throwable $exception) {
                 $message = Str::limit(trim($exception->getMessage()), 1000, '') ?: 'Die strukturelle Workflow-Reparatur konnte nicht gespeichert werden.';
                 $this->sessions->appendEvent(

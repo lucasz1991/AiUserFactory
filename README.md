@@ -125,6 +125,8 @@ Arbeitsprotokoll aktualisieren.
 
 ### Arbeitsprotokoll
 
+2026-10-03 | Codex/UI | verifiziert: Auch Editor mit kompakter KPI-/Aktionsleiste statt Hero, Screenreader-Name und Sperre erhalten; Ruecklink unter Weitere. 62px Desktop, 120px mobil mit gemeinsamer Aktionszeile. 8 Tests/148 Assertions, Vite-Build und lokale Browser-/Menuepruefung gruen. Nur Manager-View, gemeinsames Toolbar-CSS und Toolbar-Markup-Test; Produktionsseite als Referenz, kein Deployment.
+
 2026-10-03 | Codex/UI | verifiziert: Workflow-Uebersicht mit schmaler KPI-Zeile links und Aktionen rechts statt Hero/Titel/Beschreibung/Karten. Screenreader-Titel und bestehende Aktionen bleiben erhalten. Browser 1332px: 62px hoch; 390px: 91px, Menues ohne Beschnitt. 7 Tests/130 Assertions, Vite-Build und Diff-Check gruen. Scope workflows-index.blade.php, workflow-experience.css, WorkflowIndexToolbarMarkupTest. Parallele Orchestrierungsarbeit unberuehrt; kein Deployment/Push.
 
 2026-10-03 | Codex | in_arbeit: Livewire-Animationsschleifen im Workflow-Editor/Studio beseitigen; Browser- und Studio-Modale auf gemeinsame ui.modal-Komponente vereinheitlichen. Scope: workflow-motion.js, ui/modal, Studio-Views, fokussierte UI-Verifikation.
@@ -136,6 +138,8 @@ Arbeitsprotokoll aktualisieren.
 2026-10-03 | Codex | verifiziert: Personen-Accounts zeigen gespeicherte Passwoerter als Admin-lesbare Read-only-Felder mit Ausblenden, je Mailbox und gewaehltem Social-Account. Admin-Boot-Guard, Locked-personId, unveraenderte Verschluesselung/Export-Redaktion. Mobile Profile kompakter, horizontale Kontoauswahl, Tastaturtabs, navigation-only GSAP ohne Morph-/Count-up-Schleifen. 26 Tests / 199 Assertions, Pint, Vite und lokaler Browser 390/1440px inkl. Livewire-Kontowechsel gruen. Browserprofil ohne Zugangsdaten; Passwortfaelle nur mit synthetischen Testdaten geprueft. Kein Deployment/Push. Bericht: ../.lmzdev/artifacts/reports/person-profile-accounts-2026-10-03.md.
 
 2026-10-03 | Codex/root + queue_isolation + run_concurrency + ci_operations | in_arbeit: Review der Workflow-Orchestrierung gegen aktuellen Code, CI und produktiven Worker-Stand pruefen. Getrennte Control-/AI-Queues, kurze gemeinsame Run-Leases, konfliktfeste Kontextpersistenz, sichere spaete KI-Ergebnisse und belegte CI-/MySQL-Korrekturen. Keine Produktionseingriffe, kein Push; vorhandene README-Ergaenzung bleibt erhalten. Ownership: ../.lmzdev/TASKS.md.
+
+2026-10-03 | Codex/root + Teilteam | verifiziert (lokal): Control-/AI-Queues, kurze atomare Run-Leases, Kontext-Three-way-Merge, KI-/Callback-/Snapshot-Fences, atomare Checkpoint-Aktionen und Altjob-Recovery umgesetzt. CI-Vite-Artefakttransfer/JSON-Fehler und Migrationsrollback korrigiert; Node-Loop-Status-I/O stark reduziert, ClientController-Runtime synchron. SQLite/MariaDB jeweils 809 Tests/6099 Assertions/8 Nicht-Workflow-Skips; Node 149/149, Vite, Pint, Diff-Check, PHP-Audit und npm-Produktionsaudit gruen. Full npm audit bleibt wegen ungepatchtem DEV-braces rot; kein Gate-Bypass. Read-only Produktion: ein Defaultworker; separater Pool-Rollout/Migration vorbereitet, nicht deployed. Kein Push oder Produktionseingriff, parallele UI-Aenderungen erhalten. Bericht: ../.lmzdev/artifacts/reports/workflow-orchestration-review-and-optimizations-2026-10-03.md; Rollout: docs/workflow-orchestration-rollout-2026-10-03.md.
 
 Statuswerte: `geplant`, `in_arbeit`, `verifiziert`, `blockiert`.
 

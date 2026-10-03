@@ -21,7 +21,7 @@ Das Beispiel `deployment/supervisor-followflow-queue.conf.example` beschreibt di
 ## Kontrollierter Rollout
 
 1. Wartungsfenster und Rueckweg festlegen; neue Starts kurz anhalten. Aktive externe Aufgaben und reservierte Altjobs erfassen. Jobs nicht pauschal loeschen oder erneut ausfuehren.
-2. Getesteten Code, `composer.lock` und echten Vite-Build gemeinsam bereitstellen. `composer install` statt unkontrolliertem Produktions-Update verwenden. Die additive Migration `2026_10_03_210000_create_workflow_run_leases_table` vor Starts mit dem neuen Code ausfuehren.
+2. Getesteten Code, `composer.lock`, `package-lock.json` und echten Vite-Build gemeinsam bereitstellen. `composer install`/`npm ci` statt unkontrolliertem Produktions-Update verwenden; Build/Node-Runtime mit dem Projektminimum Node 22.12 oder hoeher. Die additive Migration `2026_10_03_210000_create_workflow_run_leases_table` vor Starts mit dem neuen Code ausfuehren.
 3. Ein einziges Prozessmanagement festlegen: Plesk **oder** Supervisor. Einen gerade arbeitenden alten Worker kontrolliert auslaufen lassen; Plesk-Worker nicht gleichzeitig als zweiten Defaultpool neben Supervisor weiterbetreiben. Insbesondere lange Bildjobs nicht mitten in einem externen Effekt abbrechen.
 4. Konfiguration aktualisieren (`config:cache`, sofern bisher verwendet), Worker geordnet neu starten und alle drei Pools aktivieren. `queue:restart` beendet Worker erst nach dem aktuellen Job; die Prozessverwaltung muss sie wieder starten. Keine neuen Workflow-Starts, solange die zwei neuen Pools fehlen.
 5. Defaultpool zum Abarbeiten alter serialisierter `database/default`-Payloads erhalten. Bestehende verzögerte oder reservierte Jobs nicht umschreiben; Queue-Recovery erkennt Alt- und Neujobs.
@@ -40,5 +40,7 @@ Bei Rollback zuerst neue Starts anhalten und Worker geordnet auslaufen lassen. N
 Lokale PHP-/Node-Tests und ein Build sind kein Produktions-Lasttest und keine Garantie fuer fremde Portale oder Provider. MySQL-8-Verifikation erfolgt zusaetzlich ueber die CI; eine lokale MariaDB-Abnahme darf nicht als MySQL-8-Abnahme bezeichnet werden. Kontrolllauf, Replay-Schutz, manuelle Freigaben, Katalogbindung und sensible Exportredaktion bleiben verbindlich.
 
 Grosse Klassen werden schrittweise entlang bereits getesteter Verantwortlichkeiten entkoppelt. Die neue Run-Koordination, Kontextpersistenz und Entscheidungsvalidierung sind eigene kleine Bausteine. Eine vollstaendige Aufteilung der Runtime oder Migration aller Verlaufsdaten ist nicht Voraussetzung fuer diesen Rollout und bleibt ein eigener, messungsgetriebener AP14/AP15-Schritt.
+
+PHP- und npm-Produktionsabhaengigkeiten sind nach kompatiblen Patchupdates ohne Auditbefund. Das vollstaendige npm-Audit bleibt wegen des ungepatchten DEV-`braces`-Advisory [GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm) rot. Dies ist kein freigegebener Release-Gate-Bypass. Kein erzwungener inkompatibler Paketwechsel und keine Deaktivierung des CI-Audits; verbleibenden Buildkettenbefund vor Release nach bestehender Security-Policy behandeln.
 
 Referenzen: [Laravel Queues](https://laravel.com/framework/docs/12.x/queues), [Laravel Pessimistic Locking](https://laravel.com/framework/docs/12.x/queries#pessimistic-locking), bestehender Session-Plan `docs/workflow-session-audit-und-umsetzungsplan-2026-09-25.md`.
