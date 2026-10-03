@@ -8,6 +8,7 @@ use App\Services\Mail\MailAccountRegistrationRunner;
 use App\Services\Mail\WebmailSessionRunner;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Validation\Rule;
+use Livewire\Attributes\Locked;
 use Livewire\Component;
 
 class PersonEmailAccountSettings extends Component
@@ -22,6 +23,7 @@ class PersonEmailAccountSettings extends Component
         'custom' => ['label' => 'Custom / Andere', 'webmail' => '', 'auto' => false],
     ];
 
+    #[Locked]
     public int $personId;
 
     public ?Person $person = null;
@@ -75,6 +77,11 @@ class PersonEmailAccountSettings extends Component
 
     public array $webmailSessionResult = [];
 
+    public function boot(): void
+    {
+        abort_unless(auth()->user()?->role === 'admin', 403);
+    }
+
     public function mount(int $personId): void
     {
         $this->personId = $personId;
@@ -83,8 +90,17 @@ class PersonEmailAccountSettings extends Component
 
     public function render()
     {
+        // Scoped, render-only values; the public accounts list stays redacted.
+        $accountPasswords = PersonEmailAccount::query()
+            ->where('person_id', $this->personId)
+            ->get()
+            ->mapWithKeys(fn (PersonEmailAccount $account) => [
+                $account->id => $this->storedEmailPassword($account),
+            ]);
+
         return view('livewire.admin.config.person-email-account-settings', [
             'providers' => self::PROVIDERS,
+            'accountPasswords' => $accountPasswords,
         ]);
     }
 

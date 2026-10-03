@@ -4,11 +4,11 @@
     unveraendert `person-email-account-settings` ein, damit IMAP/SMTP,
     Registrierung und Webmail-Session erhalten bleiben.
 --}}
-<div class="ff-accounts" data-person-accounts wire:loading.class="opacity-70">
+<div class="ff-accounts" data-person-accounts>
     <div class="ff-accounts__summary">
         <div>
             <p class="ff-accounts__eyebrow">Accounts</p>
-            <h3 class="ff-accounts__title">Zugaenge dieser Person</h3>
+            <h3 class="ff-accounts__title">Zugänge dieser Person</h3>
             <p class="ff-accounts__hint">
                 E-Mail-Konto und Portalkonten an einem Ort. Jeder Eintrag ist im Workflow ueber
                 <code class="ff-accounts__code">person.accounts.&lt;typ&gt;.username</code> erreichbar.
@@ -102,6 +102,10 @@
                             @endif
                         </div>
                     </header>
+
+                    <x-persons.account-password
+                        :id="'person-'.$person->id.'-'.$selected['type'].'-password'"
+                        :value="$selected['password']" :stored="$selected['hasPassword']" />
 
                     @if($selected['type'] === 'instagram')
                         <div class="ff-account-card__notice">

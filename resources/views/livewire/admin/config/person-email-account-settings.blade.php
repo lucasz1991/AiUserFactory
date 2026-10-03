@@ -43,7 +43,7 @@
             @else
                 <ul class="divide-y divide-slate-100 rounded-lg border border-slate-200">
                     @foreach ($accounts as $acc)
-                        <li class="flex flex-wrap items-center justify-between gap-3 px-4 py-3 {{ $editingAccountId === $acc['id'] ? 'bg-primary-base/5' : 'bg-white' }}">
+                        <li wire:key="mail-account-{{ $acc['id'] }}" class="ff-mail-account flex flex-wrap items-center justify-between gap-3 px-4 py-3 {{ $editingAccountId === $acc['id'] ? 'bg-primary-base/5' : 'bg-white' }}">
                             <div class="flex min-w-0 items-center gap-3">
                                 <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500">
                                     <span class="mdi mdi-email-outline text-lg"></span>
@@ -88,6 +88,8 @@
                                     Loeschen
                                 </button>
                             </div>
+                            <x-persons.account-password :id="'mail-account-'.$acc['id'].'-password'"
+                                :value="$accountPasswords[$acc['id']] ?? ''" :stored="$acc['has_password']" />
                         </li>
                     @endforeach
                 </ul>

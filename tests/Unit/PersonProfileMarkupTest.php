@@ -87,7 +87,7 @@ class PersonProfileMarkupTest extends TestCase
 
         $motion = file_get_contents(dirname(__DIR__, 2).'/resources/js/components/person-profile-motion.js');
 
-        $this->assertStringContainsString('[data-person-profile] [data-magnetic]', $motion);
+        $this->assertStringNotContainsString('pointermove', $motion);
         $this->assertStringContainsString('data-magnetic', $this->view('person-detail'));
     }
 
@@ -136,6 +136,11 @@ class PersonProfileMarkupTest extends TestCase
         $this->assertStringContainsString("import { gsap } from 'gsap';", $motion);
         $this->assertStringContainsString("mm.add('(prefers-reduced-motion: no-preference)'", $motion);
         $this->assertStringContainsString('[data-person-profile]', $motion);
+
+        $this->assertStringNotContainsString('MutationObserver', $motion);
+        $this->assertStringNotContainsString('textContent =', $motion);
+        $this->assertStringContainsString('new WeakSet()', $motion);
+        $this->assertStringContainsString('media?.revert()', $motion);
 
         // Startzustaende duerfen nicht im CSS stehen, sonst bleibt ohne
         // JavaScript alles unsichtbar.

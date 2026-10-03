@@ -5,6 +5,7 @@ namespace App\Livewire\Admin\Config;
 use App\Models\Person;
 use App\Services\Persons\PersonAccountRegistry;
 use Illuminate\Validation\Rule;
+use Livewire\Attributes\Locked;
 use Livewire\Attributes\On;
 use Livewire\Component;
 
@@ -22,6 +23,7 @@ use Livewire\Component;
  */
 class PersonAccounts extends Component
 {
+    #[Locked]
     public int $personId;
 
     public string $selectedType = 'email';
@@ -42,6 +44,11 @@ class PersonAccounts extends Component
 
     public bool $formHasStoredPassword = false;
 
+    public function boot(): void
+    {
+        abort_unless(auth()->user()?->role === 'admin', 403);
+    }
+
     public function mount(int $personId): void
     {
         $this->personId = $personId;
@@ -54,6 +61,10 @@ class PersonAccounts extends Component
 
         $accounts = $person ? $registry->all($person) : [];
         $selected = $accounts[$this->selectedType] ?? null;
+        // View-only: never put decrypted credentials in public Livewire state.
+        if ($person && $selected && $selected['kind'] !== 'email') {
+            $selected = $registry->account($person, $this->selectedType, true);
+        }
 
         return view('livewire.admin.config.person-accounts', [
             'person' => $person,

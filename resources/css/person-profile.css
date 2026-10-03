@@ -29,10 +29,6 @@
   gap: 1.5rem;
 }
 
-.ff-person-profile--busy {
-  opacity: 0.65;
-  pointer-events: none;
-}
 
 /* ------------------------------------------------------------------ Flash */
 
@@ -247,7 +243,7 @@
 
 .ff-profile-metrics {
   display: grid;
-  grid-template-columns: repeat(1, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.85rem;
 }
 
@@ -367,6 +363,17 @@
 .ff-profile-tabs .ff-profile-tab--active:hover { background: var(--ff-profile-brand-deep, #1e3f70); color: #fff; }
 
 .ff-profile-panels { min-height: 12rem; }
+
+/* Credentials are deliberately readable, but remain selectable read-only data. */
+.ff-account-password { width: 100%; min-width: 0; margin: 1rem 0; }
+.ff-account-password__label { display: block; margin-bottom: .4rem; font-size: .8125rem; font-weight: 600; color: var(--ff-shell-text, #182435); }
+.ff-account-password__control { display: flex; min-width: 0; border: 1px solid var(--ff-shell-border, #d7e0ea); border-radius: 10px; background: var(--ff-shell-surface-muted, #f7f9fc); overflow: hidden; }
+.ff-account-password__control input { flex: 1 1 0%; width: 0; min-width: 0; min-height: 44px; padding: .65rem .75rem; border: 0; background: transparent; color: var(--ff-shell-text, #182435); font: 1rem ui-monospace, monospace; }
+.ff-account-password__control button { flex: 0 0 auto; min-height: 44px; padding: .5rem .75rem; border-left: 1px solid var(--ff-shell-border, #d7e0ea); color: var(--ff-shell-text, #182435); font-size: .8125rem; }
+.ff-account-password__hint { margin: .4rem 0 0; font-size: .75rem; line-height: 1.5; color: var(--ff-shell-muted, #637188); }
+.ff-mail-account > .ff-account-password { flex-basis: 100%; margin: 0; }
+.ff-mail-account { background: var(--ff-shell-surface, #fff) !important; }
+.ff-profile-tab:focus-visible, .ff-account-chip:focus-visible, .ff-account-password__control:focus-within { outline: 2px solid var(--ff-profile-brand, #2f5c9e); outline-offset: 3px; }
 
 /* Ausfallsicherung fuer die Tabs.
  *
@@ -913,6 +920,27 @@
  * damit ohne JavaScript nichts unsichtbar bleibt. Hier steht nur die
  * Abschaltung fuer Nutzer mit reduzierter Bewegung.
  */
+
+@media (max-width: 767.98px) {
+  .ff-person-profile { gap: 1rem; }
+  .ff-profile-hero__inner { padding: 1rem; gap: 1rem; }
+  .ff-profile-hero__identity { gap: .85rem; flex-basis: 100%; }
+  .ff-profile-hero__avatar { width: 3.5rem; height: 3.5rem; font-size: 1.5rem; border-radius: 12px; }
+  .ff-profile-hero__name { font-size: 1.4rem; line-height: 1.2; }
+  .ff-profile-hero__meta { font-size: .75rem; line-height: 1.5; }
+  .ff-profile-hero__chips { gap: .35rem; margin-top: .65rem; }
+  .ff-profile-hero__actions { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
+  .ff-profile-hero__actions .ff-btn { min-height: 44px; padding: .6rem; }
+  .ff-profile-metrics { gap: .5rem; }
+  .ff-metric { padding: .75rem; }
+  .ff-metric dt { letter-spacing: .02em; }
+  .ff-metric dd { font-size: 1.35rem; }
+  .ff-profile-tabs { border-radius: 14px; }
+  .ff-accounts__panel { padding: .75rem; }
+  .ff-account-card__actions > button, .ff-mail-account button { min-height: 44px; }
+  .ff-accounts__rail { display: flex; flex-direction: row; overflow-x: auto; max-height: none; gap: .5rem; padding-bottom: .5rem; }
+  .ff-accounts__rail .ff-account-chip { flex: 0 0 10rem; min-height: 60px; }
+}
 
 @media (prefers-reduced-motion: reduce) {
   .ff-metric,

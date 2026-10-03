@@ -13,8 +13,8 @@
 <div
     class="ff-person-profile"
     data-person-profile
-    wire:loading.class="ff-person-profile--busy"
     x-data="{ tab: 'overview' }"
+    x-bind:data-tabs-ready="'1'"
     x-on:person-open-credentials.window="$wire.openEditProfile()"
     x-on:person-open-runtime-settings.window="$wire.openRuntimeSettingsModal()"
     x-on:person-build-session.window="$wire.buildInstagramSession()"
@@ -210,12 +210,23 @@
              ausser dem ersten aus — faellt das JavaScript aus (z. B. wenn
              `livewire.js` nicht laedt), zeigt die Seite dann eine saubere
              Uebersicht statt aller sieben Panels uebereinander. --}}
-        <div class="ff-profile-tabs" role="tablist" aria-label="Profilbereiche" x-init="$root.dataset.tabsReady = '1'">
+        <div class="ff-profile-tabs" role="tablist" aria-label="Profilbereiche" x-init="$root.dataset.tabsReady = '1'"
+            @keydown="if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes($event.key)) {
+                const tabs = [...$el.querySelectorAll('[role=tab]')];
+                const index = tabs.indexOf($event.target);
+                if (index < 0) return;
+                $event.preventDefault();
+                const next = $event.key === 'Home' ? 0 : $event.key === 'End' ? tabs.length - 1 : (index + ($event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+                tabs[next].click(); tabs[next].focus();
+            }">
             <div class="ff-profile-tabs__track">
                 @foreach($tabs as $key => $label)
                     <button
                         type="button"
                         role="tab"
+                        id="profile-tab-{{ $key }}"
+                        aria-controls="profile-panel-{{ $key }}"
+                        :tabindex="tab === '{{ $key }}' ? 0 : -1"
                         @click="tab = '{{ $key }}'"
                         :aria-selected="tab === '{{ $key }}' ? 'true' : 'false'"
                         :class="tab === '{{ $key }}' ? 'ff-profile-tab ff-profile-tab--active' : 'ff-profile-tab'"
@@ -226,7 +237,7 @@
         </div>
 
         <div class="ff-profile-panels">
-            <div x-show="tab === 'overview'" class="ff-profile-panel space-y-6" data-profile-panel>
+            <div x-show="tab === 'overview'" id="profile-panel-overview" role="tabpanel" aria-labelledby="profile-tab-overview" tabindex="0" class="ff-profile-panel space-y-6" data-profile-panel>
                 <div class="grid gap-6 xl:grid-cols-2">
                     <x-admin.panel title="Stammdaten" class="ff-surface">
                         <dl class="ff-datagrid">
@@ -269,7 +280,7 @@
                 </x-admin.panel>
             </div>
 
-            <div x-show="tab === 'accounts'" class="ff-profile-panel space-y-6" data-profile-panel>
+            <div x-show="tab === 'accounts'" id="profile-panel-accounts" role="tabpanel" aria-labelledby="profile-tab-accounts" tabindex="0" class="ff-profile-panel space-y-6" data-profile-panel>
                 <livewire:admin.config.person-accounts
                     :person-id="$personRecord->id"
                     :key="'person-accounts-'.$personRecord->id" />
@@ -331,13 +342,13 @@
                 @endif
             </div>
 
-            <div x-show="tab === 'automation'" class="ff-profile-panel space-y-6" data-profile-panel>
+            <div x-show="tab === 'automation'" id="profile-panel-automation" role="tabpanel" aria-labelledby="profile-tab-automation" tabindex="0" class="ff-profile-panel space-y-6" data-profile-panel>
                 <livewire:admin.config.person-automation
                     :person-id="$personRecord->id"
                     :key="'person-automation-'.$personRecord->id" />
             </div>
 
-            <div x-show="tab === 'ai'" class="ff-profile-panel space-y-6" data-profile-panel>
+            <div x-show="tab === 'ai'" id="profile-panel-ai" role="tabpanel" aria-labelledby="profile-tab-ai" tabindex="0" class="ff-profile-panel space-y-6" data-profile-panel>
                 <x-admin.panel title="AI-Persona" description="Diese Felder steuern Kontext, Stil und Verhalten der Persona." class="ff-surface">
                     <x-slot name="actions">
                         <button type="button" wire:click="saveAiProfile" class="ff-btn ff-btn--primary">
@@ -410,7 +421,7 @@
                 </x-admin.panel>
             </div>
 
-            <div x-show="tab === 'activity'" class="ff-profile-panel space-y-6" data-profile-panel>
+            <div x-show="tab === 'activity'" id="profile-panel-activity" role="tabpanel" aria-labelledby="profile-tab-activity" tabindex="0" class="ff-profile-panel space-y-6" data-profile-panel>
                 <x-admin.panel title="Interne Aktivitaeten" description="Sandbox-Plan fuer realistische Persona-Sessions ohne reale Plattformaktionen." class="ff-surface">
                     <x-slot name="actions">
                         @if($activitySimulation !== [])
@@ -515,11 +526,11 @@
                 </x-admin.panel>
             </div>
 
-            <div x-show="tab === 'processes'" class="ff-profile-panel space-y-6" data-profile-panel>
+            <div x-show="tab === 'processes'" id="profile-panel-processes" role="tabpanel" aria-labelledby="profile-tab-processes" tabindex="0" class="ff-profile-panel space-y-6" data-profile-panel>
                 <livewire:admin.config.person-process-list :person-id="$personRecord->id" :key="'person-process-list-'.$personRecord->id" />
             </div>
 
-            <div x-show="tab === 'media'" class="ff-profile-panel space-y-6" data-profile-panel>
+            <div x-show="tab === 'media'" id="profile-panel-media" role="tabpanel" aria-labelledby="profile-tab-media" tabindex="0" class="ff-profile-panel space-y-6" data-profile-panel>
                 <x-admin.panel title="Profilbild" description="Avatar direkt auf der Person speichern oder entfernen." class="ff-surface">
                     <form wire:submit="uploadAvatar" class="flex flex-wrap items-end gap-3 p-5">
                         <div class="min-w-[260px] flex-1">
@@ -576,7 +587,7 @@
                 </x-admin.panel>
             </div>
 
-            <div x-show="tab === 'raw'" class="ff-profile-panel" data-profile-panel>
+            <div x-show="tab === 'raw'" id="profile-panel-raw" role="tabpanel" aria-labelledby="profile-tab-raw" tabindex="0" class="ff-profile-panel" data-profile-panel>
                 <x-admin.panel title="Rohdaten" description="Vollstaendige gespeicherte Personendaten fuer technische Pruefung und Prompting." class="ff-surface">
                     <div class="p-5">
                         <pre class="overflow-x-auto rounded-lg bg-slate-900 p-4 text-xs leading-relaxed text-slate-100">{{ json_encode($personRecord->toArray(), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) }}</pre>
