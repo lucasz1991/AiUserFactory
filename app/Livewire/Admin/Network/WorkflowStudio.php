@@ -11,6 +11,7 @@ use App\Models\Workflow;
 use App\Models\WorkflowCopilotSession;
 use App\Models\WorkflowOptimizationPlan;
 use App\Models\WorkflowRun;
+use App\Models\WorkflowStudioCheckpoint;
 use App\Models\WorkflowStudioSession;
 use App\Services\Workflows\WorkflowCopilotLaunchRequest;
 use App\Services\Workflows\WorkflowCopilotLaunchService;
@@ -30,6 +31,7 @@ use App\Services\Workflows\WorkflowTaskCatalog;
 use App\Services\Workflows\WorkflowTaskOrderingService;
 use DomainException;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -509,6 +511,9 @@ class WorkflowStudio extends Component
                 $confirmationId,
             );
             if ($decision['requires_confirmation']) {
+                if ($confirmationId) {
+                    app(WorkflowStudioAuthorizationService::class)->consume($session->fresh(), $confirmationId);
+                }
                 $this->rememberPendingConfirmation([
                     'type' => 'checkpoint_restore',
                     'action' => 'checkpoint.restore',
@@ -550,6 +555,9 @@ class WorkflowStudio extends Component
                 $confirmationId,
             );
             if ($decision['requires_confirmation']) {
+                if ($confirmationId) {
+                    app(WorkflowStudioAuthorizationService::class)->consume($session->fresh(), $confirmationId);
+                }
                 $this->rememberPendingConfirmation([
                     'type' => 'checkpoint_branch',
                     'action' => 'checkpoint.branch',
@@ -639,6 +647,12 @@ class WorkflowStudio extends Component
         $this->pendingConfirmation = [];
         if (($pending['type'] ?? null) === 'probe') {
             $this->runProbe($actionId);
+        } elseif (($pending['type'] ?? null) === 'checkpoint_restore') {
+            $this->restoreCheckpoint((int) ($pending['checkpoint_id'] ?? 0), $actionId, (int) ($pending['workflow_run_id'] ?? 0));
+            app(WorkflowStudioAuthorizationService::class)->consume($this->session(), $actionId);
+        } elseif (($pending['type'] ?? null) === 'checkpoint_branch') {
+            $this->branchFromCheckpoint((int) ($pending['checkpoint_id'] ?? 0), $actionId);
+            app(WorkflowStudioAuthorizationService::class)->consume($this->session(), $actionId);
         } elseif (in_array(($pending['type'] ?? null), ['copilot_task', 'copilot_plan'], true)) {
             $session = $this->session()->fresh();
             $state = is_array($session->state_json) ? $session->state_json : [];
@@ -1297,7 +1311,14 @@ class WorkflowStudio extends Component
         $this->resetErrorBag();
         try {
             $this->assertWritableTestContext();
-            $this->lastActionResult = $action();
+            $this->lastActionResult = str_starts_with($event, 'checkpoint.')
+                ? DB::transaction(function () use ($action): array {
+                    Workflow::query()->lockForUpdate()->findOrFail($this->workflowId);
+                    WorkflowStudioSession::query()->where('workflow_id', $this->workflowId)->lockForUpdate()->findOrFail($this->studioSessionId);
+
+                    return $action();
+                }, 3)
+                : $action();
             app(WorkflowStudioSessionService::class)->appendEvent($this->session(), $event, $this->lastActionResult['message'] ?? $event, $this->lastActionResult);
             $this->dispatchStudioNotice($this->lastActionResult);
         } catch (Throwable $exception) {
@@ -1369,6 +1390,7 @@ class WorkflowStudio extends Component
         ?WorkflowRun $run = null,
         bool $confirmationRequired = false,
         ?string $confirmationId = null,
+        ?int $checkpointId = null,
     ): array {
         $run ??= $this->activeRun();
 
@@ -1381,8 +1403,68 @@ class WorkflowStudio extends Component
             'revision' => (int) $this->workflow()->copilot_revision,
             'confirmation_required' => $confirmationRequired,
             'confirmation_id' => $confirmationId,
+            'checkpoint_id' => $checkpointId,
             'message' => $message,
         ];
+    }
+
+    private function assertCheckpointRunIsSafe(WorkflowRun $run, bool $requirePaused = false): void
+    {
+        $run->refresh();
+        $session = $this->session();
+        if ((int) $run->workflow_id !== $this->workflowId
+            || (int) $run->workflow_studio_session_id !== $this->studioSessionId
+            || (int) $session->active_workflow_run_id !== (int) $run->getKey()) {
+            throw new DomainException('Der Ziel-Lauf ist nicht mehr der aktive Lauf dieser Studio-Sitzung.');
+        }
+
+        if ($requirePaused && $run->status !== 'paused') {
+            throw new DomainException('Ein Checkpoint kann erst nach einer bestaetigten sicheren Pause erstellt werden.');
+        }
+
+        $lease = DB::table('workflow_run_leases')->where('workflow_run_id', $run->getKey())->lockForUpdate()->first();
+        if ($lease && $lease->token !== null && $lease->expires_at !== null && now()->isBefore($lease->expires_at)) {
+            throw new DomainException('Die Laufsteuerung ist noch aktiv. Bitte zuerst sicher pausieren.');
+        }
+        if ($run->stepRuns()->where(function ($query): void {
+            $query->where('status', 'running')
+                ->orWhere(fn ($waiting) => $waiting->where('status', 'waiting')->whereNotNull('external_run_id'));
+        })->exists()) {
+            throw new DomainException('Ein laufender Task muss zuerst sicher pausiert werden.');
+        }
+    }
+
+    private function checkpointActionParameters(WorkflowStudioCheckpoint $checkpoint, ?WorkflowRun $run = null): array
+    {
+        $checkpoint = $this->session()->checkpoints()->findOrFail($checkpoint->getKey());
+        $run = ($run ?? $this->activeRun())?->fresh();
+        $state = $run ? [
+            'status' => $run->status,
+            'context' => $run->context_json,
+            'result' => $run->result_json,
+            'step_id' => $run->current_workflow_step_id,
+            'revision' => $run->workflow_revision,
+            'steps' => $run->stepRuns()->get(['id', 'status', 'external_run_type', 'external_run_id', 'result_json'])->toArray(),
+        ] : [];
+
+        return [
+            'checkpoint_id' => (int) $checkpoint->getKey(),
+            'checkpoint_revision' => (int) data_get($checkpoint->cursor_json, 'workflow_revision', $checkpoint->run?->workflow_revision),
+            'checkpoint_signature' => $checkpoint->state_signature,
+            'checkpoint_runtime_hash' => hash('sha256', (string) $checkpoint->encrypted_runtime_context),
+            'checkpoint_cursor' => $checkpoint->cursor_json,
+            'checkpoint_reproducible' => (bool) $checkpoint->is_reproducible,
+            'workflow_revision' => (int) $this->workflow()->copilot_revision,
+            'target_run_id' => $run ? (int) $run->getKey() : null,
+            'target_run_status' => $run?->status,
+            'target_run_state_hash' => hash('sha256', json_encode($state, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)),
+            'active_run_id' => $this->session()->active_workflow_run_id,
+        ];
+    }
+
+    private function rememberPendingConfirmation(array $pending): void
+    {
+        $this->pendingConfirmation = $pending;
     }
 
     private function decodeObject(string $json, string $label): array

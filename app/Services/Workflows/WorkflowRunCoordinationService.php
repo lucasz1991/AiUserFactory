@@ -38,13 +38,14 @@ class WorkflowRunCoordinationService
         return $claimed === 1 ? $token : null;
     }
 
-    public function owns(int $runId, string $token): bool
+    public function owns(int $runId, string $token, bool $lock = false): bool
     {
-        return DB::table('workflow_run_leases')
+        $query = DB::table('workflow_run_leases')
             ->where('workflow_run_id', $runId)
             ->where('token', $token)
-            ->where('expires_at', '>', now())
-            ->exists();
+            ->where('expires_at', '>', now());
+
+        return $lock ? $query->lockForUpdate()->first() !== null : $query->exists();
     }
 
     public function release(int $runId, string $token): void

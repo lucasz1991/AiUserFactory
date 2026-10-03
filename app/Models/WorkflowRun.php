@@ -54,6 +54,12 @@ class WorkflowRun extends Model
             }
 
             $store = app(WorkflowRunContextStore::class);
+            if (! $store->equivalent($this->getOriginal('status'), $current->status)
+                && in_array($current->status, ['paused', 'stop_requested', 'completed', 'failed', 'cancelled', 'timed_out'], true)
+                && $this->isDirty(['context_json', 'current_workflow_step_id', 'workflow_revision', 'result_json'])
+                && ! ($this->isDirty('status') && $this->status === $current->status)) {
+                throw new WorkflowRunConflictException('status');
+            }
             foreach (['status', 'current_workflow_step_id', 'workflow_revision', 'result_json', 'error_message', 'finished_at'] as $attribute) {
                 if ($this->isDirty($attribute)
                     && ! $store->equivalent($this->getOriginal($attribute), $current->getAttribute($attribute))

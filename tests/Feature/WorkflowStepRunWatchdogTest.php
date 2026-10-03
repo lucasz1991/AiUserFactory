@@ -9,6 +9,7 @@ use App\Models\WorkflowStep;
 use App\Models\WorkflowStepRun;
 use App\Models\WorkflowStudioEvent;
 use App\Services\Workflows\WorkflowExecutionService;
+use App\Services\Workflows\WorkflowRunCoordinationService;
 use App\Services\Workflows\WorkflowStudioSessionService;
 use App\Services\Workflows\WorkflowTaskRunner;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -127,6 +128,25 @@ class WorkflowStepRunWatchdogTest extends TestCase
         $this->assertSame('waiting', $stepRun->status);
         $this->assertSame('running', $run->status);
         $this->assertSame([], data_get($run->context_json, 'watchdog_events', []));
+    }
+
+    public function test_scheduler_expiry_uses_the_same_claim_as_callback_and_advance(): void
+    {
+        Queue::fake();
+        [$workflow, $step] = $this->workflow();
+        [$run, $stepRun] = $this->waitingWorkflowTaskRun($workflow, $step, [], now()->subHours(2));
+        $coordination = app(WorkflowRunCoordinationService::class);
+        $token = $coordination->acquire($run->id, 'callback');
+        $this->assertNotNull($token);
+
+        try {
+            app(WorkflowExecutionService::class)->expireTimedOutRuns();
+            $this->assertSame('waiting', $stepRun->fresh()->status);
+            $this->assertSame('running', $run->fresh()->status);
+            Queue::assertPushed(MonitorWorkflowStepRunJob::class, 1);
+        } finally {
+            $coordination->release($run->id, $token);
+        }
     }
 
     public function test_real_workflow_task_monitoring_polls_young_runs_faster_than_old_runs(): void

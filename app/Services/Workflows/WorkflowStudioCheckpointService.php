@@ -2,7 +2,9 @@
 
 namespace App\Services\Workflows;
 
+use App\Models\Workflow;
 use App\Models\WorkflowRun;
+use App\Models\WorkflowStep;
 use App\Models\WorkflowStudioCheckpoint;
 use App\Models\WorkflowStudioRevision;
 use App\Models\WorkflowStudioSession;
@@ -98,54 +100,92 @@ class WorkflowStudioCheckpointService
         WorkflowStudioCheckpoint|int $checkpoint,
         ?WorkflowRun $run = null,
     ): WorkflowRun {
-        $checkpoint = $this->resolve($session, $checkpoint);
-        $run ??= $session->activeRun;
+        $locator = WorkflowStudioSession::query()->select(['id', 'workflow_id'])->findOrFail($session->getKey());
+        $checkpointId = $checkpoint instanceof WorkflowStudioCheckpoint ? $checkpoint->getKey() : $checkpoint;
+        $requestedRunId = $run?->getKey() ?? $session->active_workflow_run_id;
 
-        if (! $run || (int) $run->workflow_id !== (int) $session->workflow_id) {
-            throw new DomainException('Der Ziel-Lauf ist nicht mehr verfuegbar.');
-        }
+        return DB::transaction(function () use ($locator, $session, $checkpointId, $requestedRunId): WorkflowRun {
+            $workflow = Workflow::query()->lockForUpdate()->findOrFail($locator->workflow_id);
+            $lockedSession = WorkflowStudioSession::query()->lockForUpdate()->findOrFail($session->getKey());
 
-        if ($run->stepRuns()->where(function ($query): void {
-            $query->where('status', 'running')
-                ->orWhere(fn ($waiting) => $waiting->where('status', 'waiting')->whereNotNull('external_run_id'));
-        })->exists()) {
-            throw new DomainException('Ein laufender Task muss zuerst sicher pausiert werden.');
-        }
+            if ((int) $lockedSession->workflow_id !== (int) $workflow->getKey()
+                || (int) $session->workflow_id !== (int) $workflow->getKey()) {
+                throw new DomainException('Die Studio-Sitzung gehoert nicht mehr zu diesem Workflow.');
+            }
 
-        $this->assertCompatible($session, $checkpoint);
-        $context = $this->decryptContext($checkpoint);
-        $context['manual_pause_requested'] = true;
-        $context['manual_pause_checkpoint'] = [
-            'workflow_studio_checkpoint_id' => (int) $checkpoint->getKey(),
-            'restored_at' => now()->toIso8601String(),
-        ];
-        $cursor = is_array($checkpoint->cursor_json) ? $checkpoint->cursor_json : [];
-        if (filled($cursor['task_key'] ?? null)) {
-            $context['next_task_key'] = $cursor['task_key'];
-        }
+            $lockedSession->setRelation('workflow', $workflow);
+            $runId = $requestedRunId;
+            $lockedRun = $runId ? WorkflowRun::query()->lockForUpdate()->find($runId) : null;
 
-        $run->stepRuns()->whereIn('status', ['running', 'waiting'])->update([
-            'status' => 'queued',
-            'external_run_type' => null,
-            'external_run_id' => null,
-            'finished_at' => null,
-            'duration_ms' => null,
-            'error_message' => null,
-        ]);
-        $run->forceFill([
-            'status' => 'paused',
-            'current_workflow_step_id' => $cursor['workflow_step_id'] ?? $checkpoint->workflow_step_id,
-            'context_json' => $context,
-            'result_json' => [],
-            'finished_at' => null,
-            'error_message' => null,
-        ])->save();
-        $session->forceFill(['active_workflow_run_id' => $run->getKey(), 'status' => 'paused', 'paused_at' => now()])->save();
-        app(WorkflowStudioSessionService::class)->appendEvent($session, 'checkpoint.restored', 'Lauf wurde auf „'.$checkpoint->name.'“ zurueckgesetzt.', [
-            'checkpoint_id' => (int) $checkpoint->getKey(), 'workflow_run_id' => (int) $run->getKey(),
-        ], 'warning');
+            if (! $lockedRun
+                || (int) $lockedRun->workflow_id !== (int) $workflow->getKey()
+                || (int) $lockedRun->workflow_studio_session_id !== (int) $lockedSession->getKey()
+                || (int) $lockedSession->active_workflow_run_id !== (int) $lockedRun->getKey()) {
+                throw new DomainException('Der Ziel-Lauf ist nicht mehr der aktive Lauf dieser Studio-Sitzung.');
+            }
 
-        return $run->fresh() ?? $run;
+            $checkpoint = WorkflowStudioCheckpoint::query()->lockForUpdate()->findOrFail($checkpointId);
+            $checkpoint = $this->resolve($lockedSession, $checkpoint);
+            $this->assertCompatible($lockedSession, $checkpoint);
+
+            if ($checkpoint->workflow_run_id && ! WorkflowRun::query()
+                ->whereKey($checkpoint->workflow_run_id)
+                ->where('workflow_id', $workflow->getKey())
+                ->where('workflow_studio_session_id', $lockedSession->getKey())->exists()) {
+                throw new DomainException('Der Checkpoint wurde nicht aus einem Lauf dieser Studio-Sitzung erstellt.');
+            }
+
+            // A worker can hold an orchestration claim before it creates its
+            // first step. Lock that claim too, so restore cannot race the start.
+            $lease = DB::table('workflow_run_leases')->where('workflow_run_id', $lockedRun->getKey())->lockForUpdate()->first();
+            if ($lease && $lease->token !== null && $lease->expires_at !== null && now()->isBefore($lease->expires_at)) {
+                throw new DomainException('Die Laufsteuerung ist noch aktiv. Bitte zuerst sicher pausieren.');
+            }
+
+            $stepRuns = $lockedRun->stepRuns()->lockForUpdate()->get();
+            if ($stepRuns->contains(fn ($step): bool => $step->status === 'running'
+                || ($step->status === 'waiting' && $step->external_run_id !== null))) {
+                throw new DomainException('Ein laufender Task muss zuerst sicher pausiert werden.');
+            }
+
+            $context = $this->decryptContext($checkpoint);
+            $context['manual_pause_requested'] = true;
+            $context['manual_pause_checkpoint'] = [
+                'workflow_studio_checkpoint_id' => (int) $checkpoint->getKey(),
+                'restored_at' => now()->toIso8601String(),
+            ];
+            $cursor = is_array($checkpoint->cursor_json) ? $checkpoint->cursor_json : [];
+            $stepId = $cursor['workflow_step_id'] ?? $checkpoint->workflow_step_id;
+            if ($stepId !== null && ! WorkflowStep::query()->whereKey($stepId)->where('workflow_id', $workflow->getKey())->exists()) {
+                throw new DomainException('Der Checkpoint-Cursor gehoert nicht zu diesem Workflow.');
+            }
+            if (filled($cursor['task_key'] ?? null)) {
+                $context['next_task_key'] = $cursor['task_key'];
+            }
+
+            $lockedRun->stepRuns()->whereIn('status', ['running', 'waiting'])->update([
+                'status' => 'queued',
+                'external_run_type' => null,
+                'external_run_id' => null,
+                'finished_at' => null,
+                'duration_ms' => null,
+                'error_message' => null,
+            ]);
+            $lockedRun->forceFill([
+                'status' => 'paused',
+                'current_workflow_step_id' => $stepId,
+                'context_json' => $context,
+                'result_json' => [],
+                'finished_at' => null,
+                'error_message' => null,
+            ])->save();
+            $lockedSession->forceFill(['active_workflow_run_id' => $lockedRun->getKey(), 'status' => 'paused', 'paused_at' => now()])->save();
+            app(WorkflowStudioSessionService::class)->appendEvent($lockedSession, 'checkpoint.restored', 'Lauf wurde auf „'.$checkpoint->name.'“ zurueckgesetzt.', [
+                'checkpoint_id' => (int) $checkpoint->getKey(), 'workflow_run_id' => (int) $lockedRun->getKey(),
+            ], 'warning');
+
+            return $lockedRun->fresh() ?? $lockedRun;
+        }, 3);
     }
 
     public function branch(WorkflowStudioSession $session, WorkflowStudioCheckpoint|int $checkpoint): WorkflowRun
@@ -205,9 +245,7 @@ class WorkflowStudioCheckpointService
 
     private function resolve(WorkflowStudioSession $session, WorkflowStudioCheckpoint|int $checkpoint): WorkflowStudioCheckpoint
     {
-        $checkpoint = $checkpoint instanceof WorkflowStudioCheckpoint
-            ? $checkpoint
-            : WorkflowStudioCheckpoint::query()->findOrFail($checkpoint);
+        $checkpoint = WorkflowStudioCheckpoint::query()->findOrFail($checkpoint instanceof WorkflowStudioCheckpoint ? $checkpoint->getKey() : $checkpoint);
 
         if ((int) $checkpoint->workflow_studio_session_id !== (int) $session->getKey()) {
             throw new DomainException('Der Checkpoint gehoert nicht zu dieser Studio-Sitzung.');

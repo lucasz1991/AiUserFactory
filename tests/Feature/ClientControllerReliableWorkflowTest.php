@@ -13,7 +13,10 @@ use App\Services\Workflows\WorkflowExecutionService;
 use App\Services\Workflows\WorkflowRuntimeFingerprint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Crypt;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\File;
 use Illuminate\Support\Str;
+use Mockery;
 use Tests\Concerns\CreatesNetworkNodes;
 use Tests\TestCase;
 
@@ -700,7 +703,7 @@ class ClientControllerReliableWorkflowTest extends TestCase
         $this->assertSame($run->id, $freeNode->fresh()->workflow_reservation_run_id);
         $this->assertNull($busyNode->fresh()->workflow_reservation_run_id);
 
-        $run->forceFill(['status' => 'stop_requested'])->save();
+        $run->refresh()->forceFill(['status' => 'stop_requested'])->save();
         app(WorkflowExecutionService::class)->advance($run);
         $this->assertSame(1, NetworkJob::query()->where('workflow_run_id', $run->id)->count());
     }
@@ -749,5 +752,78 @@ class ClientControllerReliableWorkflowTest extends TestCase
         $this->assertSame('stop', $job->fresh()->control_command);
         $this->assertTrue((bool) data_get($job->fresh()->control_payload_json, 'force'));
         $this->assertTrue((bool) data_get($job->fresh()->control_payload_json, 'terminate_process_tree'));
+    }
+
+    public function test_client_projection_keeps_stop_requests_and_rejects_an_old_job_snapshot(): void
+    {
+        [$run, $stepRun, $job] = $this->clientProjectionFixture();
+        $run->forceFill(['status' => 'stop_requested'])->save();
+        $service = app(WorkflowExecutionService::class);
+        $snapshot = ['currentStepId' => $stepRun->workflow_step_id, 'state' => 'running'];
+
+        $service->applyClientWorkflowProgress($job, $snapshot);
+        $this->assertSame('stop_requested', $run->fresh()->status);
+
+        $job->fresh()->forceFill(['last_sequence' => 2])->save();
+        $service->applyClientWorkflowProgress($job, [...$snapshot, 'state' => 'failed']);
+        $this->assertSame('waiting', $stepRun->fresh()->status);
+
+        $service->completeClientWorkflowRun($job->fresh(), [
+            'clientWorkflowComplete' => true,
+            'ok' => true,
+            'workflow_variables' => ['late' => 'must-not-commit'],
+        ], 'success');
+        $this->assertSame('cancelled', $run->fresh()->status);
+        $this->assertSame('cancelled', $stepRun->fresh()->status);
+        $this->assertNull(data_get($run->fresh()->context_json, 'workflow_variables.late'));
+    }
+
+    public function test_failed_client_projection_rolls_back_steps_and_retains_the_session_source(): void
+    {
+        config(['app.key' => 'base64:MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTI=']);
+        [$run, $stepRun, $job] = $this->clientProjectionFixture();
+        $source = tempnam(sys_get_temp_dir(), 'ff-session-projection-');
+        $payload = '{"cookies":[],"domain":"example.test"}';
+        File::put($source, $payload);
+        $transactionLevel = DB::transactionLevel();
+        $service = Mockery::mock(WorkflowExecutionService::class)->makePartial()->shouldAllowMockingProtectedMethods();
+        $service->shouldReceive('completeClientWorkflowRunLocked')->once()->andReturnUsing(function ($job, $run, $result) use ($source, $payload, $stepRun, $transactionLevel): void {
+            $this->assertSame($transactionLevel + 1, DB::transactionLevel());
+            $this->assertSame($payload, Crypt::decryptString($result['encryptedBrowserSessionPayload']));
+            $this->assertFileExists($source);
+            $stepRun->fresh()->forceFill(['status' => 'completed'])->save();
+
+            throw new \RuntimeException('synthetic projection failure');
+        });
+
+        try {
+            try {
+                $service->completeClientWorkflowRun($job, [
+                    'clientWorkflowComplete' => true,
+                    'browserSessionFilePath' => $source,
+                    'ok' => true,
+                ], 'success');
+                $this->fail('Projection failure must propagate without acknowledging partial state.');
+            } catch (\RuntimeException $exception) {
+                $this->assertSame('synthetic projection failure', $exception->getMessage());
+            }
+            $this->assertFileExists($source);
+            $this->assertSame('waiting', $stepRun->fresh()->status);
+            $this->assertSame('running', $run->fresh()->status);
+        } finally {
+            File::delete($source);
+        }
+    }
+
+    private function clientProjectionFixture(): array
+    {
+        $node = $this->createNetworkNode(['name' => 'Projection test', 'node_uuid' => (string) Str::uuid(), 'api_key' => Str::random(32), 'status' => 'active']);
+        $workflow = Workflow::query()->create(['name' => 'Projection test', 'slug' => 'projection-'.Str::random(10), 'is_active' => true]);
+        $step = $workflow->steps()->create(['name' => 'Projection', 'type' => WorkflowStep::TYPE_BROWSER_TASK, 'action_key' => 'projection', 'position' => 10, 'is_enabled' => true, 'config_json' => ['tasks' => []]]);
+        $run = WorkflowRun::query()->create(['run_uuid' => (string) Str::uuid(), 'workflow_id' => $workflow->id, 'status' => 'running', 'context_json' => [], 'result_json' => []]);
+        $job = NetworkJob::query()->create(['job_uuid' => (string) Str::uuid(), 'network_node_id' => $node->id, 'workflow_run_id' => $run->id, 'type' => 'workflow_run', 'status' => 'dispatched', 'payload_json' => [], 'last_sequence' => 1]);
+        $stepRun = $run->stepRuns()->create(['workflow_step_id' => $step->id, 'status' => 'waiting', 'external_run_type' => 'client-controller-workflow-run', 'external_run_id' => $job->job_uuid, 'result_json' => []]);
+
+        return [$run, $stepRun, $job];
     }
 }

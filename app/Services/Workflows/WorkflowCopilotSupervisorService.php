@@ -3,6 +3,8 @@
 namespace App\Services\Workflows;
 
 use App\Exceptions\WorkflowRevisionConflictException;
+use App\Exceptions\WorkflowRunConflictException;
+use App\Exceptions\WorkflowSupervisorInterruptedException;
 use App\Jobs\RunWorkflowJob;
 use App\Jobs\WorkflowCopilotSupervisorJob;
 use App\Models\Workflow;
@@ -58,6 +60,21 @@ class WorkflowCopilotSupervisorService
 
         try {
             $this->superviseWithLease($sessionId);
+        } catch (WorkflowSupervisorInterruptedException|WorkflowRunConflictException $exception) {
+            $session = WorkflowCopilotSession::query()->find($sessionId);
+            if ($session) {
+                $this->sessions->appendEvent(
+                    $session,
+                    'supervisor.result_discarded',
+                    'Ein veraltetes Supervisor-Ergebnis wurde verworfen; Pause, Stopp und neuere Benutzeranweisungen bleiben erhalten.',
+                    ['reason' => class_basename($exception)],
+                    $session->phase,
+                    'info',
+                );
+                if ($session->status !== WorkflowCopilotSession::STATUS_PAUSED && ! in_array($session->status, WorkflowCopilotSession::TERMINAL_STATUSES, true)) {
+                    $this->sessions->updateState($session, ['supervisor_recheck_requested' => true]);
+                }
+            }
         } finally {
             $this->releaseSupervisorLease($sessionId, $leaseToken);
         }
@@ -2122,56 +2139,59 @@ class WorkflowCopilotSupervisorService
             return;
         }
 
-        if ($session->status !== WorkflowCopilotSession::STATUS_RUNNING) {
-            $session = $this->sessions->transition(
-                $session,
-                WorkflowCopilotSession::STATUS_RUNNING,
-                'executing',
-                [],
-                'Der naechste System-Reparaturlauf wird gestartet.',
-            );
-        }
+        $expectedDecision = app(WorkflowCopilotDecisionGuard::class)->snapshot($session);
+        $this->withCurrentDecision($session, $expectedDecision, function (WorkflowCopilotSession $session) use ($resumeContext): void {
+            if ($session->status !== WorkflowCopilotSession::STATUS_RUNNING) {
+                $session = $this->sessions->transition(
+                    $session,
+                    WorkflowCopilotSession::STATUS_RUNNING,
+                    'executing',
+                    [],
+                    'Der naechste System-Reparaturlauf wird gestartet.',
+                );
+            }
 
-        $session->loadMissing('workflow.steps');
-        $workflowInputs = is_array($session->workflow_inputs_json) ? $session->workflow_inputs_json : [];
-        $runtimeVariables = is_array($resumeContext['workflow_variables'] ?? null)
-            ? $resumeContext['workflow_variables']
-            : $workflowInputs;
-        $context = array_replace($workflowInputs, $resumeContext, [
-            'person_id' => $session->person_id,
-            'workflow_variables' => $runtimeVariables,
-            'workflow_copilot_session_id' => (int) $session->id,
-            'workflow_revision' => (int) $session->current_revision,
-            'copilot_history_preflight' => is_array(data_get($session->state_json, 'history_preflight'))
-                ? data_get($session->state_json, 'history_preflight')
-                : [],
-            'copilot_supervised' => true,
-            'copilot_verification_run' => false,
-            'execution_target' => 'system',
-            'network_node_id' => null,
-            'device_id' => null,
-            'started_from' => 'workflow-copilot',
-        ]);
-        $run = $this->execution->start($session->workflow, $context, 'workflow-copilot');
-        $session = $this->sessions->attachRun($session, $run);
-        $firstStep = $session->workflow->enabledSteps()->first();
-        $firstTask = $firstStep ? data_get($firstStep->task_cards, '0') : null;
-        $this->sessions->updateState($session, [
-            'phase' => 'executing',
-            'current_step_name' => $firstStep?->name,
-            'current_task_key' => is_array($firstTask) ? ($firstTask['key'] ?? null) : null,
-            'last_action' => 'System-Test gestartet',
-            'next_action' => 'Ersten Task ausfuehren',
-        ], 'executing');
-        $this->sessions->appendEvent(
-            $session,
-            'run.started',
-            'System-Reparaturlauf #'.$run->id.' wurde gestartet.',
-            ['workflow_run_id' => $run->id, 'execution_target' => 'system', 'revision' => $session->current_revision],
-            'executing',
-            'info',
-            true,
-        );
+            $session->loadMissing('workflow.steps');
+            $workflowInputs = is_array($session->workflow_inputs_json) ? $session->workflow_inputs_json : [];
+            $runtimeVariables = is_array($resumeContext['workflow_variables'] ?? null)
+                ? $resumeContext['workflow_variables']
+                : $workflowInputs;
+            $context = array_replace($workflowInputs, $resumeContext, [
+                'person_id' => $session->person_id,
+                'workflow_variables' => $runtimeVariables,
+                'workflow_copilot_session_id' => (int) $session->id,
+                'workflow_revision' => (int) $session->current_revision,
+                'copilot_history_preflight' => is_array(data_get($session->state_json, 'history_preflight'))
+                    ? data_get($session->state_json, 'history_preflight')
+                    : [],
+                'copilot_supervised' => true,
+                'copilot_verification_run' => false,
+                'execution_target' => 'system',
+                'network_node_id' => null,
+                'device_id' => null,
+                'started_from' => 'workflow-copilot',
+            ]);
+            $run = $this->execution->start($session->workflow, $context, 'workflow-copilot');
+            $session = $this->sessions->attachRun($session, $run);
+            $firstStep = $session->workflow->enabledSteps()->first();
+            $firstTask = $firstStep ? data_get($firstStep->task_cards, '0') : null;
+            $this->sessions->updateState($session, [
+                'phase' => 'executing',
+                'current_step_name' => $firstStep?->name,
+                'current_task_key' => is_array($firstTask) ? ($firstTask['key'] ?? null) : null,
+                'last_action' => 'System-Test gestartet',
+                'next_action' => 'Ersten Task ausfuehren',
+            ], 'executing');
+            $this->sessions->appendEvent(
+                $session,
+                'run.started',
+                'System-Reparaturlauf #'.$run->id.' wurde gestartet.',
+                ['workflow_run_id' => $run->id, 'execution_target' => 'system', 'revision' => $session->current_revision],
+                'executing',
+                'info',
+                true,
+            );
+        });
     }
 
     protected function createInitialWorkflowDefinition(WorkflowCopilotSession $session): WorkflowCopilotSession
@@ -2203,6 +2223,7 @@ class WorkflowCopilotSupervisorService
 
         $expectedRevision = (int) $session->current_revision;
         $plannedSnapshotHash = $this->workflowSnapshotHash($workflow);
+        $expectedDecision = app(WorkflowCopilotDecisionGuard::class)->snapshot($session);
         $this->sessions->appendEvent(
             $session,
             'planning.started',
@@ -2230,56 +2251,60 @@ class WorkflowCopilotSupervisorService
             'initial_planning',
         );
         $session = $session->fresh(['workflow.steps']) ?? $session;
-        $revision = $this->revisions->apply(
-            $session,
-            $expectedRevision,
-            'Vollstaendige kataloggebundene Erstdefinition fuer den leeren Workflow.',
-            function (Workflow $lockedWorkflow) use ($session, $plan, $plannedSnapshotHash): void {
-                $currentWorkflow = $lockedWorkflow->fresh(['steps']) ?? $lockedWorkflow;
 
-                if (! hash_equals($plannedSnapshotHash, $this->workflowSnapshotHash($currentWorkflow))) {
-                    throw new \DomainException('Der Workflow wurde waehrend der Erstplanung geaendert; der Plan wurde verworfen.');
-                }
+        return $this->withCurrentDecision($session, $expectedDecision, function (WorkflowCopilotSession $session) use ($plan, $expectedRevision, $plannedSnapshotHash, $expectedDecision): WorkflowCopilotSession {
+            $revision = $this->revisions->apply(
+                $session,
+                $expectedRevision,
+                'Vollstaendige kataloggebundene Erstdefinition fuer den leeren Workflow.',
+                function (Workflow $lockedWorkflow) use ($session, $plan, $plannedSnapshotHash, $expectedDecision): void {
+                    app(WorkflowCopilotDecisionGuard::class)->assertCurrent($session, $expectedDecision);
+                    $currentWorkflow = $lockedWorkflow->fresh(['steps']) ?? $lockedWorkflow;
 
-                $this->planning->applyPlan(
-                    $lockedWorkflow,
-                    (string) $session->goal,
-                    $plan,
-                    is_array($session->success_criteria_json) ? $session->success_criteria_json : [],
-                    is_array($session->workflow_inputs_json) ? $session->workflow_inputs_json : [],
-                );
-            },
-        );
+                    if (! hash_equals($plannedSnapshotHash, $this->workflowSnapshotHash($currentWorkflow))) {
+                        throw new \DomainException('Der Workflow wurde waehrend der Erstplanung geaendert; der Plan wurde verworfen.');
+                    }
 
-        $this->sessions->appendEvent(
-            $session,
-            'planning.completed',
-            'Der leere Workflow wurde als ausfuehrbare Erstdefinition gespeichert; der erste System-Test startet jetzt.',
-            [
-                'workflow_revision_id' => (int) $revision->id,
-                'revision_number' => (int) $revision->revision_number,
-                'plan_snapshot_hash' => $plannedSnapshotHash,
-                'step_count' => count($plan['steps'] ?? []),
-                'task_count' => (int) ($plan['task_count'] ?? 0),
-                'summary' => $plan['summary'] ?? null,
-            ],
-            'planning',
-            'success',
-            true,
-        );
+                    $this->planning->applyPlan(
+                        $lockedWorkflow,
+                        (string) $session->goal,
+                        $plan,
+                        is_array($session->success_criteria_json) ? $session->success_criteria_json : [],
+                        is_array($session->workflow_inputs_json) ? $session->workflow_inputs_json : [],
+                    );
+                },
+            );
 
-        return $this->sessions->transition(
-            $session,
-            WorkflowCopilotSession::STATUS_RUNNING,
-            'executing',
-            [
-                'current_step_name' => data_get($plan, 'steps.0.name'),
-                'current_task_key' => data_get($plan, 'steps.0.tasks.0.key'),
-                'last_action' => 'Workflow-Erstdefinition erstellt',
-                'next_action' => 'Ersten System-Test starten',
-            ],
-            'Die automatisch erstellte Workflow-Erstdefinition wird jetzt getestet.',
-        );
+            $this->sessions->appendEvent(
+                $session,
+                'planning.completed',
+                'Der leere Workflow wurde als ausfuehrbare Erstdefinition gespeichert; der erste System-Test startet jetzt.',
+                [
+                    'workflow_revision_id' => (int) $revision->id,
+                    'revision_number' => (int) $revision->revision_number,
+                    'plan_snapshot_hash' => $plannedSnapshotHash,
+                    'step_count' => count($plan['steps'] ?? []),
+                    'task_count' => (int) ($plan['task_count'] ?? 0),
+                    'summary' => $plan['summary'] ?? null,
+                ],
+                'planning',
+                'success',
+                true,
+            );
+
+            return $this->sessions->transition(
+                $session,
+                WorkflowCopilotSession::STATUS_RUNNING,
+                'executing',
+                [
+                    'current_step_name' => data_get($plan, 'steps.0.name'),
+                    'current_task_key' => data_get($plan, 'steps.0.tasks.0.key'),
+                    'last_action' => 'Workflow-Erstdefinition erstellt',
+                    'next_action' => 'Ersten System-Test starten',
+                ],
+                'Die automatisch erstellte Workflow-Erstdefinition wird jetzt getestet.',
+            );
+        });
     }
 
     protected function recordedRunSideEffects(
@@ -2328,48 +2353,51 @@ class WorkflowCopilotSupervisorService
 
             return;
         }
-        $workflowHash = $this->workflowSnapshotHash($session->workflow);
-        $session = $this->sessions->transition(
-            $session,
-            WorkflowCopilotSession::STATUS_VERIFYING,
-            'verifying',
-            ['repair_run_id' => (int) $repairRun->id],
-            'Kontrolllauf von Anfang an wird gestartet.',
-        );
-        $inputs = is_array($session->workflow_inputs_json) ? $session->workflow_inputs_json : [];
-        $run = $this->execution->start($session->workflow, array_replace($inputs, [
-            'person_id' => $session->person_id,
-            'workflow_variables' => $inputs,
-            'workflow_copilot_session_id' => (int) $session->id,
-            'workflow_revision' => (int) $session->current_revision,
-            'copilot_history_preflight' => is_array(data_get($session->state_json, 'history_preflight'))
-                ? data_get($session->state_json, 'history_preflight')
-                : [],
-            'copilot_supervised' => true,
-            'copilot_verification_run' => true,
-            'copilot_mutations_allowed' => false,
-            'copilot_frozen_success_criteria' => $session->success_criteria_json,
-            'copilot_frozen_workflow_hash' => $workflowHash,
-            'execution_target' => 'system',
-            'network_node_id' => null,
-            'device_id' => null,
-            'started_from' => 'workflow-copilot-verification',
-        ]), 'workflow-copilot-verification');
-        $this->sessions->attachRun($session, $run);
-        $this->sessions->appendEvent(
-            $session,
-            'verification.started',
-            'Frischer End-to-End-Kontrolllauf #'.$run->id.' wurde mit der gespeicherten Revision gestartet.',
-            [
-                'workflow_run_id' => $run->id,
-                'revision' => $session->current_revision,
-                'workflow_snapshot_hash' => $workflowHash,
+        $expectedDecision = app(WorkflowCopilotDecisionGuard::class)->snapshot($session);
+        $this->withCurrentDecision($session, $expectedDecision, function (WorkflowCopilotSession $session) use ($repairRun): void {
+            $workflowHash = $this->workflowSnapshotHash($session->workflow);
+            $session = $this->sessions->transition(
+                $session,
+                WorkflowCopilotSession::STATUS_VERIFYING,
+                'verifying',
+                ['repair_run_id' => (int) $repairRun->id],
+                'Kontrolllauf von Anfang an wird gestartet.',
+            );
+            $inputs = is_array($session->workflow_inputs_json) ? $session->workflow_inputs_json : [];
+            $run = $this->execution->start($session->workflow, array_replace($inputs, [
+                'person_id' => $session->person_id,
+                'workflow_variables' => $inputs,
+                'workflow_copilot_session_id' => (int) $session->id,
+                'workflow_revision' => (int) $session->current_revision,
+                'copilot_history_preflight' => is_array(data_get($session->state_json, 'history_preflight'))
+                    ? data_get($session->state_json, 'history_preflight')
+                    : [],
+                'copilot_supervised' => true,
+                'copilot_verification_run' => true,
+                'copilot_mutations_allowed' => false,
+                'copilot_frozen_success_criteria' => $session->success_criteria_json,
+                'copilot_frozen_workflow_hash' => $workflowHash,
                 'execution_target' => 'system',
-            ],
-            'verifying',
-            'info',
-            true,
-        );
+                'network_node_id' => null,
+                'device_id' => null,
+                'started_from' => 'workflow-copilot-verification',
+            ]), 'workflow-copilot-verification');
+            $this->sessions->attachRun($session, $run);
+            $this->sessions->appendEvent(
+                $session,
+                'verification.started',
+                'Frischer End-to-End-Kontrolllauf #'.$run->id.' wurde mit der gespeicherten Revision gestartet.',
+                [
+                    'workflow_run_id' => $run->id,
+                    'revision' => $session->current_revision,
+                    'workflow_snapshot_hash' => $workflowHash,
+                    'execution_target' => 'system',
+                ],
+                'verifying',
+                'info',
+                true,
+            );
+        });
     }
 
     protected function startVerificationSafely(WorkflowCopilotSession $session, WorkflowRun $repairRun): void
@@ -4006,10 +4034,16 @@ class WorkflowCopilotSupervisorService
         callable $callback,
         string $source,
     ): mixed {
+        // Closures capture the same model object, so provider-bound goal, inputs
+        // and permissions must be refreshed together with the expected snapshot.
+        $session->refresh();
+        $guard = app(WorkflowCopilotDecisionGuard::class);
+        $expected = $guard->snapshot($session);
+        $guard->assertCurrent($session, $expected);
         $this->aiUsage->beginCapture();
 
         try {
-            return $callback();
+            $result = $callback();
         } finally {
             $records = $this->aiUsage->finishCapture();
 
@@ -4017,6 +4051,23 @@ class WorkflowCopilotSupervisorService
                 $this->sessions->recordAiUsage($session, $records, $source);
             }
         }
+
+        $guard->assertCurrent($session, $expected, $source === 'history_preflight');
+
+        return $result;
+    }
+
+    protected function withCurrentDecision(WorkflowCopilotSession $session, array $expected, callable $callback): mixed
+    {
+        // Only DB-only application/transition work belongs here. Provider calls,
+        // observation and browser startup have already completed outside locks.
+        return DB::transaction(function () use ($session, $expected, $callback): mixed {
+            Workflow::query()->lockForUpdate()->findOrFail($session->workflow_id);
+            $locked = WorkflowCopilotSession::query()->lockForUpdate()->findOrFail($session->id);
+            app(WorkflowCopilotDecisionGuard::class)->assertCurrent($locked, $expected);
+
+            return $callback($locked->load(['workflow.steps', 'activeRun']));
+        });
     }
 
     protected function appendVisionAnalysisCompletedEvent(

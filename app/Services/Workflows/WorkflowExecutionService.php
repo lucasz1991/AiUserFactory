@@ -13,7 +13,6 @@ use App\Models\ManagedProcess;
 use App\Models\NetworkJob;
 use App\Models\NetworkNode;
 use App\Models\Person;
-use App\Models\PersonEmailAccount;
 use App\Models\Workflow;
 use App\Models\WorkflowCopilotSession;
 use App\Models\WorkflowRun;
@@ -513,6 +512,9 @@ class WorkflowExecutionService
         try {
             $step = $this->nextStepForRun($run);
         } catch (\Throwable $exception) {
+            if ($exception instanceof WorkflowRunConflictException) {
+                throw $exception;
+            }
             $this->failRun($run, $exception->getMessage());
 
             return;
@@ -1118,6 +1120,10 @@ class WorkflowExecutionService
             return;
         }
 
+        if (! $this->stepOperationIsCurrent($stepRun)) {
+            return;
+        }
+
         if ($stepRun->external_run_type === 'client-controller-workflow-run') {
             // Full client workflows are advanced exclusively by client progress/result callbacks.
             return;
@@ -1613,6 +1619,9 @@ class WorkflowExecutionService
             ->firstOrFail();
         $step = $stepRun->workflowStep;
         $context = is_array($run->context_json) ? $run->context_json : [];
+        if (! $this->stepOperationIsCurrent($stepRun)) {
+            return ['', 0];
+        }
         $resumeTaskKey = trim((string) ($context['copilot_current_task_key'] ?? ''));
         $transientTask = is_array($context['copilot_transient_task'] ?? null) ? $context['copilot_transient_task'] : [];
         $isProbe = $transientTask !== [];
@@ -2163,7 +2172,7 @@ class WorkflowExecutionService
                 }
 
                 if ($this->stepRunTimedOut($stepRun)) {
-                    $this->expireStepRun($stepRun);
+                    $this->monitorStepRun((int) $stepRun->id);
                 }
             });
     }
@@ -2412,7 +2421,19 @@ class WorkflowExecutionService
 
     public function applyClientWorkflowProgress(NetworkJob $job, array $snapshot): void
     {
-        $run = $job->workflowRun()->with(['workflow.steps', 'stepRuns.workflowStep'])->first();
+        DB::transaction(function () use ($job, $snapshot): void {
+            $run = WorkflowRun::query()->with(['workflow.steps', 'stepRuns.workflowStep'])
+                ->lockForUpdate()->find($job->workflow_run_id);
+            if (! $this->clientProjectionIsCurrent($job, $run) || $run->status === 'paused') {
+                return;
+            }
+
+            $this->applyClientWorkflowProgressLocked($job, $run, $snapshot);
+        });
+    }
+
+    protected function applyClientWorkflowProgressLocked(NetworkJob $job, WorkflowRun $run, array $snapshot): void
+    {
 
         if (! $run || $this->isFinalStatus($run->status)) {
             return;
@@ -2449,7 +2470,7 @@ class WorkflowExecutionService
         }
 
         $run->forceFill([
-            'status' => $job->status === 'stop_requested' ? 'stop_requested' : 'running',
+            'status' => $job->status === 'stop_requested' || $run->status === 'stop_requested' ? 'stop_requested' : 'running',
             'current_workflow_step_id' => $currentStepId ?: $run->current_workflow_step_id,
             'result_json' => array_replace($this->publicRunSnapshot($snapshot), [
                 'source' => 'client-controller',
@@ -2466,12 +2487,58 @@ class WorkflowExecutionService
             return;
         }
 
-        $run = $job->workflowRun()->with(['workflow.steps', 'stepRuns.workflowStep'])->first();
+        // Read/encrypt large session artifacts before taking the run row lock.
+        // Keep the source until every associated database write has committed.
+        $sessionSources = [];
+        foreach ([
+            ['webmailSessionFilePath', 'webmail_session_file_path', 'encryptedSessionPayload', 'finalizeWorkflowWebmailSessionResult'],
+            ['browserSessionFilePath', 'browser_session_file_path', 'encryptedBrowserSessionPayload', 'finalizeWorkflowBrowserSessionResult'],
+        ] as [$pathKey, $alias, $encryptedKey, $finalizer]) {
+            $source = trim((string) ($result[$pathKey] ?? $result[$alias] ?? ''));
+            if ($source === '' || filled($result[$encryptedKey] ?? null)) {
+                continue;
+            }
+
+            $result = $this->{$finalizer}($result, false);
+            if (filled($result[$encryptedKey] ?? null)) {
+                $sessionSources[] = $source;
+            } elseif ($status === 'success') {
+                $status = 'failed';
+                $errorMessage = (string) ($result['statusMessage'] ?? 'Die Session konnte nicht gespeichert werden.');
+            }
+            unset($result[$pathKey], $result[$alias]);
+        }
+
+        $projected = DB::transaction(function () use ($job, $result, $status, $errorMessage): bool {
+            $run = WorkflowRun::query()->with(['workflow.steps', 'stepRuns.workflowStep'])
+                ->lockForUpdate()->find($job->workflow_run_id);
+            if (! $this->clientProjectionIsCurrent($job, $run) || $run->status === 'paused') {
+                return false;
+            }
+
+            $mayPersistArtifacts = $run->status !== 'stop_requested';
+            $this->completeClientWorkflowRunLocked($job, $run, $result, $status, $errorMessage);
+
+            return $mayPersistArtifacts;
+        });
+
+        if ($projected && $sessionSources !== []) {
+            DB::afterCommit(static function () use ($sessionSources): void {
+                foreach (array_unique($sessionSources) as $source) {
+                    File::delete($source);
+                }
+            });
+        }
+    }
+
+    protected function completeClientWorkflowRunLocked(NetworkJob $job, WorkflowRun $run, array $result, string $status, ?string $errorMessage): void
+    {
 
         if (! $run || $this->isFinalStatus($run->status)) {
             return;
         }
 
+        $stopping = $run->status === 'stop_requested';
         $steps = collect(is_array($result['steps'] ?? null) ? $result['steps'] : [])
             ->filter(fn (mixed $step): bool => is_array($step))
             ->keyBy(fn (array $step): int => (int) ($step['workflowStepId'] ?? 0));
@@ -2500,14 +2567,21 @@ class WorkflowExecutionService
             ])->save();
         }
 
-        $this->applyWorkflowVariablesResult($run, $result);
-        $lastStepRun = $run->stepRuns->last();
+        if (! $stopping) {
+            $this->applyWorkflowVariablesResult($run, $result);
+            $lastStepRun = $run->stepRuns->last();
 
-        if ($lastStepRun instanceof WorkflowStepRun) {
-            $result = $this->applyExternalResult($lastStepRun, $result);
+            if ($lastStepRun instanceof WorkflowStepRun) {
+                $result = $this->applyExternalResult($lastStepRun, $result);
+            }
+        } else {
+            $run->stepRuns()->whereIn('status', ['queued', 'running', 'waiting'])->update([
+                'status' => 'cancelled',
+                'finished_at' => now(),
+            ]);
         }
 
-        $runStatus = match ($status) {
+        $runStatus = $stopping ? 'cancelled' : match ($status) {
             'success' => 'completed',
             'cancelled' => 'cancelled',
             'timed_out' => 'timed_out',
@@ -2527,6 +2601,19 @@ class WorkflowExecutionService
             'error_message' => $runStatus === 'completed' ? null : ($errorMessage ?: (string) ($result['statusMessage'] ?? '')),
         ])->save();
         $this->releaseClientReservation($run);
+    }
+
+    protected function clientProjectionIsCurrent(NetworkJob $job, ?WorkflowRun $run): bool
+    {
+        if (! $run || $this->isFinalStatus((string) $run->status)) {
+            return false;
+        }
+
+        $currentJob = NetworkJob::query()->where('workflow_run_id', $run->id)->where('type', 'workflow_run')->latest('id')->first();
+
+        return $currentJob
+            && (int) $currentJob->id === (int) $job->id
+            && (int) $currentJob->last_sequence === (int) $job->last_sequence;
     }
 
     public function isAuthoritativeClientWorkflowResult(array $result, string $status = 'success'): bool
@@ -2799,14 +2886,18 @@ class WorkflowExecutionService
         $result = $this->normalizeStepResult($stepRun, $result);
         $result = $this->withTaskStatuses($stepRun->workflowStep, $result, $taskStatus);
 
-        $stepRun->forceFill([
+        $saved = $this->persistStepOutcome($stepRun, [
             'status' => 'completed',
             'finished_at' => $finishedAt,
             'duration_ms' => max(0, $startedAt->diffInMilliseconds($finishedAt)),
             'result_json' => $this->publicRunSnapshot($result),
             'logs_json' => $this->logsFromExternalStatus($result),
             'error_message' => null,
-        ])->save();
+        ]);
+
+        if (! $saved) {
+            return;
+        }
 
         $this->recordTaskHistory($stepRun, $result, $observedTaskKeys);
         $this->cleanupSuccessfulWorkflowTaskLogs($stepRun, $result);
@@ -2828,6 +2919,9 @@ class WorkflowExecutionService
      */
     protected function recordTaskHistory(WorkflowStepRun $stepRun, array $result, array $observedTaskKeys): void
     {
+        if (! $this->runOperationIsCurrent($stepRun->workflowRun)) {
+            return;
+        }
         $observedTaskKeys = array_fill_keys($observedTaskKeys, true);
         $tasks = collect(data_get($result, 'tasks', []))
             ->filter(function (mixed $task) use ($observedTaskKeys): bool {
@@ -2955,14 +3049,18 @@ class WorkflowExecutionService
             ? $this->withTaskStatuses($stepRun->workflowStep, $this->normalizeStepResult($stepRun, $result), 'failed', $message)
             : null;
 
-        $stepRun->forceFill([
+        $saved = $this->persistStepOutcome($stepRun, [
             'status' => 'failed',
             'finished_at' => $finishedAt,
             'duration_ms' => max(0, $startedAt->diffInMilliseconds($finishedAt)),
             'result_json' => $result ? $this->publicRunSnapshot($result) : $stepRun->result_json,
             'logs_json' => $result ? $this->logsFromExternalStatus($result) : $stepRun->logs_json,
             'error_message' => $message,
-        ])->save();
+        ]);
+
+        if (! $saved) {
+            return;
+        }
 
         if ($result) {
             $this->recordTaskHistory($stepRun, $result, $observedTaskKeys);
@@ -3071,6 +3169,9 @@ class WorkflowExecutionService
     protected function completeRun(WorkflowRun $run): void
     {
         $run = $this->loadRun($run->id);
+        if (! $this->runOperationIsCurrent($run)) {
+            return;
+        }
         $finishedAt = now();
         $durationMs = $this->workflowRunDurationMs($run, $finishedAt);
         $normalizedWorkflow = $this->resultNormalizer->summarizeRun($run);
@@ -3131,6 +3232,9 @@ class WorkflowExecutionService
 
     protected function failRun(WorkflowRun $run, string $message): void
     {
+        if (! $this->runOperationIsCurrent($run)) {
+            return;
+        }
         $finishedAt = now();
         $durationMs = $this->workflowRunDurationMs($run, $finishedAt);
         $normalizedWorkflow = $this->resultNormalizer->summarizeRun($this->loadRun($run->id));
@@ -4365,7 +4469,7 @@ class WorkflowExecutionService
         app(PersistBrowserSessionTask::class)->deleteVerificationMailbox($result);
     }
 
-    protected function finalizeWorkflowWebmailSessionResult(array $result): array
+    protected function finalizeWorkflowWebmailSessionResult(array $result, bool $deleteSource = true): array
     {
         if (trim((string) ($result['encryptedSessionPayload'] ?? '')) !== '') {
             return $result;
@@ -4384,7 +4488,9 @@ class WorkflowExecutionService
         $sessionPayload = trim((string) File::get($sessionFilePath));
 
         if ($sessionPayload === '') {
-            File::delete($sessionFilePath);
+            if ($deleteSource) {
+                File::delete($sessionFilePath);
+            }
             $result['ok'] = false;
             $result['status'] = 'failed';
             $result['statusMessage'] = 'Webmail-Session-Datei ist leer.';
@@ -4408,12 +4514,14 @@ class WorkflowExecutionService
         ], $summary);
         $result['sessionFinalized'] = true;
 
-        File::delete($sessionFilePath);
+        if ($deleteSource) {
+            File::delete($sessionFilePath);
+        }
 
         return $result;
     }
 
-    protected function finalizeWorkflowBrowserSessionResult(array $result): array
+    protected function finalizeWorkflowBrowserSessionResult(array $result, bool $deleteSource = true): array
     {
         if (trim((string) ($result['encryptedBrowserSessionPayload'] ?? '')) !== '') {
             return $result;
@@ -4432,7 +4540,9 @@ class WorkflowExecutionService
         $sessionPayload = trim((string) File::get($sessionFilePath));
 
         if ($sessionPayload === '') {
-            File::delete($sessionFilePath);
+            if ($deleteSource) {
+                File::delete($sessionFilePath);
+            }
             $result['ok'] = false;
             $result['status'] = 'failed';
             $result['statusMessage'] = 'Browser-Session-Datei ist leer.';
@@ -4456,7 +4566,9 @@ class WorkflowExecutionService
         ], $summary);
         $result['browserSessionFinalized'] = true;
 
-        File::delete($sessionFilePath);
+        if ($deleteSource) {
+            File::delete($sessionFilePath);
+        }
 
         return $result;
     }
@@ -5380,6 +5492,33 @@ class WorkflowExecutionService
             'result' => $result,
             'networkJobUuid' => $job->job_uuid,
         ];
+    }
+
+    protected function persistStepOutcome(WorkflowStepRun $stepRun, array $attributes): bool
+    {
+        return DB::transaction(function () use ($stepRun, $attributes): bool {
+            $run = WorkflowRun::query()->lockForUpdate()->find($stepRun->workflow_run_id);
+            if (! $run || ! in_array($run->status, ['queued', 'running', 'waiting'], true)) {
+                return false;
+            }
+
+            $token = $this->runOperationTokens[(int) $run->id] ?? null;
+            if ($token !== null && ! app(WorkflowRunCoordinationService::class)->owns((int) $run->id, $token, true)) {
+                return false;
+            }
+
+            $current = WorkflowStepRun::query()->lockForUpdate()->find($stepRun->id);
+            if (! $current || ! in_array($current->status, ['pending', 'queued', 'running', 'waiting'], true)
+                || $current->external_run_type !== $stepRun->external_run_type
+                || $current->external_run_id !== $stepRun->external_run_id) {
+                return false;
+            }
+
+            $current->forceFill($attributes)->save();
+            $stepRun->setRawAttributes($current->getAttributes(), true);
+
+            return true;
+        });
     }
 
     protected function runOperationIsCurrent(WorkflowRun $run, bool $allowClientStop = false): bool

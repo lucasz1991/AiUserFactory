@@ -84,6 +84,7 @@ let pendingStatusWrite = null;
 let pendingStatusWriteTimer = null;
 let lastStatusWriteAtMs = 0;
 let lastStatusState = '';
+const publishedTaskStarts = new Set();
 let completionCallbackState = '';
 let completionCallbackPromise = null;
 let publicTaskConfigurations = null;
@@ -404,10 +405,15 @@ function statusWriteIntervalMs() {
   return Math.max(250, Math.min(60000, configured || STATUS_WRITE_INTERVAL_MS));
 }
 
-function statusWriteMustBeImmediate(state, stage) {
+function statusWriteMustBeImmediate(state, stage, extra) {
+  const taskKey = String(extra.taskKey ?? '').trim();
+
   return lastStatusState !== state
     || TERMINAL_STATUS_STATES.has(state)
-    || stage === 'task-started';
+    // Publish every distinct task immediately. Re-entering the same loop cards
+    // uses the normal latest-value throttle rather than rewriting the whole
+    // status file for every fast iteration. Unidentified starts fail open.
+    || (stage === 'task-started' && (taskKey === '' || !publishedTaskStarts.has(taskKey)));
 }
 
 function clearPendingStatusWrite() {
@@ -493,6 +499,11 @@ function commitStatusWrite(entry) {
   writeJson(runtime.statusPath, statusPayload(entry.state, entry.stage, entry.message, entry.extra));
   lastStatusWriteAtMs = Date.now();
   lastStatusState = entry.state;
+
+  if (entry.stage === 'task-started') {
+    publishedTaskStarts.add(String(entry.extra.taskKey ?? '').trim());
+  }
+
   queueCompletionCallback(entry.state);
 }
 
@@ -521,7 +532,7 @@ function writeStatus(state, stage, message, extra = {}) {
   const elapsedMs = Date.now() - lastStatusWriteAtMs;
   const interval = statusWriteIntervalMs();
 
-  if (statusWriteMustBeImmediate(state, stage) || lastStatusWriteAtMs === 0 || elapsedMs >= interval) {
+  if (statusWriteMustBeImmediate(state, stage, extra) || lastStatusWriteAtMs === 0 || elapsedMs >= interval) {
     commitStatusWrite(entry);
     return true;
   }
@@ -3167,7 +3178,7 @@ async function run() {
       taskResults.push({ key: task.key, title: taskLabel, status: 'running', startedAt: taskStartedAt });
     }
 
-    writeStatus('running', 'task-started', taskLabel);
+    writeStatus('running', 'task-started', taskLabel, { taskKey: task.key });
 
     let result;
 

@@ -46,6 +46,9 @@ class WorkflowRunPreviewPathHistoryTest extends TestCase
         [$run, $stepRun] = $this->scenario();
 
         $this->completeStepRun($stepRun, ['tasks' => [['key' => 'start', 'status' => 'completed']]]);
+        // A real backward route requeues the existing row before the next
+        // attempt. A second completion of the same finished attempt is a duplicate.
+        $stepRun->refresh()->forceFill(['status' => 'running', 'finished_at' => null, 'result_json' => []])->save();
         $this->completeStepRun($stepRun->fresh(), ['tasks' => [['key' => 'start', 'status' => 'failed']]]);
 
         $history = collect(data_get($run->fresh()->context_json, 'task_history', []));

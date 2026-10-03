@@ -100,7 +100,7 @@ class OperationalMetricsService
                 $metrics = $database->table($table)->where('queue', $queue)
                     ->selectRaw('COUNT(*) AS pending')
                     ->selectRaw('SUM(CASE WHEN reserved_at IS NULL AND available_at <= ? THEN 1 ELSE 0 END) AS ready', [$now])
-                    ->selectRaw('SUM(CASE WHEN reserved_at IS NULL AND available_at > ? THEN 1 ELSE 0 END) AS delayed', [$now])
+                    ->selectRaw('SUM(CASE WHEN reserved_at IS NULL AND available_at > ? THEN 1 ELSE 0 END) AS queue_delayed', [$now])
                     ->selectRaw('SUM(CASE WHEN reserved_at IS NOT NULL THEN 1 ELSE 0 END) AS reserved')
                     ->selectRaw('SUM(CASE WHEN reserved_at IS NOT NULL AND reserved_at <= ? THEN 1 ELSE 0 END) AS expired_reserved', [$now - $reservationSeconds])
                     ->selectRaw('MIN(CASE WHEN reserved_at IS NULL AND available_at <= ? THEN available_at ELSE NULL END) AS oldest_ready_at', [$now])
@@ -115,7 +115,7 @@ class OperationalMetricsService
                 'heartbeat' => $this->heartbeat(OperationalHeartbeatService::workerKey($queue), $this->workerHeartbeatSeconds($queue)),
                 'pending' => $metrics ? (int) $metrics->pending : null,
                 'ready' => $metrics ? (int) $metrics->ready : null,
-                'delayed' => $metrics ? (int) $metrics->delayed : null,
+                'delayed' => $metrics ? (int) $metrics->queue_delayed : null,
                 'reserved' => $metrics ? (int) $metrics->reserved : null,
                 'expired_reserved' => $metrics ? (int) $metrics->expired_reserved : null,
                 'oldest_ready_seconds' => $metrics && $metrics->oldest_ready_at !== null ? max(0, $now - (int) $metrics->oldest_ready_at) : null,

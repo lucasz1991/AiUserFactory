@@ -18,6 +18,9 @@ return new class extends Migration
     public function down(): void
     {
         Schema::table('network_jobs', function (Blueprint $table): void {
+            $table->dropIndex(['signaled_at']);
+            $table->dropIndex(['pulled_at']);
+            $table->dropIndex(['started_at']);
             $table->dropColumn(['signaled_at', 'pulled_at', 'started_at']);
         });
     }

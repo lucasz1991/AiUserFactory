@@ -3,6 +3,7 @@
 namespace App\Services\Workflows;
 
 use App\Enums\WorkflowCopilotPermissionMode;
+use App\Exceptions\WorkflowSupervisorInterruptedException;
 use App\Models\Workflow;
 use App\Models\WorkflowCopilotSession;
 use App\Models\WorkflowRevision;
@@ -57,6 +58,8 @@ class WorkflowCopilotPreflightService
         $session = WorkflowCopilotSession::query()
             ->with(['workflow.steps', 'activeRun'])
             ->findOrFail($session->getKey());
+        $decisionGuard = app(WorkflowCopilotDecisionGuard::class);
+        $expectedDecision = $decisionGuard->snapshot($session);
         $history = $this->history($session);
         $candidates = $allowRepairs
             ? $this->historicalRepairCandidates($session, $history['evidence'])
@@ -91,6 +94,7 @@ class WorkflowCopilotPreflightService
                 'rejected_operations' => $skippedOfflinePlanRejections,
             ];
         $operations = is_array($offlinePlan['operations'] ?? null) ? $offlinePlan['operations'] : [];
+        $decisionGuard->assertCurrent($session, $expectedDecision);
         $report['offline_plan'] = [
             'operation_count' => count($operations),
             'operations' => $operations,
@@ -126,7 +130,7 @@ class WorkflowCopilotPreflightService
 
         try {
             if ($candidates !== [] || $operations !== []) {
-                $revision = $this->applyPreflightRepairs($session, $candidates, $operations, $offlinePlan);
+                $revision = $this->applyPreflightRepairs($session, $candidates, $operations, $offlinePlan, $expectedDecision);
                 $session = $session->fresh(['workflow.steps']) ?? $session;
                 $report['revision_before'] = (int) ($report['revision_before'] ?? 0);
                 $report['revision_after'] = (int) $revision->revision_number;
@@ -152,6 +156,8 @@ class WorkflowCopilotPreflightService
                     true,
                 );
             }
+        } catch (WorkflowSupervisorInterruptedException $exception) {
+            throw $exception;
         } catch (Throwable $exception) {
             $message = Str::limit(trim($exception->getMessage()), 900, '');
             $report['repair_failure'] = [
@@ -519,13 +525,17 @@ class WorkflowCopilotPreflightService
         array $candidates,
         array $operations,
         array $offlinePlan,
+        array $expectedDecision = [],
     ): WorkflowRevision {
         return $this->revisions->apply(
             $session,
             (int) $session->current_revision,
             $this->safeText((string) ($offlinePlan['reason'] ?? ''))
                 ?: 'Vorab-Reparatur aus erfolgreichen und fehlgeschlagenen Lauf-/Revisionsevidenzen vor dem Browser-Test.',
-            function (Workflow $workflow) use ($session, $candidates, $operations): void {
+            function (Workflow $workflow) use ($session, $candidates, $operations, $expectedDecision): void {
+                if ($expectedDecision !== []) {
+                    app(WorkflowCopilotDecisionGuard::class)->assertCurrent($session, $expectedDecision);
+                }
                 foreach ($candidates as $candidate) {
                     $step = WorkflowStep::query()
                         ->where('workflow_id', $session->workflow_id)

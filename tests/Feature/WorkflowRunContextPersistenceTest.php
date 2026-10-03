@@ -73,6 +73,22 @@ class WorkflowRunContextPersistenceTest extends TestCase
         $store->merge(['tasks' => ['a', 'b']], ['tasks' => ['b', 'a']], ['tasks' => ['a', 'c']]);
     }
 
+    public function test_context_only_late_result_is_fenced_after_a_stop_request(): void
+    {
+        $run = $this->createRun(['variables' => ['original' => true]]);
+        $worker = $run->fresh();
+        $run->update(['status' => 'stop_requested']);
+
+        try {
+            $worker->update(['context_json' => ['variables' => ['original' => true, 'late_result' => true]]]);
+            $this->fail('A context-only late result must respect stop.');
+        } catch (WorkflowRunConflictException $exception) {
+            $this->assertStringContainsString('status', $exception->getMessage());
+        }
+        $this->assertSame('stop_requested', $run->fresh()->status);
+        $this->assertArrayNotHasKey('late_result', $run->fresh()->context_json['variables']);
+    }
+
     public function test_deletion_and_explicit_null_are_distinct_and_merge_with_unrelated_changes(): void
     {
         $store = app(WorkflowRunContextStore::class);

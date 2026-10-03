@@ -125,7 +125,7 @@ Arbeitsprotokoll aktualisieren.
 
 ### Arbeitsprotokoll
 
-2026-10-03 | Codex/UI | in_arbeit: Markierten Hero der Workflow-Uebersicht durch schmale KPI-/Aktionszeile ersetzen; Scope workflows-index.blade.php, workflow-experience.css, eigener Markup-Test. Parallel laufende Orchestrierungsarbeit bleibt unangetastet.
+2026-10-03 | Codex/UI | verifiziert: Workflow-Uebersicht mit schmaler KPI-Zeile links und Aktionen rechts statt Hero/Titel/Beschreibung/Karten. Screenreader-Titel und bestehende Aktionen bleiben erhalten. Browser 1332px: 62px hoch; 390px: 91px, Menues ohne Beschnitt. 7 Tests/130 Assertions, Vite-Build und Diff-Check gruen. Scope workflows-index.blade.php, workflow-experience.css, WorkflowIndexToolbarMarkupTest. Parallele Orchestrierungsarbeit unberuehrt; kein Deployment/Push.
 
 2026-10-03 | Codex | in_arbeit: Livewire-Animationsschleifen im Workflow-Editor/Studio beseitigen; Browser- und Studio-Modale auf gemeinsame ui.modal-Komponente vereinheitlichen. Scope: workflow-motion.js, ui/modal, Studio-Views, fokussierte UI-Verifikation.
 
