@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Jobs\MonitorWorkflowStepRunJob;
+use App\Jobs\RunWorkflowJob;
 use App\Models\Workflow;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowStep;
@@ -10,11 +11,13 @@ use App\Models\WorkflowStepRun;
 use App\Services\Mail\MailAccountRegistrationRunner;
 use App\Services\Workflows\WorkflowExecutionService;
 use App\Services\Workflows\WorkflowRunDebugPackageService;
+use App\Services\Workflows\WorkflowRunCoordinationService;
 use App\Services\Workflows\WorkflowTaskRunner;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\URL;
@@ -104,6 +107,103 @@ class WorkflowRuntimeCallbackTest extends TestCase
             return $job->workflowStepRunId === $stepRun->id;
         });
         $this->assertSame('waiting', $stepRun->fresh()->status);
+    }
+
+    public function test_run_claim_serializes_reentrant_advance_and_callback_during_a_process_start(): void
+    {
+        Queue::fake();
+        $stepRun = $this->stepRun(['status' => 'queued', 'external_run_type' => null, 'external_run_id' => null]);
+        $stepRun->workflowStep->forceFill([
+            'type' => WorkflowStep::TYPE_BROWSER_TASK,
+            'config_json' => ['tasks' => [['key' => 'first', 'task_key' => 'wait.seconds', 'value' => 0]]],
+        ])->save();
+        $transactionLevel = DB::transactionLevel();
+        $runner = Mockery::mock(WorkflowTaskRunner::class);
+        $runner->shouldReceive('start')->once()->andReturnUsing(function ($run, $step, $starting, $context, $externalId) use ($transactionLevel): array {
+            $this->assertSame($transactionLevel, DB::transactionLevel(), 'Runner startup must not hold orchestration database locks.');
+            $this->assertSame($externalId, $starting->fresh()->external_run_id);
+            app(WorkflowExecutionService::class)->advance($run->id);
+            app(WorkflowExecutionService::class)->monitorStepRun($starting->id);
+
+            return ['runId' => $externalId, 'state' => 'running'];
+        });
+        $this->app->instance(WorkflowTaskRunner::class, $runner);
+
+        app(WorkflowExecutionService::class)->advance($stepRun->workflow_run_id);
+
+        $this->assertDatabaseCount('workflow_step_runs', 1);
+        $this->assertSame('waiting', $stepRun->fresh()->status);
+        Queue::assertPushed(RunWorkflowJob::class, 1);
+        Queue::assertPushed(MonitorWorkflowStepRunJob::class, 2);
+        $this->assertNull(DB::table('workflow_run_leases')->where('workflow_run_id', $stepRun->workflow_run_id)->value('token'));
+    }
+
+    public function test_stop_during_spawn_remains_responsive_and_cannot_be_overwritten_by_late_start_result(): void
+    {
+        Queue::fake();
+        $stepRun = $this->stepRun(['status' => 'queued', 'external_run_type' => null, 'external_run_id' => null]);
+        $stepRun->workflowStep->forceFill([
+            'type' => WorkflowStep::TYPE_BROWSER_TASK,
+            'config_json' => ['tasks' => [['key' => 'first', 'task_key' => 'wait.seconds', 'value' => 0]]],
+        ])->save();
+        $runner = Mockery::mock(WorkflowTaskRunner::class);
+        $runner->shouldReceive('cancelRun')->andReturn(['ok' => true]);
+        $runner->shouldReceive('start')->once()->andReturnUsing(function ($run, $step, $starting, $context, $externalId): array {
+            $stopped = app(WorkflowExecutionService::class)->cancel($run->id, 'Stop waehrend Start');
+            $this->assertTrue($stopped['ok']);
+            $this->assertSame('cancelled', $run->fresh()->status);
+
+            return ['runId' => $externalId, 'state' => 'running'];
+        });
+        $this->app->instance(WorkflowTaskRunner::class, $runner);
+
+        app(WorkflowExecutionService::class)->advance($stepRun->workflow_run_id);
+
+        $this->assertSame('cancelled', $stepRun->fresh()->status);
+        $this->assertSame('cancelled', $stepRun->workflowRun->fresh()->status);
+        Queue::assertNotPushed(MonitorWorkflowStepRunJob::class);
+    }
+
+    public function test_cancelled_run_ignores_a_terminal_snapshot_read_by_an_older_monitor(): void
+    {
+        Queue::fake();
+        $stepRun = $this->stepRun();
+        $runner = Mockery::mock(WorkflowTaskRunner::class);
+        $runner->shouldReceive('readRun')->once()->andReturnUsing(function () use ($stepRun): array {
+            $stepRun->workflowRun->fresh()->forceFill(['status' => 'cancelled'])->save();
+            $stepRun->fresh()->forceFill(['status' => 'cancelled'])->save();
+
+            return ['state' => 'completed', 'workflow_variables' => ['late' => 'must-not-commit'], 'ok' => true];
+        });
+        $this->app->instance(WorkflowTaskRunner::class, $runner);
+
+        app(WorkflowExecutionService::class)->monitorStepRun($stepRun->id);
+
+        $this->assertSame('cancelled', $stepRun->fresh()->status);
+        $this->assertSame('cancelled', $stepRun->workflowRun->fresh()->status);
+        $this->assertNull(data_get($stepRun->workflowRun->fresh()->context_json, 'workflow_variables.late'));
+        Queue::assertNothingPushed();
+    }
+
+    public function test_expired_claim_can_be_reconciled_without_an_old_owner_releasing_the_new_claim(): void
+    {
+        $stepRun = $this->stepRun();
+        $coordination = app(WorkflowRunCoordinationService::class);
+        $first = $coordination->acquire($stepRun->workflow_run_id, 'advance', 30);
+        $this->assertNotNull($first);
+        $this->assertNull($coordination->acquire($stepRun->workflow_run_id, 'monitor', 30));
+
+        try {
+            $this->travel(31)->seconds();
+            $second = $coordination->acquire($stepRun->workflow_run_id, 'monitor', 30);
+            $this->assertNotNull($second);
+            $this->assertNotSame($first, $second);
+            $coordination->release($stepRun->workflow_run_id, $first);
+            $this->assertFalse($coordination->owns($stepRun->workflow_run_id, $first));
+            $this->assertTrue($coordination->owns($stepRun->workflow_run_id, $second));
+        } finally {
+            $this->travelBack();
+        }
     }
 
     public function test_reserved_runtime_id_and_terminal_status_survive_a_fast_spawn(): void

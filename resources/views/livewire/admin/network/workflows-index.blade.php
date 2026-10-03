@@ -1,15 +1,20 @@
 <div class="workflow-experience space-y-6" data-workflows-index-root wire:loading.class="opacity-90">
-    <section class="ff-command-surface overflow-visible px-4 py-5 sm:px-6 sm:py-6" aria-labelledby="workflows-index-title">
-        <div class="relative z-10 flex flex-wrap items-start justify-between gap-5">
-        <div class="min-w-0">
-            <p class="ff-kicker">Automation Workspace</p>
-            <h1 id="workflows-index-title" class="ff-page-title mt-2">Workflows</h1>
-            <p class="ff-page-copy mt-2 text-sm">
-                Prozesse organisieren, den letzten Lauf prüfen oder direkt in einen schrittweisen Test wechseln.
-            </p>
-        </div>
-        <div class="ml-auto flex max-w-full flex-col items-end gap-2">
-            <div class="flex flex-wrap justify-end gap-2">
+    <section class="ff-command-surface overflow-visible ff-workflow-index-bar" aria-labelledby="workflows-index-title" data-workflow-index-toolbar>
+        <h1 id="workflows-index-title" class="sr-only">Workflows</h1>
+        <dl class="ff-workflow-index-bar__stats" aria-label="Workflow-Statistik">
+            @foreach([
+                ['Workflows', $summary['workflows']],
+                ['Aktiv', $summary['active_workflows']],
+                ['Listen', $summary['lists']],
+                ['Tasks', $summary['task_cards']],
+            ] as [$label, $value])
+                <div>
+                    <dt>{{ $label }}</dt>
+                    <dd>{{ $value }}</dd>
+                </div>
+            @endforeach
+        </dl>
+        <div class="ff-workflow-index-bar__actions">
                 <div class="relative" x-data="{ open: false }" x-on:keydown.escape.window="open = false">
                     <button type="button" x-on:click="open = ! open" x-bind:aria-expanded="open" class="group ff-action-trigger ff-action-trigger--primary inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold">
                         <span class="inline-flex h-6 w-6 items-center justify-center rounded-full bg-white/10 text-lg leading-none transition-transform duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] group-hover:rotate-90" aria-hidden="true">+</span>
@@ -35,22 +40,6 @@
                         <a href="{{ route('processes.index') }}" class="block rounded-md px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">Prozesse öffnen</a>
                     </div>
                 </div>
-            </div>
-
-            <dl class="ff-metric-rail" aria-label="Workflow-Statistik">
-                @foreach([
-                    ['Workflows', $summary['workflows']],
-                    ['Aktiv', $summary['active_workflows']],
-                    ['Listen', $summary['lists']],
-                    ['Tasks', $summary['task_cards']],
-                ] as [$label, $value])
-                    <div class="ff-metric">
-                        <dt>{{ $label }}</dt>
-                        <dd>{{ $value }}</dd>
-                    </div>
-                @endforeach
-            </dl>
-        </div>
         </div>
     </section>
 

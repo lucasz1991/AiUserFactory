@@ -125,6 +125,39 @@
 /* Typografie                                                          */
 /* ------------------------------------------------------------------ */
 
+/* Index-only utility bar: the workflow list, not a hero, is the focal point. */
+.ff-command-surface.ff-workflow-index-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: .5rem 1rem;
+  padding: .5rem .75rem;
+  border: 1px solid var(--ff-shell-border, #dde3ec) !important;
+  border-radius: .75rem !important;
+  background: var(--ff-shell-surface, #fff) !important;
+  box-shadow: none !important;
+}
+.ff-workflow-index-bar::after { content: none; }
+.ff-workflow-index-bar__stats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .5rem 1.25rem;
+  margin: 0;
+}
+.ff-workflow-index-bar__stats > div { display: flex; align-items: baseline; gap: .4rem; }
+.ff-workflow-index-bar__stats dt { font-size: .75rem; font-weight: 500; color: var(--ff-shell-muted, #64748b); }
+.ff-workflow-index-bar__stats dd { margin: 0; font-size: .875rem; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--ff-shell-text, #0b1220); }
+.ff-workflow-index-bar__actions { display: flex; align-items: center; gap: .5rem; margin-left: auto; }
+.ff-workflow-index-bar__actions > div > button { min-height: 44px; }
+@media (max-width: 639.98px) {
+  .ff-workflow-index-bar__stats { width: 100%; justify-content: space-between; gap: .5rem; }
+  .ff-workflow-index-bar__actions { position: relative; }
+  .ff-workflow-index-bar__actions > div { position: static !important; }
+  .ff-workflow-index-bar__actions .ff-menu { top: 100%; max-width: calc(100vw - 3rem); }
+}
+
 .ff-kicker {
   display: inline-flex;
   align-items: center;

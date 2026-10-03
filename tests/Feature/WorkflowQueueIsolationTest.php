@@ -87,14 +87,29 @@ class WorkflowQueueIsolationTest extends TestCase
     public function test_long_ai_job_is_not_available_for_duplicate_processing_before_its_timeout(): void
     {
         $this->freezeTime();
-        Bus::dispatch(new GeneratePersonImages(4, 'synthetic', 'portrait', '1:1'));
-        $queue = Queue::connection(WorkflowQueues::AI_CONNECTION);
-        $first = $queue->pop(WorkflowQueues::AI);
-        $this->assertNotNull($first);
-        $this->travel(1801)->seconds();
-        $this->assertNull($queue->pop(WorkflowQueues::AI));
-        $this->travel(60)->seconds();
-        $this->assertSame($first->getJobId(), $queue->pop(WorkflowQueues::AI)->getJobId());
+
+        foreach ([WorkflowQueues::AI => WorkflowQueues::AI_CONNECTION, 'default' => 'database'] as $lane => $connection) {
+            $job = new GeneratePersonImages(4, 'synthetic', 'portrait', '1:1');
+            Bus::dispatch($job->onConnection($connection)->onQueue($lane));
+            $queue = Queue::connection($connection);
+            $first = $queue->pop($lane);
+            $this->assertNotNull($first);
+            $this->travel(1801)->seconds();
+            $this->assertNull($queue->pop($lane));
+            $this->travel(60)->seconds();
+            $this->assertSame($first->getJobId(), $queue->pop($lane)->getJobId());
+        }
+    }
+
+    public function test_legacy_worker_probe_without_a_lane_still_records_the_default_pool(): void
+    {
+        $class = RecordOperationsWorkerHeartbeat::class;
+        $probe = unserialize('O:'.strlen($class).':"'.$class.'":0:{}', ['allowed_classes' => [$class]]);
+        $heartbeats = app(OperationalHeartbeatService::class);
+        $probe->handle($heartbeats);
+
+        $this->assertSame('default', $heartbeats->latest(OperationalHeartbeatService::WORKER_KEY)['queue']);
+        $this->assertSame('operations-worker-heartbeat:default', $probe->uniqueId());
     }
 
     public function test_health_records_each_pool_and_distinguishes_delays_from_waiting_jobs(): void

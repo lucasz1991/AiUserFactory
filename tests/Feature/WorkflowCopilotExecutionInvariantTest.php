@@ -13,6 +13,7 @@ use App\Services\Workflows\WorkflowExecutionService;
 use App\Services\Workflows\WorkflowTaskRunner;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Crypt;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Str;
 use Mockery;
@@ -30,6 +31,32 @@ class WorkflowCopilotExecutionInvariantTest extends TestCase
         parent::setUp();
 
         config(['app.key' => 'base64:MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTI=']);
+    }
+
+    public function test_copilot_task_start_occurs_after_ownership_transaction_has_committed(): void
+    {
+        Queue::fake();
+        [$workflow] = $this->workflow();
+        $session = app(WorkflowCopilotSessionService::class)->start($workflow);
+        $run = app(WorkflowExecutionService::class)->start($workflow, [
+            'workflow_copilot_session_id' => $session->id,
+            'copilot_supervised' => true,
+        ], 'workflow-copilot');
+        $transactionLevel = DB::transactionLevel();
+        $runner = Mockery::mock(WorkflowTaskRunner::class);
+        $runner->shouldReceive('start')->once()->andReturnUsing(function ($run, $step, $starting, $context, $externalId) use ($transactionLevel, $session): array {
+            $this->assertSame($transactionLevel, DB::transactionLevel());
+            app(WorkflowCopilotSessionService::class)->pause($session->fresh());
+
+            return ['runId' => $externalId, 'state' => 'running'];
+        });
+        $this->app->instance(WorkflowTaskRunner::class, $runner);
+
+        app(WorkflowExecutionService::class)->advance($run->id);
+
+        $this->assertSame('paused', $session->fresh()->status);
+        $this->assertSame('waiting', $run->stepRuns()->first()->status);
+        $this->assertDatabaseCount('workflow_step_runs', 1);
     }
 
     public function test_locked_workflow_only_accepts_its_active_copilot_session_and_forces_system(): void

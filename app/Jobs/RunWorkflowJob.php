@@ -6,10 +6,10 @@ use App\Services\Workflows\WorkflowExecutionService;
 use App\Support\WorkflowQueues;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Database\Eloquent\ModelNotFoundException;
 
 class RunWorkflowJob implements ShouldQueue
 {

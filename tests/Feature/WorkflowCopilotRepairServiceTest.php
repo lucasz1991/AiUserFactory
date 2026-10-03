@@ -830,6 +830,9 @@ class WorkflowCopilotRepairServiceTest extends TestCase
         $this->assertSame('open-homepage', data_get($step->fresh()->config_json, 'routes.timeout.step'));
         $this->assertSame('open-google', data_get($step->fresh()->config_json, 'routes.timeout.card_key'));
 
+        // MySQL may reorder JSON object keys; identical routes must not trigger another restart.
+        $step->refresh()->forceFill(['config_json' => $this->canonicalJsonValue($step->config_json)])->save();
+
         $continued = $service->plan($session->fresh(), $step->fresh(), $checkpoint, $observation, $vision);
 
         $this->assertSame('continue_route', $continued['action']);
