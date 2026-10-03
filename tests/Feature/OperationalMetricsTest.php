@@ -133,7 +133,7 @@ class OperationalMetricsTest extends TestCase
             'recorded_at' => now()->subMinutes(10)->toIso8601String(),
         ]);
         Cache::forever(OperationalHeartbeatService::WORKER_KEY, [
-            'recorded_at' => now()->subMinutes(10)->toIso8601String(),
+            'recorded_at' => now()->subMinutes(40)->toIso8601String(),
         ]);
 
         $exit = Artisan::call('operations:health', ['--json' => true, '--fail-on-alert' => true]);

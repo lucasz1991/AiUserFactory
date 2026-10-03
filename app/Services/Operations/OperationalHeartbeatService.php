@@ -2,6 +2,7 @@
 
 namespace App\Services\Operations;
 
+use App\Support\WorkflowQueues;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\File;
 use Throwable;
@@ -23,9 +24,18 @@ class OperationalHeartbeatService
         return $this->record(self::SCHEDULER_KEY, ['source' => 'schedule']);
     }
 
-    public function recordWorker(): array
+    public function recordWorker(string $lane = 'default'): array
     {
-        return $this->record(self::WORKER_KEY, ['source' => 'queued_probe']);
+        return $this->record(self::workerKey($lane), [
+            'source' => 'queued_probe',
+            'queue' => $lane,
+            'connection' => WorkflowQueues::lanes()[$lane] ?? 'database',
+        ]);
+    }
+
+    public static function workerKey(string $lane): string
+    {
+        return $lane === 'default' ? self::WORKER_KEY : self::WORKER_KEY.'.'.$lane;
     }
 
     /** @param array<string, int> $removed */

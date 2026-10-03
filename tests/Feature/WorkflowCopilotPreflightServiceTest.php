@@ -110,7 +110,7 @@ class WorkflowCopilotPreflightServiceTest extends TestCase
         $this->assertSame(3, $workflow->copilot_revision);
         $this->assertSame('[data-testid="login"]', $task['selector']);
         $this->assertSame('[data-testid="login"]', $task['element_selector']);
-        $this->assertSame(['type' => 'step', 'step' => 'next'], $task['on_error']);
+        $this->assertJsonSame(['type' => 'step', 'step' => 'next'], $task['on_error']);
         $this->assertNotNull($session->active_workflow_run_id);
         $this->assertSame(3, $session->activeRun()->firstOrFail()->workflow_revision);
         $this->assertSame(1, data_get($session->state_json, 'history_preflight.applied_repair_count'));

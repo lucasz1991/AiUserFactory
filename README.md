@@ -125,11 +125,17 @@ Arbeitsprotokoll aktualisieren.
 
 ### Arbeitsprotokoll
 
+2026-10-03 | Codex/UI | in_arbeit: Markierten Hero der Workflow-Uebersicht durch schmale KPI-/Aktionszeile ersetzen; Scope workflows-index.blade.php, workflow-experience.css, eigener Markup-Test. Parallel laufende Orchestrierungsarbeit bleibt unangetastet.
+
 2026-10-03 | Codex | in_arbeit: Livewire-Animationsschleifen im Workflow-Editor/Studio beseitigen; Browser- und Studio-Modale auf gemeinsame ui.modal-Komponente vereinheitlichen. Scope: workflow-motion.js, ui/modal, Studio-Views, fokussierte UI-Verifikation.
 
 2026-10-03 | Codex | verifiziert: Globale Morph-Reanimation und Kennzahl-Tweens entfernt; Browser-Inspektor mit stabilem Key, inkrementeller Payload und Cursor-Deduplizierung. Studio-Dialoge teilen ui.modal mit Body-Teleport, Fokus/Escape, reduzierter Bewegung und mobilem Scrollbereich. 83 PHP-Tests / 955 Assertions, 2 Node-Tests, Vite-Build und authentifizierter Browser (Desktop/390px) gruen; echte Livewire-Refreshes ohne Positions-/Fokusverlust, temporaere DOM-Datenwechsel ohne Such-/Scrollverlust. Kein Deployment oder externer Portal-Test. Details: ../.lmzdev/artifacts/reports/workflow-ui-stability-2026-10-03.md.
 
 2026-10-03 | Codex | in_arbeit: Personenprofile kompakter und zugaenglicher gestalten; gespeicherte Account-Passwoerter auf ausdruecklichen Nutzerwunsch in der Admin-UI lesbar anzeigen. Scope: PersonAccounts, PersonEmailAccountSettings, Profil-/Account-Views, person-profile.css, fokussierte Tests. Registry-Exports und Verschluesselung bleiben unveraendert.
+
+2026-10-03 | Codex | verifiziert: Personen-Accounts zeigen gespeicherte Passwoerter als Admin-lesbare Read-only-Felder mit Ausblenden, je Mailbox und gewaehltem Social-Account. Admin-Boot-Guard, Locked-personId, unveraenderte Verschluesselung/Export-Redaktion. Mobile Profile kompakter, horizontale Kontoauswahl, Tastaturtabs, navigation-only GSAP ohne Morph-/Count-up-Schleifen. 26 Tests / 199 Assertions, Pint, Vite und lokaler Browser 390/1440px inkl. Livewire-Kontowechsel gruen. Browserprofil ohne Zugangsdaten; Passwortfaelle nur mit synthetischen Testdaten geprueft. Kein Deployment/Push. Bericht: ../.lmzdev/artifacts/reports/person-profile-accounts-2026-10-03.md.
+
+2026-10-03 | Codex/root + queue_isolation + run_concurrency + ci_operations | in_arbeit: Review der Workflow-Orchestrierung gegen aktuellen Code, CI und produktiven Worker-Stand pruefen. Getrennte Control-/AI-Queues, kurze gemeinsame Run-Leases, konfliktfeste Kontextpersistenz, sichere spaete KI-Ergebnisse und belegte CI-/MySQL-Korrekturen. Keine Produktionseingriffe, kein Push; vorhandene README-Ergaenzung bleibt erhalten. Ownership: ../.lmzdev/TASKS.md.
 
 Statuswerte: `geplant`, `in_arbeit`, `verifiziert`, `blockiert`.
 

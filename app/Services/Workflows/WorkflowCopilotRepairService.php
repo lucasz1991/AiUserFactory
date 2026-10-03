@@ -3810,7 +3810,7 @@ class WorkflowCopilotRepairService
             if (is_array($entryTask)
                 && (string) ($entryTask['key'] ?? '') !== (string) $navigationTask['key']
                 && is_array($entryTask['next'] ?? null)
-                && $entryTask['next'] !== $route) {
+                && $this->sortOperation($entryTask['next']) !== $this->sortOperation($route)) {
                 $operations[] = [
                     'type' => 'update_task_routes',
                     'step_action_key' => (string) $entryStep->action_key,
@@ -3820,7 +3820,7 @@ class WorkflowCopilotRepairService
             }
 
             if ((int) $entryStep->id !== (int) $navigationStep->id
-                && data_get($entryStep->config_json, 'routes.success') !== $route) {
+                && $this->sortOperation(data_get($entryStep->config_json, 'routes.success')) !== $this->sortOperation($route)) {
                 $operations[] = [
                     'type' => 'update_step_routes',
                     'step_action_key' => (string) $entryStep->action_key,
@@ -3831,7 +3831,7 @@ class WorkflowCopilotRepairService
 
         $failedTask = collect($failedStep->task_cards)->firstWhere('key', $failedTaskKey);
 
-        if (is_array($failedTask) && ($failedTask['on_error'] ?? null) !== $route) {
+        if (is_array($failedTask) && $this->sortOperation($failedTask['on_error'] ?? null) !== $this->sortOperation($route)) {
             $operations[] = [
                 'type' => 'update_task_routes',
                 'step_action_key' => (string) $failedStep->action_key,
@@ -3843,7 +3843,7 @@ class WorkflowCopilotRepairService
         $failedRoutes = [];
 
         foreach (['failed', 'timeout'] as $failedOutcome) {
-            if (data_get($failedStep->config_json, 'routes.'.$failedOutcome) !== $route) {
+            if ($this->sortOperation(data_get($failedStep->config_json, 'routes.'.$failedOutcome)) !== $this->sortOperation($route)) {
                 $failedRoutes[$failedOutcome] = $route;
             }
         }

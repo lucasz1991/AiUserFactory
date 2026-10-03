@@ -15,6 +15,7 @@ use App\Models\WorkflowCopilotSession;
 use App\Models\WorkflowPortalProfile;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowRunArtifact;
+use App\Support\WorkflowQueues;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -31,6 +32,7 @@ class OperationalMetricsService
         $since = now()->subDays($windowDays);
         $liveness = $this->liveness();
         $networkJobs = $this->networkJobs($since);
+        $queues = $this->queues();
         $workflows = $this->workflows($since);
         $copilot = $this->copilot($since);
         $aiApi = $this->aiApi($since);
@@ -45,6 +47,7 @@ class OperationalMetricsService
             'window_days' => $windowDays,
             'liveness' => $liveness,
             'network_jobs' => $networkJobs,
+            'queues' => $queues,
             'workflows' => $workflows,
             'copilot' => $copilot,
             'ai_api' => $aiApi,
@@ -53,7 +56,7 @@ class OperationalMetricsService
             'security' => $security,
             'artifacts' => $artifacts,
             'runner_baseline' => $runnerBaseline,
-            'alerts' => $this->alerts($liveness, $networkJobs, $workflows, $copilot, $aiApi, $portalProfiles, $security),
+            'alerts' => $this->alerts($liveness, $networkJobs, $workflows, $copilot, $aiApi, $portalProfiles, $security, $queues),
         ];
     }
 
@@ -67,7 +70,7 @@ class OperationalMetricsService
             ),
             'worker' => $this->heartbeat(
                 OperationalHeartbeatService::WORKER_KEY,
-                (int) config('operations.thresholds.worker_heartbeat_seconds', 180),
+                $this->workerHeartbeatSeconds('default'),
             ),
             'artifact_prune' => $this->heartbeat(
                 OperationalHeartbeatService::ARTIFACT_PRUNE_KEY,
@@ -78,6 +81,54 @@ class OperationalMetricsService
                 (int) config('operations.thresholds.cookie_prune_hours', 48) * 3600,
             ),
         ];
+    }
+
+    /** @return array<string, array<string, mixed>> */
+    private function queues(): array
+    {
+        $database = DB::connection(config('queue.connections.database.connection'));
+        $table = (string) config('queue.connections.database.table', 'jobs');
+        $available = Schema::connection($database->getName())->hasTable($table);
+        $now = now()->timestamp;
+        $lanes = [];
+
+        foreach (WorkflowQueues::lanes() as $queue => $connection) {
+            $reservationSeconds = WorkflowQueues::reservationSeconds($queue);
+            $metrics = null;
+
+            if ($available) {
+                $metrics = $database->table($table)->where('queue', $queue)
+                    ->selectRaw('COUNT(*) AS pending')
+                    ->selectRaw('SUM(CASE WHEN reserved_at IS NULL AND available_at <= ? THEN 1 ELSE 0 END) AS ready', [$now])
+                    ->selectRaw('SUM(CASE WHEN reserved_at IS NULL AND available_at > ? THEN 1 ELSE 0 END) AS delayed', [$now])
+                    ->selectRaw('SUM(CASE WHEN reserved_at IS NOT NULL THEN 1 ELSE 0 END) AS reserved')
+                    ->selectRaw('SUM(CASE WHEN reserved_at IS NOT NULL AND reserved_at <= ? THEN 1 ELSE 0 END) AS expired_reserved', [$now - $reservationSeconds])
+                    ->selectRaw('MIN(CASE WHEN reserved_at IS NULL AND available_at <= ? THEN available_at ELSE NULL END) AS oldest_ready_at', [$now])
+                    ->first();
+            }
+
+            $lanes[$queue] = [
+                'connection' => $connection,
+                'queue' => $queue,
+                'available' => $available,
+                'retry_after_seconds' => $reservationSeconds,
+                'heartbeat' => $this->heartbeat(OperationalHeartbeatService::workerKey($queue), $this->workerHeartbeatSeconds($queue)),
+                'pending' => $metrics ? (int) $metrics->pending : null,
+                'ready' => $metrics ? (int) $metrics->ready : null,
+                'delayed' => $metrics ? (int) $metrics->delayed : null,
+                'reserved' => $metrics ? (int) $metrics->reserved : null,
+                'expired_reserved' => $metrics ? (int) $metrics->expired_reserved : null,
+                'oldest_ready_seconds' => $metrics && $metrics->oldest_ready_at !== null ? max(0, $now - (int) $metrics->oldest_ready_at) : null,
+            ];
+        }
+
+        return $lanes;
+    }
+
+    private function workerHeartbeatSeconds(string $queue): int
+    {
+        // A probe on a healthy AI pool can wait behind the longest allowed job.
+        return max((int) config('operations.thresholds.worker_heartbeat_seconds', 180), WorkflowQueues::reservationSeconds($queue) + 120);
     }
 
     /** @return array<string, mixed> */
@@ -523,8 +574,29 @@ class OperationalMetricsService
         array $aiApi,
         array $portalProfiles,
         array $security,
+        array $queues,
     ): array {
         $alerts = [];
+
+        foreach ($queues as $queue => $lane) {
+            if ($queue !== 'default' && data_get($lane, 'heartbeat.status') !== 'ok') {
+                $alerts[] = [
+                    'severity' => data_get($lane, 'heartbeat.status') === 'stale' ? 'critical' : 'warning',
+                    'code' => 'queue_'.$queue.'_heartbeat',
+                    'message' => 'Queue '.$queue.': Worker-Heartbeat ist '.(data_get($lane, 'heartbeat.status') === 'stale' ? 'veraltet.' : 'noch nicht belegt.'),
+                ];
+            }
+
+            $maxWait = $queue === WorkflowQueues::CONTROL ? 30 : WorkflowQueues::reservationSeconds($queue);
+
+            if (($lane['oldest_ready_seconds'] ?? 0) > $maxWait || ($lane['expired_reserved'] ?? 0) > 0) {
+                $alerts[] = [
+                    'severity' => 'critical',
+                    'code' => 'queue_'.$queue.'_backlog',
+                    'message' => 'Queue '.$queue.': faellige Jobs warten zu lange oder eine Worker-Reservierung ist abgelaufen.',
+                ];
+            }
+        }
 
         foreach ([
             'scheduler' => 'Scheduler',

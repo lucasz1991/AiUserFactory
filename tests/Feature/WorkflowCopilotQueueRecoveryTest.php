@@ -13,9 +13,11 @@ use App\Models\WorkflowStep;
 use App\Models\WorkflowStepRun;
 use App\Services\Workflows\WorkflowCopilotQueueRecoveryService;
 use App\Services\Workflows\WorkflowCopilotSessionService;
+use App\Support\WorkflowQueues;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\DB;
 use RuntimeException;
 use Tests\TestCase;
 
@@ -78,7 +80,8 @@ class WorkflowCopilotQueueRecoveryTest extends TestCase
         $this->assertSame(1, $first['dispatched']);
         Queue::assertPushed(WorkflowCopilotSupervisorJob::class, function ($job) use ($session): bool {
             return $job->workflowCopilotSessionId === $session->id
-                && $job->connection === 'database';
+                && $job->connection === WorkflowQueues::AI_CONNECTION
+                && $job->queue === WorkflowQueues::AI;
         });
         $this->assertDatabaseHas('workflow_copilot_events', [
             'workflow_copilot_session_id' => $session->id,
@@ -104,13 +107,13 @@ class WorkflowCopilotQueueRecoveryTest extends TestCase
 
         $this->assertSame(3, $result['dispatched']);
         Queue::assertPushed(RunWorkflowJob::class, function ($job) use ($queuedRun): bool {
-            return $job->workflowRunId === $queuedRun->id && $job->connection === 'database';
+            return $job->workflowRunId === $queuedRun->id && $job->connection === WorkflowQueues::CONTROL_CONNECTION && $job->queue === WorkflowQueues::CONTROL;
         });
         Queue::assertPushed(RunWorkflowJob::class, function ($job) use ($runningRun): bool {
-            return $job->workflowRunId === $runningRun->id && $job->connection === 'database';
+            return $job->workflowRunId === $runningRun->id && $job->connection === WorkflowQueues::CONTROL_CONNECTION && $job->queue === WorkflowQueues::CONTROL;
         });
         Queue::assertPushed(MonitorWorkflowStepRunJob::class, function ($job) use ($waitingStepRun): bool {
-            return $job->workflowStepRunId === $waitingStepRun->id && $job->connection === 'database';
+            return $job->workflowStepRunId === $waitingStepRun->id && $job->connection === WorkflowQueues::CONTROL_CONNECTION && $job->queue === WorkflowQueues::CONTROL;
         });
         Queue::assertNotPushed(WorkflowCopilotSupervisorJob::class);
         $this->assertSame($queuedRun->id, $queuedSession->fresh()->active_workflow_run_id);
@@ -154,9 +157,59 @@ class WorkflowCopilotQueueRecoveryTest extends TestCase
     {
         $job = new ReconcileWorkflowCopilotSessionsJob;
 
-        $this->assertSame('database', $job->connection);
+        $this->assertSame(WorkflowQueues::CONTROL_CONNECTION, $job->connection);
         $this->assertSame(120, $job->uniqueFor);
         $this->assertSame('workflow-copilot-queue-reconciliation', $job->uniqueId());
+    }
+
+    public function test_recovery_does_not_duplicate_legacy_or_isolated_pending_jobs(): void
+    {
+        Queue::fake();
+        [, $legacySession] = $this->workflowAndSession();
+        [, $aiSession] = $this->workflowAndSession();
+        [, $run] = $this->sessionWithRun('queued');
+        [, , $stepRun] = $this->sessionWithRun('waiting', true);
+        $this->makeSessionStale($legacySession);
+        $this->makeSessionStale($aiSession);
+        $this->insertQueuedPayload(new WorkflowCopilotSupervisorJob($legacySession->id), 'default');
+        $this->insertQueuedPayload(new WorkflowCopilotSupervisorJob($aiSession->id), WorkflowQueues::AI, now()->subSeconds(1801)->timestamp);
+        $this->insertQueuedPayload(new RunWorkflowJob($run->id), WorkflowQueues::CONTROL);
+        $this->insertQueuedPayload(new MonitorWorkflowStepRunJob($stepRun->id), WorkflowQueues::CONTROL, now()->subSeconds(121)->timestamp);
+
+        $result = app(WorkflowCopilotQueueRecoveryService::class)->reconcile();
+
+        $this->assertSame(4, $result['pending']);
+        $this->assertSame(0, $result['dispatched']);
+        Queue::assertNothingPushed();
+    }
+
+    public function test_recovery_ignores_other_target_ids_and_expired_reservations(): void
+    {
+        Queue::fake();
+        [, $session] = $this->workflowAndSession();
+        [, $run] = $this->sessionWithRun('queued');
+        $this->makeSessionStale($session);
+        $this->insertQueuedPayload(new WorkflowCopilotSupervisorJob($session->id), WorkflowQueues::AI, now()->subSeconds(1861)->timestamp);
+        $this->insertQueuedPayload(new RunWorkflowJob($run->id + 10000), WorkflowQueues::CONTROL);
+
+        $result = app(WorkflowCopilotQueueRecoveryService::class)->reconcile();
+
+        $this->assertSame(2, $result['dispatched']);
+        $this->assertSame(0, $result['pending']);
+        Queue::assertPushedOn(WorkflowQueues::AI, WorkflowCopilotSupervisorJob::class);
+        Queue::assertPushedOn(WorkflowQueues::CONTROL, RunWorkflowJob::class);
+    }
+
+    private function insertQueuedPayload(object $job, string $queue, ?int $reservedAt = null): void
+    {
+        DB::table('jobs')->insert([
+            'queue' => $queue,
+            'payload' => json_encode(['displayName' => $job::class, 'data' => ['command' => serialize($job)]], JSON_THROW_ON_ERROR),
+            'attempts' => $reservedAt === null ? 0 : 1,
+            'reserved_at' => $reservedAt,
+            'available_at' => now()->addSeconds(30)->timestamp,
+            'created_at' => now()->subMinutes(5)->timestamp,
+        ]);
     }
 
     /**

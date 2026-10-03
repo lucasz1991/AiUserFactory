@@ -82,7 +82,7 @@ class WorkflowStudioRouteRepairPromptTest extends TestCase
             ->call('applyRouteRepairAndStart')
             ->assertSet('showRouteRepairModal', false);
 
-        $this->assertSame(
+        $this->assertJsonSame(
             ['type' => 'card', 'card_key' => 'ende', 'card' => 'ende'],
             data_get($workflow->fresh()->steps->first()->config_json, 'tasks.0.next'),
         );

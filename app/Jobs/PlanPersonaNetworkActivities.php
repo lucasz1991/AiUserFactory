@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Services\Simulation\PersonaNetworkPlanningService;
+use App\Support\WorkflowQueues;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -26,6 +27,7 @@ class PlanPersonaNetworkActivities implements ShouldQueue
         public string $intensity = 'balanced',
         public string $reason = 'scheduled',
     ) {
+        $this->onConnection(WorkflowQueues::AI_CONNECTION)->onQueue(WorkflowQueues::AI)->afterCommit();
         $this->days = max(1, min(14, $this->days));
         $this->intensity = in_array($this->intensity, ['quiet', 'balanced', 'active', 'creator'], true)
             ? $this->intensity

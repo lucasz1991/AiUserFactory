@@ -1,6 +1,12 @@
-[program:followflow-queue]
+# Minimum small-host topology: one worker per lane (three PHP workers total).
+# Use only one process manager. If Supervisor owns these pools, disable the
+# Plesk Laravel extension's queue worker before enabling this configuration.
+# Keep default during rollout: old serialized jobs retain database/default.
+# Connections share the jobs table, but have different reservation lifetimes.
+
+[program:followflow-workflow-control]
 process_name=%(program_name)s_%(process_num)02d
-command=php /var/www/vhosts/follow-flow.de/factory.follow-flow.de/artisan queue:work database --sleep=1 --tries=3 --timeout=180
+command=/opt/plesk/php/8.3/bin/php /var/www/vhosts/follow-flow.de/factory.follow-flow.de/artisan queue:work database-workflow-control --queue=workflow-control --sleep=1 --tries=1 --timeout=120 --memory=256 --max-jobs=500 --max-time=3600
 directory=/var/www/vhosts/follow-flow.de/factory.follow-flow.de
 autostart=true
 autorestart=true
@@ -9,5 +15,40 @@ killasgroup=true
 user=followflow
 numprocs=1
 redirect_stderr=true
-stdout_logfile=/var/www/vhosts/follow-flow.de/factory.follow-flow.de/storage/logs/queue-worker.log
-stopwaitsecs=360
+stdout_logfile=/var/www/vhosts/follow-flow.de/factory.follow-flow.de/storage/logs/queue-workflow-control.log
+stdout_logfile_maxbytes=10MB
+stdout_logfile_backups=3
+stopwaitsecs=150
+
+[program:followflow-workflow-ai]
+process_name=%(program_name)s_%(process_num)02d
+command=/opt/plesk/php/8.3/bin/php /var/www/vhosts/follow-flow.de/factory.follow-flow.de/artisan queue:work database-workflow-ai --queue=workflow-ai --sleep=1 --tries=1 --timeout=1800 --memory=384 --max-jobs=100 --max-time=3600
+directory=/var/www/vhosts/follow-flow.de/factory.follow-flow.de
+autostart=true
+autorestart=true
+stopasgroup=true
+killasgroup=true
+user=followflow
+numprocs=1
+redirect_stderr=true
+stdout_logfile=/var/www/vhosts/follow-flow.de/factory.follow-flow.de/storage/logs/queue-workflow-ai.log
+stdout_logfile_maxbytes=10MB
+stdout_logfile_backups=3
+stopwaitsecs=1860
+
+[program:followflow-queue-default]
+process_name=%(program_name)s_%(process_num)02d
+# Legacy AI jobs can have a 1,800-second payload timeout; drain, do not purge.
+command=/opt/plesk/php/8.3/bin/php /var/www/vhosts/follow-flow.de/factory.follow-flow.de/artisan queue:work database --queue=default --sleep=1 --tries=1 --timeout=1800 --memory=256 --max-jobs=500 --max-time=3600
+directory=/var/www/vhosts/follow-flow.de/factory.follow-flow.de
+autostart=true
+autorestart=true
+stopasgroup=true
+killasgroup=true
+user=followflow
+numprocs=1
+redirect_stderr=true
+stdout_logfile=/var/www/vhosts/follow-flow.de/factory.follow-flow.de/storage/logs/queue-default.log
+stdout_logfile_maxbytes=10MB
+stdout_logfile_backups=3
+stopwaitsecs=1860

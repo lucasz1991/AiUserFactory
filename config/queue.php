@@ -38,8 +38,26 @@ return [
             'driver' => 'database',
             'table' => 'jobs',
             'queue' => 'default',
-            'retry_after' => (int) env('DB_QUEUE_RETRY_AFTER', 240),
+            // Legacy serialized AI jobs may still be waiting on default during rollout.
+            'retry_after' => max(1860, (int) env('DB_QUEUE_RETRY_AFTER', 1860)),
             'after_commit' => false,
+        ],
+
+        'database-workflow-control' => [
+            'driver' => 'database',
+            'table' => 'jobs',
+            'queue' => 'workflow-control',
+            'retry_after' => max(150, (int) env('WORKFLOW_CONTROL_RETRY_AFTER', 150)),
+            'after_commit' => true,
+        ],
+
+        'database-workflow-ai' => [
+            'driver' => 'database',
+            'table' => 'jobs',
+            'queue' => 'workflow-ai',
+            // Image generation has a 1,800-second job timeout; planning has 600.
+            'retry_after' => max(1860, (int) env('WORKFLOW_AI_RETRY_AFTER', 1860)),
+            'after_commit' => true,
         ],
 
         'beanstalkd' => [

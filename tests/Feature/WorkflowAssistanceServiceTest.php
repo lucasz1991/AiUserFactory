@@ -73,7 +73,7 @@ class WorkflowAssistanceServiceTest extends TestCase
 
         $browserState = $firstRequest->fresh()->browser_state_json;
         $this->assertSame('https://example.test/challenge', $browserState['current_url']);
-        $this->assertSame([[
+        $this->assertJsonSame([[
             'key' => 'main',
             'label' => 'Main Browser',
             'url' => 'https://example.test/challenge',
@@ -87,7 +87,7 @@ class WorkflowAssistanceServiceTest extends TestCase
         foreach (['browser-secret', 'cookie-secret', 'runtime-secret', 'username', 'password'] as $secret) {
             $this->assertStringNotContainsString($secret, $serializedState);
         }
-        $this->assertSame([
+        $this->assertJsonSame([
             'provider' => 'recaptcha',
             'frameCount' => 2,
             'responsePresent' => false,

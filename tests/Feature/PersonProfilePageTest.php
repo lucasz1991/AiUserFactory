@@ -10,6 +10,7 @@ use App\Models\User;
 use App\Services\Persons\PersonAccountRegistry;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Crypt;
+use Livewire\Features\SupportLockedProperties\CannotUpdateLockedPropertyException;
 use Livewire\Livewire;
 use Tests\TestCase;
 
@@ -168,7 +169,7 @@ class PersonProfilePageTest extends TestCase
     {
         $this->actingAs($this->admin());
         $person = $this->makePerson();
-        $this->expectException(\Livewire\Features\SupportLockedProperties\CannotUpdateLockedPropertyException::class);
+        $this->expectException(CannotUpdateLockedPropertyException::class);
         Livewire::test(PersonAccounts::class, ['personId' => $person->id])
             ->set('personId', $person->id + 1);
     }

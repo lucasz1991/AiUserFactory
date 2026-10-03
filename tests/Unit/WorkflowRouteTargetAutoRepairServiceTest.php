@@ -202,7 +202,7 @@ class WorkflowRouteTargetAutoRepairServiceTest extends TestCase
         $this->assertCount(1, $applied);
 
         $step = $workflow->fresh()->steps->firstWhere('action_key', 'liste-eins');
-        $this->assertSame(
+        $this->assertJsonSame(
             ['type' => 'card', 'card_key' => 'ende', 'card' => 'ende'],
             data_get($step->config_json, 'tasks.0.next'),
         );

@@ -2,6 +2,9 @@
 
 namespace App\Models;
 
+use App\Exceptions\WorkflowRunConflictException;
+use App\Services\Workflows\WorkflowRunContextStore;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -39,6 +42,37 @@ class WorkflowRun extends Model
         'context_json' => 'array',
         'result_json' => 'array',
     ];
+
+    protected function performUpdate(Builder $query)
+    {
+        // The lock covers only the merge/write, never browser or AI I/O. Keeping
+        // this at the persistence boundary also protects existing context writers.
+        return $this->getConnection()->transaction(function () use ($query): bool {
+            $current = $this->newQueryWithoutScopes()->useWritePdo()->lockForUpdate()->find($this->getKey());
+            if (! $current) {
+                return false;
+            }
+
+            $store = app(WorkflowRunContextStore::class);
+            foreach (['status', 'current_workflow_step_id', 'workflow_revision', 'result_json', 'error_message', 'finished_at'] as $attribute) {
+                if ($this->isDirty($attribute)
+                    && ! $store->equivalent($this->getOriginal($attribute), $current->getAttribute($attribute))
+                    && ! $store->equivalent($this->getAttribute($attribute), $current->getAttribute($attribute))) {
+                    throw new WorkflowRunConflictException($attribute);
+                }
+            }
+
+            if ($this->isDirty('context_json')) {
+                $this->setAttribute('context_json', $store->merge(
+                    $this->getOriginal('context_json') ?? [],
+                    $this->context_json ?? [],
+                    $current->context_json ?? [],
+                ));
+            }
+
+            return parent::performUpdate($query);
+        }, 3);
+    }
 
     public function workflow(): BelongsTo
     {

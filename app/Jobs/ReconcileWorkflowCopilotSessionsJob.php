@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Services\Workflows\WorkflowCopilotQueueRecoveryService;
+use App\Support\WorkflowQueues;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -25,7 +26,7 @@ class ReconcileWorkflowCopilotSessionsJob implements ShouldBeUnique, ShouldQueue
 
     public function __construct()
     {
-        $this->onConnection('database');
+        $this->onConnection(WorkflowQueues::CONTROL_CONNECTION)->onQueue(WorkflowQueues::CONTROL)->afterCommit();
     }
 
     public function handle(WorkflowCopilotQueueRecoveryService $recovery): void

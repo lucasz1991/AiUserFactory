@@ -15,6 +15,7 @@ concurrency:
 jobs:
   php:
     name: PHP ${{ matrix.php }}
+    needs: node
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
@@ -70,6 +71,12 @@ jobs:
             echo "No changed PHP files to format-check."
           fi
 
+      - name: Download verified Vite assets
+        uses: actions/download-artifact@v5
+        with:
+          name: vite-build
+          path: public/build
+
       - name: Run PHP tests
         run: php -d max_execution_time=0 artisan test
 
@@ -91,6 +98,7 @@ jobs:
 
   mysql:
     name: MySQL integration
+    needs: node
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -136,6 +144,12 @@ jobs:
       - name: Run migrations on MySQL
         run: php artisan migrate --force
 
+      - name: Download verified Vite assets
+        uses: actions/download-artifact@v5
+        with:
+          name: vite-build
+          path: public/build
+
       - name: Run PHP tests on MySQL
         run: php -d max_execution_time=0 artisan test
 
@@ -162,6 +176,14 @@ jobs:
 
       - name: Build and verify Vite assets
         run: npm run build
+
+      - name: Share verified Vite assets with PHP test jobs
+        uses: actions/upload-artifact@v4
+        with:
+          name: vite-build
+          path: public/build
+          if-no-files-found: error
+          retention-days: 1
 
   dependency-audit:
     name: Dependency audit

@@ -4,6 +4,7 @@ namespace App\Services\Workflows;
 
 use App\Enums\WorkflowLogicalOutcome;
 use App\Enums\WorkflowRouteDisposition;
+use App\Exceptions\WorkflowRunConflictException;
 use App\Jobs\MonitorWorkflowStepRunJob;
 use App\Jobs\RunWorkflowJob;
 use App\Jobs\WorkflowCopilotSupervisorJob;
@@ -34,6 +35,7 @@ use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Process;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
@@ -70,6 +72,9 @@ class WorkflowExecutionService
      * bleibt.
      */
     private const TASK_HISTORY_LIMIT = 600;
+
+    /** @var array<int, string> */
+    private array $runOperationTokens = [];
 
     public function __construct(
         protected MailAccountRegistrationRunner $mailRegistration,
@@ -290,7 +295,7 @@ class WorkflowExecutionService
         });
 
         if ($copilotSessionId === 0) {
-            RunWorkflowJob::dispatch($run->id);
+            RunWorkflowJob::dispatch($run->id)->afterCommit();
         }
 
         return $run;
@@ -343,6 +348,37 @@ class WorkflowExecutionService
     public function advance(int|WorkflowRun $workflowRun): void
     {
         $runId = $workflowRun instanceof WorkflowRun ? (int) $workflowRun->id : (int) $workflowRun;
+        WorkflowRun::query()->select('id')->findOrFail($runId);
+        $lease = app(WorkflowRunCoordinationService::class);
+        $token = $lease->acquire($runId, 'advance');
+
+        if ($token === null) {
+            if (config('queue.default') !== 'sync' || Queue::isFake()) {
+                RunWorkflowJob::dispatch($runId)->delay(now()->addSecond())->afterCommit();
+            }
+
+            return;
+        }
+
+        $this->runOperationTokens[$runId] = $token;
+
+        try {
+            if ($this->prepareRunAdvance($runId)) {
+                // Database ownership checks have committed before any runner I/O.
+                $this->advanceRun($runId);
+            }
+        } catch (WorkflowRunConflictException $exception) {
+            if (config('queue.default') !== 'sync' || Queue::isFake()) {
+                RunWorkflowJob::dispatch($runId)->delay(now()->addSecond())->afterCommit();
+            }
+        } finally {
+            unset($this->runOperationTokens[$runId]);
+            $lease->release($runId, $token);
+        }
+    }
+
+    protected function prepareRunAdvance(int $runId): bool
+    {
         $locator = WorkflowRun::query()
             ->select(['id', 'workflow_id', 'workflow_copilot_session_id', 'context_json'])
             ->find($runId);
@@ -357,12 +393,10 @@ class WorkflowExecutionService
         );
 
         if ($sessionId <= 0) {
-            $this->advanceRun($runId);
-
-            return;
+            return true;
         }
 
-        DB::transaction(function () use ($locator, $sessionId): void {
+        return DB::transaction(function () use ($locator, $sessionId): bool {
             $workflow = Workflow::query()->lockForUpdate()->findOrFail($locator->workflow_id);
             $session = WorkflowCopilotSession::query()->lockForUpdate()->find($sessionId);
             $run = WorkflowRun::query()->lockForUpdate()->findOrFail($locator->id);
@@ -405,12 +439,13 @@ class WorkflowExecutionService
                     ])->save();
                 }
 
-                return;
+                return false;
             }
 
             unset($context['copilot_advance_blocked']);
             $run->forceFill(['context_json' => $context])->save();
-            $this->advanceRun($run);
+
+            return true;
         });
     }
 
@@ -507,8 +542,19 @@ class WorkflowExecutionService
         $stepRun = $stepRun ?: $this->createStepRun($run, $step);
 
         try {
+            if (! $this->runOperationIsCurrent($run)) {
+                return;
+            }
+
             $this->executeStep($run, $step, $stepRun);
         } catch (\Throwable $exception) {
+            if ($exception instanceof WorkflowRunConflictException) {
+                throw $exception;
+            }
+            if (! $this->runOperationIsCurrent($run)) {
+                return;
+            }
+
             $this->failStepRun($stepRun, $exception->getMessage());
             $this->failRun($run, $exception->getMessage());
         }
@@ -717,7 +763,7 @@ class WorkflowExecutionService
             'error_message' => null,
         ])->save();
 
-        RunWorkflowJob::dispatch($run->id);
+        RunWorkflowJob::dispatch($run->id)->afterCommit();
 
         return ['ok' => true, 'message' => 'Probeaktion wurde gestartet.', 'task_key' => $task['key']];
     }
@@ -729,6 +775,8 @@ class WorkflowExecutionService
         if ($this->isFinalStatus($run->status)) {
             return ['ok' => true, 'message' => 'Workflow-Lauf ist bereits beendet.'];
         }
+
+        $run = $this->markRunStopRequested($run);
 
         $clientJob = NetworkJob::query()
             ->where('workflow_run_id', $run->id)
@@ -833,7 +881,7 @@ class WorkflowExecutionService
 
     public function terminate(int|WorkflowRun $workflowRun, string $message = 'Workflow-Lauf und zugehoerige Node-Prozesse wurden beendet.'): array
     {
-        $run = $this->loadRun($workflowRun);
+        $run = $this->markRunStopRequested($this->loadRun($workflowRun));
         $terminatedAt = now();
         $message = trim($message) ?: 'Workflow-Lauf und zugehoerige Node-Prozesse wurden beendet.';
         $clientJobs = NetworkJob::query()
@@ -1017,21 +1065,46 @@ class WorkflowExecutionService
 
     public function monitorStepRun(int $workflowStepRunId): void
     {
+        $runId = (int) WorkflowStepRun::query()->whereKey($workflowStepRunId)->value('workflow_run_id');
+        if ($runId <= 0) {
+            return;
+        }
+
+        $lease = app(WorkflowRunCoordinationService::class);
+        $token = $lease->acquire($runId, 'monitor');
+        if ($token === null) {
+            if (config('queue.default') !== 'sync' || Queue::isFake()) {
+                MonitorWorkflowStepRunJob::dispatch($workflowStepRunId)->delay(now()->addSecond())->afterCommit();
+            }
+
+            return;
+        }
+
         $lock = Cache::lock('workflow-step-run-monitor:'.$workflowStepRunId, self::MONITOR_LOCK_SECONDS);
 
         if (! $lock->get()) {
             // Callback und bereits eingeplanter Monitor duerfen denselben Step
             // nicht gleichzeitig abschliessen. Der kurze Retry stellt sicher,
             // dass ein finales Signal bei Lock-Contention nicht verloren geht.
-            MonitorWorkflowStepRunJob::dispatch($workflowStepRunId)->delay(now()->addSecond());
+            $lease->release($runId, $token);
+            if (config('queue.default') !== 'sync' || Queue::isFake()) {
+                MonitorWorkflowStepRunJob::dispatch($workflowStepRunId)->delay(now()->addSecond())->afterCommit();
+            }
 
             return;
         }
 
+        $this->runOperationTokens[$runId] = $token;
         try {
             $this->monitorStepRunWithLock($workflowStepRunId);
+        } catch (WorkflowRunConflictException $exception) {
+            if (config('queue.default') !== 'sync' || Queue::isFake()) {
+                MonitorWorkflowStepRunJob::dispatch($workflowStepRunId)->delay(now()->addSecond())->afterCommit();
+            }
         } finally {
+            unset($this->runOperationTokens[$runId]);
             $lock->release();
+            $lease->release($runId, $token);
         }
     }
 
@@ -1065,6 +1138,10 @@ class WorkflowExecutionService
         }
 
         $status = $this->readExternalStatus($stepRun);
+
+        if (! $this->stepOperationIsCurrent($stepRun)) {
+            return;
+        }
 
         if (! is_array($status)) {
             $message = 'Der externe Node-Lauf konnte nicht gelesen werden.';
@@ -1116,6 +1193,10 @@ class WorkflowExecutionService
 
         $result = $this->prepareExternalResult($stepRun, $this->readExternalResult($stepRun, $status));
         $result = $this->normalizeStepResult($stepRun, $result, $status);
+        if (! $this->stepOperationIsCurrent($stepRun)) {
+            return;
+        }
+        $stepRun->setRelation('workflowRun', $this->loadRun($stepRun->workflow_run_id));
         $this->ingestDebugArtifacts($stepRun, $status, $result);
 
         $clientReportedStatus = strtolower(trim((string) ($result['status'] ?? $result['state'] ?? '')));
@@ -1301,7 +1382,7 @@ class WorkflowExecutionService
                     'error_message' => null,
                 ])->save();
 
-                RunWorkflowJob::dispatch($run->id);
+                RunWorkflowJob::dispatch($run->id)->afterCommit();
 
                 return true;
             }
@@ -1496,7 +1577,7 @@ class WorkflowExecutionService
                     'error_message' => null,
                 ])->save();
 
-                RunWorkflowJob::dispatch($run->id);
+                RunWorkflowJob::dispatch($run->id)->afterCommit();
             },
         );
     }
@@ -1875,7 +1956,7 @@ class WorkflowExecutionService
             return;
         }
 
-        RunWorkflowJob::dispatch($run->id);
+        RunWorkflowJob::dispatch($run->id)->afterCommit();
     }
 
     protected function holdCaptchaAssistance(WorkflowStepRun $stepRun, array $result): void
@@ -2324,7 +2405,7 @@ class WorkflowExecutionService
             ]),
         ])->save();
 
-        RunWorkflowJob::dispatch($run->id)->delay(now()->addSeconds(10));
+        RunWorkflowJob::dispatch($run->id)->delay(now()->addSeconds(10))->afterCommit();
 
         return false;
     }
@@ -2482,6 +2563,10 @@ class WorkflowExecutionService
 
     protected function startWorkflowTaskStep(WorkflowRun $run, WorkflowStep $step, WorkflowStepRun $stepRun): string
     {
+        if (! $this->runOperationIsCurrent($run)) {
+            return 'waiting';
+        }
+
         if ($this->isCopilotSupervisedRun($run)) {
             $context = is_array($run->context_json) ? $run->context_json : [];
             $transientTask = is_array($context['copilot_transient_task'] ?? null) ? $context['copilot_transient_task'] : [];
@@ -2516,6 +2601,9 @@ class WorkflowExecutionService
 
         $runtimeContext = $this->workflowRuntimeContext($run, $step, $stepRun);
         $this->clearRouteCursor($run);
+        if (! $this->runOperationIsCurrent($run) || ! $this->prepareRunAdvance((int) $run->id)) {
+            return 'waiting';
+        }
         $externalRun = $this->workflowTasks->start(
             $run,
             $step,
@@ -2523,6 +2611,17 @@ class WorkflowExecutionService
             $runtimeContext,
             $externalRunId,
         );
+
+        if (! $this->runOperationIsCurrent($run)) {
+            // A stop can arrive while the detached process is being spawned.
+            // It remains responsive because it never waits for this lease.
+            $status = (string) WorkflowRun::query()->whereKey($run->id)->value('status');
+            if (in_array($status, ['cancelled', 'stop_requested', 'failed', 'timed_out'], true)) {
+                $this->terminateExternalRun($stepRun, 'Der Lauf wurde waehrend des Prozessstarts gestoppt.');
+            }
+
+            return 'waiting';
+        }
 
         // Check und Update muessen atomar bleiben: Ein Callback kann den Step
         // genau zwischen einem Model-refresh() und save() abschliessen. Das
@@ -2532,6 +2631,7 @@ class WorkflowExecutionService
             ->whereIn('status', ['running', 'waiting'])
             ->where('external_run_type', 'workflow-task')
             ->where('external_run_id', (string) ($externalRun['runId'] ?? $externalRunId))
+            ->whereHas('workflowRun', fn ($query) => $query->whereIn('status', ['queued', 'running', 'waiting']))
             ->update([
                 'status' => 'waiting',
                 'result_json' => json_encode($this->publicRunSnapshot($externalRun), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
@@ -3211,6 +3311,11 @@ class WorkflowExecutionService
 
     protected function continueAfterStep(WorkflowRun $run, WorkflowStepRun $stepRun, array $result, string $outcome, int $delaySeconds = 0): void
     {
+        if (! $this->runOperationIsCurrent($run)) {
+            return;
+        }
+        $run = $this->loadRun($run->id);
+
         $route = $this->routeForResult($stepRun->workflowStep, $outcome, $result)
             ?: $this->linearRouteAfterStep($run, $stepRun->workflowStep, $outcome);
         $routeType = (string) ($route['type'] ?? 'step');
@@ -3328,7 +3433,7 @@ class WorkflowExecutionService
             'context_json' => $context,
         ])->save();
 
-        $pendingDispatch = RunWorkflowJob::dispatch($run->id);
+        $pendingDispatch = RunWorkflowJob::dispatch($run->id)->afterCommit();
 
         if ($delaySeconds > 0) {
             $pendingDispatch->delay(now()->addSeconds($delaySeconds));
@@ -4835,7 +4940,7 @@ class WorkflowExecutionService
             $delaySeconds = $isYoung ? self::MONITOR_FAST_POLL_SECONDS : self::MONITOR_DEFAULT_POLL_SECONDS;
         }
 
-        MonitorWorkflowStepRunJob::dispatch($stepRun->id)->delay(now()->addSeconds(max(1, min(60, $delaySeconds))));
+        MonitorWorkflowStepRunJob::dispatch($stepRun->id)->delay(now()->addSeconds(max(1, min(60, $delaySeconds))))->afterCommit();
     }
 
     /**
@@ -5275,6 +5380,49 @@ class WorkflowExecutionService
             'result' => $result,
             'networkJobUuid' => $job->job_uuid,
         ];
+    }
+
+    protected function runOperationIsCurrent(WorkflowRun $run, bool $allowClientStop = false): bool
+    {
+        $token = $this->runOperationTokens[(int) $run->id] ?? null;
+        if ($token !== null && ! app(WorkflowRunCoordinationService::class)->owns((int) $run->id, $token)) {
+            return false;
+        }
+
+        $current = WorkflowRun::query()->find($run->id);
+        if (! $current || $this->isFinalStatus((string) $current->status) || $current->status === 'paused') {
+            return false;
+        }
+
+        return ! in_array($current->status, ['stop_requested', 'unreachable'], true)
+            || ($allowClientStop && $current->status === 'stop_requested');
+    }
+
+    protected function stepOperationIsCurrent(WorkflowStepRun $stepRun): bool
+    {
+        $allowClientStop = $stepRun->external_run_type === 'client-controller-workflow-task';
+        if (! $this->runOperationIsCurrent($stepRun->workflowRun, $allowClientStop)) {
+            return false;
+        }
+
+        $current = WorkflowStepRun::query()->find($stepRun->id);
+
+        return $current
+            && in_array($current->status, ['running', 'waiting'], true)
+            && $current->external_run_type === $stepRun->external_run_type
+            && $current->external_run_id === $stepRun->external_run_id;
+    }
+
+    protected function markRunStopRequested(WorkflowRun $run): WorkflowRun
+    {
+        return DB::transaction(function () use ($run): WorkflowRun {
+            $current = WorkflowRun::query()->lockForUpdate()->findOrFail($run->id);
+            if (! $this->isFinalStatus((string) $current->status)) {
+                $current->forceFill(['status' => 'stop_requested'])->save();
+            }
+
+            return $this->loadRun($current->id);
+        });
     }
 
     protected function loadRun(int|WorkflowRun $workflowRun): WorkflowRun

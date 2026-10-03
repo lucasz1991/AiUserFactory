@@ -376,8 +376,8 @@ class WorkflowCopilotSupervisorTest extends TestCase
             ->withArgs(fn (mixed $runArgument, string $taskKey, ?array $transientTask, array $repairPlan): bool => $runArgument instanceof WorkflowRun
                 && (int) $runArgument->id === (int) $run->id
                 && $taskKey === 'login-click'
-                && $transientTask === $probeTask
-                && $repairPlan === $plan);
+                && $this->canonicalJsonValue($transientTask) === $this->canonicalJsonValue($probeTask)
+                && $this->canonicalJsonValue($repairPlan) === $this->canonicalJsonValue($plan));
         $execution->shouldNotReceive('resumeCopilotCheckpoint');
         $this->app->instance(WorkflowCopilotObservationService::class, $observations);
         $this->app->instance(WorkflowCopilotVisionService::class, $visionService);

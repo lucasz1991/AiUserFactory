@@ -33,6 +33,17 @@ class OperationsHealth extends Command
                 ['Warnungen', count(data_get($snapshot, 'alerts', []))],
             ]);
 
+            $this->table(['Queue', 'Worker', 'Faellig', 'Verzoegert', 'Reserviert', 'Aeltester faelliger Job (s)'],
+                collect($snapshot['queues'])->map(fn (array $lane): array => [
+                    $lane['queue'],
+                    data_get($lane, 'heartbeat.status'),
+                    $lane['ready'] ?? 'n/a',
+                    $lane['delayed'] ?? 'n/a',
+                    $lane['reserved'] ?? 'n/a',
+                    $lane['oldest_ready_seconds'] ?? 'n/a',
+                ])->values()->all(),
+            );
+
             foreach (data_get($snapshot, 'alerts', []) as $alert) {
                 $this->warn('['.strtoupper((string) ($alert['severity'] ?? 'warning')).'] '.($alert['message'] ?? 'Unbekannte Meldung'));
             }

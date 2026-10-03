@@ -10,6 +10,7 @@ use App\Jobs\SyncManagedProcessesJob;
 use App\Models\NetworkNode;
 use App\Services\Operations\OperationalHeartbeatService;
 use App\Services\Simulation\NetworkActivityPlanningSettings;
+use App\Support\WorkflowQueues;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Foundation\Console\Kernel as ConsoleKernel;
 use Illuminate\Support\Facades\Schema;
@@ -24,6 +25,8 @@ class Kernel extends ConsoleKernel
         $schedule->call(static function (): void {
             app(OperationalHeartbeatService::class)->recordScheduler();
             RecordOperationsWorkerHeartbeat::dispatch();
+            RecordOperationsWorkerHeartbeat::dispatch(WorkflowQueues::CONTROL);
+            RecordOperationsWorkerHeartbeat::dispatch(WorkflowQueues::AI);
         })
             ->name('operations-heartbeat')
             ->everyMinute()

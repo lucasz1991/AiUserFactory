@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Models\File;
 use App\Models\Person;
 use App\Services\Ai\AiConnectionService;
+use App\Support\WorkflowQueues;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -36,6 +37,7 @@ class GeneratePersonImages implements ShouldQueue
         public array $preview = [],
         public ?int $userId = null,
     ) {
+        $this->onConnection(WorkflowQueues::AI_CONNECTION)->onQueue(WorkflowQueues::AI)->afterCommit();
         $this->imageCount = max(1, min(8, $this->imageCount));
     }
 

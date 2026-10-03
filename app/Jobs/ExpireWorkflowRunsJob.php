@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Services\Workflows\WorkflowExecutionService;
+use App\Support\WorkflowQueues;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -22,7 +23,7 @@ class ExpireWorkflowRunsJob implements ShouldQueue
 
     public function __construct()
     {
-        $this->onConnection('database');
+        $this->onConnection(WorkflowQueues::CONTROL_CONNECTION)->onQueue(WorkflowQueues::CONTROL)->afterCommit();
     }
 
     public function handle(WorkflowExecutionService $workflows): void

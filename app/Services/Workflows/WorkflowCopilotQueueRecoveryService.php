@@ -10,9 +10,11 @@ use App\Models\WorkflowCopilotEvent;
 use App\Models\WorkflowCopilotSession;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowStepRun;
+use App\Support\WorkflowQueues;
 use Carbon\CarbonImmutable;
 use DateTimeInterface;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Throwable;
 
@@ -101,7 +103,7 @@ class WorkflowCopilotQueueRecoveryService
     }
 
     /**
-     * @return array{scanned:int,dispatched:int,fresh:int,leased:int,cooldown:int,skipped:int,failed:int}
+     * @return array{scanned:int,dispatched:int,fresh:int,leased:int,pending:int,cooldown:int,skipped:int,failed:int}
      */
     public function reconcile(): array
     {
@@ -110,6 +112,7 @@ class WorkflowCopilotQueueRecoveryService
             'dispatched' => 0,
             'fresh' => 0,
             'leased' => 0,
+            'pending' => 0,
             'cooldown' => 0,
             'skipped' => 0,
             'failed' => 0,
@@ -203,6 +206,11 @@ class WorkflowCopilotQueueRecoveryService
             }
 
             $claim = $this->dispatchTarget($session, $run, $stepRun);
+
+            if ($this->hasPendingDispatch($claim)) {
+                return ['reason' => 'pending'];
+            }
+
             $signature = $this->recoverySignature($session, $run, $stepRun, $claim);
             $recovery = is_array($state['queue_recovery'] ?? null) ? $state['queue_recovery'] : [];
             $cooldownUntil = $this->parseTimestamp($recovery['cooldown_until'] ?? null);
@@ -223,6 +231,7 @@ class WorkflowCopilotQueueRecoveryService
                 'cooldown_until' => now()->addSeconds(self::REDISPATCH_COOLDOWN_SECONDS)->toIso8601String(),
                 'dispatch_kind' => $claim['kind'],
                 'dispatch_target_id' => $claim['target_id'],
+                'dispatch_queue' => $claim['kind'] === 'supervisor' ? WorkflowQueues::AI : WorkflowQueues::CONTROL,
             ]);
             $session->forceFill(['state_json' => $state])->save();
 
@@ -232,6 +241,7 @@ class WorkflowCopilotQueueRecoveryService
                 'Eine verwaiste System-Ausfuehrung wurde durch die Queue-Ueberwachung erneut eingeplant.',
                 [
                     'dispatch_kind' => $claim['kind'],
+                    'dispatch_queue' => $claim['kind'] === 'supervisor' ? WorkflowQueues::AI : WorkflowQueues::CONTROL,
                     'workflow_run_id' => $run?->id,
                     'workflow_step_run_id' => $stepRun?->id,
                     'run_status' => $run?->status,
@@ -258,6 +268,45 @@ class WorkflowCopilotQueueRecoveryService
             'monitor' => MonitorWorkflowStepRunJob::dispatch((int) $claim['target_id']),
             default => WorkflowCopilotSupervisorJob::dispatch((int) $claim['session_id']),
         };
+    }
+
+    /**
+     * Do not duplicate a delayed or actively reserved job, including a legacy
+     * database/default payload. Inspect metadata only; never unserialize jobs.
+     *
+     * @param  array{kind:string,target_id:int}  $claim
+     */
+    protected function hasPendingDispatch(array $claim): bool
+    {
+        $database = DB::connection(config('queue.connections.database.connection'));
+        $table = (string) config('queue.connections.database.table', 'jobs');
+
+        if (! Schema::connection($database->getName())->hasTable($table)) {
+            return false;
+        }
+
+        [$jobClass, $identifier] = match ($claim['kind']) {
+            'run' => [RunWorkflowJob::class, 'workflowRunId'],
+            'monitor' => [MonitorWorkflowStepRunJob::class, 'workflowStepRunId'],
+            default => [WorkflowCopilotSupervisorJob::class, 'workflowCopilotSessionId'],
+        };
+        $serializedIdentifier = 's:'.strlen($identifier).':"'.$identifier.'";i:'.(int) $claim['target_id'].';';
+
+        foreach ($database->table($table)->where('payload->displayName', $jobClass)->cursor() as $job) {
+            if ($job->reserved_at !== null
+                && (int) $job->reserved_at <= now()->timestamp - WorkflowQueues::reservationSeconds((string) $job->queue)) {
+                continue;
+            }
+
+            $payload = json_decode((string) $job->payload, true);
+            $command = data_get($payload, 'data.command');
+
+            if (is_string($command) && str_contains($command, $serializedIdentifier)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

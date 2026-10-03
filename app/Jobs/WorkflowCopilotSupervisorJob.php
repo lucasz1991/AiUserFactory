@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Services\Workflows\WorkflowCopilotQueueRecoveryService;
 use App\Services\Workflows\WorkflowCopilotSupervisorService;
+use App\Support\WorkflowQueues;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -27,7 +28,7 @@ class WorkflowCopilotSupervisorJob implements ShouldQueue
     public function __construct(
         public int $workflowCopilotSessionId,
     ) {
-        $this->onConnection('database');
+        $this->onConnection(WorkflowQueues::AI_CONNECTION)->onQueue(WorkflowQueues::AI)->afterCommit();
     }
 
     public function handle(WorkflowCopilotSupervisorService $supervisor): void
