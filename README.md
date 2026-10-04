@@ -21,6 +21,16 @@ The full client-side
 workflow protocol does not depend on the queue worker for live progress or
 step routing, while legacy and non-portable fallback workflows still do.
 
+### Live Aufnahme (Desktop)
+
+Unter Netzwerk → Live Aufnahme bzw. über den gleichnamigen Button in der Workflow-Liste können aktive Administratoren in einem eigenen Browser Aktionen vorführen. Rechtsklick auf ein Eingabefeld ordnet einen normalen Task-Datenwert, eine Workflow-Variable oder festen Text zu; ein Testwert für eine Variable gilt nur während der Aufnahme. Passwörter werden maskiert und nicht als Literal gespeichert. Keine neuen ENV-Einträge oder zusätzlichen Frontend-Pakete sind erforderlich; die vorhandene Node-Konfiguration und Chrome-Erkennung werden wiederverwendet.
+
+Die geordnete Aktionsliste lässt sich nach Pause bearbeiten, sortieren und kürzen. Nach Beenden erzeugt „Als Workflow speichern“ idempotent einen neuen inaktiven Workflow mit regulären Katalogtasks, benötigten Workflow-Eingaben und geprüften Routen. Aufgenommene Mauswege werden begrenzt wiedergegeben. Komma-getrennte CSS-Alternativen müssen beim Aufnehmen eindeutig dasselbe Element treffen; die Wiedergabe prüft zusätzlich die Element-Signatur und bricht bei widersprüchlichen oder fehlenden sicheren Zielen ab. Ein Treffer auf zukünftig beliebig geänderten Portalen wird nicht garantiert.
+
+Die erste Version steuert ein Hauptfenster: Navigation, Klick, Mausbewegung/Hover, vertikales Scrollen, Eingaben einschließlich Select-Feldern sowie Enter/Tab. Iframes, Shadow-DOM, Drag-and-drop und neue Browserfenster sind nicht Teil dieser Version. Private Netzwerkziele und credential-haltige URLs werden abgewiesen. Aufnahmedaten sind pro Admin geschützt und verschlüsselt; der private Browser und sein Profil schließen beim Beenden oder nach Inaktivität. Bei einem späteren Rollout sind die additive `workflow_recordings`-Migration und der synchronisierte Client-Workflow-Runtime-Stand erforderlich; lokale Tests sind kein Deployment.
+
+Lokal am 04.10.2026 verifiziert: 711 Workflow-PHP-Tests / 5859 Assertions, 234 Node-CJS-Tests plus neun Route-Fokus-Tests, Vite/Pint und Desktop-Browseraufnahme bis zum gespeicherten, gültigen inaktiven Workflow. Client-Runtime bytegleich synchronisiert. Kein Plesk-Rollout, keine Migration der normalen Anwendungsdatenbank und keine installierte Client-Abnahme; Details in der autoritativen ROOT `.lmzdev/artifacts/reports/workflow-live-recording-2026-10-04.md`.
+
 Geplante Aufgaben ausführen:
 
 php artisan schedule:run

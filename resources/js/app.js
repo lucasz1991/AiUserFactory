@@ -12,6 +12,7 @@ import { workflowSelectorField } from './components/workflow-selector-syntax';
 import { workflowRouteSurface } from './components/workflow-route-surface';
 import { workflowLiveWorkspace } from './components/workflow-live-workspace';
 import { workflowDomInspector } from './components/workflow-dom-inspector';
+import { workflowLiveRecording } from './components/workflow-live-recording';
 import './app-shell';
 // Spur W (PWA + Web-Push). Beim App-Shell-Umbau bitte uebernehmen — ohne
 // diesen Import registriert sich kein Service Worker und die Alpine-
@@ -48,6 +49,11 @@ function registerAlpinePlugins() {
     if (!window.Alpine.__workflowDomInspectorRegistered) {
         window.Alpine.data('workflowDomInspector', workflowDomInspector);
         window.Alpine.__workflowDomInspectorRegistered = true;
+    }
+
+    if (!window.Alpine.__workflowLiveRecordingRegistered) {
+        window.Alpine.data('workflowLiveRecording', workflowLiveRecording);
+        window.Alpine.__workflowLiveRecordingRegistered = true;
     }
 
     if (window.Alpine.__aiUserFactoryPluginsRegistered) {

@@ -1,6 +1,7 @@
 'use strict';
 
 const { captureTaskPreview, startTaskPreview } = require('../lib/preview.cjs');
+const { runRecordedHover } = require('../lib/recorded-target.cjs');
 const {
   elementCandidatesFromInput,
   elementSnapshot,
@@ -45,6 +46,10 @@ async function run(context = {}) {
   const page = context.page;
   const input = context.input || {};
   const timeout = Number(input.timeoutMs || context.timeoutMs || 30000);
+  if (input.recorded_selector_strict === true) {
+    startTaskPreview(context);
+    return captureTaskPreview(context, await runRecordedHover(context, timeout));
+  }
   const settleMs = Math.max(0, Math.min(10000, Number(input.settle_ms || input.settleMs || 250)));
   const releaseAfterClick = optionBoolean(input, ['release_after_click', 'releaseAfterClick'], true);
   const candidates = elementCandidatesFromInput(input, {

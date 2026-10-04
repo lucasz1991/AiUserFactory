@@ -15,6 +15,10 @@
             @endforeach
         </dl>
         <div class="ff-workflow-index-bar__actions">
+                <a href="{{ route('network.live-recording') }}" class="ff-action-trigger inline-flex items-center gap-2 px-3 py-2 text-sm font-semibold" wire:navigate>
+                    <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/></svg>
+                    Live Aufnahme
+                </a>
                 <div class="relative" x-data="{ open: false }" x-on:keydown.escape.window="open = false">
                     <button type="button" x-on:click="open = ! open" x-bind:aria-expanded="open" class="group ff-action-trigger ff-action-trigger--primary inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold">
                         <span class="inline-flex h-6 w-6 items-center justify-center rounded-full bg-white/10 text-lg leading-none transition-transform duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] group-hover:rotate-90" aria-hidden="true">+</span>

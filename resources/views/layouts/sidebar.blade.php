@@ -99,6 +99,13 @@
                                 Workflows
                             </x-menu.sidebar-nav-link>
                             <x-menu.sidebar-nav-link
+                                :href="route('network.live-recording')"
+                                :active="request()->routeIs('network.live-recording*')"
+                                nested
+                            >
+                                Live Aufnahme
+                            </x-menu.sidebar-nav-link>
+                            <x-menu.sidebar-nav-link
                                 :href="route('network.portal-profiles')"
                                 :active="request()->routeIs('network.portal-profiles')"
                                 nested

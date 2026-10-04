@@ -2,11 +2,13 @@
 
 const { captureTaskPreview } = require('../lib/preview.cjs');
 const { fillFirstMatchingInput } = require('../lib/fill_input.cjs');
+const { runRecordedFill } = require('../lib/recorded-target.cjs');
 
 async function run(context = {}) {
   const page = context.page;
   const input = context.input || {};
-  const value = String(input.value ?? input.inputValue ?? input.input_value ?? input.text ?? '').trim();
+  const suppliedValue = String(input.value ?? input.inputValue ?? input.input_value ?? input.text ?? '');
+  const value = input.recorded_selector_strict === true ? suppliedValue : suppliedValue.trim();
   const timeout = Number(input.timeoutMs || context.timeoutMs || 60000);
   const selectors = []
     .concat(input.inputSelector || [])
@@ -54,6 +56,10 @@ async function run(context = {}) {
     }
 
     return { ok: false, status: 'failed', statusMessage: 'Kein Wert zum Fuellen uebergeben.' };
+  }
+
+  if (input.recorded_selector_strict === true) {
+    return captureTaskPreview(context, await runRecordedFill(context, value, timeout));
   }
 
   const candidates = selectors.length > 0

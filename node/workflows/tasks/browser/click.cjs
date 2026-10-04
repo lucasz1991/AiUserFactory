@@ -1,6 +1,7 @@
 'use strict';
 
 const { captureTaskPreview } = require('../lib/preview.cjs');
+const { runRecordedClick } = require('../lib/recorded-target.cjs');
 const {
   clickFirstVisibleElement,
   elementCandidatesFromInput,
@@ -10,6 +11,9 @@ async function run(context = {}) {
   const page = context.page;
   const input = context.input || {};
   const timeout = Number(input.timeoutMs || context.timeoutMs || 60000);
+  if (input.recorded_selector_strict === true) {
+    return captureTaskPreview(context, await runRecordedClick(context, timeout));
+  }
   const candidates = elementCandidatesFromInput(input, {
     textKeys: ['text', 'texts', 'label', 'labels', 'value'],
   });

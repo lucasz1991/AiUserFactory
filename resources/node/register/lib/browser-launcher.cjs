@@ -380,4 +380,5 @@ module.exports = {
   launchConfiguredBrowserWithProfileRetry,
   normalizeBrowserEngine,
   resolveBrowserEngine,
+  systemChromeCandidates,
 };
