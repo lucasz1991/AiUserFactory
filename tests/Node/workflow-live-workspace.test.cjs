@@ -1,8 +1,34 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { readFileSync } = require('node:fs');
+const { join } = require('node:path');
 let workflowLiveWorkspace;
 test.before(async () => {
     ({ workflowLiveWorkspace } = await import('../../resources/js/components/workflow-live-workspace.js'));
+});
+
+test('the rendered editor event guard accepts its live mini but rejects another instance', () => {
+    const template = readFileSync(join(__dirname, '../../resources/views/livewire/admin/network/partials/workflow-definition-editor.blade.php'), 'utf8');
+    const guard = template.match(/eventTargetsThisEditor\(detail = \{\}\) \{([\s\S]+?)\r?\n        \},/);
+    assert.ok(guard, 'Exercise the actual Alpine guard used by the shared editor.');
+    const targets = new Function('detail', guard[1]
+        .replaceAll('@js($routeMarkerId)', JSON.stringify('workflow-route-studio-42'))
+        .replaceAll('@js($livePreviewInstance)', JSON.stringify('studio-42-live-preview')));
+    const editor = {
+        editorInstance: 'studio-42',
+        $root: { offsetParent: {}, closest: () => null },
+    };
+    for (const instance of ['studio-42', 'workflow-route-studio-42', 'studio-42-live-preview']) {
+        assert.equal(targets.call(editor, { instance }), true, instance);
+    }
+    assert.equal(targets.call(editor, { instance: 'studio-43-live-preview', source: 'studio-42' }), false);
+    assert.equal(targets.call(editor, { editorInstance: 'studio-43', instance: 'studio-42-live-preview' }), false);
+    assert.equal(targets.call(editor, {}), true);
+    editor.$root.offsetParent = null;
+    assert.equal(targets.call(editor, {}), false);
+    editor.$root.offsetParent = {};
+    editor.$root.closest = () => ({});
+    assert.equal(targets.call(editor, {}), false);
 });
 
 function workspace(config = {}, surface = {}) {

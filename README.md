@@ -1472,6 +1472,13 @@ eigenen Menues. Die Browserzeile zeigt aktives Fenster, Status und Vorschau.
 Tastaturfokus kehrt nach Dialogen zum sichtbaren, sitzungsgebundenen Ausloeser
 zurueck. Bestehende Berechtigungen, Sperren und Bestaetigungen gelten unveraendert.
 
+Der Child-Editor besitzt genau einen wirksamen Runstatus-Listener. Ein expliziter
+Override verhindert, dass der geerbte Manager-Listener reale Livewire-Events
+abfaengt. Regressionen pruefen den echten `dispatch`-Weg, nicht nur direkte
+Methodenaufrufe. Task-Auswahl aus der eigenen Live-Miniinstanz wird akzeptiert;
+fremde Editor-/Studioinstanzen bleiben ausgeschlossen. Der aktuelle UI-Auftrag
+und die abschliessende Browserabnahme konzentrieren sich auf Desktop.
+
 Das Studio kennt zwei Modi:
 
 - `interactive`: Der Benutzer kann starten, pausieren, fortsetzen, einen
