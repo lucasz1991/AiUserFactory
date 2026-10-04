@@ -1448,6 +1448,30 @@ Die Taskbearbeitung verwendet weiterhin die Formulare des
 `WorkflowStudioTaskEditor` im Modal; Revisionen werden im Workflow-Manager
 unter `Weitere Aktionen` verwaltet.
 
+### Kompakte Live-Arbeitsflaeche (2026-10-04)
+
+Bearbeiten und Testen verwenden denselben dauerhaft montierten Definitionseditor.
+Beim aktiven Lauf verschwindet die Task-Bibliothek automatisch; stattdessen zeigt
+die Miniansicht den beobachteten Ablauf und den aktuellen Task. Pause stellt die
+vorherige Bibliotheksauswahl wieder her. Nach dem Lauf bleibt die Ergebnis-Miniansicht
+sichtbar; `Bearbeiten` wechselt zum vorhandenen Editor zurueck. Task-interne
+Routenboxen entfallen; Routen und Fehlerfeedback bleiben funktional erhalten.
+
+`WorkflowLiveTaskPresenter` liest ausschliesslich den eigenen aktuellen Lauf und
+einen begrenzten oeffentlichen Step-Snapshot. Laufende Task-Ergebnisse haben Vorrang
+vor dem naechsten Kontextcursor; fehlende oder mehrdeutige Evidenz erfindet keinen
+laufenden Task. Studio, Mini-Markierung und automatische Sichtbarkeit verwenden
+dieselbe Quelle. Cursorwechsel aktualisieren die Ansicht; unveraenderte Polls und
+Screenshot-/URL-/Zeitwechsel loesen keine zusaetzliche Editor-Aktualisierung aus.
+Beobachtete Laufwege sind in dieser Liveansicht blau; fachliche Routenergebnisse
+bleiben separat erhalten. Terminal-Cursor werden nicht als noch laufend markiert.
+
+Start, Pause/Fortsetzen und Stop bleiben direkt erreichbar. Testmodus, Einzeltest
+und weitere Optionen stehen im Menue `Testoptionen`; Laufdaten und Diagnose in
+eigenen Menues. Die Browserzeile zeigt aktives Fenster, Status und Vorschau.
+Tastaturfokus kehrt nach Dialogen zum sichtbaren, sitzungsgebundenen Ausloeser
+zurueck. Bestehende Berechtigungen, Sperren und Bestaetigungen gelten unveraendert.
+
 Das Studio kennt zwei Modi:
 
 - `interactive`: Der Benutzer kann starten, pausieren, fortsetzen, einen

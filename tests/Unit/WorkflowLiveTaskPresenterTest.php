@@ -82,4 +82,24 @@ class WorkflowLiveTaskPresenterTest extends TestCase
         $stepRun->result_json = ['tasks' => $tasks];
         $this->assertNull($presenter->present($workflow, $run));
     }
+
+    public function test_latest_completed_attempt_does_not_revive_an_older_running_attempt(): void
+    {
+        [$workflow, $run, $olderAttempt] = $this->fixture(['tasks' => [['key' => 'first', 'status' => 'running']]]);
+        $completedAttempt = (new WorkflowStepRun)->forceFill([
+            'id' => 41, 'workflow_run_id' => 30, 'workflow_step_id' => 20, 'status' => 'completed',
+            'result_json' => ['tasks' => [['key' => 'first', 'status' => 'completed']]],
+        ]);
+        $foreignAttempt = (new WorkflowStepRun)->forceFill([
+            'id' => 42, 'workflow_run_id' => 99, 'workflow_step_id' => 20, 'status' => 'running',
+            'result_json' => ['tasks' => [['key' => 'second', 'status' => 'running']]],
+        ]);
+        $run->setRelation('stepRuns', new Collection([$olderAttempt, $completedAttempt, $foreignAttempt]));
+
+        $this->assertNull(app(WorkflowLiveTaskPresenter::class)->present($workflow, $run));
+        $this->assertTrue($run->relationLoaded('stepRuns'));
+        $this->assertCount(3, $run->stepRuns);
+        $this->assertSame('waiting', $olderAttempt->status);
+        $this->assertSame('completed', $completedAttempt->status);
+    }
 }

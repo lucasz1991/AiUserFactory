@@ -67,7 +67,7 @@
             const source = String(detail?.editorInstance || detail?.instance || detail?.source || '');
 
             if (source !== '') {
-                return [this.editorInstance, @js($routeMarkerId)].includes(source);
+                return [this.editorInstance, @js($routeMarkerId), @js($livePreviewInstance)].includes(source);
             }
 
             return this.$root.offsetParent !== null && ! this.$root.closest('[inert]');

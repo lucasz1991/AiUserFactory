@@ -245,6 +245,19 @@ class WorkflowStudioTaskEditor extends WorkflowManager
         }
     }
 
+    /**
+     * Remove the inherited manager's On attribute from this child method. It
+     * would otherwise overwrite the session-scoped listener above and skip
+     * every real runtime event because this child owns no manager workbench.
+     */
+    public function handleWorkbenchRunStatusChanged(
+        int $studioSessionId,
+        ?int $runId = null,
+        string $status = 'idle',
+    ): void {
+        $this->handleRunStatusChanged($studioSessionId, $runId, $status);
+    }
+
     #[On('workflow-definition-access-refresh-requested')]
     public function refreshDefinitionAccess(?int $studioSessionId = null): void
     {

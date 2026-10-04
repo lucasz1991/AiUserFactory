@@ -15,6 +15,8 @@ use App\Services\Workflows\WorkflowStudioSessionService;
 use DOMDocument;
 use DOMXPath;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
+use Livewire\Features\SupportEvents\SupportEvents;
 use Livewire\Features\SupportLockedProperties\CannotUpdateLockedPropertyException;
 use Livewire\Livewire;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -134,6 +136,18 @@ class WorkflowWorkspaceFeedbackTest extends TestCase
         $this->assertSame(1, $workflow->runs()->count());
     }
 
+    public function test_studio_child_registers_its_run_listener_instead_of_the_inherited_manager_handler(): void
+    {
+        [$workflow, $step, $session] = $this->liveWorkspace();
+        $editor = Livewire::test(WorkflowStudioTaskEditor::class, [
+            'workflow' => $workflow, 'studioSessionId' => $session->id,
+        ]);
+
+        $this->assertSame('handleRunStatusChanged', SupportEvents::getListenerMethodName(
+            $editor->instance(), 'workflow-studio-run-status-changed',
+        ));
+    }
+
     public function test_workspace_presentation_tracks_database_lifecycle_instead_of_event_status(): void
     {
         [$workflow, $step, $session] = $this->liveWorkspace();
@@ -151,7 +165,7 @@ class WorkflowWorkspaceFeedbackTest extends TestCase
             'cancelled' => 'result', 'stopped' => 'result', 'lost' => 'result', 'budget_exhausted' => 'result',
         ] as $status => $presentation) {
             $run->update(['status' => $status]);
-            $editor->call('handleRunStatusChanged', $session->id, $run->id, $status === 'paused' ? 'running' : 'paused')
+            $editor->dispatch('workflow-studio-run-status-changed', studioSessionId: $session->id, runId: $run->id, status: $status === 'paused' ? 'running' : 'paused')
                 ->assertSet('workspaceRunId', $run->id)
                 ->assertSet('taskEditRunStatus', $status)
                 ->assertSet('workspaceRunPresentation', $presentation)
@@ -168,7 +182,7 @@ class WorkflowWorkspaceFeedbackTest extends TestCase
         $editor->call('refreshDefinitionAccess', $session->id)->assertSet('workspaceRunPresentation', 'live');
 
         $session->update(['active_workflow_run_id' => null]);
-        $editor->call('handleRunStatusChanged', $session->id, null, 'running')
+        $editor->dispatch('workflow-studio-run-status-changed', studioSessionId: $session->id, runId: null, status: 'running')
             ->assertSet('workspaceRunId', null)->assertSet('workspaceRunPresentation', 'edit');
         $this->assertSame($definition, $step->fresh()->config_json);
         $this->assertSame(1, $workflow->runs()->count());
@@ -203,11 +217,11 @@ class WorkflowWorkspaceFeedbackTest extends TestCase
         $editor = Livewire::test(WorkflowStudioTaskEditor::class, [
             'workflow' => $workflow, 'studioSessionId' => $session->id,
         ]);
-        $editor->call('handleRunStatusChanged', $session->id + 1, $run->id, 'paused')
+        $editor->dispatch('workflow-studio-run-status-changed', studioSessionId: $session->id + 1, runId: $run->id, status: 'paused')
             ->assertSet('workspaceRunId', $run->id)->assertSet('workspaceRunPresentation', 'live');
-        $editor->call('handleRunStatusChanged', $session->id, $run->id + 1, 'paused')
+        $editor->dispatch('workflow-studio-run-status-changed', studioSessionId: $session->id, runId: $run->id + 1, status: 'paused')
             ->assertSet('workspaceRunId', $run->id)->assertSet('workspaceRunPresentation', 'live');
-        $editor->call('handleRunStatusChanged', $session->id, null, 'paused')
+        $editor->dispatch('workflow-studio-run-status-changed', studioSessionId: $session->id, runId: null, status: 'paused')
             ->assertSet('workspaceRunId', $run->id)->assertSet('workspaceRunPresentation', 'live');
 
         $run->update(['status' => 'completed']);
@@ -215,7 +229,7 @@ class WorkflowWorkspaceFeedbackTest extends TestCase
             ->assertSet('workspaceRunPresentation', 'result');
         $newRun = $this->workspaceRun($workflow, $step, $session, 'queued');
         app(WorkflowStudioSessionService::class)->attachRun($session, $newRun);
-        $editor->call('handleRunStatusChanged', $session->id, $newRun->id, 'completed')
+        $editor->dispatch('workflow-studio-run-status-changed', studioSessionId: $session->id, runId: $newRun->id, status: 'completed')
             ->assertSet('workspaceRunId', $newRun->id)->assertSet('workspaceRunPresentation', 'live')
             ->assertViewHas('activeRun', fn (WorkflowRun $activeRun): bool => $activeRun->id === $newRun->id);
         $this->assertSame('completed', $run->fresh()->status);
@@ -400,7 +414,7 @@ class WorkflowWorkspaceFeedbackTest extends TestCase
         $studio->call('refreshStudio')->assertDispatched('workflow-studio-run-status-changed',
             studioSessionId: $session->id, runId: $run->id, status: 'running',
         );
-        $editor->call('handleRunStatusChanged', $session->id, $run->id, 'running')
+        $editor->dispatch('workflow-studio-run-status-changed', studioSessionId: $session->id, runId: $run->id, status: 'running')
             ->assertSet('workspaceCursorNode', 'main::qa-wait-second');
         $xpath = $this->xpath($editor->html());
         $this->assertSame(1, $xpath->query('//*[@data-minimap-node="main::qa-wait-second" and @data-workflow-task-status="running" and @aria-current="step"]')->count());
@@ -457,6 +471,75 @@ class WorkflowWorkspaceFeedbackTest extends TestCase
             $this->assertSame($step->id, $cursor['step_id']);
             $this->assertSame('runtime', $cursor['source']);
         }
+    }
+
+    public function test_unloaded_live_cursor_queries_only_bounded_own_snapshots_without_hydrating_history(): void
+    {
+        [$workflow, $step, $session] = $this->liveWorkspace();
+        $run = $this->workspaceRun($workflow, $step, $session, 'running');
+        $run->update(['context_json' => ['next_task_key' => null]]);
+        $currentSnapshot = $run->stepRuns()->create([
+            'workflow_step_id' => $step->id, 'status' => 'running',
+            'result_json' => ['tasks' => [['key' => 'current', 'status' => 'running']]],
+        ]);
+        // Production still stores one attempt per run/step. Other historical
+        // steps make the query bound observable without changing that schema.
+        for ($index = 0; $index < 40; $index++) {
+            $historicalStep = $workflow->steps()->create([
+                'name' => 'Historischer Schritt '.$index, 'action_key' => 'history-'.$index,
+                'type' => 'browser_task', 'position' => 20 + $index, 'is_enabled' => true,
+                'config_json' => ['tasks' => [['key' => 'first', 'task_key' => 'wait.seconds', 'value' => 0]]],
+            ]);
+            $run->stepRuns()->create([
+                'workflow_step_id' => $historicalStep->id, 'status' => 'completed',
+                'result_json' => ['tasks' => [['key' => 'first', 'status' => 'completed']]],
+            ]);
+        }
+        $foreignRun = $this->workspaceRun($workflow, $step, $session, 'running');
+        $foreignRun->stepRuns()->create([
+            'workflow_step_id' => $step->id, 'status' => 'running',
+            'result_json' => ['tasks' => [['key' => 'first', 'status' => 'running']]],
+        ]);
+        $workflow->load('steps');
+        $unloadedRun = $run->fresh();
+        $this->assertFalse($unloadedRun->relationLoaded('stepRuns'));
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        try {
+            $cursor = app(WorkflowLiveTaskPresenter::class)->present($workflow, $unloadedRun);
+            $queries = DB::getQueryLog();
+        } finally {
+            DB::disableQueryLog();
+        }
+        $this->assertCount(1, $queries);
+        $this->assertStringContainsString('workflow_step_runs', $queries[0]['query']);
+        $this->assertStringContainsString('limit 32', strtolower($queries[0]['query']));
+        $this->assertMatchesRegularExpression('/order by\s+"?id"?\s+desc/i', $queries[0]['query']);
+        $this->assertSame([$run->id, $step->id], $queries[0]['bindings']);
+        $this->assertSame($currentSnapshot->id, $cursor['step_run_id']);
+        $this->assertSame('main::current', $cursor['node']);
+        $this->assertFalse($unloadedRun->relationLoaded('stepRuns'));
+
+        // The no-current-step branch is bounded too and cannot pick the newer
+        // foreign runner or revive an older own snapshot behind terminal data.
+        $unloadedRun->current_workflow_step_id = null;
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        try {
+            $withoutCurrentStep = app(WorkflowLiveTaskPresenter::class)->present($workflow, $unloadedRun);
+            $queries = DB::getQueryLog();
+        } finally {
+            DB::disableQueryLog();
+        }
+        $this->assertNull($withoutCurrentStep);
+        $this->assertCount(1, $queries);
+        $this->assertStringContainsString('limit 32', strtolower($queries[0]['query']));
+        $this->assertSame([$run->id], $queries[0]['bindings']);
+        $this->assertFalse($unloadedRun->relationLoaded('stepRuns'));
+        $this->assertSame($step->id, $run->fresh()->current_workflow_step_id);
+        $this->assertSame(41, $run->stepRuns()->count());
+        $this->assertSame(1, $foreignRun->stepRuns()->count());
     }
 
     public static function publicSnapshotTaskEvidence(): array
