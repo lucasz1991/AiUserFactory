@@ -6,11 +6,12 @@
 @endphp
 
 <section
-    x-data="{ expanded: false }"
+    x-data="{ expanded: false, cardsVisible: false }"
     class="ff-browser-strip relative z-20 shrink-0 border-b px-4 py-2.5 lg:px-6"
     data-studio-browser-windows
+    wire:key="studio-browser-windows-{{ $session->id }}"
 >
-    <div class="mb-2 flex min-w-0 items-center justify-between gap-3">
+    <div class="flex min-w-0 items-center justify-between gap-3">
         <div class="flex min-w-0 items-center gap-3">
             <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-600" aria-hidden="true">
                 <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
@@ -29,10 +30,13 @@
                         {{ $connectedBrowserWindows }} verbunden
                     </span>
                 </div>
-                <p data-studio-browser-description class="mt-0.5 truncate text-[10px] text-slate-500">Aktives Fenster im Blick, weitere Browser bei Bedarf einblenden.</p>
+                <p data-studio-browser-description class="sr-only">Browserfenster und Live-Vorschau öffnen.</p>
             </div>
         </div>
 
+        <div class="flex items-center gap-2">
+            <button type="button" x-on:click="cardsVisible = !cardsVisible" x-bind:aria-expanded="cardsVisible" class="ff-action-trigger inline-flex min-h-11 items-center gap-2 px-3 text-xs font-semibold" x-text="cardsVisible ? 'Fenster ausblenden' : 'Fenster anzeigen'"></button>
+            <button type="button" wire:click="openToolModal('browser')" class="ff-action-trigger inline-flex min-h-11 items-center px-3 text-xs font-semibold">Browser öffnen</button>
         @if($orderedBrowserWindows->count() > 1)
             <button
                 type="button"
@@ -47,14 +51,15 @@
                 </svg>
             </button>
         @endif
+        </div>
     </div>
 
-    <div class="ff-studio-commandbar flex items-stretch gap-2 overflow-x-auto pb-0.5">
+    <div x-cloak x-show.important="cardsVisible" class="ff-studio-commandbar mt-2 flex items-stretch gap-2 overflow-x-auto pb-0.5">
         @forelse($orderedBrowserWindows as $window)
             <article
                 @if(! $loop->first)
                     x-cloak
-                    x-show="expanded"
+                    x-show.important="expanded"
                     x-transition:enter="transition duration-200 ease-out motion-reduce:transition-none"
                     x-transition:enter-start="opacity-0 -translate-y-1"
                     x-transition:enter-end="opacity-100 translate-y-0"

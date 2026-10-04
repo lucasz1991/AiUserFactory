@@ -595,6 +595,12 @@
     $activeRouteNode = $activeRouteAction !== ''
         ? $activeRouteAction.'::'.($activeTaskKey !== '' ? $activeTaskKey : '*')
         : '';
+    $selectedRouteStep = $stepById->get((int) $selectedStepId);
+    if ($selectedRouteStep && $selectedTaskKey !== '') {
+        $activeRouteNode = $selectedRouteStep->action_key.'::'.$selectedTaskKey;
+    }
+    $feedbackByTask = app(\App\Services\Workflows\WorkflowRunTaskFeedback::class)->tasks($workflow, $workflowRun);
+    $routeMessagesByTask = $routeEvents->unique(fn (array $event) => ($event['sourceNode'] ?? '').'|'.($event['outcome'] ?? '').'|'.($event['targetNode'] ?? ''))->groupBy('sourceNode');
     $taskTone = static function (string $status, bool $active): string {
         return match (true) {
             $active || in_array($status, ['running', 'waiting'], true) => 'border-amber-300 bg-amber-50 text-amber-900 shadow-amber-100',
@@ -730,7 +736,7 @@
                     setTimeout(() => this.refreshRouteLines(), 80);
                 },
                 routeFocusNode() {
-                    return this.hoveredRouteNode || this.activeRouteNode || '';
+                    return this.activeRouteNode || this.hoveredRouteNode || '';
                 },
                 routeFocusBelongsToStep(actionKey) {
                     const focusNode = this.routeFocusNode();
@@ -743,25 +749,26 @@
                 },
                 renderRouteLines() {
                     const focusNode = this.routeFocusNode();
-                    const hasRelatedLine = focusNode !== '' && this.routeLines.some((line) => line.sourceNode === focusNode || line.targetNode === focusNode);
+                    const hasRelatedLine = focusNode !== '' && this.routeLines.some((line) => line.sourceNode === focusNode);
 
                     this.routeSvgMarkup = this.routeLines.map((line) => {
+                        if (focusNode && line.sourceNode !== focusNode) return '';
                         const color = {
                             runtime: '#0ea5e9',
                             success: '#34d399',
                             failed: '#f87171',
-                            partial: '#f59e0b',
+                            partial: '#3b82f6',
                             timeout: '#8b5cf6',
-                            waiting: '#f59e0b',
-                            default: '#94a3b8',
-                        }[line.tone] || '#94a3b8';
+                            waiting: '#3b82f6',
+                            default: '#3b82f6',
+                        }[line.tone] || '#3b82f6';
                         const marker = this.markerIds[line.tone] || this.markerIds.default;
                         const dash = line.direction === 'back' || line.tone === 'failed'
                             ? ' stroke-dasharray=&quot;6 5&quot;'
                             : (line.tone === 'partial'
                                 ? ' stroke-dasharray=&quot;4 4&quot;'
                                 : (line.tone === 'timeout' ? ' stroke-dasharray=&quot;3 4&quot;' : ''));
-                        const related = !hasRelatedLine || line.sourceNode === focusNode || line.targetNode === focusNode;
+                        const related = !focusNode || line.sourceNode === focusNode;
                         // Feature R3: Das Alter bestimmt die Grunddeckkraft — juengere
                         // Linien kraeftiger, aeltere blasser, aber nie unsichtbar.
                         // Der Hover-Fokus daempft zusaetzlich, blendet aber ebenfalls
@@ -859,7 +866,7 @@
                         const sourceStepIndex = stepIndexes.get(sourceColumn) ?? -1;
                         const targetStepIndex = stepIndexes.get(targetColumn) ?? -1;
                         const lane = 12 + ((index % 4) * 6);
-                        const tone = routeEvent.lineTone || 'default';
+                        const tone = ['success', 'failed', 'timeout', 'partial'].includes(routeEvent.outcome) ? routeEvent.outcome : 'default';
                         const sourceNode = routeEvent.sourceNode || '';
                         const targetNode = routeEvent.targetNode || '';
                         const lineResult = (points, radius = 10) => ({
@@ -1010,16 +1017,16 @@
                         <path d="M0,0 L0,6 L6,3 z" fill="#f87171"></path>
                     </marker>
                     <marker id="{{ $mapId }}-arrow-partial" markerWidth="6" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
-                        <path d="M0,0 L0,6 L6,3 z" fill="#f59e0b"></path>
+                        <path d="M0,0 L0,6 L6,3 z" fill="#3b82f6"></path>
                     </marker>
                     <marker id="{{ $mapId }}-arrow-timeout" markerWidth="6" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
                         <path d="M0,0 L0,6 L6,3 z" fill="#8b5cf6"></path>
                     </marker>
                     <marker id="{{ $mapId }}-arrow-waiting" markerWidth="6" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
-                        <path d="M0,0 L0,6 L6,3 z" fill="#f59e0b"></path>
+                        <path d="M0,0 L0,6 L6,3 z" fill="#3b82f6"></path>
                     </marker>
                     <marker id="{{ $mapId }}-arrow-default" markerWidth="6" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
-                        <path d="M0,0 L0,6 L6,3 z" fill="#94a3b8"></path>
+                        <path d="M0,0 L0,6 L6,3 z" fill="#3b82f6"></path>
                     </marker>
                 </defs>
                 <g x-html="routeSvgMarkup"></g>
@@ -1077,9 +1084,10 @@
                                     @php
                                         $taskKey = (string) ($task['key'] ?? '');
                                         $taskResult = $resultTasks->get($taskKey);
+                                        $feedback = $feedbackByTask[$step->id][$taskKey] ?? [];
                                         $taskStatus = $plannedOnlyStep
                                             ? 'not_executed'
-                                            : (string) data_get($taskResult, 'status', data_get($task, 'status', 'configured'));
+                                            : (string) ($feedback['status'] ?? data_get($taskResult, 'status', data_get($task, 'status', 'configured')));
                                         $isTaskActive = $isActiveStep && ($activeTaskKey === '' ? ($loop->first && in_array($stepStatus, ['running', 'waiting'], true)) : $taskKey === $activeTaskKey);
                                         $isTaskSelected = $selectedStepId === (int) $step->id && $selectedTaskKey === $taskKey;
                                         $tone = $taskTone($taskStatus, $isTaskActive);
@@ -1090,11 +1098,13 @@
                                             ? trim((string) $step->action_key).'::'.trim((string) ($previousTask['key'] ?? ''))
                                             : '';
                                         $taskRouteBadge = $routeBadgesByNode[$taskNode] ?? null;
+                                        $taskRoutes = $routeMessagesByTask->get($taskNode, collect());
                                     @endphp
 
                                     @if(! $loop->first)
                                         <div
                                             class="ml-4 transition-all {{ $lineTone }}"
+                                            x-show.important="!routeFocusNode()"
                                             x-bind:class="{
                                                 'h-2': zoomLevel === 'overview',
                                                 'h-3': zoomLevel === 'standard',
@@ -1109,6 +1119,7 @@
                                     <div
                                          data-minimap-node="{{ $taskNode }}"
                                          data-workflow-task-status="{{ $taskStatus }}"
+                                         data-task-failed="{{ ($feedback['failed'] ?? false) ? 'true' : 'false' }}"
                                          data-workflow-minimap-active-target="{{ $isTaskActive ? 'true' : 'false' }}"
                                          data-workflow-minimap-selected-task="{{ $isTaskSelected ? 'true' : 'false' }}"
                                         x-on:mouseenter="setHoveredRouteNode(@js($taskNode))"
@@ -1116,15 +1127,15 @@
                                         @if($selectableTasks)
                                             role="button"
                                             tabindex="0"
-                                             x-on:click.stop="$dispatch('workflow-preview-task-selected', { workflowId: {{ (int) $workflow->id }}, stepId: {{ (int) $step->id }}, taskKey: @js($taskKey), instance, source })"
-                                             x-on:keydown.enter.prevent.stop="$dispatch('workflow-preview-task-selected', { workflowId: {{ (int) $workflow->id }}, stepId: {{ (int) $step->id }}, taskKey: @js($taskKey), instance, source })"
+                                             x-on:click.stop="activeRouteNode = @js($taskNode); renderRouteLines(); $dispatch('workflow-preview-task-selected', { workflowId: {{ (int) $workflow->id }}, stepId: {{ (int) $step->id }}, taskKey: @js($taskKey), instance, source })"
+                                             x-on:keydown.enter.prevent.stop="activeRouteNode = @js($taskNode); renderRouteLines(); $dispatch('workflow-preview-task-selected', { workflowId: {{ (int) $workflow->id }}, stepId: {{ (int) $step->id }}, taskKey: @js($taskKey), instance, source })"
                                              x-on:dblclick.stop="$dispatch('workflow-preview-task-edit-requested', { workflowId: {{ (int) $workflow->id }}, stepId: {{ (int) $step->id }}, taskKey: @js($taskKey), instance, source })"
                                              title="Task auswählen; Doppelklick zum Bearbeiten"
                                          @endif
                                          @if($selectableTasks)
                                              aria-label="{{ $step->name }}: {{ $task['title'] ?? 'Task' }} ({{ $taskStatus }})"
                                              aria-pressed="{{ $isTaskSelected ? 'true' : 'false' }}"
-                                             x-on:keydown.space.prevent.stop="$dispatch('workflow-preview-task-selected', { workflowId: {{ (int) $workflow->id }}, stepId: {{ (int) $step->id }}, taskKey: @js($taskKey), instance, source })"
+                                             x-on:keydown.space.prevent.stop="activeRouteNode = @js($taskNode); renderRouteLines(); $dispatch('workflow-preview-task-selected', { workflowId: {{ (int) $workflow->id }}, stepId: {{ (int) $step->id }}, taskKey: @js($taskKey), instance, source })"
                                          @endif
                                          class="relative rounded-md border shadow-sm {{ $tone }} {{ $isTaskSelected ? 'ring-2 ring-sky-500 ring-offset-2 ring-offset-white' : '' }} {{ $selectableTasks ? 'min-h-11 cursor-pointer touch-manipulation transition hover:-translate-y-px hover:shadow-md focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2' : '' }}"
                                          x-bind:class="zoomLevel === 'overview' ? 'px-1.5 py-1 text-[9px]' : (zoomLevel === 'standard' ? 'px-2 py-1 text-[10px]' : 'px-2 py-1.5 text-[11px]')"
@@ -1139,6 +1150,7 @@
                                         @endif
                                         <div class="truncate {{ $taskRouteBadge ? 'pr-16' : 'pr-2' }} font-semibold">{{ $task['title'] ?? 'Task' }}</div>
                                         <div x-show="zoomLevel !== 'overview'" class="mt-0.5 truncate opacity-70">{{ $taskStatus }}</div>
+                                        <x-workflows.task-feedback :node="$taskNode" :feedback="$feedback" :routes="$taskRoutes" :compact="true" />
                                     </div>
                                 @empty
                                     <div
@@ -1158,6 +1170,7 @@
                             @endphp
                             <div
                                 class="flex h-20 shrink-0 items-center px-2 transition-all"
+                                x-show.important="!routeFocusNode()"
                                 x-bind:class="{
                                     'w-7': zoomLevel === 'overview',
                                     'w-9': zoomLevel === 'standard',
@@ -1202,14 +1215,6 @@
             </div>
         </div>
 
-        @if($routeEvents->isNotEmpty())
-            <div class="flex flex-wrap gap-1 text-[11px]">
-                @foreach($routeEvents->take(-6) as $routeEvent)
-                    <span class="rounded-full px-2 py-1 font-semibold ring-1 {{ $routeChipClass($routeEvent) }}">
-                        {{ $routeEvent['directionLabel'] }}: {{ $routeEvent['outcomeLabel'] ?? $routeEvent['outcome'] }} -> {{ $routeEvent['routeLabel'] }}
-                    </span>
-                @endforeach
-            </div>
-        @endif
+
     @endif
 </div>

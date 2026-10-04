@@ -126,6 +126,32 @@
 /* ------------------------------------------------------------------ */
 
 /* Index-only utility bar: the workflow list, not a hero, is the focal point. */
+.ff-task-feedback { margin-top: .5rem; padding: .6rem .75rem; border-radius: .5rem; font-size: .6875rem; line-height: 1.5; }
+.ff-task-feedback strong, .ff-task-feedback span { display: block; overflow-wrap: anywhere; }
+.ff-task-feedback--error { background: #fff1f2; color: #9f1239; border: 1px solid #fecdd3; }
+[data-task-failed='true'] > .ff-task-card { border-color: #f87171 !important; box-shadow: 0 0 0 1px #f87171 !important; }
+.ff-task-routes { margin-top: .5rem; padding: .25rem .625rem; border: 1px solid var(--ff-shell-line, #e2e8f0); border-radius: .5rem; background: var(--ff-shell-surface, #fff); }
+.ff-task-route-toggle { min-height: 28px; cursor: pointer; font-size: .6875rem; font-weight: 600; line-height: 28px; color: var(--ff-text-secondary, #475569); }
+.ff-task-route-toggle span { float: right; font-variant-numeric: tabular-nums; opacity: .65; }
+.ff-task-route-toggle:focus-visible { outline: 2px solid #3b82f6; outline-offset: 2px; border-radius: .25rem; }
+.ff-task-route-list { padding: .25rem 0 .5rem; }
+@media (hover: none), (pointer: coarse) { .ff-task-route-toggle { min-height: 44px; line-height: 44px; } }
+.ff-task-route { display: flex; align-items: baseline; gap: .375rem; font-size: .6875rem; line-height: 1.5; overflow-wrap: anywhere; color: #2563eb; }
+.ff-task-route + .ff-task-route { margin-top: .25rem; }
+.ff-task-route--success { color: #047857; }
+.ff-task-route--error { color: #be123c; }
+.ff-task-route--timeout { color: #7c3aed; }
+.ff-task-route__dot { flex: 0 0 .375rem; height: .375rem; margin-top: .3rem; border-radius: 50%; background: currentColor; }
+.ff-workflow-manager-bar .ff-workflow-index-bar__stats { margin-right: auto; }
+[data-workflow-unified-workspace] .ff-canvas-toolbar { padding: .5rem .75rem !important; gap: .5rem !important; }
+[data-workflow-unified-workspace] .ff-tool-dock { padding: .25rem .75rem !important; }
+[data-workflow-unified-workspace] .ff-browser-strip { padding: .25rem .75rem !important; }
+[data-workflow-unified-workspace] [data-studio-primary-bar] { min-height: 44px; }
+@media (max-width: 639.98px) {
+    .ff-workflow-manager-bar .ff-workflow-index-bar__stats { width: auto !important; flex: 1; }
+    .ff-workflow-manager-bar .ff-workflow-back { align-self: flex-start; }
+}
+
 .ff-command-surface.ff-workflow-index-bar {
   display: flex;
   flex-wrap: wrap;

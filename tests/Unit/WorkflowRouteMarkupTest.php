@@ -8,6 +8,19 @@ use PHPUnit\Framework\TestCase;
 
 class WorkflowRouteMarkupTest extends TestCase
 {
+    public function test_pointer_focus_does_not_move_route_details_before_task_activation(): void
+    {
+        $card = file_get_contents(dirname(__DIR__, 2).'/resources/views/components/workflows/step-card.blade.php');
+        $this->assertSame(1, preg_match('/x-on:focus\.self="([^"]*)"/', $card, $focus));
+        $this->assertStringNotContainsString('setActiveRouteNode', $focus[1]);
+        $this->assertStringContainsString('x-on:keydown.enter.self.prevent.stop="setActiveRouteNode', $card);
+        $this->assertStringContainsString('x-on:keydown.space.self.prevent.stop="setActiveRouteNode', $card);
+        $this->assertStringContainsString('x-bind:aria-pressed="activeRouteNode ===', $card);
+        $feedback = file_get_contents(dirname(__DIR__, 2).'/resources/views/components/workflows/task-feedback.blade.php');
+        $this->assertStringContainsString('<details wire:ignore.self', $feedback);
+        $this->assertStringNotContainsString('routeFocusNode()', $feedback);
+    }
+
     public function test_standard_editor_routes_use_shared_surface_mobile_focus_and_livewire_refresh(): void
     {
         $surface = file_get_contents(dirname(__DIR__, 2).'/resources/js/components/workflow-route-surface.js');
@@ -16,7 +29,7 @@ class WorkflowRouteMarkupTest extends TestCase
         $this->assertStringContainsString('export function workflowRouteSurface', $surface);
         $this->assertStringContainsString("window.matchMedia('(max-width: 767px)')", $surface);
         $this->assertStringContainsString('this.showAllRoutes = !event.matches', $surface);
-        $this->assertStringContainsString('line.sourceNode === focusNode || line.targetNode === focusNode', $surface);
+        $this->assertStringContainsString('line.sourceNode === focusNode', $surface);
         $this->assertStringContainsString("window.Livewire.hook('morphed'", $surface);
         $this->assertStringNotContainsString("window.Livewire.hook('morph.updated'", $surface);
         $this->assertStringContainsString('new ResizeObserver(() => this.queueRouteRefresh())', $surface);
@@ -36,7 +49,7 @@ class WorkflowRouteMarkupTest extends TestCase
         $this->assertStringContainsString('activeRouteNode: @js($activeRouteNode)', $definition);
         $this->assertStringContainsString('setHoveredRouteNode(node = \'\')', $definition);
         $this->assertStringContainsString('const adjacentSteps', $definition);
-        $this->assertStringContainsString('line.sourceNode === focusNode || line.targetNode === focusNode', $definition);
+        $this->assertStringContainsString('line.sourceNode === focusNode', $definition);
         $this->assertStringContainsString('data-minimap-step-column', $source);
         $this->assertStringNotContainsString('const laneY = Math.max(4', $definition);
         $this->assertStringEndsWith('}', trim($definition));
@@ -128,8 +141,8 @@ class WorkflowRouteMarkupTest extends TestCase
     {
         $source = file_get_contents(dirname(__DIR__, 2).'/resources/views/livewire/admin/network/workflow-studio/browser.blade.php');
 
-        $this->assertStringContainsString('@if($run)', $source);
-        $this->assertStringContainsString('<x-workflows.minimap', $source);
+        $this->assertStringContainsString('@if(! $historicalRunView)', $source);
+        $this->assertStringContainsString('<livewire:admin.network.workflow-studio-task-editor', $source);
         $this->assertStringContainsString(':workflow="$workflow"', $source);
         $this->assertStringContainsString(':selectable-tasks="! $autonomousMode"', $source);
         $this->assertStringContainsString('initial-zoom="overview"', $source);

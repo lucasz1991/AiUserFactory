@@ -29,7 +29,7 @@
     ];
 @endphp
 
-<nav class="ff-tool-dock relative z-20 shrink-0 border-b px-4 py-2 lg:px-6" aria-label="Workflow-Testwerkzeuge" data-workflow-studio-tool-bar>
+<nav wire:key="studio-tool-dock-{{ $session->id }}" class="ff-tool-dock relative z-20 shrink-0 border-b px-4 py-2 lg:px-6" aria-label="Workflow-Testwerkzeuge" data-workflow-studio-tool-bar>
     <div class="ff-studio-commandbar flex items-stretch gap-2 overflow-x-auto pb-0.5">
         <div class="flex shrink-0 items-center pr-1">
             <div>

@@ -6,6 +6,7 @@ use App\Models\Workflow;
 use App\Models\WorkflowStep;
 use App\Models\WorkflowStudioSession;
 use App\Services\Workflows\WorkflowRouteMapPresenter;
+use App\Services\Workflows\WorkflowRunTaskFeedback;
 use App\Services\Workflows\WorkflowStudioDefinitionMutationPolicy;
 use App\Services\Workflows\WorkflowStudioRevisionService;
 use App\Services\Workflows\WorkflowTaskCatalog;
@@ -34,7 +35,7 @@ class WorkflowStudioTaskEditor extends WorkflowManager
 
     public string $taskEditLockMessage = '';
 
-    public function mount(Workflow $workflow, ?int $studioSessionId = null, bool $modalOnly = false): void
+    public function mount(Workflow $workflow, ?int $studioSessionId = null, bool $modalOnly = false, int $initialStepId = 0, string $initialTaskKey = ''): void
     {
         $this->selectedWorkflowId = (int) $workflow->getKey();
         $this->studioSessionId = (int) $studioSessionId;
@@ -43,6 +44,9 @@ class WorkflowStudioTaskEditor extends WorkflowManager
         $this->catalogTargetStepId = (string) ($firstStep?->getKey() ?: '');
         $this->overviewSelectedStepId = (int) ($firstStep?->getKey() ?: 0);
         $this->overviewSelectedTaskKey = trim((string) data_get($firstStep?->task_cards, '0.key', ''));
+        if ($initialStepId > 0) {
+            $this->selectOverviewTask($initialStepId, $initialTaskKey);
+        }
         $this->synchronizeTaskEditAccess();
     }
 
@@ -58,6 +62,18 @@ class WorkflowStudioTaskEditor extends WorkflowManager
         $this->selectOverviewTask($stepId, $taskKey);
         $this->openEditTaskCard($stepId, $taskKey);
         $this->synchronizeTaskEditAccess();
+    }
+
+    public function selectTaskForTest(int $stepId, string $taskKey): void
+    {
+        $step = $this->stepForSelectedWorkflow($stepId);
+        if (! $step || ! collect($step->task_cards)->contains('key', $taskKey)) {
+            return;
+        }
+        $this->selectOverviewTask($stepId, $taskKey);
+        $this->dispatch('workflow-workspace-task-selected',
+            studioSessionId: $this->studioSessionId, stepId: $stepId, taskKey: $taskKey,
+        );
     }
 
     /**
@@ -670,6 +686,7 @@ class WorkflowStudioTaskEditor extends WorkflowManager
             'runStatus' => $activeRun?->status,
             'activeRun' => $activeRun,
             'routeMap' => $routeMap,
+            'taskFeedback' => app(WorkflowRunTaskFeedback::class)->tasks($workflow, $activeRun),
             'modalOnly' => $this->modalOnly,
             'definitionDrawerOpen' => $definitionDrawerOpen,
             'taskEditReadOnly' => $this->taskEditReadOnly,

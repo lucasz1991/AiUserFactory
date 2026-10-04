@@ -1,6 +1,15 @@
 <section class="ff-canvas-shell flex h-full min-h-0 min-w-0 flex-col" data-workflow-studio-diagram>
     <div class="ff-canvas-grid min-h-0 flex-1 overflow-hidden p-2.5 sm:p-3">
-        @if($run)
+        @if(! $historicalRunView)
+            <livewire:admin.network.workflow-studio-task-editor
+                :workflow="$workflow"
+                :studio-session-id="$session->id"
+                :modal-only="false"
+                :initial-step-id="(int) $selectedStepId"
+                :initial-task-key="$selectedTaskKey"
+                :key="'workflow-workspace-editor-'.$session->id"
+            />
+        @elseif($run)
             <div class="h-full min-h-0 overflow-hidden rounded-xl border border-slate-200 bg-white/95 shadow-inner">
                 <x-workflows.run-preview
                     class="h-full min-h-0"

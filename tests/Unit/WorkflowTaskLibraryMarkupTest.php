@@ -11,6 +11,7 @@ class WorkflowTaskLibraryMarkupTest extends TestCase
         $root = dirname(__DIR__, 2);
         $source = file_get_contents($root.'/resources/views/livewire/admin/network/partials/workflow-definition-editor.blade.php');
         $studioWrapper = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-studio-task-editor.blade.php');
+        $studioCanvas = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-studio/browser.blade.php');
         $manager = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-manager.blade.php');
 
         $this->assertStringContainsString('data-workflow-definition-editor', $source);
@@ -35,7 +36,9 @@ class WorkflowTaskLibraryMarkupTest extends TestCase
         $this->assertStringContainsString('const target = taskTarget || stepTarget', $source);
         $this->assertStringContainsString('target?.focus({ preventScroll: true })', $source);
         $this->assertStringContainsString("@include('livewire.admin.network.partials.workflow-definition-editor'", $studioWrapper);
-        $this->assertStringContainsString('<livewire:admin.network.workflow-studio-task-editor', $manager);
+        $this->assertStringContainsString('<livewire:admin.network.workflow-studio', $manager);
+        $this->assertStringContainsString('<livewire:admin.network.workflow-studio-task-editor', $studioCanvas);
+        $this->assertStringContainsString(':modal-only="false"', $studioCanvas);
         $this->assertStringNotContainsString("@include('livewire.admin.network.partials.workflow-definition-editor'", $manager);
     }
 
@@ -124,8 +127,11 @@ class WorkflowTaskLibraryMarkupTest extends TestCase
         $manager = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-manager.blade.php');
         $source = file_get_contents($root.'/resources/views/livewire/admin/network/partials/workflow-definition-editor.blade.php');
         $studioWrapper = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-studio-task-editor.blade.php');
+        $studioCanvas = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-studio/browser.blade.php');
 
-        $this->assertSame(1, substr_count($manager, '<livewire:admin.network.workflow-studio-task-editor'));
+        $this->assertSame(0, substr_count($manager, '<livewire:admin.network.workflow-studio-task-editor'));
+        $this->assertSame(1, preg_match_all('/<livewire:admin\.network\.workflow-studio\s/', $manager));
+        $this->assertSame(1, substr_count($studioCanvas, '<livewire:admin.network.workflow-studio-task-editor'));
         $this->assertSame(1, substr_count($studioWrapper, "@include('livewire.admin.network.partials.workflow-definition-editor'"));
         $this->assertStringNotContainsString('@if(false)', $manager);
         $this->assertStringNotContainsString('ff-task-library-launcher', $manager);

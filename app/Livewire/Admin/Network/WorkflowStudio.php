@@ -21,6 +21,7 @@ use App\Services\Workflows\WorkflowExecutionService;
 use App\Services\Workflows\WorkflowObservabilityPolicy;
 use App\Services\Workflows\WorkflowRetryRouteAutoRepairService;
 use App\Services\Workflows\WorkflowRouteTargetAutoRepairService;
+use App\Services\Workflows\WorkflowRunTaskFeedback;
 use App\Services\Workflows\WorkflowStudioAuthorizationService;
 use App\Services\Workflows\WorkflowStudioCheckpointService;
 use App\Services\Workflows\WorkflowStudioControlService;
@@ -91,6 +92,8 @@ class WorkflowStudio extends Component
     public string $selectedTaskKey = '';
 
     public string $editingTaskJson = '';
+
+    public string $lastFailureFocusSignature = '';
 
     public string $probeAction = 'selector.search';
 
@@ -225,6 +228,7 @@ class WorkflowStudio extends Component
             }
         }
 
+        $this->focusFailedTask($activeRun);
         $this->lastRunStatusDispatchSignature = $this->runStatusDispatchSignature($activeRun);
     }
 
@@ -723,6 +727,17 @@ class WorkflowStudio extends Component
         $this->selectedStepId = (string) $stepId;
         $this->selectedTaskKey = $taskKey;
         $this->editingTaskJson = $task ? (json_encode($task, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) ?: '') : '';
+        $this->dispatch('workflow-standard-editor-focused',
+            stepId: $stepId, taskKey: $taskKey, editorInstance: 'studio-'.$this->studioSessionId,
+        );
+    }
+
+    #[On('workflow-workspace-task-selected')]
+    public function selectWorkspaceTask(int $studioSessionId, int $stepId, string $taskKey): void
+    {
+        if ($studioSessionId === $this->studioSessionId) {
+            $this->selectTask($stepId, $taskKey);
+        }
     }
 
     public function selectPreviousTask(): void
@@ -770,6 +785,12 @@ class WorkflowStudio extends Component
 
     public function openDefinitionBuilder(): void
     {
+        if ($this->isHistoricalRunView()) {
+            // Leave the read-only history view, never replace the active run.
+            $this->activeRunId = $this->session()->active_workflow_run_id;
+            $this->dispatchRunStatusChanged($this->activeRun());
+        }
+        $this->dispatch('workflow-workspace-library-open', studioSessionId: $this->studioSessionId);
         if ($this->hosted) {
             $this->dispatchHostedDefinitionRequest(
                 (int) $this->selectedStepId,
@@ -1176,6 +1197,7 @@ class WorkflowStudio extends Component
         }
         $run = $this->activeRun();
         $this->synchronizeSelectionWithRunCursor($run);
+        $this->focusFailedTask($run);
         $this->ensureSelectedTaskExists();
         $runIsSessionActive = $session
             && $run
@@ -1362,6 +1384,8 @@ class WorkflowStudio extends Component
             'session_active_run_id' => $session->active_workflow_run_id ? (int) $session->active_workflow_run_id : null,
             'display_run_id' => $run?->getKey() ? (int) $run->getKey() : null,
             'display_run_status' => (string) ($run?->status ?? 'idle'),
+            'display_task_feedback' => data_get($run?->context_json, 'task_history_sequence', count((array) data_get($run?->context_json, 'task_history', []))),
+            'display_cursor' => [$run?->current_workflow_step_id, data_get($run?->context_json, 'next_task_key')],
             'definition_can_edit' => (bool) $policy['can_edit'],
             'definition_can_pause' => (bool) $policy['can_pause_for_edit'],
             'definition_lock_message' => (string) $policy['message'],
@@ -1901,6 +1925,10 @@ class WorkflowStudio extends Component
             return false;
         }
 
+        if (in_array($run->status, ['failed', 'timed_out', 'cancelled', 'completed'], true)) {
+            return false;
+        }
+
         $taskKey = trim((string) data_get($run->context_json, 'next_task_key', ''));
         if ($taskKey === '') {
             return false;
@@ -1924,6 +1952,25 @@ class WorkflowStudio extends Component
         $this->observedCursorSignature = $signature;
 
         return true;
+    }
+
+    private function focusFailedTask(?WorkflowRun $run): void
+    {
+        if (! $run || ! in_array($run->status, ['failed', 'timed_out'], true)) {
+            $this->lastFailureFocusSignature = '';
+
+            return;
+        }
+        $failure = app(WorkflowRunTaskFeedback::class)->failure($this->workflow(), $run);
+        if (! $failure) {
+            return;
+        }
+        $signature = $run->id.'::'.$failure['step_id'].'::'.$failure['task_key'];
+        if ($signature === $this->lastFailureFocusSignature) {
+            return; // Polls must not steal focus back after a manual selection.
+        }
+        $this->lastFailureFocusSignature = $signature;
+        $this->selectTask($failure['step_id'], $failure['task_key']);
     }
 
     private function rebasePausedRunRevision(WorkflowRun $run, string $intent = 'resume_run'): void

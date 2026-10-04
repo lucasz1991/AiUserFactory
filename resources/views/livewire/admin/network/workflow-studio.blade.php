@@ -94,11 +94,11 @@
     @endphp
 
     <header class="ff-studio-header relative z-30 shrink-0 border-b">
-        <div data-studio-primary-bar class="flex flex-wrap items-center gap-3 px-3 py-3 sm:px-4 lg:px-6">
+        <div data-studio-primary-bar class="flex flex-wrap items-center justify-end gap-2 px-3 py-1 sm:px-4">
             @if($hosted)
-                <div data-workflow-studio-hosted-status class="min-w-[180px] flex-1">
+                <div data-workflow-studio-hosted-status class="sr-only">
                     <div class="flex flex-wrap items-center gap-2.5">
-                        <span class="ff-kicker">Workflow-Test</span>
+                        <span class="ff-kicker">Arbeitsfläche</span>
                         <span class="ff-status-island" data-active="{{ $isActive ? 'true' : 'false' }}" role="status" aria-live="polite">
                             <span class="ff-status-dot" aria-hidden="true"></span>
                             <span class="text-[10px] font-bold tracking-wide">{{ $statusLabel }}</span>
@@ -211,7 +211,7 @@
                     type="button"
                     wire:click="openDefinitionBuilder"
                     data-workflow-studio-builder-trigger
-                    title="Task-Bibliothek und Listenverwaltung über dem Studio öffnen"
+                    title="Task-Bibliothek und Listenverwaltung öffnen"
                     class="ff-action-trigger ff-action-trigger--primary inline-flex h-9 shrink-0 items-center gap-2 px-3 text-[11px] font-bold"
                 >
                     <span class="text-base leading-none" aria-hidden="true">+</span> Listen &amp; Tasks
@@ -246,7 +246,7 @@
     @endunless
 
     {{-- isolate kapselt die Diagramm-/Overlay-z-Werte (Minimap z-10/z-20, Lade-Overlay z-50) in einen eigenen Stacking-Kontext, damit sie nie mit den Shell-Modalen konkurrieren --}}
-    <main class="ff-canvas-grid relative isolate min-h-0 flex-1 overflow-hidden p-3">
+    <main wire:key="studio-canvas-{{ $session->id }}" class="ff-canvas-grid relative isolate min-h-0 flex-1 overflow-hidden p-3">
         <section class="h-full min-h-0 min-w-0" aria-label="Workflow-Vorschau und Live-Ausführung">
             @include('livewire.admin.network.workflow-studio.browser')
         </section>
@@ -321,14 +321,14 @@
         </x-ui.modal>
     @endif
 
-    @unless($hosted)
+    @if($historicalRunView)
         <livewire:admin.network.workflow-studio-task-editor
             :workflow="$workflow"
             :studio-session-id="$session->id"
             :modal-only="true"
-            :key="'workflow-studio-task-modal-'.$workflow->id.'-'.$session->id"
+            :key="'workflow-studio-task-editor-'.$workflow->id.'-'.$session->id"
         />
-    @endunless
+    @endif
 
     @if(! $autonomousMode && ! $historicalRunView)
         @include('livewire.admin.network.workflow-studio.selector-modal')

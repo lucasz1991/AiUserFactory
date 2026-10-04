@@ -114,7 +114,7 @@ class WorkflowWorkbenchUiSafetyMarkupTest extends TestCase
         $this->assertStringContainsString("requested?.closest?.('.ff-menu')", $manager);
         $this->assertStringContainsString("querySelector(':scope > button[aria-expanded]')", $manager);
 
-        $this->assertStringContainsString("\$managerWorkbenchPollEnabled = \$workbenchSurface === 'definition';", $manager);
+        $this->assertStringContainsString('$managerWorkbenchPollEnabled = false;', $manager);
         $this->assertMatchesRegularExpression('/\?\s*2\s*:\s*15;/', $manager);
         $this->assertStringContainsString('data-workflow-manager-poll=', $manager);
         $this->assertStringContainsString('wire:target.except="taskSearch,selectTaskGroup,catalogTargetStepId,refreshWorkbenchContext"', $manager);

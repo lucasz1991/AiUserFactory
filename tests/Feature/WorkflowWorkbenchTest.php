@@ -434,13 +434,11 @@ class WorkflowWorkbenchTest extends TestCase
         $this->assertStringNotContainsString('x-collapse', $definition);
         $this->assertStringContainsString('data-studio-workflow-canvas', $definition);
 
-        $this->assertStringContainsString('data-workflow-workbench-definition', $manager);
-        $this->assertStringContainsString('data-workflow-workbench-test', $manager);
-        $this->assertStringContainsString('x-show.important="workbenchSurface === \'definition\'"', $manager);
-        $this->assertStringContainsString('x-show.important="workbenchSurface === \'test\'"', $manager);
-        $this->assertStringContainsString('x-bind:inert="workbenchSurface !== \'definition\'"', $manager);
-        $this->assertStringContainsString('x-bind:inert="workbenchSurface !== \'test\'"', $manager);
-        $this->assertStringContainsString('<livewire:admin.network.workflow-studio-task-editor', $manager);
+        $this->assertStringContainsString('data-workflow-unified-workspace', $manager);
+        $this->assertStringNotContainsString('role="tabpanel"', $manager);
+        $this->assertStringNotContainsString('role="tablist"', $manager);
+        $browser = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-studio/browser.blade.php');
+        $this->assertSame(1, substr_count($browser, '<livewire:admin.network.workflow-studio-task-editor'));
         $this->assertStringContainsString(':hosted="true"', $manager);
         $this->assertStringContainsString(':studio-session-id="$workbenchStudioSessionId"', $manager);
         $this->assertStringContainsString('workflow-workbench-test-', $manager);

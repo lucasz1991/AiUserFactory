@@ -25,10 +25,15 @@
     $taskEditPauseRequestedState = (bool) ($taskEditPauseRequested ?? false);
     $taskEditRunStatusState = (string) ($taskEditRunStatus ?? 'idle');
     $taskEditLockMessageState = (string) ($taskEditLockMessage ?? '');
-    // Im Studio wuerde ein dauerhaft sichtbarer Editor-Canvas die Vollbild-Testansicht
-    // verdraengen, deshalb erscheinen Bibliothek und Canvas dort nur als Overlay auf Abruf.
+    // Nur historische Vorschauen behalten einen modalen Editor. Aktuelle
+    // Definition und Testlauf verwenden denselben dauerhaft montierten Canvas.
     $definitionDrawerOpen = (bool) ($definitionDrawerOpen ?? false);
     $showDefinitionSurface = ! $modalOnly || $definitionDrawerOpen;
+    $routeTitles = collect($routeMap['nodes'] ?? [])->pluck('title', 'id');
+    $routesByTask = collect($routeMap['edges'] ?? [])->map(function (array $edge) use ($routeTitles): array {
+        $edge['targetLabel'] = $routeTitles->get($edge['target'] ?? '', $edge['label'] ?? 'Workflow-Ende');
+        return $edge;
+    })->unique(fn (array $edge) => ($edge['source'] ?? '').'|'.($edge['outcome'] ?? '').'|'.($edge['target'] ?? ''))->groupBy('source');
 @endphp
 
 <div
@@ -112,7 +117,9 @@
 
             if (!stepId) return;
 
-            await $wire.selectOverviewTask(stepId, taskKey);
+            if (Number($wire.overviewSelectedStepId) !== stepId || String($wire.overviewSelectedTaskKey || '') !== taskKey) {
+                await $wire.selectOverviewTask(stepId, taskKey);
+            }
             if (! this.desktopSidebar) this.mobileLibraryOpen = false;
             this.focusedTask = taskKey ? `${stepId}::${taskKey}` : '';
             this.$nextTick(() => {
@@ -123,9 +130,9 @@
                         .find((node) => node.dataset.workflowTaskKey === taskKey)
                     : null;
                 const target = taskTarget || stepTarget;
-                this.activeRouteNode = taskTarget?.dataset.workflowTaskNode
+                this.setActiveRouteNode(taskTarget?.dataset.workflowTaskNode
                     || stepTarget?.querySelector('[data-workflow-route-node]')?.dataset.workflowRouteNode
-                    || '';
+                    || '');
                 target?.scrollIntoView({ behavior: this.scrollBehavior(), block: 'nearest', inline: 'center' });
                 target?.focus({ preventScroll: true });
                 this.queueRouteRefresh();
@@ -143,8 +150,10 @@
     x-on:workflow-preview-task-selected.stop="if (eventTargetsThisEditor($event.detail)) focusOverviewTask($event.detail)"
     x-on:workflow-preview-task-edit-requested.stop="if (eventTargetsThisEditor($event.detail)) editOverviewTask($event.detail)"
     x-on:workflow-standard-editor-focused.window="if (eventTargetsThisEditor($event.detail)) focusOverviewTask($event.detail)"
+    x-on:workflow-task-selected.stop="$wire.selectTaskForTest(Number($event.detail.stepId), String($event.detail.taskKey))"
     x-on:workflow-definition-workbench-entered.window="enterDefinitionWorkbench($event.detail)"
     x-on:workflow-library-close-requested.window="closeMobileLibrary()"
+    x-on:workflow-workspace-library-open.window="if (Number($event.detail.studioSessionId) === @js($studioSessionId)) setLibraryExpanded(true, true)"
     x-on:workflow-task-move-requested.stop="
         if (! @js($canEdit)) return;
         const detail = $event.detail || {};
@@ -205,18 +214,20 @@
             data-studio-editor-canvas-panel
             class="order-1 flex h-full min-h-0 w-full min-w-0 max-w-full shrink-0 flex-col overflow-hidden bg-slate-50 md:col-start-1 md:row-start-1"
         >
+            @if(! $canEdit)
+                <p class="shrink-0 border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-900" role="status">{{ $taskEditLockMessageState ?: 'Bearbeitung ist für diesen Lauf gesperrt. Pausiere den interaktiven Test am sicheren Haltepunkt.' }}</p>
+            @endif
             <div class="ff-canvas-toolbar flex shrink-0 flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
                 <div class="flex min-w-0 items-start gap-3">
                     <div class="min-w-0">
                     <div class="flex items-center gap-2">
                         <div>
-                            <p class="ff-kicker">Editor</p>
-                            <h2 class="mt-0.5 text-sm font-bold tracking-tight text-slate-950">Workflow aufbauen</h2>
+                            <h2 class="text-sm font-bold tracking-tight text-slate-950">Ablauf</h2>
                         </div>
                         <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600">{{ $steps->count() }} Listen</span>
                         <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600">{{ $steps->sum(fn ($step) => count($step->task_cards)) }} Tasks</span>
                     </div>
-                    <p class="mt-1 text-xs text-slate-500">Listen und Tasks verschieben, bearbeiten oder direkt aus dem Katalog einsetzen.</p>
+                    <p class="sr-only">Auswählen zum Testen · Doppelklick zum Bearbeiten</p>
                     </div>
                 </div>
                 <div class="flex flex-wrap items-center justify-end gap-2">
@@ -234,10 +245,10 @@
                         <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="2"></rect><rect x="14" y="3" width="7" height="7" rx="2"></rect><rect x="3" y="14" width="7" height="7" rx="2"></rect><path d="M17.5 14v7M14 17.5h7"></path></svg>
                         Bibliothek öffnen
                     </button>
-                    <div class="hidden items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[10px] font-bold text-slate-600 sm:flex" aria-label="Legende der Verbindungslinien">
+                    <div class="sr-only" aria-label="Legende der Verbindungslinien">
                         <span class="inline-flex items-center gap-1"><i class="h-0.5 w-3 rounded bg-emerald-500"></i> Erfolg</span>
                         <span class="inline-flex items-center gap-1"><i class="h-0.5 w-3 rounded bg-rose-400"></i> Fehler</span>
-                        <span class="inline-flex items-center gap-1"><i class="h-0.5 w-3 rounded bg-amber-500"></i> Partial</span>
+                        <span class="inline-flex items-center gap-1"><i class="h-0.5 w-3 rounded bg-blue-500"></i> Weitere</span>
                         <span class="inline-flex items-center gap-1"><i class="h-0.5 w-3 rounded bg-violet-500"></i> Timeout</span>
                         @if($activeRun)
                             <span class="inline-flex items-center gap-1"><i class="h-0.5 w-3 rounded bg-sky-500"></i> Laufweg</span>
@@ -246,7 +257,6 @@
                     <button
                         type="button"
                         {{-- inline-flex kommt aus Tailwind mit !important und wuerde ein nacktes x-show ueberstimmen --}}
-                        x-show.important="compactRouteMode"
                         x-on:click="toggleAllRoutes()"
                         x-bind:aria-pressed="showAllRoutes"
                         class="inline-flex min-h-11 items-center rounded-xl border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 transition hover:border-blue-300 hover:text-blue-700"
@@ -267,19 +277,7 @@
                 </div>
             </div>
 
-            <details class="group shrink-0 border-b border-slate-200 bg-white/80 px-4 py-2.5 text-xs text-slate-600">
-                <summary class="flex cursor-pointer list-none items-center justify-between gap-3 font-bold text-slate-700 marker:hidden">
-                    <span>Kurzhilfe zu Workflow, Listen, Tasks und Weiterleitungen</span>
-                    <span class="text-[10px] font-semibold text-slate-600 group-open:hidden">Öffnen</span>
-                    <span class="hidden text-[10px] font-semibold text-slate-600 group-open:inline">Schließen</span>
-                </summary>
-                <div class="mt-3 grid gap-3 leading-5 md:grid-cols-2 xl:grid-cols-4">
-                    <p><strong>Workflow:</strong> Der gesamte Prozess mit Ziel, Eingaben und Erfolgskriterien. Aktivierte Listen laufen grundsätzlich von links nach rechts.</p>
-                    <p><strong>Liste:</strong> Eine fachliche Phase mit eigenen Erfolgs-, Fehler-, Partial- und Timeout-Wegen. Ihre Route greift erst, wenn keine Task-Route Vorrang hat.</p>
-                    <p><strong>Task:</strong> Eine konkrete Aktion. Ohne eigene Route folgt die nächste Karte; <code>next</code> und <code>on_error</code> können zu Karten, Listen, Ende oder Fehler führen.</p>
-                    <p><strong>Loop:</strong> Start, Reader, optionales Array-Sammeln und Loop-Ende bilden einen Block. Normaler Abschluss, leere Liste und Fehler besitzen getrennte Ziele.</p>
-                </div>
-            </details>
+
 
             @if(! $canEdit)
                 <div class="flex shrink-0 items-center justify-between gap-3 border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-900">
@@ -311,10 +309,10 @@
                         @foreach([
                             'success' => '#10b981',
                             'failed' => '#fb7185',
-                            'partial' => '#f59e0b',
+                            'partial' => '#3b82f6',
                             'timeout' => '#8b5cf6',
                             'runtime' => '#0ea5e9',
-                            'default' => '#94a3b8',
+                            'default' => '#3b82f6',
                         ] as $markerName => $markerColor)
                             <marker id="{{ $routeMarkerId }}-arrow-{{ $markerName }}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
                                 <path d="M 0 0 L 10 5 L 0 10 z" fill="{{ $markerColor }}"></path>
@@ -338,7 +336,7 @@
                             data-studio-editor-step
                             class="rounded-2xl transition {{ (string) $step->id === $catalogTargetStepId ? 'ring-2 ring-blue-500 ring-offset-4 ring-offset-slate-50' : '' }}"
                         >
-                            <x-workflows.step-card :step="$step" :locked="! $canEdit">
+                            <x-workflows.step-card :step="$step" :locked="! $canEdit" :task-feedback="$taskFeedback[$step->id] ?? []" :routes-by-task="$routesByTask">
                                 <x-slot name="actions">
                                     <button type="button" wire:click="openEditStep({{ $step->id }})" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-100">Liste bearbeiten</button>
                                     <button type="button" wire:click="toggleStep({{ $step->id }})" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-100">{{ $step->is_enabled ? 'Pausieren' : 'Aktivieren' }}</button>

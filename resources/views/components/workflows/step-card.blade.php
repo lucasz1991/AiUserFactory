@@ -1,6 +1,8 @@
 @props([
     'step',
     'locked' => false,
+    'taskFeedback' => [],
+    'routesByTask' => [],
 ])
 
 @php
@@ -230,6 +232,8 @@
                 @php
                     $taskKey = trim((string) ($task['key'] ?? ''));
                     $sourceNode = $step->action_key.'::'.$taskKey;
+                    $feedback = $taskFeedback[$taskKey] ?? [];
+                    $taskRoutes = $routesByTask[$sourceNode] ?? [];
                     $successTarget = $routeNodeForTask(is_array($task['next'] ?? null) ? $task['next'] : null);
                     $failedTarget = $routeNodeForTask(is_array($task['on_error'] ?? null) ? $task['on_error'] : null);
                     $isLoopPairTask = trim((string) data_get($task, 'loop_pair_id', '')) !== '';
@@ -257,6 +261,7 @@
                     @if($connectsFromPrevious)
                         <div
                             class="ml-5 flex h-5 w-3 justify-center transition-opacity"
+                            x-show.important="!routeFocusNode() || routeFocusNode() === @js($previousNode)"
                             x-bind:class="routeFocusNode() && ![@js($previousNode), @js($sourceNode)].includes(routeFocusNode()) ? 'opacity-50' : 'opacity-100'"
                             aria-hidden="true"
                         >
@@ -276,11 +281,22 @@
                         data-assistant-highlight-key="{{ $taskKey }}"
                         data-route-success="{{ $successTarget }}"
                         data-route-failed="{{ $failedTarget }}"
+                        data-workflow-task-status="{{ $feedback['status'] ?? 'configured' }}"
+                        data-task-failed="{{ ($feedback['failed'] ?? false) ? 'true' : 'false' }}"
+                        role="button"
+                        tabindex="0"
+                        aria-label="{{ $task['title'] ?? 'Task' }}{{ ($feedback['failed'] ?? false) ? ': fehlgeschlagen' : '' }}"
+                        {{-- Pointer focus happens before click. Changing route details
+                             here would move the card between pointerdown and pointerup. --}}
+                        x-on:focus.self="focusedTask = @js($step->id.'::'.$taskKey)"
+                        x-bind:aria-pressed="activeRouteNode === @js($sourceNode)"
+                        x-on:keydown.enter.self.prevent.stop="setActiveRouteNode(@js($sourceNode)); $dispatch('workflow-task-selected', { stepId: {{ $step->id }}, taskKey: @js($taskKey) })"
+                        x-on:keydown.space.self.prevent.stop="setActiveRouteNode(@js($sourceNode)); $dispatch('workflow-task-selected', { stepId: {{ $step->id }}, taskKey: @js($taskKey) })"
                         @if(! $locked) draggable="true" @endif
                         @if(! $locked) x-on:dragstart.stop="beginTaskDrag($event, @js($task['key'] ?? ''), @js((string) $step->id))" @endif
                         x-on:mouseenter="setHoveredRouteNode(@js($sourceNode))"
                         x-on:mouseleave="setHoveredRouteNode('')"
-                        x-on:click.stop="if (! taskActivationAllowed($event)) return; focusedTask = @js($step->id.'::'.($task['key'] ?? '')); setActiveRouteNode(@js($sourceNode))"
+                        x-on:click.stop="if (! taskActivationAllowed($event)) return; focusedTask = @js($step->id.'::'.($task['key'] ?? '')); setActiveRouteNode(@js($sourceNode)); $dispatch('workflow-task-selected', { stepId: {{ $step->id }}, taskKey: @js($taskKey) })"
                         @if(! $locked) x-on:dblclick.stop="if (! taskActivationAllowed($event)) return; $wire.openEditTaskCard({{ $step->id }}, @js($task['key'] ?? ''))" @endif
                         x-bind:class="focusedTask === @js($step->id.'::'.($task['key'] ?? '')) ? 'ring-2 ring-slate-400 ring-offset-2 ring-offset-slate-100' : ''"
                         class="relative z-20 w-full min-w-0 max-w-full rounded-lg"
@@ -288,11 +304,12 @@
                         <x-workflows.task-card :task="$task" :show-ports="true" :locked="$locked">
                             @if(! $locked)
                                 <x-slot name="actions">
-                                    <button type="button" wire:click="openEditTaskCard({{ $step->id }}, @js($task['key'] ?? ''))" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-100">Bearbeiten</button>
+                                    <button type="button" x-on:click="open = false" wire:click="openEditTaskCard({{ $step->id }}, @js($task['key'] ?? ''))" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-100">Bearbeiten</button>
                                     <button type="button" wire:click="removeTaskCard({{ $step->id }}, @js($task['key'] ?? ''))" wire:confirm="{{ $isLoopPairTask ? 'Loop-Start und Loop-Ende wirklich entfernen?' : 'Step-Karte wirklich entfernen?' }}" class="block w-full rounded px-3 py-2 text-left text-xs font-semibold text-red-700 hover:bg-red-50">Entfernen</button>
                                 </x-slot>
                             @endif
                         </x-workflows.task-card>
+                        <x-workflows.task-feedback :node="$sourceNode" :feedback="$feedback" :routes="$taskRoutes" />
                         @if(! $locked)
                             <div
                                 class="ff-touch-task-reorder"

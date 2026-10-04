@@ -2,11 +2,11 @@ const ROUTE_TONES = {
     success: { color: '#10b981', marker: 'success', dash: '' },
     failed: { color: '#fb7185', marker: 'failed', dash: '6 5' },
     error: { color: '#fb7185', marker: 'failed', dash: '6 5' },
-    partial: { color: '#f59e0b', marker: 'partial', dash: '4 4' },
+    partial: { color: '#3b82f6', marker: 'partial', dash: '4 4' },
     timeout: { color: '#8b5cf6', marker: 'timeout', dash: '3 4' },
     runtime: { color: '#0ea5e9', marker: 'runtime', dash: '' },
-    implicit: { color: '#94a3b8', marker: 'default', dash: '' },
-    default: { color: '#94a3b8', marker: 'default', dash: '' },
+    implicit: { color: '#3b82f6', marker: 'default', dash: '' },
+    default: { color: '#3b82f6', marker: 'default', dash: '' },
 };
 
 const normalizeOutcome = (value) => {
@@ -42,6 +42,7 @@ export function workflowRouteSurface(config = {}) {
         routeOverlay: { width: 0, height: 0 },
         routeSvgMarkup: '',
         _routeResizeObserver: null,
+        _routeMutationObserver: null,
         _routeMedia: null,
         _routeMediaListener: null,
         _routeLivewireCleanup: null,
@@ -51,10 +52,10 @@ export function workflowRouteSurface(config = {}) {
         init() {
             this._routeMedia = window.matchMedia('(max-width: 767px)');
             this.compactRouteMode = this._routeMedia.matches;
-            this.showAllRoutes = !this.compactRouteMode;
+            this.showAllRoutes = !this.compactRouteMode && !this.routeFocusNode();
             this._routeMediaListener = (event) => {
                 this.compactRouteMode = event.matches;
-                this.showAllRoutes = !event.matches;
+                this.showAllRoutes = !event.matches && !this.routeFocusNode();
                 this.queueRouteRefresh();
             };
             this._routeMedia.addEventListener?.('change', this._routeMediaListener);
@@ -65,6 +66,14 @@ export function workflowRouteSurface(config = {}) {
                 if (surface && window.ResizeObserver) {
                     this._routeResizeObserver = new ResizeObserver(() => this.queueRouteRefresh());
                     this._routeResizeObserver.observe(surface);
+                }
+                if (surface && window.MutationObserver) {
+                    this._routeMutationObserver = new MutationObserver((records) => {
+                        // Columns can change without resizing the viewport.
+                        // SVG writes are not layout signals.
+                        if (records.some((record) => !record.target.closest?.('svg'))) this.queueRouteRefresh();
+                    });
+                    this._routeMutationObserver.observe(surface, { childList: true, subtree: true });
                 }
 
                 this.queueRouteRefresh();
@@ -87,6 +96,7 @@ export function workflowRouteSurface(config = {}) {
 
         destroy() {
             this._routeResizeObserver?.disconnect();
+            this._routeMutationObserver?.disconnect();
             this._routeMedia?.removeEventListener?.('change', this._routeMediaListener);
             this._routeLivewireCleanup?.();
             window.removeEventListener('resize', this._routeWindowRefresh);
@@ -96,7 +106,7 @@ export function workflowRouteSurface(config = {}) {
         },
 
         routeFocusNode() {
-            return this.hoveredRouteNode || this.activeRouteNode || this.initialRouteNode || '';
+            return this.activeRouteNode || this.hoveredRouteNode || this.initialRouteNode || '';
         },
 
         setHoveredRouteNode(node = '') {
@@ -106,13 +116,19 @@ export function workflowRouteSurface(config = {}) {
 
         setActiveRouteNode(node = '') {
             const normalized = String(node || '');
-            this.activeRouteNode = this.activeRouteNode === normalized ? '' : normalized;
-            this.initialRouteNode = normalized || this.initialRouteNode;
+            this.activeRouteNode = normalized;
+            this.initialRouteNode = normalized;
+            if (normalized) this.showAllRoutes = false;
             this.renderRouteLines();
         },
 
         toggleAllRoutes() {
             this.showAllRoutes = !this.showAllRoutes;
+            if (this.showAllRoutes) {
+                this.activeRouteNode = '';
+                this.initialRouteNode = '';
+                this.hoveredRouteNode = '';
+            }
             this.renderRouteLines();
         },
 
@@ -192,13 +208,13 @@ export function workflowRouteSurface(config = {}) {
             const focusNode = this.routeFocusNode();
             const focusOnly = this.compactRouteMode && !this.showAllRoutes;
             const hasRelatedLine = focusNode !== '' && this.routeLines.some(
-                (line) => line.sourceNode === focusNode || line.targetNode === focusNode,
+                (line) => line.sourceNode === focusNode,
             );
 
             this.routeSvgMarkup = this.routeLines.map((line) => {
-                const related = !focusNode
-                    || line.sourceNode === focusNode
-                    || line.targetNode === focusNode;
+                const related = !focusNode || line.sourceNode === focusNode;
+
+                if (focusNode && !related) return '';
 
                 if (focusOnly && (!focusNode || !related)) {
                     return '';
@@ -207,9 +223,9 @@ export function workflowRouteSurface(config = {}) {
                 const outcome = normalizeOutcome(line.outcome);
                 const tone = ROUTE_TONES[outcome] || ROUTE_TONES.default;
                 const runtimeActive = Boolean(line.runtimeActive);
-                const color = runtimeActive ? ROUTE_TONES.runtime.color : tone.color;
-                const markerName = runtimeActive ? ROUTE_TONES.runtime.marker : tone.marker;
-                const dash = runtimeActive ? '' : tone.dash;
+                const color = tone.color;
+                const markerName = tone.marker;
+                const dash = tone.dash;
                 const opacity = hasRelatedLine ? (related ? 1 : 0.16) : (outcome === 'implicit' ? 0.55 : 0.88);
                 const strokeWidth = runtimeActive ? 3.6 : (related && hasRelatedLine ? 3.1 : (outcome === 'implicit' ? 1.6 : 2.2));
                 const filter = related && hasRelatedLine
@@ -217,7 +233,7 @@ export function workflowRouteSurface(config = {}) {
                     : '';
                 const dashMarkup = dash ? ` stroke-dasharray="${dash}"` : '';
 
-                return `<path data-route-edge="${escapeAttribute(line.id)}" d="${escapeAttribute(line.path)}" fill="none" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" stroke="${color}" opacity="${opacity}"${dashMarkup}${filter} marker-end="url(#${escapeAttribute(this.routeInstance)}-arrow-${markerName})"></path>`;
+                return `<path data-route-edge="${escapeAttribute(line.id)}" data-route-source="${escapeAttribute(line.sourceNode)}" data-route-target="${escapeAttribute(line.targetNode)}" d="${escapeAttribute(line.path)}" fill="none" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" stroke="${color}" opacity="${opacity}"${dashMarkup}${filter} marker-end="url(#${escapeAttribute(this.routeInstance)}-arrow-${markerName})"></path>`;
             }).join('');
         },
 
@@ -239,6 +255,7 @@ export function workflowRouteSurface(config = {}) {
             const firstByStep = new Map();
 
             allNodes.forEach((node) => {
+                this._routeResizeObserver?.observe(node);
                 const key = node.dataset.workflowRouteNode || node.dataset.workflowTaskNode || '';
                 const step = node.dataset.workflowStepAction || '';
 
@@ -269,7 +286,11 @@ export function workflowRouteSurface(config = {}) {
                 return null;
             };
             const relativeRect = (element) => {
-                const rect = element.getBoundingClientRect();
+                // Feedback belongs to the task but must not move its ports.
+                const anchor = element.matches?.('[data-workflow-task-node]')
+                    ? (element.querySelector('.ff-task-card') || element)
+                    : element;
+                const rect = anchor.getBoundingClientRect();
 
                 return {
                     width: rect.width,
@@ -354,8 +375,8 @@ export function workflowRouteSurface(config = {}) {
                 const laneIndex = routeLane++;
                 const outcome = normalizeOutcome(edge.outcome || edge.line_tone || edge.type);
                 const sourceY = outcome === 'failed'
-                    ? sourceRect.top + (sourceRect.height * 0.72)
-                    : sourceRect.top + (sourceRect.height * 0.38);
+                    ? sourceRect.top + (sourceRect.height * 0.68)
+                    : sourceRect.top + (sourceRect.height * 0.40);
                 const targetY = targetRect.centerY;
                 let points;
 
@@ -377,7 +398,8 @@ export function workflowRouteSurface(config = {}) {
                         { x: targetRect.right, y: targetY },
                     ];
                 } else {
-                    const goesBack = targetStepIndex < sourceStepIndex || targetRect.centerX < sourceRect.centerX;
+                    const goesBack = (targetStepIndex >= 0 && sourceStepIndex >= 0 && targetStepIndex < sourceStepIndex)
+                        || targetRect.centerX < sourceRect.centerX;
                     const sourceAnchorX = goesBack ? sourceRect.left : sourceRect.right;
                     const targetAnchorX = goesBack ? targetRect.right : targetRect.left;
                     const adjacent = sourceStepIndex >= 0

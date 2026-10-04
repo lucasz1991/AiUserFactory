@@ -1318,7 +1318,7 @@ class WorkflowStudioTest extends TestCase
             'studioSessionId' => $session->id,
         ])
             ->assertSee('Task-Bibliothek')
-            ->assertSee('Workflow aufbauen')
+            ->assertSee('Ablauf')
             ->call('prepareCatalogTask', 'wait.seconds')
             ->assertSet('showAddTaskModal', true)
             ->set('newTaskTitle', 'Im Studio eingefügt')

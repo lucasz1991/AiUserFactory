@@ -125,6 +125,10 @@ Arbeitsprotokoll aktualisieren.
 
 ### Arbeitsprotokoll
 
+2026-10-04 | Codex/UI | verifiziert: Gemeinsame Bearbeiten-&-Testen-Arbeitsflaeche, Ruecknavigation ganz links, lokale Task-Fehler-/Routendetails und ausgehende farbcodierte Fokuslinien. Fehlerfokus anhand Step-ID + Task-Key; manuelle Auswahl bleibt bei Folgepolls bestehen. Routendetails sind explizit aufklappbar und verursachen keine Auswahl-/Doppelklick-Layoutspruenge. 122 Tests/1214 Assertions, vier Node-Tests, Pint, Vite, Diff-Check und lokale Desktop-/390px-Browserpruefung gruen. Keine externen Taskausfuehrungen, Runtime-/Queue-Aenderungen, Migrationen, Commits oder Deployment. Bericht: ../.lmzdev/artifacts/reports/workflow-workspace-feedback-2026-10-04.md. Ownership freigegeben.
+
+2026-10-04 | Codex/UI | in_arbeit: Zurueck im Editorheader, gemeinsame Test-/Bearbeitungs-Workbench, taskbezogene Routenmeldungen, Fehlerkennzeichnung/-fokus und nur ausgehende Routen beim Taskfokus. Scope Manager/Studio/Fokus, Route-Surface/Minimap, Definitionseditor, CSS und Verhaltenstests.
+
 2026-10-03 | Codex/UI | verifiziert: Auch Editor mit kompakter KPI-/Aktionsleiste statt Hero, Screenreader-Name und Sperre erhalten; Ruecklink unter Weitere. 62px Desktop, 120px mobil mit gemeinsamer Aktionszeile. 8 Tests/148 Assertions, Vite-Build und lokale Browser-/Menuepruefung gruen. Nur Manager-View, gemeinsames Toolbar-CSS und Toolbar-Markup-Test; Produktionsseite als Referenz, kein Deployment.
 
 2026-10-03 | Codex/UI | verifiziert: Workflow-Uebersicht mit schmaler KPI-Zeile links und Aktionen rechts statt Hero/Titel/Beschreibung/Karten. Screenreader-Titel und bestehende Aktionen bleiben erhalten. Browser 1332px: 62px hoch; 390px: 91px, Menues ohne Beschnitt. 7 Tests/130 Assertions, Vite-Build und Diff-Check gruen. Scope workflows-index.blade.php, workflow-experience.css, WorkflowIndexToolbarMarkupTest. Parallele Orchestrierungsarbeit unberuehrt; kein Deployment/Push.
