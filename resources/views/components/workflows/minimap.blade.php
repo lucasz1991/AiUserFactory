@@ -541,31 +541,6 @@
                 'terminal' => $targetKind === 'terminal',
             ];
         });
-    $routeBadgesByNode = [];
-
-    // Feature R3: Alle Knoten des Laufwegs behalten ihr Quelle-/Ziel-Abzeichen —
-    // frueher nur die letzten acht, wodurch nach Rousspruengen der Weganfang
-    // unmarkiert blieb. Spaetere Ereignisse ueberschreiben frueheren Ton, damit
-    // der juengste Zustand eines Knotens gewinnt.
-    foreach ($routeEvents->values() as $routeEvent) {
-        $isPending = (bool) ($routeEvent['pending'] ?? false);
-        $tone = (string) ($routeEvent['lineTone'] ?? 'default');
-
-        if (($routeEvent['sourceNode'] ?? '') !== '') {
-            $routeBadgesByNode[(string) $routeEvent['sourceNode']] = [
-                'label' => $isPending ? 'Quelle aktiv' : 'Quelle',
-                'tone' => $tone,
-            ];
-        }
-
-        if (($routeEvent['targetNode'] ?? '') !== '') {
-            $routeBadgesByNode[(string) $routeEvent['targetNode']] = [
-                'label' => $isPending ? 'Ziel aktiv' : 'Ziel',
-                'tone' => $tone,
-            ];
-        }
-    }
-
     // Feature R3: Frueher wurden nur die letzten 16 Ereignisse gezeichnet —
     // dadurch verschwanden bei Rousspruengen genau die Linien, die den bisher
     // zurueckgelegten Weg zeigen. Jetzt bleiben alle erhalten; das Alter steuert
@@ -600,7 +575,6 @@
         $activeRouteNode = $selectedRouteStep->action_key.'::'.$selectedTaskKey;
     }
     $feedbackByTask = app(\App\Services\Workflows\WorkflowRunTaskFeedback::class)->tasks($workflow, $workflowRun);
-    $routeMessagesByTask = $routeEvents->unique(fn (array $event) => ($event['sourceNode'] ?? '').'|'.($event['outcome'] ?? '').'|'.($event['targetNode'] ?? ''))->groupBy('sourceNode');
     $taskTone = static function (string $status, bool $active): string {
         return match (true) {
             $active || in_array($status, ['running', 'waiting'], true) => 'border-amber-300 bg-amber-50 text-amber-900 shadow-amber-100',
@@ -608,37 +582,6 @@
             $status === 'skipped' || $status === 'not_executed' => 'border-slate-200 bg-slate-50 text-slate-500 shadow-slate-100',
             in_array($status, ['failed', 'timeout'], true) => 'border-red-300 bg-red-50 text-red-900 shadow-red-100',
             default => 'border-slate-200 bg-white text-slate-600 shadow-slate-100',
-        };
-    };
-    $connectorTone = static function (string $status, bool $active): string {
-        return match (true) {
-            $active || in_array($status, ['running', 'waiting'], true) => 'bg-amber-300 text-amber-400',
-            $status === 'completed' || $status === 'success' => 'bg-emerald-300 text-emerald-400',
-            $status === 'skipped' || $status === 'not_executed' => 'bg-slate-200 text-slate-300',
-            in_array($status, ['failed', 'timeout'], true) => 'bg-red-300 text-red-400',
-            default => 'bg-slate-200 text-slate-300',
-        };
-    };
-    $routeChipClass = static function (array $routeEvent): string {
-        return match ($routeEvent['lineTone'] ?? 'default') {
-            'runtime' => 'bg-sky-50 text-sky-700 ring-sky-200',
-            'success' => 'bg-emerald-50 text-emerald-700 ring-emerald-200',
-            'failed' => 'bg-red-50 text-red-700 ring-red-200',
-            'partial' => 'bg-amber-50 text-amber-700 ring-amber-200',
-            'timeout' => 'bg-violet-50 text-violet-700 ring-violet-200',
-            'waiting' => 'bg-amber-50 text-amber-700 ring-amber-200',
-            default => 'bg-slate-100 text-slate-600 ring-slate-200',
-        };
-    };
-    $routeBadgeClass = static function (array $badge): string {
-        return match ($badge['tone'] ?? 'default') {
-            'runtime' => 'bg-sky-100 text-sky-700 ring-sky-200',
-            'success' => 'bg-emerald-100 text-emerald-700 ring-emerald-200',
-            'failed' => 'bg-red-100 text-red-700 ring-red-200',
-            'partial' => 'bg-amber-100 text-amber-700 ring-amber-200',
-            'timeout' => 'bg-violet-100 text-violet-700 ring-violet-200',
-            'waiting' => 'bg-amber-100 text-amber-700 ring-amber-200',
-            default => 'bg-slate-100 text-slate-600 ring-slate-200',
         };
     };
 @endphp
@@ -671,43 +614,13 @@
 
         <div
             x-data="{
-                routeEvents: @js($routeEventsForJs),
-                routeOverlay: { width: 0, height: 0 },
-                routeSvgMarkup: '',
-                routeLines: [],
-                hoveredRouteNode: '',
-                activeRouteNode: @js($activeRouteNode),
+                ...workflowRouteSurface({
+                    instance: @js($mapId),
+                    initialNode: @js($activeRouteNode),
+                }),
                 instance: @js($mapInstance),
                 source: @js($mapSource),
                 zoomLevel: @js($initialZoom),
-                markerIds: {
-                    runtime: @js($mapId.'-arrow-runtime'),
-                    success: @js($mapId.'-arrow-success'),
-                    failed: @js($mapId.'-arrow-failed'),
-                    partial: @js($mapId.'-arrow-partial'),
-                    timeout: @js($mapId.'-arrow-timeout'),
-                    waiting: @js($mapId.'-arrow-waiting'),
-                    default: @js($mapId.'-arrow-default'),
-                },
-                init() {
-                    this.$nextTick(() => this.refreshRouteLines());
-                    setTimeout(() => this.refreshRouteLines(), 150);
-                    setTimeout(() => this.refreshRouteLines(), 600);
-                    this._refreshMinimapRoutes = () => this.$nextTick(() => this.refreshRouteLines());
-                    window.addEventListener('resize', this._refreshMinimapRoutes);
-                    document.addEventListener('livewire:updated', this._refreshMinimapRoutes);
-                    document.addEventListener('livewire:navigated', this._refreshMinimapRoutes);
-                    if (window.ResizeObserver) {
-                        this._minimapResizeObserver = new ResizeObserver(() => this.refreshRouteLines());
-                        this._minimapResizeObserver.observe(this.$refs.minimapSurface);
-                    }
-                },
-                destroy() {
-                    window.removeEventListener('resize', this._refreshMinimapRoutes);
-                    document.removeEventListener('livewire:updated', this._refreshMinimapRoutes);
-                    document.removeEventListener('livewire:navigated', this._refreshMinimapRoutes);
-                    this._minimapResizeObserver?.disconnect();
-                },
                 isRenderable() {
                     return this.$root.offsetParent !== null && ! this.$root.closest('[inert]');
                 },
@@ -716,268 +629,28 @@
                     const requestedSource = String(detail?.source || '');
                     const targetsInstance = requestedInstance !== '' && requestedInstance === this.instance;
                     const targetsSource = requestedSource !== '' && requestedSource === this.source;
-
-                    if (! targetsInstance && ! targetsSource) return;
-
-                    this.$nextTick(() => this.refreshRouteLines());
+                    if (!targetsInstance && !targetsSource) return;
+                    if (! this.isRenderable()) return;
+                    this.queueRouteRefresh();
                 },
                 setZoom(level) {
-                    if (!['overview', 'standard', 'detail'].includes(level) || this.zoomLevel === level) {
-                        return;
-                    }
-
+                    if (!['overview', 'standard', 'detail'].includes(level) || this.zoomLevel === level) return;
                     this.zoomLevel = level;
                     this.$dispatch('workflow-minimap-zoom-changed', {
-                        level,
-                        instance: this.instance,
-                        source: this.source,
+                        level, instance: this.instance, source: this.source,
                     });
-                    this.$nextTick(() => this.refreshRouteLines());
-                    setTimeout(() => this.refreshRouteLines(), 80);
-                },
-                routeFocusNode() {
-                    return this.activeRouteNode || this.hoveredRouteNode || '';
-                },
-                routeFocusBelongsToStep(actionKey) {
-                    const focusNode = this.routeFocusNode();
-
-                    return focusNode !== '' && focusNode.startsWith(`${String(actionKey || '')}::`);
-                },
-                setHoveredRouteNode(node = '') {
-                    this.hoveredRouteNode = String(node || '');
-                    this.renderRouteLines();
-                },
-                renderRouteLines() {
-                    const focusNode = this.routeFocusNode();
-                    const hasRelatedLine = focusNode !== '' && this.routeLines.some((line) => line.sourceNode === focusNode);
-
-                    this.routeSvgMarkup = this.routeLines.map((line) => {
-                        if (focusNode && line.sourceNode !== focusNode) return '';
-                        const color = {
-                            runtime: '#0ea5e9',
-                            success: '#34d399',
-                            failed: '#f87171',
-                            partial: '#3b82f6',
-                            timeout: '#8b5cf6',
-                            waiting: '#3b82f6',
-                            default: '#3b82f6',
-                        }[line.tone] || '#3b82f6';
-                        const marker = this.markerIds[line.tone] || this.markerIds.default;
-                        const dash = line.direction === 'back' || line.tone === 'failed'
-                            ? ' stroke-dasharray=&quot;6 5&quot;'
-                            : (line.tone === 'partial'
-                                ? ' stroke-dasharray=&quot;4 4&quot;'
-                                : (line.tone === 'timeout' ? ' stroke-dasharray=&quot;3 4&quot;' : ''));
-                        const related = !focusNode || line.sourceNode === focusNode;
-                        // Feature R3: Das Alter bestimmt die Grunddeckkraft — juengere
-                        // Linien kraeftiger, aeltere blasser, aber nie unsichtbar.
-                        // Der Hover-Fokus daempft zusaetzlich, blendet aber ebenfalls
-                        // nichts aus. Die aktuell anstehende Linie bleibt immer voll.
-                        const ageOpacity = line.pending ? 1 : Math.max(0.35, Math.min(1, Number(line.ageOpacity ?? 0.92)));
-                        const opacity = hasRelatedLine
-                            ? (related ? Math.max(0.75, ageOpacity) : Math.max(0.28, ageOpacity * 0.5))
-                            : ageOpacity;
-                        const ageWidth = 1.6 + (1.4 * ageOpacity);
-                        const strokeWidth = related && hasRelatedLine
-                            ? (line.pending ? 4.4 : Math.max(2.6, ageWidth + 0.8))
-                            : (line.pending ? 3.5 : ageWidth);
-                        const filter = related && hasRelatedLine ? ' style=&quot;filter:drop-shadow(0 0 2px rgba(15,23,42,.24))&quot;' : '';
-                        const path = String(line.path || '').replace(/&/g, '&amp;').replace(/&quot;/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-                        return `<path d=&quot;${path}&quot; fill=&quot;none&quot; stroke-width=&quot;${strokeWidth}&quot; stroke-linecap=&quot;round&quot; stroke-linejoin=&quot;round&quot; stroke=&quot;${color}&quot; opacity=&quot;${opacity}&quot;${dash}${filter} marker-end=&quot;url(#${marker})&quot;></path>`;
-                    }).join('');
-                },
-                refreshRouteLines() {
-                    const surface = this.$refs.minimapSurface;
-
-                    if (!surface || ! this.isRenderable()) {
-                        this.routeOverlay = { width: 0, height: 0 };
-                        this.routeSvgMarkup = '';
-                        return;
-                    }
-
-                    const surfaceRect = surface.getBoundingClientRect();
-                    const nodeElements = Array.from(surface.querySelectorAll('[data-minimap-node]'));
-                    const nodes = new Map(nodeElements.map((node) => [node.dataset.minimapNode || '', node]));
-                    const stepColumns = Array.from(surface.querySelectorAll('[data-minimap-step-column]'));
-                    const stepIndexes = new Map(stepColumns.map((column, index) => [column, index]));
-                    const relativeRect = (element) => {
-                        const rect = element.getBoundingClientRect();
-
-                        return {
-                            left: rect.left - surfaceRect.left + surface.scrollLeft,
-                            right: rect.right - surfaceRect.left + surface.scrollLeft,
-                            top: rect.top - surfaceRect.top + surface.scrollTop,
-                            bottom: rect.bottom - surfaceRect.top + surface.scrollTop,
-                            centerX: rect.left + (rect.width / 2) - surfaceRect.left + surface.scrollLeft,
-                            centerY: rect.top + (rect.height / 2) - surfaceRect.top + surface.scrollTop,
-                        };
-                    };
-                    const roundedPath = (points, radius = 10) => {
-                        const compact = points.filter((point, index) => {
-                            const previous = points[index - 1];
-
-                            return !previous || previous.x !== point.x || previous.y !== point.y;
-                        });
-
-                        if (compact.length < 2) {
-                            return '';
-                        }
-
-                        let path = `M ${compact[0].x} ${compact[0].y}`;
-
-                        for (let index = 1; index < compact.length - 1; index++) {
-                            const previous = compact[index - 1];
-                            const current = compact[index];
-                            const next = compact[index + 1];
-                            const incoming = Math.max(1, Math.hypot(current.x - previous.x, current.y - previous.y));
-                            const outgoing = Math.max(1, Math.hypot(next.x - current.x, next.y - current.y));
-                            const cornerRadius = Math.min(radius, incoming / 2, outgoing / 2);
-                            const before = {
-                                x: current.x + ((previous.x - current.x) / incoming) * cornerRadius,
-                                y: current.y + ((previous.y - current.y) / incoming) * cornerRadius,
-                            };
-                            const after = {
-                                x: current.x + ((next.x - current.x) / outgoing) * cornerRadius,
-                                y: current.y + ((next.y - current.y) / outgoing) * cornerRadius,
-                            };
-
-                            path += ` L ${before.x} ${before.y} Q ${current.x} ${current.y} ${after.x} ${after.y}`;
-                        }
-
-                        const end = compact[compact.length - 1];
-
-                        return `${path} L ${end.x} ${end.y}`;
-                    };
-                    const lineFor = (routeEvent, index) => {
-                        const source = nodes.get(routeEvent.sourceNode || '');
-                        const target = nodes.get(routeEvent.targetNode || '');
-
-                        if (!source || !target) {
-                            return null;
-                        }
-
-                        const sourceRect = relativeRect(source);
-                        const targetRect = relativeRect(target);
-                        const sourceColumn = source.closest('[data-minimap-step-column]');
-                        const targetColumn = target.closest('[data-minimap-step-column]');
-                        const sourceColumnRect = sourceColumn ? relativeRect(sourceColumn) : sourceRect;
-                        const targetColumnRect = targetColumn ? relativeRect(targetColumn) : targetRect;
-                        const sourceStepIndex = stepIndexes.get(sourceColumn) ?? -1;
-                        const targetStepIndex = stepIndexes.get(targetColumn) ?? -1;
-                        const lane = 12 + ((index % 4) * 6);
-                        const tone = ['success', 'failed', 'timeout', 'partial'].includes(routeEvent.outcome) ? routeEvent.outcome : 'default';
-                        const sourceNode = routeEvent.sourceNode || '';
-                        const targetNode = routeEvent.targetNode || '';
-                        const lineResult = (points, radius = 10) => ({
-                            path: roundedPath(points, radius),
-                            tone,
-                            direction: routeEvent.direction || 'route',
-                            pending: !!routeEvent.pending,
-                            sourceNode,
-                            targetNode,
-                            // Feature R3: Alter der Linie fuer das Verblassen.
-                            ageOpacity: routeEvent.ageOpacity,
-                            ageIndex: routeEvent.ageIndex,
-                            ageTotal: routeEvent.ageTotal,
-                        });
-                        let points = [];
-
-                        if (source === target) {
-                            const loopX = sourceRect.right + lane;
-                            points = [
-                                { x: sourceRect.right, y: sourceRect.centerY - 5 },
-                                { x: loopX, y: sourceRect.centerY - 5 },
-                                { x: loopX, y: sourceRect.centerY + 16 },
-                                { x: sourceRect.right, y: sourceRect.centerY + 16 },
-                            ];
-
-                            return lineResult(points, 8);
-                        }
-
-                        if (sourceColumn && sourceColumn === targetColumn) {
-                            const sideX = Math.max(sourceRect.right, targetRect.right) + lane;
-                            points = [
-                                { x: sourceRect.right, y: sourceRect.centerY },
-                                { x: sideX, y: sourceRect.centerY },
-                                { x: sideX, y: targetRect.centerY },
-                                { x: targetRect.right, y: targetRect.centerY },
-                            ];
-
-                            return lineResult(points);
-                        }
-
-                        const goesBack = targetStepIndex < sourceStepIndex || targetRect.centerX < sourceRect.centerX;
-                        const sourceX = goesBack ? sourceRect.left : sourceRect.right;
-                        const targetX = goesBack ? targetRect.right : targetRect.left;
-                        const adjacentSteps = sourceStepIndex >= 0
-                            && targetStepIndex >= 0
-                            && Math.abs(sourceStepIndex - targetStepIndex) === 1;
-
-                        if (adjacentSteps) {
-                            const gapLeft = goesBack ? targetColumnRect.right : sourceColumnRect.right;
-                            const gapRight = goesBack ? sourceColumnRect.left : targetColumnRect.left;
-                            const gapOffset = ((index % 5) - 2) * 2;
-                            const gapX = Math.max(gapLeft + 5, Math.min(gapRight - 5, ((gapLeft + gapRight) / 2) + gapOffset));
-                            points = [
-                                { x: sourceX, y: sourceRect.centerY },
-                                { x: gapX, y: sourceRect.centerY },
-                                { x: gapX, y: targetRect.centerY },
-                                { x: targetX, y: targetRect.centerY },
-                            ];
-
-                            return lineResult(points);
-                        }
-
-                        const firstStepIndex = Math.min(sourceStepIndex, targetStepIndex);
-                        const lastStepIndex = Math.max(sourceStepIndex, targetStepIndex);
-                        const involvedRects = nodeElements
-                            .filter((node) => {
-                                const columnIndex = stepIndexes.get(node.closest('[data-minimap-step-column]')) ?? -1;
-
-                                return columnIndex >= firstStepIndex && columnIndex <= lastStepIndex;
-                            })
-                            .map(relativeRect);
-                        const upperY = Math.max(6, Math.min(...involvedRects.map((rect) => rect.top), sourceRect.top, targetRect.top) - lane);
-                        const lowerY = Math.min(
-                            surface.scrollHeight - 6,
-                            Math.max(...involvedRects.map((rect) => rect.bottom), sourceRect.bottom, targetRect.bottom) + lane,
-                        );
-                        const upperCost = Math.abs(sourceRect.centerY - upperY) + Math.abs(targetRect.centerY - upperY);
-                        const lowerCost = Math.abs(sourceRect.centerY - lowerY) + Math.abs(targetRect.centerY - lowerY);
-                        const corridorY = lowerCost < upperCost ? lowerY : upperY;
-                        const sourceLaneX = sourceX + (goesBack ? -lane : lane);
-                        const targetLaneX = targetX + (goesBack ? lane : -lane);
-                        points = [
-                            { x: sourceX, y: sourceRect.centerY },
-                            { x: sourceLaneX, y: sourceRect.centerY },
-                            { x: sourceLaneX, y: corridorY },
-                            { x: targetLaneX, y: corridorY },
-                            { x: targetLaneX, y: targetRect.centerY },
-                            { x: targetX, y: targetRect.centerY },
-                        ];
-
-                        return lineResult(points);
-                    };
-                    const lines = this.routeEvents
-                        .map((routeEvent, index) => lineFor(routeEvent, index))
-                        .filter(Boolean);
-
-                    this.routeOverlay = {
-                        width: surface.scrollWidth,
-                        height: surface.scrollHeight,
-                    };
-                    this.routeLines = lines;
-                    this.renderRouteLines();
+                    this.$nextTick(() => this.queueRouteRefresh());
                 },
             }"
-            x-ref="minimapSurface"
-            x-on:scroll.debounce.100ms="refreshRouteLines()"
+            x-ref="routeSurface"
+            data-workflow-route-surface
+            x-on:scroll.passive.debounce.80ms="queueRouteRefresh()"
             x-on:workflow-minimap-refresh-requested.window="refreshForEvent($event.detail)"
             data-workflow-minimap-scroll-container
             data-workflow-preview-scrollbar
             class="relative overflow-x-auto pb-2"
         >
+            <script type="application/json" x-ref="routeMap">@json(['edges' => $routeEventsForJs])</script>
             @if($zoomable)
                 <div
                     class="sticky left-0 top-0 z-30 mb-2 flex w-max max-w-full items-center gap-1 rounded-xl border border-slate-200 bg-white/95 p-1 shadow-sm backdrop-blur"
@@ -995,46 +668,26 @@
                             data-workflow-minimap-zoom-level="{{ $zoomKey }}"
                         >{{ $zoomLabel }}</button>
                     @endforeach
+                    <button type="button" x-on:click.stop="toggleAllRoutes()" x-bind:aria-pressed="showAllRoutes"
+                        class="ml-2 inline-flex min-h-11 items-center rounded-lg px-3 text-[11px] font-semibold text-slate-600 hover:bg-slate-100 focus-visible:ring-2 focus-visible:ring-blue-500"
+                        x-text="showAllRoutes ? 'Hauptpfad' : 'Alle Verbindungen'"></button>
                     <span class="sr-only" aria-live="polite" x-text="`Zoomstufe ${zoomLevel}`"></span>
                 </div>
             @endif
 
             <svg
-                class="pointer-events-none absolute left-0 top-0 z-20"
+                class="pointer-events-none absolute left-0 top-0 z-20 overflow-visible"
                 x-bind:width="routeOverlay.width"
                 x-bind:height="routeOverlay.height"
                 x-bind:viewBox="`0 0 ${routeOverlay.width} ${routeOverlay.height}`"
                 aria-hidden="true"
             >
-                <defs>
-                    <marker id="{{ $mapId }}-arrow-runtime" markerWidth="7" markerHeight="7" refX="6.5" refY="3.5" orient="auto" markerUnits="userSpaceOnUse">
-                        <path d="M0,0 L0,7 L7,3.5 z" fill="#0ea5e9"></path>
-                    </marker>
-                    <marker id="{{ $mapId }}-arrow-success" markerWidth="6" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
-                        <path d="M0,0 L0,6 L6,3 z" fill="#34d399"></path>
-                    </marker>
-                    <marker id="{{ $mapId }}-arrow-failed" markerWidth="6" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
-                        <path d="M0,0 L0,6 L6,3 z" fill="#f87171"></path>
-                    </marker>
-                    <marker id="{{ $mapId }}-arrow-partial" markerWidth="6" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
-                        <path d="M0,0 L0,6 L6,3 z" fill="#3b82f6"></path>
-                    </marker>
-                    <marker id="{{ $mapId }}-arrow-timeout" markerWidth="6" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
-                        <path d="M0,0 L0,6 L6,3 z" fill="#8b5cf6"></path>
-                    </marker>
-                    <marker id="{{ $mapId }}-arrow-waiting" markerWidth="6" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
-                        <path d="M0,0 L0,6 L6,3 z" fill="#3b82f6"></path>
-                    </marker>
-                    <marker id="{{ $mapId }}-arrow-default" markerWidth="6" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
-                        <path d="M0,0 L0,6 L6,3 z" fill="#3b82f6"></path>
-                    </marker>
-                </defs>
+                <x-workflows.route-markers :instance="$mapId" />
                 <g x-html="routeSvgMarkup"></g>
             </svg>
 
             <div
-                class="relative z-10 flex min-w-max items-start gap-0"
-                x-bind:class="zoomLevel === 'overview' ? 'pt-3' : (zoomLevel === 'standard' ? 'pt-5' : 'pt-7')"
+                class="ff-route-stage relative z-10 flex min-w-max items-start gap-0"
                 data-workflow-minimap-stage
             >
                 @foreach($steps as $step)
@@ -1047,7 +700,6 @@
                         $plannedOnlyStep = $step->type === \App\Models\WorkflowStep::TYPE_PLANNED_ACTION && trim((string) ($stepRun?->external_run_id ?? '')) === '';
                         $stepTone = $taskTone($stepStatus, $isActiveStep);
                         $stepNode = trim((string) $step->action_key).'::*';
-                        $stepRouteBadge = $routeBadgesByNode[$stepNode] ?? null;
                     @endphp
 
                     <div class="flex items-start">
@@ -1055,9 +707,12 @@
                             class="shrink-0"
                             x-bind:class="zoomLevel === 'overview' ? 'w-36' : (zoomLevel === 'standard' ? 'w-48' : 'w-56')"
                             data-minimap-step-column="{{ $step->action_key }}"
+                            data-workflow-step-column="{{ $step->action_key }}"
                         >
                             <div
                                 data-minimap-node="{{ $stepNode }}"
+                                data-workflow-route-node="{{ $stepNode }}"
+                                data-workflow-step-action="{{ $step->action_key }}"
                                 data-workflow-minimap-active-step="{{ $isActiveStep ? 'true' : 'false' }}"
                                 x-on:mouseenter="setHoveredRouteNode(@js($stepNode))"
                                 x-on:mouseleave="setHoveredRouteNode('')"
@@ -1071,10 +726,6 @@
                                 @if($stepRun?->status)
                                     <span x-show="zoomLevel !== 'overview'" class="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold {{ $stepTone }}">
                                         {{ $stepRun->status }}
-                                    </span>
-                                @elseif($stepRouteBadge)
-                                    <span x-show="zoomLevel !== 'overview'" class="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 {{ $routeBadgeClass($stepRouteBadge) }}">
-                                        {{ $stepRouteBadge['label'] }}
                                     </span>
                                 @endif
                             </div>
@@ -1091,33 +742,18 @@
                                         $isTaskActive = $isActiveStep && ($activeTaskKey === '' ? ($loop->first && in_array($stepStatus, ['running', 'waiting'], true)) : $taskKey === $activeTaskKey);
                                         $isTaskSelected = $selectedStepId === (int) $step->id && $selectedTaskKey === $taskKey;
                                         $tone = $taskTone($taskStatus, $isTaskActive);
-                                        $lineTone = $connectorTone($taskStatus, $isTaskActive);
                                         $taskNode = trim((string) $step->action_key).'::'.$taskKey;
-                                        $previousTask = $loop->first ? null : $tasks->get($loop->index - 1);
-                                        $previousTaskNode = is_array($previousTask)
-                                            ? trim((string) $step->action_key).'::'.trim((string) ($previousTask['key'] ?? ''))
-                                            : '';
-                                        $taskRouteBadge = $routeBadgesByNode[$taskNode] ?? null;
-                                        $taskRoutes = $routeMessagesByTask->get($taskNode, collect());
                                     @endphp
 
                                     @if(! $loop->first)
-                                        <div
-                                            class="ml-4 transition-all {{ $lineTone }}"
-                                            x-show.important="!routeFocusNode()"
-                                            x-bind:class="{
-                                                'h-2': zoomLevel === 'overview',
-                                                'h-3': zoomLevel === 'standard',
-                                                'h-4': zoomLevel === 'detail',
-                                                'opacity-50': routeFocusNode() && ![@js($previousTaskNode), @js($taskNode)].includes(routeFocusNode()),
-                                                'opacity-100 w-0.5': routeFocusNode() && [@js($previousTaskNode), @js($taskNode)].includes(routeFocusNode()),
-                                                'w-px': !routeFocusNode() || ![@js($previousTaskNode), @js($taskNode)].includes(routeFocusNode()),
-                                            }"
-                                        ></div>
+                                        <div data-workflow-task-gap aria-hidden="true"
+                                            x-bind:class="zoomLevel === 'overview' ? 'h-2' : (zoomLevel === 'standard' ? 'h-3' : 'h-4')"></div>
                                     @endif
 
                                     <div
                                          data-minimap-node="{{ $taskNode }}"
+                                         data-workflow-task-node="{{ $taskNode }}"
+                                         data-workflow-step-action="{{ $step->action_key }}"
                                          data-workflow-task-status="{{ $taskStatus }}"
                                          data-task-failed="{{ ($feedback['failed'] ?? false) ? 'true' : 'false' }}"
                                          data-workflow-minimap-active-target="{{ $isTaskActive ? 'true' : 'false' }}"
@@ -1127,30 +763,25 @@
                                         @if($selectableTasks)
                                             role="button"
                                             tabindex="0"
-                                             x-on:click.stop="activeRouteNode = @js($taskNode); renderRouteLines(); $dispatch('workflow-preview-task-selected', { workflowId: {{ (int) $workflow->id }}, stepId: {{ (int) $step->id }}, taskKey: @js($taskKey), instance, source })"
-                                             x-on:keydown.enter.prevent.stop="activeRouteNode = @js($taskNode); renderRouteLines(); $dispatch('workflow-preview-task-selected', { workflowId: {{ (int) $workflow->id }}, stepId: {{ (int) $step->id }}, taskKey: @js($taskKey), instance, source })"
+                                             x-on:click.stop="setActiveRouteNode(@js($taskNode)); $dispatch('workflow-preview-task-selected', { workflowId: {{ (int) $workflow->id }}, stepId: {{ (int) $step->id }}, taskKey: @js($taskKey), instance, source })"
+                                             x-on:keydown.enter.prevent.stop="setActiveRouteNode(@js($taskNode)); $dispatch('workflow-preview-task-selected', { workflowId: {{ (int) $workflow->id }}, stepId: {{ (int) $step->id }}, taskKey: @js($taskKey), instance, source })"
                                              x-on:dblclick.stop="$dispatch('workflow-preview-task-edit-requested', { workflowId: {{ (int) $workflow->id }}, stepId: {{ (int) $step->id }}, taskKey: @js($taskKey), instance, source })"
                                              title="Task auswählen; Doppelklick zum Bearbeiten"
                                          @endif
                                          @if($selectableTasks)
                                              aria-label="{{ $step->name }}: {{ $task['title'] ?? 'Task' }} ({{ $taskStatus }})"
                                              aria-pressed="{{ $isTaskSelected ? 'true' : 'false' }}"
-                                             x-on:keydown.space.prevent.stop="activeRouteNode = @js($taskNode); renderRouteLines(); $dispatch('workflow-preview-task-selected', { workflowId: {{ (int) $workflow->id }}, stepId: {{ (int) $step->id }}, taskKey: @js($taskKey), instance, source })"
+                                             x-on:keydown.space.prevent.stop="setActiveRouteNode(@js($taskNode)); $dispatch('workflow-preview-task-selected', { workflowId: {{ (int) $workflow->id }}, stepId: {{ (int) $step->id }}, taskKey: @js($taskKey), instance, source })"
                                          @endif
-                                         class="relative rounded-md border shadow-sm {{ $tone }} {{ $isTaskSelected ? 'ring-2 ring-sky-500 ring-offset-2 ring-offset-white' : '' }} {{ $selectableTasks ? 'min-h-11 cursor-pointer touch-manipulation transition hover:-translate-y-px hover:shadow-md focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2' : '' }}"
+                                         class="relative rounded-md border shadow-sm {{ $tone }} {{ $isTaskSelected ? 'ring-2 ring-sky-500 ring-offset-2 ring-offset-white' : '' }} {{ $selectableTasks ? 'min-h-11 cursor-pointer touch-manipulation transition-colors hover:shadow-md focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2' : '' }}"
                                          x-bind:class="zoomLevel === 'overview' ? 'px-1.5 py-1 text-[9px]' : (zoomLevel === 'standard' ? 'px-2 py-1 text-[10px]' : 'px-2 py-1.5 text-[11px]')"
                                      >
                                          @if($isTaskSelected)
                                              <span class="absolute inset-y-1.5 -left-1 w-1 rounded-full bg-sky-500" aria-hidden="true"></span>
                                          @endif
-                                        @if($taskRouteBadge)
-                                            <span x-show="zoomLevel !== 'overview'" class="absolute right-1 top-1 rounded-full px-1.5 py-0.5 text-[9px] font-semibold ring-1 {{ $routeBadgeClass($taskRouteBadge) }}">
-                                                {{ $taskRouteBadge['label'] }}
-                                            </span>
-                                        @endif
-                                        <div class="truncate {{ $taskRouteBadge ? 'pr-16' : 'pr-2' }} font-semibold">{{ $task['title'] ?? 'Task' }}</div>
+                                        <div class="truncate pr-2 font-semibold">{{ $task['title'] ?? 'Task' }}</div>
                                         <div x-show="zoomLevel !== 'overview'" class="mt-0.5 truncate opacity-70">{{ $taskStatus }}</div>
-                                        <x-workflows.task-feedback :node="$taskNode" :feedback="$feedback" :routes="$taskRoutes" :compact="true" />
+                                        <x-workflows.task-feedback :feedback="$feedback" />
                                     </div>
                                 @empty
                                     <div
@@ -1165,26 +796,8 @@
                         </div>
 
                         @if(! $loop->last)
-                            @php
-                                $nextStepAction = trim((string) ($steps->get($loop->index + 1)?->action_key ?? ''));
-                            @endphp
-                            <div
-                                class="flex h-20 shrink-0 items-center px-2 transition-all"
-                                x-show.important="!routeFocusNode()"
-                                x-bind:class="{
-                                    'w-7': zoomLevel === 'overview',
-                                    'w-9': zoomLevel === 'standard',
-                                    'w-12': zoomLevel === 'detail',
-                                    'opacity-50': routeFocusNode() && !routeFocusBelongsToStep(@js((string) $step->action_key)) && !routeFocusBelongsToStep(@js($nextStepAction)),
-                                    'opacity-100': !routeFocusNode() || routeFocusBelongsToStep(@js((string) $step->action_key)) || routeFocusBelongsToStep(@js($nextStepAction)),
-                                }"
-                            >
-                                <div
-                                    class="flex-1 transition-all {{ $connectorTone($stepStatus, $isActiveStep) }}"
-                                    x-bind:class="routeFocusNode() && (routeFocusBelongsToStep(@js((string) $step->action_key)) || routeFocusBelongsToStep(@js($nextStepAction))) ? 'h-0.5' : 'h-px'"
-                                ></div>
-                                <div class="h-0 w-0 border-y-4 border-l-8 border-y-transparent {{ in_array($stepStatus, ['failed', 'timeout'], true) ? 'border-l-red-400' : ($isActiveStep || in_array($stepStatus, ['running', 'waiting'], true) ? 'border-l-amber-400' : ($stepStatus === 'completed' ? 'border-l-emerald-400' : 'border-l-slate-300')) }}"></div>
-                            </div>
+                            <div data-workflow-column-gap aria-hidden="true" class="shrink-0"
+                                x-bind:class="zoomLevel === 'overview' ? 'w-12' : (zoomLevel === 'standard' ? 'w-14' : 'w-16')"></div>
                         @endif
                     </div>
                 @endforeach
@@ -1194,10 +807,12 @@
                         class="ml-8 flex shrink-0 flex-col gap-2"
                         x-bind:class="zoomLevel === 'overview' ? 'w-28' : (zoomLevel === 'standard' ? 'w-36' : 'w-44')"
                         data-minimap-step-column="terminal"
+                        data-workflow-step-column="terminal"
                         aria-label="Workflow-Terminalziele"
                     >
                         <div
                             data-minimap-node="terminal::end"
+                            data-workflow-route-node="terminal::end"
                             class="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-2 text-emerald-900 shadow-sm"
                         >
                             <span class="block text-[8px] font-black uppercase tracking-wide text-emerald-700">Ende</span>
@@ -1205,6 +820,7 @@
                         </div>
                         <div
                             data-minimap-node="terminal::fail"
+                            data-workflow-route-node="terminal::fail"
                             class="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-2 text-rose-900 shadow-sm"
                         >
                             <span class="block text-[8px] font-black uppercase tracking-wide text-rose-700">Fehler</span>

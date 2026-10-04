@@ -2,7 +2,6 @@
     'step',
     'locked' => false,
     'taskFeedback' => [],
-    'routesByTask' => [],
 ])
 
 @php
@@ -233,16 +232,12 @@
                     $taskKey = trim((string) ($task['key'] ?? ''));
                     $sourceNode = $step->action_key.'::'.$taskKey;
                     $feedback = $taskFeedback[$taskKey] ?? [];
-                    $taskRoutes = $routesByTask[$sourceNode] ?? [];
                     $successTarget = $routeNodeForTask(is_array($task['next'] ?? null) ? $task['next'] : null);
                     $failedTarget = $routeNodeForTask(is_array($task['on_error'] ?? null) ? $task['on_error'] : null);
                     $isLoopPairTask = trim((string) data_get($task, 'loop_pair_id', '')) !== '';
                     $previousTask = $loop->first ? null : ($step->task_cards[$loop->index - 1] ?? null);
                     $previousTarget = is_array($previousTask)
                         ? $routeNodeForTask(is_array($previousTask['next'] ?? null) ? $previousTask['next'] : null)
-                        : '';
-                    $previousNode = is_array($previousTask)
-                        ? $step->action_key.'::'.trim((string) ($previousTask['key'] ?? ''))
                         : '';
                     $connectsFromPrevious = ! $loop->first && ($previousTarget === '' || $previousTarget === $sourceNode);
                 @endphp
@@ -256,22 +251,11 @@
                             x-on:dragover.prevent="$event.dataTransfer.dropEffect = dragEffect($event)"
                             x-on:drop.prevent.stop="dropTask($event, {{ $loop->index }})"
                         @endif
-                        class="h-3 rounded border border-dashed border-transparent {{ $locked ? '' : 'transition hover:h-8 hover:border-slate-300 hover:bg-slate-50' }}"
+                        class="h-3 rounded border border-dashed border-transparent {{ $locked ? '' : 'transition-colors hover:border-slate-300 hover:bg-slate-50' }}"
                     ></div>
                     @if($connectsFromPrevious)
-                        <div
-                            class="ml-5 flex h-5 w-3 justify-center transition-opacity"
-                            x-show.important="!routeFocusNode() || routeFocusNode() === @js($previousNode)"
-                            x-bind:class="routeFocusNode() && ![@js($previousNode), @js($sourceNode)].includes(routeFocusNode()) ? 'opacity-50' : 'opacity-100'"
-                            aria-hidden="true"
-                        >
-                            <span
-                                class="relative h-4 bg-emerald-400 transition-all"
-                                x-bind:class="routeFocusNode() && [@js($previousNode), @js($sourceNode)].includes(routeFocusNode()) ? 'w-0.5 shadow-sm shadow-emerald-400' : 'w-px'"
-                            >
-                                <span class="absolute -bottom-1 -left-[3px] h-0 w-0 border-x-[4px] border-t-[5px] border-x-transparent border-t-emerald-500"></span>
-                            </span>
-                        </div>
+                        {{-- Fixed spacing; the shared SVG owns every connection. --}}
+                        <div class="h-5" data-workflow-task-gap aria-hidden="true"></div>
                     @endif
                     <div
                         data-workflow-task-node="{{ $sourceNode }}"
@@ -286,8 +270,8 @@
                         role="button"
                         tabindex="0"
                         aria-label="{{ $task['title'] ?? 'Task' }}{{ ($feedback['failed'] ?? false) ? ': fehlgeschlagen' : '' }}"
-                        {{-- Pointer focus happens before click. Changing route details
-                             here would move the card between pointerdown and pointerup. --}}
+                        {{-- Pointer focus happens before click; task activation stays
+                             on click/keyboard, and route focus only changes SVG paint. --}}
                         x-on:focus.self="focusedTask = @js($step->id.'::'.$taskKey)"
                         x-bind:aria-pressed="activeRouteNode === @js($sourceNode)"
                         x-on:keydown.enter.self.prevent.stop="setActiveRouteNode(@js($sourceNode)); $dispatch('workflow-task-selected', { stepId: {{ $step->id }}, taskKey: @js($taskKey) })"
@@ -309,7 +293,7 @@
                                 </x-slot>
                             @endif
                         </x-workflows.task-card>
-                        <x-workflows.task-feedback :node="$sourceNode" :feedback="$feedback" :routes="$taskRoutes" />
+                        <x-workflows.task-feedback :feedback="$feedback" />
                         @if(! $locked)
                             <div
                                 class="ff-touch-task-reorder"
@@ -375,7 +359,7 @@
                 x-on:dragover.prevent="$event.dataTransfer.dropEffect = dragEffect($event)"
                 x-on:drop.prevent.stop="dropTask($event, {{ count($step->task_cards) }})"
             @endif
-            class="mb-2 h-3 rounded border border-dashed border-transparent {{ $locked ? '' : 'transition hover:h-8 hover:border-slate-300 hover:bg-slate-50' }}"
+            class="mb-2 h-3 rounded border border-dashed border-transparent {{ $locked ? '' : 'transition-colors hover:border-slate-300 hover:bg-slate-50' }}"
         ></div>
 
         @if(! $locked)

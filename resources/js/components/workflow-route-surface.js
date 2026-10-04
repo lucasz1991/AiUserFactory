@@ -28,6 +28,114 @@ const escapeAttribute = (value) => String(value || '')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
 
+const roundedRoutePath = (points, radius = 8) => {
+    const compact = points.filter((point, index) => !index
+        || point.x !== points[index - 1].x || point.y !== points[index - 1].y);
+    if (compact.length < 2) return '';
+    let path = `M ${compact[0].x} ${compact[0].y}`;
+    for (let index = 1; index < compact.length - 1; index += 1) {
+        const previous = compact[index - 1];
+        const current = compact[index];
+        const next = compact[index + 1];
+        const incoming = Math.hypot(current.x - previous.x, current.y - previous.y);
+        const outgoing = Math.hypot(next.x - current.x, next.y - current.y);
+        const corner = Math.min(radius, incoming / 2, outgoing / 2);
+        const before = { x: current.x + (previous.x - current.x) / incoming * corner, y: current.y + (previous.y - current.y) / incoming * corner };
+        const after = { x: current.x + (next.x - current.x) / outgoing * corner, y: current.y + (next.y - current.y) / outgoing * corner };
+        path += ` L ${before.x} ${before.y} Q ${current.x} ${current.y} ${after.x} ${after.y}`;
+    }
+    const end = compact[compact.length - 1];
+    return `${path} L ${end.x} ${end.y}`;
+};
+
+// Shared geometry for overview, editable canvas and live test. Lane allocation
+// depends on the complete map, never the hovered/selected subset.
+export function buildWorkflowRouteLines(edges, nodes) {
+    const unique = new Map();
+    const rank = { success: 0, implicit: 1, default: 2, partial: 3, failed: 4, timeout: 5, runtime: 6 };
+    for (const [index, edge] of edges.entries()) {
+        if (edge?.reachable === false) continue;
+        const sourceNode = String(edge.source || edge.sourceNode || edge.from || '');
+        const targetNode = String(edge.target || edge.targetNode || edge.to || '');
+        const source = nodes.get(sourceNode);
+        const target = nodes.get(targetNode);
+        if (!source || !target) continue;
+        const outcome = normalizeOutcome(edge.outcome || edge.line_tone || edge.lineTone || edge.type);
+        const key = `${sourceNode}|${targetNode}|${outcome}`;
+        const previous = unique.get(key);
+        unique.set(key, {
+            id: String(previous?.id || edge.id || `route-${index}`), sourceNode, targetNode, source, target, outcome,
+            runtimeActive: Boolean(previous?.runtimeActive || edge.runtime_active || edge.runtimeActive || edge.pending || (edge.runtime && edge.executed)),
+            runtimeObserved: Boolean(previous?.runtimeObserved || (edge.runtime && (edge.runtimeCount || edge.runtime_count || edge.executed))),
+            ageOpacity: Math.max(previous?.ageOpacity || 0, Number(edge.ageOpacity ?? 0.88)),
+        });
+    }
+    const routes = [...unique.values()].sort((a, b) => a.source.index - b.source.index
+        || a.source.rect.top - b.source.rect.top || rank[a.outcome] - rank[b.outcome]
+        || a.target.index - b.target.index || a.target.rect.top - b.target.rect.top
+        || a.targetNode.localeCompare(b.targetNode));
+    const lanes = new Map();
+    const allocate = (key, start, end) => {
+        const pool = lanes.get(key) || [];
+        const low = Math.min(start, end) - 6;
+        const high = Math.max(start, end) + 6;
+        let slot = pool.findIndex((ranges) => ranges.every(([a, b]) => high < a || low > b));
+        if (slot < 0) { slot = pool.length; pool.push([]); }
+        pool[slot].push([low, high]);
+        lanes.set(key, pool);
+        return slot;
+    };
+    const incoming = new Map();
+    const all = [...nodes.values()];
+    const top = Math.min(...all.map((node) => node.columnRect.top));
+    const bottom = Math.max(...all.map((node) => node.columnRect.bottom));
+    routes.forEach((line) => {
+        const { source, target } = line;
+        const sameColumn = source.column === target.column && source.column !== null;
+        const back = target.index < source.index || (sameColumn && target.rect.top <= source.rect.top);
+        const adjacent = !sameColumn && Math.abs(source.index - target.index) === 1;
+        line.kind = sameColumn ? 'side' : (adjacent && !back ? 'gap' : (back ? 'bottom' : 'top'));
+        line.pool = line.kind === 'side' ? `side:${source.index}` : (line.kind === 'gap' ? `gap:${source.index}` : line.kind);
+        line.slot = allocate(line.pool, line.kind === 'side' || line.kind === 'gap' ? source.rect.centerY : source.rect.centerX,
+            line.kind === 'side' || line.kind === 'gap' ? target.rect.centerY : target.rect.centerX);
+        const list = incoming.get(line.targetNode) || [];
+        list.push(line);
+        incoming.set(line.targetNode, list);
+    });
+    return routes.map((line) => {
+        const { source, target } = line;
+        const s = source.rect;
+        const t = target.rect;
+        const slots = lanes.get(line.pool).length;
+        const sourceY = s.top + s.height * ({ failed: 0.68, timeout: 0.82, partial: 0.24 }[line.outcome] ?? 0.40);
+        const inbound = incoming.get(line.targetNode);
+        const targetY = t.centerY + (inbound.length > 1 ? (inbound.indexOf(line) / (inbound.length - 1) - 0.5) * Math.min(20, t.height * 0.5) : 0);
+        const channel = 12 + line.slot * Math.min(6, 24 / Math.max(1, slots - 1));
+        let points;
+        if (line.kind === 'side') {
+            const sideX = source.columnRect.right + channel;
+            // A self-loop returns to a separate port, never a zero-length edge.
+            const endY = source === target ? s.top + s.height * 0.90 : targetY;
+            points = [{ x: s.right, y: sourceY }, { x: sideX, y: sourceY }, { x: sideX, y: endY }, { x: t.right, y: endY }];
+        } else if (line.kind === 'gap') {
+            const left = source.columnRect.right;
+            const right = target.columnRect.left;
+            const gapX = left + (right - left) * (line.slot + 1) / (slots + 1);
+            points = [{ x: s.right, y: sourceY }, { x: gapX, y: sourceY }, { x: gapX, y: targetY }, { x: t.left, y: targetY }];
+        } else {
+            const back = line.kind === 'bottom';
+            const corridorY = back ? bottom + 12 + line.slot * Math.min(8, 56 / Math.max(1, slots - 1))
+                : top - 12 - line.slot * Math.min(8, 56 / Math.max(1, slots - 1));
+            const sourceX = source.columnRect.right + channel;
+            const targetAnchor = back ? t.right : t.left;
+            const targetX = back ? target.columnRect.right + channel : target.columnRect.left - channel;
+            points = [{ x: s.right, y: sourceY }, { x: sourceX, y: sourceY }, { x: sourceX, y: corridorY },
+                { x: targetX, y: corridorY }, { x: targetX, y: targetY }, { x: targetAnchor, y: targetY }];
+        }
+        return { ...line, path: roundedRoutePath(points), points };
+    });
+}
+
 export function workflowRouteSurface(config = {}) {
     return {
         routeInstance: String(config.instance || 'workflow'),
@@ -36,7 +144,7 @@ export function workflowRouteSurface(config = {}) {
         activeRouteNode: '',
         initialRouteNode: String(config.initialNode || ''),
         showRoutes: true,
-        showAllRoutes: true,
+        showAllRoutes: false,
         compactRouteMode: false,
         routeLines: [],
         routeOverlay: { width: 0, height: 0 },
@@ -52,10 +160,9 @@ export function workflowRouteSurface(config = {}) {
         init() {
             this._routeMedia = window.matchMedia('(max-width: 767px)');
             this.compactRouteMode = this._routeMedia.matches;
-            this.showAllRoutes = !this.compactRouteMode && !this.routeFocusNode();
+            this.showAllRoutes = false;
             this._routeMediaListener = (event) => {
                 this.compactRouteMode = event.matches;
-                this.showAllRoutes = !event.matches && !this.routeFocusNode();
                 this.queueRouteRefresh();
             };
             this._routeMedia.addEventListener?.('change', this._routeMediaListener);
@@ -221,19 +328,22 @@ export function workflowRouteSurface(config = {}) {
                 }
 
                 const outcome = normalizeOutcome(line.outcome);
+                // Quiet default: show the actual task flow. Branches are
+                // inspectable on hover/selection or through the explicit All control.
+                if (!focusNode && !this.showAllRoutes && !line.runtimeActive && !line.runtimeObserved
+                    && (line.sourceNode.endsWith('::*') || !['success', 'implicit', 'default'].includes(outcome))) return '';
                 const tone = ROUTE_TONES[outcome] || ROUTE_TONES.default;
                 const runtimeActive = Boolean(line.runtimeActive);
                 const color = tone.color;
                 const markerName = tone.marker;
                 const dash = tone.dash;
-                const opacity = hasRelatedLine ? (related ? 1 : 0.16) : (outcome === 'implicit' ? 0.55 : 0.88);
-                const strokeWidth = runtimeActive ? 3.6 : (related && hasRelatedLine ? 3.1 : (outcome === 'implicit' ? 1.6 : 2.2));
-                const filter = related && hasRelatedLine
-                    ? ' style="filter:drop-shadow(0 0 2px rgba(15,23,42,.2))"'
-                    : '';
+                const ageOpacity = Math.max(0.35, Math.min(1, Number(line.ageOpacity ?? 0.88)));
+                const opacity = hasRelatedLine || runtimeActive ? 1 : (outcome === 'implicit' ? 0.55 : ageOpacity);
+                const strokeWidth = runtimeActive || hasRelatedLine ? 2.6 : 1.8;
                 const dashMarkup = dash ? ` stroke-dasharray="${dash}"` : '';
 
-                return `<path data-route-edge="${escapeAttribute(line.id)}" data-route-source="${escapeAttribute(line.sourceNode)}" data-route-target="${escapeAttribute(line.targetNode)}" d="${escapeAttribute(line.path)}" fill="none" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" stroke="${color}" opacity="${opacity}"${dashMarkup}${filter} marker-end="url(#${escapeAttribute(this.routeInstance)}-arrow-${markerName})"></path>`;
+                const halo = `<path class="ff-route-halo" d="${escapeAttribute(line.path)}" fill="none" stroke-width="${strokeWidth + 3}" stroke-linecap="round" stroke-linejoin="round"></path>`;
+                return halo + `<path data-route-edge="${escapeAttribute(line.id)}" data-route-source="${escapeAttribute(line.sourceNode)}" data-route-target="${escapeAttribute(line.targetNode)}" data-route-outcome="${outcome}" d="${escapeAttribute(line.path)}" fill="none" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" stroke="${color}" opacity="${opacity}"${dashMarkup} marker-end="url(#${escapeAttribute(this.routeInstance)}-arrow-${markerName})"></path>`;
             }).join('');
         },
 
@@ -303,152 +413,37 @@ export function workflowRouteSurface(config = {}) {
                     centerY: rect.top + (rect.height / 2) - surfaceRect.top + surface.scrollTop,
                 };
             };
-            const roundedPath = (points, radius = 9) => {
-                const compact = points.filter((point, index) => {
-                    const previous = points[index - 1];
-
-                    return !previous || previous.x !== point.x || previous.y !== point.y;
-                });
-
-                if (compact.length < 2) {
-                    return '';
-                }
-
-                let path = `M ${compact[0].x} ${compact[0].y}`;
-
-                for (let index = 1; index < compact.length - 1; index += 1) {
-                    const previous = compact[index - 1];
-                    const current = compact[index];
-                    const next = compact[index + 1];
-                    const incoming = Math.hypot(current.x - previous.x, current.y - previous.y);
-                    const outgoing = Math.hypot(next.x - current.x, next.y - current.y);
-                    const cornerRadius = Math.min(radius, incoming / 2, outgoing / 2);
-
-                    if (!cornerRadius) {
-                        path += ` L ${current.x} ${current.y}`;
-                        continue;
-                    }
-
-                    const before = {
-                        x: current.x + ((previous.x - current.x) / incoming) * cornerRadius,
-                        y: current.y + ((previous.y - current.y) / incoming) * cornerRadius,
-                    };
-                    const after = {
-                        x: current.x + ((next.x - current.x) / outgoing) * cornerRadius,
-                        y: current.y + ((next.y - current.y) / outgoing) * cornerRadius,
-                    };
-
-                    path += ` L ${before.x} ${before.y} Q ${current.x} ${current.y} ${after.x} ${after.y}`;
-                }
-
-                const end = compact[compact.length - 1];
-
-                return `${path} L ${end.x} ${end.y}`;
-            };
             const stepColumns = Array.from(surface.querySelectorAll('[data-workflow-step-column]'));
             const stepIndexes = new Map(stepColumns.map((column, index) => [column, index]));
             const routeMap = this.readRouteMap();
-            const edges = Array.isArray(routeMap?.edges) && routeMap.edges.length
-                ? routeMap.edges.filter((edge) => edge?.reachable !== false)
+            const rawEdges = Array.isArray(routeMap?.edges)
+                ? routeMap.edges
                 : this.fallbackEdges(taskNodes);
-            let routeLane = 0;
-            const lines = [];
-
-            edges.forEach((edge, edgeIndex) => {
-                const sourceNode = String(edge.source || edge.from || '');
-                const targetNode = String(edge.target || edge.to || '');
-                const source = targetElement(sourceNode);
-                const target = targetElement(targetNode);
-
-                if (!source || !target) {
-                    return;
-                }
-
-                const sourceRect = relativeRect(source);
-                const targetRect = relativeRect(target);
-                const sourceStepElement = source.closest('[data-workflow-step-column]');
-                const targetStepElement = target.closest('[data-workflow-step-column]');
-                const sourceStepRect = sourceStepElement ? relativeRect(sourceStepElement) : sourceRect;
-                const targetStepRect = targetStepElement ? relativeRect(targetStepElement) : targetRect;
-                const sourceStepIndex = stepIndexes.get(sourceStepElement) ?? -1;
-                const targetStepIndex = stepIndexes.get(targetStepElement) ?? -1;
-                const laneIndex = routeLane++;
-                const outcome = normalizeOutcome(edge.outcome || edge.line_tone || edge.type);
-                const sourceY = outcome === 'failed'
-                    ? sourceRect.top + (sourceRect.height * 0.68)
-                    : sourceRect.top + (sourceRect.height * 0.40);
-                const targetY = targetRect.centerY;
-                let points;
-
-                if (source === target) {
-                    const loopX = sourceStepRect.right + 16 + ((laneIndex % 4) * 6);
-                    points = [
-                        { x: sourceRect.right, y: sourceY },
-                        { x: loopX, y: sourceY },
-                        { x: loopX, y: targetY + 16 },
-                        { x: sourceRect.right, y: targetY + 16 },
-                        { x: sourceRect.right, y: targetY },
-                    ];
-                } else if (sourceStepElement && sourceStepElement === targetStepElement) {
-                    const sideX = sourceStepRect.right + 16 + ((laneIndex % 4) * 6);
-                    points = [
-                        { x: sourceRect.right, y: sourceY },
-                        { x: sideX, y: sourceY },
-                        { x: sideX, y: targetY },
-                        { x: targetRect.right, y: targetY },
-                    ];
-                } else {
-                    const goesBack = (targetStepIndex >= 0 && sourceStepIndex >= 0 && targetStepIndex < sourceStepIndex)
-                        || targetRect.centerX < sourceRect.centerX;
-                    const sourceAnchorX = goesBack ? sourceRect.left : sourceRect.right;
-                    const targetAnchorX = goesBack ? targetRect.right : targetRect.left;
-                    const adjacent = sourceStepIndex >= 0
-                        && targetStepIndex >= 0
-                        && Math.abs(sourceStepIndex - targetStepIndex) === 1;
-
-                    if (adjacent) {
-                        const gapLeft = goesBack ? targetStepRect.right : sourceStepRect.right;
-                        const gapRight = goesBack ? sourceStepRect.left : targetStepRect.left;
-                        const gapOffset = ((laneIndex % 5) - 2) * 3;
-                        const gapX = Math.max(
-                            gapLeft + 8,
-                            Math.min(gapRight - 8, ((gapLeft + gapRight) / 2) + gapOffset),
-                        );
-                        points = [
-                            { x: sourceAnchorX, y: sourceY },
-                            { x: gapX, y: sourceY },
-                            { x: gapX, y: targetY },
-                            { x: targetAnchorX, y: targetY },
-                        ];
-                    } else {
-                        const clearance = 18 + ((laneIndex % 5) * 6);
-                        const corridorY = Math.max(12, Math.min(sourceStepRect.top, targetStepRect.top) - clearance);
-                        const sourceLaneX = sourceAnchorX + (goesBack ? -clearance : clearance);
-                        const targetLaneX = targetAnchorX + (goesBack ? clearance : -clearance);
-                        points = [
-                            { x: sourceAnchorX, y: sourceY },
-                            { x: sourceLaneX, y: sourceY },
-                            { x: sourceLaneX, y: corridorY },
-                            { x: targetLaneX, y: corridorY },
-                            { x: targetLaneX, y: targetY },
-                            { x: targetAnchorX, y: targetY },
-                        ];
+            const edges = rawEdges.map((edge) => {
+                const key = String(edge.target || edge.targetNode || edge.to || '');
+                const firstTask = key.endsWith('::*') ? firstByStep.get(key.slice(0, -3)) : null;
+                return firstTask ? { ...edge, target: firstTask.dataset.workflowTaskNode } : edge;
+            });
+            const descriptors = new Map();
+            const descriptorFor = (element) => {
+                const column = element.closest('[data-workflow-step-column]');
+                const rect = relativeRect(element);
+                return { rect, column, columnRect: column ? relativeRect(column) : rect,
+                    index: stepIndexes.get(column) ?? stepColumns.length };
+            };
+            allNodes.forEach((node) => {
+                const key = node.dataset.workflowRouteNode || node.dataset.workflowTaskNode || '';
+                if (key) descriptors.set(key, descriptorFor(node));
+            });
+            for (const edge of edges) {
+                for (const key of [edge.source || edge.sourceNode || edge.from, edge.target || edge.targetNode || edge.to]) {
+                    if (key && !descriptors.has(key)) {
+                        const element = targetElement(key);
+                        if (element) descriptors.set(key, descriptorFor(element));
                     }
                 }
-
-                lines.push({
-                    id: String(edge.id || `route-${edgeIndex}`),
-                    path: roundedPath(points),
-                    outcome,
-                    sourceNode,
-                    targetNode,
-                    runtimeActive: Boolean(
-                        edge.runtime_active
-                        || edge.runtimeActive
-                        || (edge.runtime && (edge.executed || edge.pending)),
-                    ),
-                });
-            });
+            }
+            const lines = buildWorkflowRouteLines(edges, descriptors);
 
             this.routeOverlay = {
                 width: Math.max(surface.scrollWidth, surface.clientWidth),

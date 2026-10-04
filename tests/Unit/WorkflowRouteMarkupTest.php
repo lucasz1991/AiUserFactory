@@ -8,7 +8,7 @@ use PHPUnit\Framework\TestCase;
 
 class WorkflowRouteMarkupTest extends TestCase
 {
-    public function test_pointer_focus_does_not_move_route_details_before_task_activation(): void
+    public function test_tasks_have_error_feedback_but_no_route_disclosures_or_hover_reflow(): void
     {
         $card = file_get_contents(dirname(__DIR__, 2).'/resources/views/components/workflows/step-card.blade.php');
         $this->assertSame(1, preg_match('/x-on:focus\.self="([^"]*)"/', $card, $focus));
@@ -17,8 +17,13 @@ class WorkflowRouteMarkupTest extends TestCase
         $this->assertStringContainsString('x-on:keydown.space.self.prevent.stop="setActiveRouteNode', $card);
         $this->assertStringContainsString('x-bind:aria-pressed="activeRouteNode ===', $card);
         $feedback = file_get_contents(dirname(__DIR__, 2).'/resources/views/components/workflows/task-feedback.blade.php');
-        $this->assertStringContainsString('<details wire:ignore.self', $feedback);
+        $this->assertStringNotContainsString('<details', $feedback);
+        $this->assertStringNotContainsString('data-task-routes', $feedback);
+        $this->assertStringContainsString('data-task-error', $feedback);
         $this->assertStringNotContainsString('routeFocusNode()', $feedback);
+        $this->assertStringNotContainsString('hover:h-', $card);
+        $this->assertStringNotContainsString('x-show.important="!routeFocusNode()', $card);
+        $this->assertStringContainsString('data-workflow-task-gap', $card);
     }
 
     public function test_standard_editor_routes_use_shared_surface_mobile_focus_and_livewire_refresh(): void
@@ -28,7 +33,7 @@ class WorkflowRouteMarkupTest extends TestCase
 
         $this->assertStringContainsString('export function workflowRouteSurface', $surface);
         $this->assertStringContainsString("window.matchMedia('(max-width: 767px)')", $surface);
-        $this->assertStringContainsString('this.showAllRoutes = !event.matches', $surface);
+        $this->assertStringContainsString('this.showAllRoutes = false;', $surface);
         $this->assertStringContainsString('line.sourceNode === focusNode', $surface);
         $this->assertStringContainsString("window.Livewire.hook('morphed'", $surface);
         $this->assertStringNotContainsString("window.Livewire.hook('morph.updated'", $surface);
@@ -44,31 +49,32 @@ class WorkflowRouteMarkupTest extends TestCase
     public function test_preview_routes_use_the_same_focus_and_corridor_behavior(): void
     {
         $source = file_get_contents(dirname(__DIR__, 2).'/resources/views/components/workflows/minimap.blade.php');
-        $definition = $this->alpineDefinitionContaining($source, 'routeEvents:');
+        $definition = $this->alpineDefinitionContaining($source, 'workflowRouteSurface');
 
-        $this->assertStringContainsString('activeRouteNode: @js($activeRouteNode)', $definition);
-        $this->assertStringContainsString('setHoveredRouteNode(node = \'\')', $definition);
-        $this->assertStringContainsString('const adjacentSteps', $definition);
-        $this->assertStringContainsString('line.sourceNode === focusNode', $definition);
+        $this->assertStringContainsString('initialNode: @js($activeRouteNode)', $definition);
+        $this->assertStringContainsString('...workflowRouteSurface({', $definition);
+        $this->assertStringNotContainsString('refreshRouteLines() {', $definition, 'Keine zweite Geometrie-Implementierung.');
+        $this->assertStringContainsString('x-ref="routeMap"', $source);
+        $this->assertStringContainsString('data-workflow-task-node="{{ $taskNode }}"', $source);
+        $this->assertStringContainsString('data-workflow-column-gap', $source);
+        $this->assertStringNotContainsString('x-show.important="!routeFocusNode()', $source);
+        $this->assertStringNotContainsString('hover:-translate', $source);
+        $this->assertStringNotContainsString('taskRouteBadge', $source);
         $this->assertStringContainsString('data-minimap-step-column', $source);
         $this->assertStringNotContainsString('const laneY = Math.max(4', $definition);
         $this->assertStringEndsWith('}', trim($definition));
     }
 
-    /**
-     * Feature R3: In der Vorschau bestimmt zusaetzlich das Alter der Linie die
-     * Deckkraft. Der Hover-Fokus daempft nur noch, statt fest auf 1 / 0.5 zu
-     * setzen — und keine Linie darf dabei unsichtbar werden.
-     */
+    /** Ohne Auswahl bleiben auch aeltere Linien sichtbar; Fokus filtert nur Quellen. */
     public function test_preview_route_opacity_encodes_age_and_never_reaches_zero(): void
     {
         $source = file_get_contents(dirname(__DIR__, 2).'/resources/views/components/workflows/minimap.blade.php');
-        $definition = $this->alpineDefinitionContaining($source, 'routeEvents:');
+        $surface = file_get_contents(dirname(__DIR__, 2).'/resources/js/components/workflow-route-surface.js');
 
-        $this->assertStringContainsString('line.ageOpacity', $definition);
-        $this->assertStringContainsString('Math.max(0.35', $definition, 'Untergrenze fuer die Alters-Deckkraft fehlt.');
-        $this->assertStringContainsString('Math.max(0.28', $definition, 'Auch unfokussierte Linien bleiben sichtbar.');
-        $this->assertStringNotContainsString('related ? 1 : 0.5', $definition, 'Die alte, altersblinde Deckkraft ist ersetzt.');
+        $this->assertStringContainsString("\$routeEvent['ageOpacity']", $source);
+        $this->assertStringContainsString('line.ageOpacity', $surface);
+        $this->assertStringContainsString('Math.max(0.35', $surface);
+        $this->assertStringContainsString('if (focusNode && !related) return', $surface);
     }
 
     public function test_manager_cards_drive_hover_and_active_route_focus(): void
@@ -78,18 +84,17 @@ class WorkflowRouteMarkupTest extends TestCase
         $this->assertStringContainsString('x-on:mouseenter="setHoveredRouteNode(', $source);
         $this->assertStringContainsString('x-on:mouseleave="setHoveredRouteNode(\'\')"', $source);
         $this->assertStringContainsString('setActiveRouteNode(', $source);
-        $this->assertStringContainsString("'opacity-50'", $source);
+        $this->assertStringContainsString('data-workflow-task-gap', $source);
     }
 
     public function test_minimap_zoom_uses_semantic_density_and_recalculates_route_geometry(): void
     {
         $source = file_get_contents(dirname(__DIR__, 2).'/resources/views/components/workflows/minimap.blade.php');
-        $definition = $this->alpineDefinitionContaining($source, 'routeEvents:');
+        $definition = $this->alpineDefinitionContaining($source, 'workflowRouteSurface');
 
         $this->assertStringContainsString("['overview', 'standard', 'detail']", $definition);
         $this->assertStringContainsString('setZoom(level)', $definition);
-        $this->assertStringContainsString('this.$nextTick(() => this.refreshRouteLines())', $definition);
-        $this->assertStringContainsString('new ResizeObserver(() => this.refreshRouteLines())', $definition);
+        $this->assertStringContainsString('this.$nextTick(() => this.queueRouteRefresh())', $definition);
         $this->assertStringContainsString('data-workflow-minimap-zoom-level="{{ $zoomKey }}"', $source);
         $this->assertStringContainsString('x-on:click.stop="setZoom(@js($zoomKey))"', $source);
         $this->assertStringContainsString('data-workflow-minimap-instance="{{ $mapInstance }}"', $source);
@@ -118,11 +123,11 @@ class WorkflowRouteMarkupTest extends TestCase
         $this->assertStringContainsString("'configured' => true", $source);
         $this->assertStringContainsString('WorkflowRouteMapPresenter::class', $source);
         $this->assertStringContainsString('WorkflowRouteMapPresenter::MODE_COMBINED', $source);
-        $this->assertStringContainsString('arrow-runtime', $source);
-        $this->assertStringContainsString('arrow-partial', $source);
-        $this->assertStringContainsString('arrow-timeout', $source);
-        $this->assertStringContainsString("'partial' => 'bg-amber-50", $source);
-        $this->assertStringContainsString("'timeout' => 'bg-violet-50", $source);
+        $markers = file_get_contents(dirname(__DIR__, 2).'/resources/views/components/workflows/route-markers.blade.php');
+        $this->assertStringContainsString('<x-workflows.route-markers', $source);
+        $this->assertStringContainsString("'partial' => '#3b82f6'", $markers);
+        $this->assertStringContainsString("'timeout' => '#8b5cf6'", $markers);
+        $this->assertStringContainsString('markerUnits="userSpaceOnUse"', $markers);
         $this->assertStringContainsString('data-minimap-node="terminal::end"', $source);
         $this->assertStringContainsString('data-minimap-node="terminal::fail"', $source);
         $this->assertStringContainsString('Str::slug($mapInstance)', $source);
