@@ -346,6 +346,120 @@ class WorkflowWorkspaceFeedbackTest extends TestCase
         ];
     }
 
+    #[DataProvider('internalTransitionEvidenceSources')]
+    public function test_actual_internal_task_transitions_are_visible_without_reinterpreting_a_later_definition(string $evidenceSource): void
+    {
+        [$workflow, $step, $session] = $this->liveWorkspace();
+        $configuration = $step->config_json;
+        // The definition was edited later; it is not a record of the old path.
+        $configuration['tasks'][0]['next'] = ['type' => 'card', 'action_key' => 'main', 'card_key' => 'untouched'];
+        $configuration['tasks'][1]['next'] = ['type' => 'end'];
+        $step->update(['config_json' => $configuration]);
+        $run = $this->workspaceRun($workflow, $step, $session, 'running');
+        $tasks = [
+            ['key' => 'first', 'status' => 'success'],
+            ['key' => 'current', 'status' => 'success'],
+            ['key' => 'untouched', 'status' => 'running'],
+        ];
+        if ($evidenceSource === 'timestamp-pairs') {
+            $tasks[0] += ['startedAt' => '2026-10-04T08:00:00.000Z', 'finishedAt' => '2026-10-04T08:00:01.000Z', 'next' => ['type' => 'card', 'action_key' => 'main', 'card_key' => 'current']];
+            $tasks[1] += ['startedAt' => '2026-10-04T08:00:02.000Z', 'finishedAt' => '2026-10-04T08:00:03.000Z', 'next' => ['type' => 'card', 'action_key' => 'main', 'card_key' => 'untouched']];
+            $tasks[2] += ['startedAt' => '2026-10-04T08:00:04.000Z'];
+        }
+        $snapshot = ['tasks' => $tasks];
+        if ($evidenceSource === 'actual-events') {
+            $snapshot['events'] = [
+                ['at' => '2026-10-04T08:00:00.000Z', 'stage' => 'task-started', 'taskKey' => 'first'],
+                ['at' => '2026-10-04T08:00:01.000Z', 'stage' => 'task-completed', 'taskKey' => 'first', 'status' => 'success'],
+                ['at' => '2026-10-04T08:00:02.000Z', 'stage' => 'task-started', 'taskKey' => 'current'],
+                ['at' => '2026-10-04T08:00:03.000Z', 'stage' => 'task-completed', 'taskKey' => 'current', 'status' => 'success'],
+                ['at' => '2026-10-04T08:00:04.000Z', 'stage' => 'task-started', 'taskKey' => 'untouched'],
+            ];
+        }
+        $stepRun = $run->stepRuns()->create(['workflow_step_id' => $step->id, 'status' => 'running', 'result_json' => $snapshot]);
+        $stepRun->update(['result_json' => $snapshot + [
+            'workflowRunId' => $run->id, 'workflowStepId' => $step->id, 'workflowStepRunId' => $stepRun->id,
+        ]]);
+        app(WorkflowStudioSessionService::class)->attachRun($session, $run);
+        $editor = Livewire::test(WorkflowStudioTaskEditor::class, ['workflow' => $workflow, 'studioSessionId' => $session->id]);
+        $script = $this->xpath($editor->html())->query('//*[@data-workflow-live-preview]//script[@*[name()="x-ref"]="routeMap"]');
+        $this->assertSame(1, $script->count());
+        $edges = collect(json_decode($script->item(0)->textContent, true, flags: JSON_THROW_ON_ERROR)['edges']);
+        foreach ([['main::first', 'main::current'], ['main::current', 'main::untouched']] as [$source, $target]) {
+            $observed = $edges->first(fn (array $edge): bool => $edge['sourceNode'] === $source && $edge['targetNode'] === $target && $edge['executed']);
+            $this->assertNotNull($observed, $evidenceSource.' must expose the actual internal task transition.');
+            $this->assertTrue($observed['runtime']);
+            $this->assertGreaterThan(0, $observed['runtimeCount']);
+            $this->assertSame('success', $observed['outcome']);
+            $this->assertSame('runtime', $observed['visualTone']);
+        }
+        $revisedPlannedEdge = $edges->first(fn (array $edge): bool => $edge['sourceNode'] === 'main::first' && $edge['targetNode'] === 'main::untouched');
+        $this->assertNotNull($revisedPlannedEdge);
+        $this->assertFalse($revisedPlannedEdge['executed']);
+        $this->assertSame('neutral', $revisedPlannedEdge['visualTone']);
+        $this->assertSame([], data_get($run->fresh()->context_json, 'route_history', []), 'The presenter must not persist inferred UI paths.');
+        $this->assertSame($configuration, $step->fresh()->config_json);
+        $this->assertSame($snapshot + ['workflowRunId' => $run->id, 'workflowStepId' => $step->id, 'workflowStepRunId' => $stepRun->id], $stepRun->fresh()->result_json);
+    }
+
+    public static function internalTransitionEvidenceSources(): array
+    {
+        return ['runtime event order' => ['actual-events'], 'recorded timestamp pair and snapshot target' => ['timestamp-pairs']];
+    }
+
+    #[DataProvider('unprovenInternalTransitions')]
+    public function test_task_status_planned_routes_and_ambiguous_or_foreign_snapshots_never_color_internal_connections(string $scenario): void
+    {
+        [$workflow, $step, $session] = $this->liveWorkspace();
+        $run = $this->workspaceRun($workflow, $step, $session, 'running');
+        $tasks = [
+            ['key' => 'first', 'status' => 'success', 'startedAt' => '2026-10-04T08:00:00.000Z', 'finishedAt' => '2026-10-04T08:00:01.000Z', 'next' => ['type' => 'card', 'action_key' => 'main', 'card_key' => 'current']],
+            ['key' => 'current', 'status' => 'running', 'startedAt' => '2026-10-04T08:00:02.000Z'],
+        ];
+        $snapshot = [];
+        if ($scenario === 'status-only') {
+            $tasks = [['key' => 'first', 'status' => 'success'], ['key' => 'current', 'status' => 'running']];
+            $run->update(['context_json' => ['next_task_key' => 'current', 'task_history' => [
+                ['workflow_step_id' => $step->id, 'task_key' => 'first', 'status' => 'completed', 'seq' => 1],
+            ]]]);
+        } elseif ($scenario === 'future-target') {
+            $tasks[1] = ['key' => 'current', 'status' => 'template'];
+        } elseif ($scenario === 'target-without-start') {
+            unset($tasks[1]['startedAt']);
+        } elseif ($scenario === 'overlapping-execution') {
+            $tasks[1]['startedAt'] = '2026-10-04T08:00:00.500Z';
+        } elseif ($scenario === 'unfinished-source') {
+            unset($tasks[0]['finishedAt']);
+        } elseif ($scenario === 'different-snapshot-target') {
+            $tasks[0]['next']['card_key'] = 'untouched';
+        } elseif ($scenario === 'ambiguous-target-start') {
+            $tasks[] = ['key' => 'untouched', 'status' => 'running', 'startedAt' => $tasks[1]['startedAt']];
+        } elseif ($scenario === 'foreign-run') {
+            $snapshot['workflowRunId'] = $run->id + 1;
+        } elseif ($scenario === 'foreign-step') {
+            $snapshot['workflowStepId'] = $step->id + 1;
+        }
+        $snapshot['tasks'] = $tasks;
+        $run->stepRuns()->create(['workflow_step_id' => $step->id, 'status' => 'running', 'result_json' => $snapshot]);
+        app(WorkflowStudioSessionService::class)->attachRun($session, $run);
+        $editor = Livewire::test(WorkflowStudioTaskEditor::class, ['workflow' => $workflow, 'studioSessionId' => $session->id]);
+        $script = $this->xpath($editor->html())->query('//*[@data-workflow-live-preview]//script[@*[name()="x-ref"]="routeMap"]');
+        $this->assertSame(1, $script->count());
+        $edges = collect(json_decode($script->item(0)->textContent, true, flags: JSON_THROW_ON_ERROR)['edges']);
+        $this->assertNotEmpty($edges);
+        $this->assertTrue($edges->every(fn (array $edge): bool => ! $edge['executed'] && $edge['runtimeCount'] === 0 && $edge['visualTone'] === 'neutral'), $scenario.' must not turn planned connections into observed paths.');
+        $this->assertSame($snapshot, $run->stepRuns()->first()->result_json);
+        $this->assertSame(1, $run->stepRuns()->count());
+    }
+
+    public static function unprovenInternalTransitions(): array
+    {
+        return array_combine(
+            $scenarios = ['status-only', 'future-target', 'target-without-start', 'overlapping-execution', 'unfinished-source', 'different-snapshot-target', 'ambiguous-target-start', 'foreign-run', 'foreign-step'],
+            array_map(fn (string $scenario): array => [$scenario], $scenarios),
+        );
+    }
+
     public function test_queued_and_pending_only_live_maps_never_color_unexecuted_success_or_error_branches(): void
     {
         [$workflow, $step, $session] = $this->liveWorkspace();

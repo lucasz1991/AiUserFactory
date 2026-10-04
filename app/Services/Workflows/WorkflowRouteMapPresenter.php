@@ -51,11 +51,12 @@ final class WorkflowRouteMapPresenter
 
         $graph = $this->graphContext($workflow);
         $definitionEdges = $this->definitionEdges($graph);
-        $runtimeEdges = $run ? $this->runtimeEdges($run, $graph) : [];
+        $stepRuns = $run ? $this->orderedStepRuns($run) : [];
+        $runtimeEdges = $run ? $this->runtimeEdges($run, $graph, $stepRuns) : [];
 
         $nodes = $graph['nodes'];
         if ($run && $mode !== self::MODE_DEFINITION) {
-            $nodes = $this->applyRuntimeNodeState($nodes, $run, $graph);
+            $nodes = $this->applyRuntimeNodeState($nodes, $run, $graph, $stepRuns);
         }
 
         $edges = match ($mode) {
@@ -370,7 +371,7 @@ final class WorkflowRouteMapPresenter
      * @param  array<string, mixed>  $graph
      * @return list<array<string, mixed>>
      */
-    private function runtimeEdges(WorkflowRun $run, array $graph): array
+    private function runtimeEdges(WorkflowRun $run, array $graph, array $stepRuns): array
     {
         $grouped = [];
         $context = is_array($run->context_json) ? $run->context_json : [];
@@ -421,6 +422,22 @@ final class WorkflowRouteMapPresenter
             }
         }
 
+        // Node executes internal card transitions without writing route_history.
+        // Project only its actual own task traces; never walk definition routes.
+        $historyKeys = array_fill_keys(array_keys($grouped), true);
+        foreach ($this->taskSnapshotEvents($run, $graph, $stepRuns) as $event) {
+            $sourceNode = $event['route']['action_key'].'::'.$event['route']['_source_card_key'];
+            $targetNode = $event['route']['action_key'].'::'.$event['route']['card_key'];
+            $key = $this->edgeMatchKey($sourceNode, $targetNode, $event['outcome']);
+            if (isset($historyKeys[$key])) {
+                continue;
+            }
+
+            $grouped[$key] = isset($grouped[$key])
+                ? $this->appendRuntimeEvent($grouped[$key], $event)
+                : $this->makeRuntimeEdge($sourceNode, $targetNode, $event['outcome'], 'card', $graph, $event);
+        }
+
         $pending = $this->pendingRuntimeEdge($context, $graph, $run);
         if ($pending !== null) {
             $key = $this->edgeMatchKey($pending['source'], $pending['target'], $pending['outcome']);
@@ -433,6 +450,136 @@ final class WorkflowRouteMapPresenter
         }
 
         return array_values($grouped);
+    }
+
+    /**
+     * @param  array<string, mixed>  $graph
+     * @param  list<WorkflowStepRun>  $stepRuns
+     * @return list<array<string, mixed>>
+     */
+    private function taskSnapshotEvents(WorkflowRun $run, array $graph, array $stepRuns): array
+    {
+        if ((int) $run->workflow_id !== (int) $graph['workflow']->getKey()) {
+            return [];
+        }
+
+        $observed = [];
+        foreach ($stepRuns as $stepRun) {
+            $action = $this->actionForStepId((int) $stepRun->workflow_step_id, $graph);
+            $snapshot = is_array($stepRun->result_json) ? $stepRun->result_json : [];
+            if ($action === '' || (int) $stepRun->workflow_run_id !== (int) $run->getKey()) {
+                continue;
+            }
+            foreach (['workflowRunId' => $run->getKey(), 'workflowStepRunId' => $stepRun->getKey(), 'workflowStepId' => $stepRun->workflow_step_id] as $field => $id) {
+                if (isset($snapshot[$field]) && (int) $snapshot[$field] !== (int) $id) {
+                    continue 2;
+                }
+            }
+
+            $append = function (string $source, string $target, string $outcome, string $at, string $evidence) use (&$observed, $action, $graph, $stepRun): void {
+                if (! isset($graph['nodes'][$action.'::'.$source], $graph['nodes'][$action.'::'.$target])) {
+                    return;
+                }
+                $observed[] = [
+                    'index' => null, 'at' => $at, 'workflow_step_id' => (int) $stepRun->workflow_step_id,
+                    'workflow_step_run_id' => (int) $stepRun->getKey(), 'outcome' => $outcome,
+                    'logical_outcome' => '', 'route_disposition' => 'continue', 'evidence' => $evidence,
+                    'route' => ['type' => 'card', 'action_key' => $action, 'card_key' => $target, '_source_card_key' => $source],
+                ];
+            };
+            $events = is_array($snapshot['events'] ?? null) ? array_slice($snapshot['events'], -100) : [];
+            $last = null;
+            $lastAt = null;
+            foreach ($events as $event) {
+                if (! is_array($event) || ! str_starts_with((string) ($event['stage'] ?? ''), 'task-')) {
+                    continue;
+                }
+                $at = $this->taskTraceTime($event['at'] ?? null);
+                $key = trim((string) ($event['taskKey'] ?? ''));
+                if ($at === null || ($lastAt !== null && $at < $lastAt) || ! isset($graph['nodes'][$action.'::'.$key])) {
+                    $last = null;
+
+                    continue;
+                }
+                $lastAt = $at;
+                $stage = (string) $event['stage'];
+                if (in_array($stage, ['task-completed', 'task-failed', 'task-condition-not-met'], true)) {
+                    $status = strtolower(trim((string) ($event['status'] ?? '')));
+                    $outcome = $stage === 'task-condition-not-met' || $stage === 'task-failed' ? 'failed' : ($status === 'partial' ? 'partial' : 'success');
+                    $last = ['key' => $key, 'at' => $at, 'outcome' => $outcome, 'target' => null];
+                } elseif (in_array($stage, ['task-dynamic-route-followed', 'task-error-route-followed', 'task-branch-route-followed'], true) && ($last['key'] ?? null) === $key) {
+                    $last['target'] = trim((string) ($event['targetTaskKey'] ?? ''));
+                    $last['outcome'] = strtolower(trim((string) ($event['routeOutcome'] ?? ''))) ?: $last['outcome'];
+                } elseif ($stage === 'task-started') {
+                    if ($last !== null && ($last['target'] === null || $last['target'] === $key) && $at >= $last['at']) {
+                        $append($last['key'], $key, $last['outcome'], (string) $event['at'], 'task_events');
+                    }
+                    $last = null;
+                }
+            }
+            // Public live snapshots intentionally omit events. A copied next
+            // route alone is still just a plan: both timed task executions and
+            // their immediate, unambiguous order must prove this transition.
+            if ($events !== [] || ! is_array($snapshot['tasks'] ?? null) || count($snapshot['tasks']) > 1000) {
+                continue;
+            }
+            $timed = [];
+            $keys = [];
+            foreach ($snapshot['tasks'] as $task) {
+                if (! is_array($task)) {
+                    continue;
+                }
+                $key = trim((string) ($task['key'] ?? ''));
+                $start = $this->taskTraceTime($task['startedAt'] ?? $task['started_at'] ?? null);
+                if ($start === null) {
+                    continue;
+                }
+                if (isset($keys[$key]) || ! isset($graph['nodes'][$action.'::'.$key])) {
+                    continue 2;
+                }
+                $keys[$key] = true;
+                $timed[] = ['task' => $task, 'key' => $key, 'start' => $start];
+            }
+            usort($timed, fn (array $left, array $right): int => $left['start'] <=> $right['start']);
+            foreach ($timed as $index => $task) {
+                if ($index > 0 && $task['start'] === $timed[$index - 1]['start']) {
+                    continue 2;
+                }
+            }
+            foreach ($timed as $index => $source) {
+                $target = $timed[$index + 1] ?? null;
+                $task = $source['task'];
+                $finish = $this->taskTraceTime($task['finishedAt'] ?? $task['finished_at'] ?? null);
+                $next = is_array($task['next'] ?? null) ? $task['next'] : [];
+                if ($target === null || ! in_array(strtolower((string) ($task['status'] ?? '')), ['success', 'completed'], true)
+                    || ($task['ok'] ?? true) === false
+                    || ! in_array(strtolower((string) ($task['logical_outcome'] ?? $task['logicalOutcome'] ?? 'success')), ['', 'success'], true)
+                    || $finish === null || $finish < $source['start'] || $target['start'] < $finish || $target['start'] <= $source['start']
+                    || ! in_array(strtolower((string) ($target['task']['status'] ?? '')), ['running', 'waiting', 'success', 'completed', 'failed', 'timeout', 'timed_out', 'cancelled', 'skipped'], true)
+                    || ($next['type'] ?? '') !== 'card' || trim((string) ($next['action_key'] ?? $next['step'] ?? $action)) !== $action
+                    || trim((string) ($next['card_key'] ?? $next['card'] ?? '')) !== $target['key']) {
+                    continue;
+                }
+                $append($source['key'], $target['key'], 'success', (string) ($target['task']['startedAt'] ?? $target['task']['started_at']), 'task_snapshot');
+            }
+        }
+
+        return $observed;
+    }
+
+    private function taskTraceTime(mixed $value): ?float
+    {
+        if (! is_string($value) || ! preg_match('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/', $value)) {
+            return null;
+        }
+        try {
+            $time = new \DateTimeImmutable($value);
+            $errors = \DateTimeImmutable::getLastErrors();
+
+            return $errors !== false && ($errors['warning_count'] || $errors['error_count']) ? null : (float) $time->format('U.u');
+        } catch (\Exception) {
+            return null;
+        }
     }
 
     /**
@@ -496,10 +643,9 @@ final class WorkflowRouteMapPresenter
      * @param  array<string, mixed>  $graph
      * @return array<string, array<string, mixed>>
      */
-    private function applyRuntimeNodeState(array $nodes, WorkflowRun $run, array $graph): array
+    private function applyRuntimeNodeState(array $nodes, WorkflowRun $run, array $graph, array $stepRuns): array
     {
         $context = is_array($run->context_json) ? $run->context_json : [];
-        $stepRuns = $this->orderedStepRuns($run);
         $latestStepRunByStep = [];
         $taskStates = [];
 

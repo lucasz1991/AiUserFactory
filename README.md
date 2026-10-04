@@ -132,6 +132,8 @@ Arbeitsprotokoll aktualisieren.
 
 ### Arbeitsprotokoll
 
+2026-10-04 | Codex/root | lokal/Desktop verifiziert: Run-Verbindungen samt Pfeilen bleiben bis positiver Lauf-Evidenz grau, auch bei Hover/Auswahl/Alle. visualTone getrennt von Fach-outcome/Geometrie; dynamischer JSON-Modus ohne Editor-Remount. Interne Taskwechsel rein lesend aus eigenen Events oder eindeutigen Zeitpaaren mit Snapshot-Route, kein status-only/Future/Foreign/Tie-Fallback. Browser-Miniansichten144x80 direkt sichtbar, aktives Fenster zuerst, stabile lokale Bild-Fallbacks und bisherige Dialog-/Probe-Guards. FullWorkflow648/5604, UI+Presenter174/1841, Node112, Vite/Pint/Diff gruen. Eigener KontrollRun12 completed mit sieben success-Tasks, sieben farbige genutzte/36graue ungenutzte Kanten; echte Bilder und Dialog/Escape/Fokus verifiziert. Lokale Langlauf-/SQLite-QA-Ausnahmen ehrlich erhalten, kein Purge/Replay. Eigene QA-Prozesse beendet, AppDB/Server8721/Produktion unveraendert; kein neuer Plesk-Rollout/Push. Bericht: ../.lmzdev/artifacts/reports/workflow-executed-routes-browser-mini-2026-10-04.md.
+
 2026-10-04 | Codex/root | produktiv verifiziert: Workflow-Teststarts repariert und Fix bb884586 ueber Plesk deployed. Ursache: neue Control-/AI-Queues bei nur einem Defaultworker (106 Control-/17 AI-Jobs unreserviert, aeltester ca. 8,4 h). Drei getrennte Supervisor-Pools aktiviert, alten Plesk-Worker deaktiviert, Scheduler erhalten; kein Queue-Purge oder Replay. Appgescoptes Node24 statt globalem Node18 mit failclosed Mindestversions-/Pfadpruefung. 59 lokale Tests/454 Assertions und 56 Queue-/Studio-Tests/297 Assertions gruen. Produktion: Build/Runtime-Hash/PHP-Syntax gruen, drei frische Heartbeats, alle Queues leer, keine kritischen Health-Alarme. Eigener inaktiver Inline-Testworkflow44 ueber echte Studio-Buttons: Runs590/591 completed (2 s/1 s), je drei Tasks success und keine verbliebenen Smokeprozesse. Bestehender Run589 startet wieder, scheitert spaeter am Portal-Input-Fill; kein neuer Loginversuch oder geratenes Selector-Update. Dev-braces-Audit und unbelegte Prune-Heartbeats bleiben offen. Bericht: ../.lmzdev/artifacts/reports/workflow-teststart-production-repair-2026-10-04.md.
 
 2026-10-04 | Codex/UI | verifiziert: Task-Routenboxen wieder entfernt; Fehlerfeedback/-fokus erhalten. Gemeinsame SVG-Geometrie und feste Marker in Uebersicht und Test-/Bearbeitungsflaeche: Hauptpfad standardmaessig, bei Hover/Auswahl nur ausgehende Linien, voller Graph per Alle Verbindungen. Feste Spacer und keine Hover-Transforms/-Hoehen; alle elf Task-Rechtecke in beiden Desktop-Ansichten vor/nach Hover identisch. 122 PHP-Tests/1222 Assertions, neun Node-Tests, Pint, Vite und Desktop-Browserabnahme inkl. Livewire-Auswahl und synthetischem Fehlerlauf gruen; eigene Testdaten entfernt. Backend/Node-Runtime unveraendert, kein Commit/Push/Deployment durch diese Spur. Bericht: ../.lmzdev/artifacts/reports/workflow-desktop-routes-2026-10-04.md. Ownership freigegeben.
@@ -1465,10 +1467,23 @@ dieselbe Quelle. Cursorwechsel aktualisieren die Ansicht; unveraenderte Polls un
 Screenshot-/URL-/Zeitwechsel loesen keine zusaetzliche Editor-Aktualisierung aus.
 Beobachtete Laufwege sind in dieser Liveansicht blau; fachliche Routenergebnisse
 bleiben separat erhalten. Terminal-Cursor werden nicht als noch laufend markiert.
+Sobald ein Run angezeigt wird, bleiben noch nicht durchlaufene Verbindungen und
+Pfeilspitzen grau, auch bei Hover, Auswahl oder `Alle Verbindungen`. Ein angekuendigter
+naechster Task ist keine Ausfuehrungsevidenz. Ohne Run behaelt der Definitionseditor
+seine fachlichen Routenfarben. Der Evidenzmodus wird aus dem aktuellen RouteMap-JSON
+gelesen; ein Livewire-Update muss den Editor dafuer nicht neu montieren.
+Interne Task-Wechsel kommen aus eigenen tatsaechlichen StepRun-Events oder
+eindeutigen abgeschlossenen/gestarteten Zeitpaaren mit passender Snapshot-Route.
+Erfolgstatus, aktuelle Definition, fehlende Zielstarts oder mehrdeutige Zeitstempel
+reichen nicht; die Projektion schreibt keine zusaetzliche Laufhistorie.
 
 Start, Pause/Fortsetzen und Stop bleiben direkt erreichbar. Testmodus, Einzeltest
 und weitere Optionen stehen im Menue `Testoptionen`; Laufdaten und Diagnose in
-eigenen Menues. Die Browserzeile zeigt aktives Fenster, Status und Vorschau.
+eigenen Menues. Die Browserzeile zeigt direkte 144x80-Miniansichten pro Fenster,
+aktives Fenster zuerst, mit Namen, Status und zuletzt verfuegbarem Screenshot.
+Feste Lade-/Leer-/Fehlerplaetze verhindern Hoehenspruenge. Weitere Fenster sind
+horizontal erreichbar; Thumbnail-Klick oeffnet den vorhandenen Browserdialog,
+gezielte Live-Proben behalten ihre bisherigen Pause-/Berechtigungssperren.
 Tastaturfokus kehrt nach Dialogen zum sichtbaren, sitzungsgebundenen Ausloeser
 zurueck. Bestehende Berechtigungen, Sperren und Bestaetigungen gelten unveraendert.
 
