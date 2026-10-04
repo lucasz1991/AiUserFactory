@@ -214,6 +214,11 @@ class WorkflowRuntimeCallbackTest extends TestCase
         $mailSettings->shouldReceive('settings')->once()->andReturn([]);
         $runner = new class($mailSettings) extends WorkflowTaskRunner
         {
+            protected function resolveNodeBinary(): string
+            {
+                return 'node-fast-spawn-test-double';
+            }
+
             protected function spawnDetachedProcess(
                 array $command,
                 string $workingDirectory,

@@ -6,6 +6,9 @@ use App\Services\Workflows\WorkflowTaskCatalog;
 use App\Services\Workflows\WorkflowTaskRunner;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Process;
+use PHPUnit\Framework\Attributes\DataProvider;
+use ReflectionMethod;
+use RuntimeException;
 use Tests\TestCase;
 
 /**
@@ -264,6 +267,75 @@ JS;
             File::exists(base_path('node/workflows/tasks/data/save_workflow_data.cjs')),
             'save_workflow_data.cjs fehlt, wird aber von persist_mail_account.cjs eingebunden.',
         );
+    }
+
+    public function test_workflow_node_override_precedes_global_candidates_and_is_probed_once(): void
+    {
+        $binary = '/opt/plesk/node/24/bin/node with spaces';
+        config(['services.workflow.node_binary' => '  '.$binary.'  ']);
+        File::partialMock()->shouldReceive('isFile')->twice()->with($binary)->andReturn(true);
+        File::shouldReceive('exists')->never();
+        Process::fake(['*' => Process::result(output: 'v24.19.0')]);
+
+        $runner = app(WorkflowTaskRunner::class);
+        $method = new ReflectionMethod($runner, 'resolveNodeBinary');
+
+        $this->assertSame($binary, $method->invoke($runner));
+        $this->assertSame($binary, $method->invoke($runner));
+        Process::assertRanTimes(fn ($process): bool => $process->command === [$binary, '--version'] && $process->timeout === 5, 1);
+    }
+
+    public function test_invalid_workflow_node_override_fails_closed_without_global_fallback(): void
+    {
+        config(['services.workflow.node_binary' => '/missing/node']);
+        File::partialMock()->shouldReceive('isFile')->once()->with('/missing/node')->andReturn(false);
+        File::shouldReceive('exists')->never();
+        Process::fake();
+
+        try {
+            $this->expectException(RuntimeException::class);
+            $this->expectExceptionMessage('WORKFLOW_NODE_BINARY');
+            (new ReflectionMethod(WorkflowTaskRunner::class, 'resolveNodeBinary'))->invoke(app(WorkflowTaskRunner::class));
+        } finally {
+            Process::assertNothingRan();
+        }
+    }
+
+    #[DataProvider('unsupportedNodeVersions')]
+    public function test_workflow_node_override_rejects_unsupported_or_unusable_binaries(string $version, int $exitCode): void
+    {
+        $binary = '/opt/plesk/node/test/bin/node';
+        config(['services.workflow.node_binary' => $binary]);
+        File::partialMock()->shouldReceive('isFile')->once()->with($binary)->andReturn(true);
+        File::shouldReceive('exists')->never();
+        Process::fake(['*' => Process::result(output: $version, exitCode: $exitCode)]);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Node.js >= 22.12.0');
+        (new ReflectionMethod(WorkflowTaskRunner::class, 'resolveNodeBinary'))->invoke(app(WorkflowTaskRunner::class));
+    }
+
+    public static function unsupportedNodeVersions(): array
+    {
+        return [
+            'old system Node' => ['v18.19.1', 0],
+            'below Puppeteer minimum' => ['v22.11.0', 0],
+            'minimum prerelease' => ['v22.12.0-rc.1', 0],
+            'not Node output' => ['not-a-node-version', 0],
+            'not executable' => ['', 126],
+        ];
+    }
+
+    public function test_unconfigured_workflow_node_keeps_the_system_candidate_and_checks_the_minimum(): void
+    {
+        $binary = PHP_OS_FAMILY === 'Windows' ? 'C:\\Program Files\\nodejs\\node.exe' : '/usr/bin/node';
+        config(['services.workflow.node_binary' => null]);
+        File::partialMock()->shouldReceive('exists')->once()->with($binary)->andReturn(true);
+        File::shouldReceive('isFile')->once()->with($binary)->andReturn(true);
+        Process::fake(['*' => Process::result(output: 'v22.12.0')]);
+
+        $this->assertSame($binary, (new ReflectionMethod(WorkflowTaskRunner::class, 'resolveNodeBinary'))->invoke(app(WorkflowTaskRunner::class)));
+        Process::assertRanTimes(fn ($process): bool => $process->command === [$binary, '--version'], 1);
     }
 
     private function resolveNodeBinary(): ?string

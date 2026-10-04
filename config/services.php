@@ -6,6 +6,10 @@ return [
         'token' => env('GITHUB_TOKEN'),
     ],
 
+    'workflow' => [
+        'node_binary' => env('WORKFLOW_NODE_BINARY'),
+    ],
+
     /*
     |--------------------------------------------------------------------------
     | Third Party Services

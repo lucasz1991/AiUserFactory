@@ -17,6 +17,11 @@ use Illuminate\Support\Str;
 
 class WorkflowTaskRunner
 {
+    private const MINIMUM_NODE_VERSION = '22.12.0';
+
+    /** @var array<string, true> */
+    private array $validatedNodeBinaries = [];
+
     protected ?WorkflowTaskCatalog $taskCatalog = null;
 
     protected ?WorkflowRuntimeFingerprint $runtimeFingerprint = null;
@@ -1658,13 +1663,19 @@ class WorkflowTaskRunner
 
     protected function resolveNodeBinary(): string
     {
+        $configured = trim((string) config('services.workflow.node_binary', ''));
+
+        if ($configured !== '') {
+            return $this->validateNodeBinary($configured);
+        }
+
         $candidates = PHP_OS_FAMILY === 'Windows'
             ? ['C:\\Program Files\\nodejs\\node.exe', 'C:\\Program Files (x86)\\nodejs\\node.exe']
             : ['/usr/bin/node', '/usr/local/bin/node', '/bin/node', '/snap/bin/node', '/usr/bin/nodejs', '/usr/local/bin/nodejs'];
 
         foreach ($candidates as $candidate) {
             if (File::exists($candidate)) {
-                return $candidate;
+                return $this->validateNodeBinary($candidate);
             }
         }
 
@@ -1674,10 +1685,34 @@ class WorkflowTaskRunner
         $binary = trim(strtok($resolved->output(), "\r\n") ?: '');
 
         if ($resolved->successful() && $binary !== '') {
-            return $binary;
+            return $this->validateNodeBinary($binary);
         }
 
         throw new \RuntimeException('Node.js wurde fuer Workflow-Tasks nicht gefunden.');
+    }
+
+    protected function validateNodeBinary(string $binary): string
+    {
+        if (! File::isFile($binary)) {
+            throw new \RuntimeException('WORKFLOW_NODE_BINARY zeigt nicht auf eine vorhandene Node.js-Binary.');
+        }
+
+        if (! isset($this->validatedNodeBinaries[$binary])) {
+            // Probe once per runner, never on every monitor poll. An explicit
+            // invalid/unsupported override must not fall back to global Node.
+            $result = Process::timeout(5)->run([$binary, '--version']);
+            $version = trim($result->output());
+
+            if (! $result->successful()
+                || ! preg_match('/^v?(\d+\.\d+\.\d+(?:[-+][\w.-]+)?)$/', $version, $matches)
+                || version_compare($matches[1], self::MINIMUM_NODE_VERSION, '<')) {
+                throw new \RuntimeException('Workflow-Tasks benoetigen Node.js >= '.self::MINIMUM_NODE_VERSION.'. WORKFLOW_NODE_BINARY muss auf eine passende Node.js-Binary zeigen.');
+            }
+
+            $this->validatedNodeBinaries[$binary] = true;
+        }
+
+        return $binary;
     }
 
     protected function spawnDetachedProcess(array $command, string $workingDirectory, string $stdoutPath, string $stderrPath, array $environment = []): ?int
