@@ -5,12 +5,19 @@ php artisan optimize:clear
 php artisan config:cache
 supervisorctl reread
 supervisorctl update
-supervisorctl restart followflow-queue:*
+php artisan queue:restart
 ```
 
 Production must use `APP_ENV=production`, `APP_DEBUG=false` and
 `QUEUE_CONNECTION=database`. An example Supervisor configuration is available
-at `deployment/supervisor-followflow-queue.conf.example`. The full client-side
+at `deployment/supervisor-followflow-queue.conf.example`. Server-side workflows
+require separate `workflow-control`, `workflow-ai` and `default` worker processes;
+a single default worker does not consume the workflow lanes. On the current Plesk
+host these are managed by Supervisor, so the Plesk Laravel Queue toggle must stay
+disabled (Scheduled Tasks stays enabled). Set `WORKFLOW_NODE_BINARY` to a supported
+app-scoped Node binary; production uses `/opt/plesk/node/24/bin/node`. See
+`docs/workflow-orchestration-rollout-2026-10-03.md` for deployment and verification.
+The full client-side
 workflow protocol does not depend on the queue worker for live progress or
 step routing, while legacy and non-portable fallback workflows still do.
 
@@ -124,6 +131,8 @@ Arbeitsprotokoll aktualisieren.
     unbegrenzt.
 
 ### Arbeitsprotokoll
+
+2026-10-04 | Codex/root | produktiv verifiziert: Workflow-Teststarts repariert und Fix bb884586 ueber Plesk deployed. Ursache: neue Control-/AI-Queues bei nur einem Defaultworker (106 Control-/17 AI-Jobs unreserviert, aeltester ca. 8,4 h). Drei getrennte Supervisor-Pools aktiviert, alten Plesk-Worker deaktiviert, Scheduler erhalten; kein Queue-Purge oder Replay. Appgescoptes Node24 statt globalem Node18 mit failclosed Mindestversions-/Pfadpruefung. 59 lokale Tests/454 Assertions und 56 Queue-/Studio-Tests/297 Assertions gruen. Produktion: Build/Runtime-Hash/PHP-Syntax gruen, drei frische Heartbeats, alle Queues leer, keine kritischen Health-Alarme. Eigener inaktiver Inline-Testworkflow44 ueber echte Studio-Buttons: Runs590/591 completed (2 s/1 s), je drei Tasks success und keine verbliebenen Smokeprozesse. Bestehender Run589 startet wieder, scheitert spaeter am Portal-Input-Fill; kein neuer Loginversuch oder geratenes Selector-Update. Dev-braces-Audit und unbelegte Prune-Heartbeats bleiben offen. Bericht: ../.lmzdev/artifacts/reports/workflow-teststart-production-repair-2026-10-04.md.
 
 2026-10-04 | Codex/UI | verifiziert: Task-Routenboxen wieder entfernt; Fehlerfeedback/-fokus erhalten. Gemeinsame SVG-Geometrie und feste Marker in Uebersicht und Test-/Bearbeitungsflaeche: Hauptpfad standardmaessig, bei Hover/Auswahl nur ausgehende Linien, voller Graph per Alle Verbindungen. Feste Spacer und keine Hover-Transforms/-Hoehen; alle elf Task-Rechtecke in beiden Desktop-Ansichten vor/nach Hover identisch. 122 PHP-Tests/1222 Assertions, neun Node-Tests, Pint, Vite und Desktop-Browserabnahme inkl. Livewire-Auswahl und synthetischem Fehlerlauf gruen; eigene Testdaten entfernt. Backend/Node-Runtime unveraendert, kein Commit/Push/Deployment durch diese Spur. Bericht: ../.lmzdev/artifacts/reports/workflow-desktop-routes-2026-10-04.md. Ownership freigegeben.
 

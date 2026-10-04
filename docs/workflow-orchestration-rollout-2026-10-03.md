@@ -1,6 +1,20 @@
 # Workflow-Orchestrierung: Betrieb und Rollout
 
-Stand: 2026-10-03. Dies ist eine vorbereitete Betriebsanleitung, kein erfolgtes Deployment.
+Stand: 2026-10-04. Die Betriebsreparatur wurde auf `factory.follow-flow.de` ausgefuehrt; die nachfolgende Anleitung bleibt das Runbook fuer weitere Rollouts. Die Produktions-Smokes ersetzen keinen umfassenden Last-/Portal-/Provider-Abnahmetest.
+
+## Produktiver Betriebsstand 2026-10-04
+
+- Fix `bb884586` ueber Plesk bereitgestellt. Node-Runner/config-Dateien stimmen im SHA-256 mit dem lokalen Fix ueberein. Lease-Migration war bereits ausgefuehrt; Runtime-Fingerprint: `19cd7c0659b7ea96e54862b0fee20399fabb0f2d99c591f65203b8136af4b0dd` (69 Dateien).
+- Queue-Prozessmanager ist **Supervisor**: `/etc/supervisor/conf.d/followflow-queue.conf`, Gruppen `followflow-workflow-control`, `followflow-workflow-ai`, `followflow-queue-default`, je ein Prozess. Status gezielt mit `supervisorctl status 'followflow-workflow-control:*' 'followflow-workflow-ai:*' 'followflow-queue-default:*'` pruefen. Keine anderen Hostgruppen neu starten.
+- Plesk Laravel Queue bleibt absichtlich **deaktiviert**, Scheduled Tasks bleibt **aktiviert**. Nicht als fehlenden Worker missverstehen oder daneben erneut einschalten. Vorher hatte nur der Plesk-Defaultworker existiert; 106 Control- und 17 AI-Jobs waren unreserviert liegengeblieben.
+- `WORKFLOW_NODE_BINARY=/opt/plesk/node/24/bin/node`, Node24.21.0, PHP8.3.35. Globales `/usr/bin/node`18.19.1 bleibt fuer andere Apps unveraendert. Der Workflow-Runner prueft den expliziten Pfad und Node >=22.12 und faellt bei einer ungueltigen Vorgabe nicht still auf alten Node zurueck.
+- Plesk-Deployment-Skript ist aktiviert: appgescopter PATH, `migrate --force`, `config:clear`, `route:clear`, `view:clear`, `npm run build`, erwarteter Runtime-Hash aus `workflow-runtime.sha256`, danach `queue:restart`. Kein pauschales Cache-Leeren oder Queue-Loeschen. Bestehende Dependency-Install- und Wartungsmodusschritte bleiben erhalten.
+- Produktionsabnahme 07:29/07:30 Europe/Berlin: eigene inaktive Workflow44-Inline-HTML-Tests per Studio-Buttons **Bis Ende** und **Echter Ablauf**; Runs590/591 in 2 s/1 s completed, alle drei Browser-Tasks success, keine verbliebenen Smokeprozesse. Keine Person, externe URL, KI oder Session-Load/Save; beim Wiederholungslauf kein persistentes Browserprofil. Vorlage bleibt bewusst inaktiv und als Abnahmebeleg erhalten.
+- Health um 07:35: alle drei Pool-/Scheduler-Heartbeats frisch, alle Queues leer, keine abgelaufenen Reservierungen oder kritischen Alarme. Alte Warnungen fuer Prune-Heartbeats und historische Portal-Erfolgsquote bleiben sichtbar. Kein manueller Prune zur kosmetischen Ampelkorrektur.
+- Der zuvor wartende Run589 wurde regulaer gestartet und erreichte die Portalnavigation; spaeter meldete `input-feld-fuellen`: „Kein passendes Input-Feld konnte gefuellt werden.“ Das ist nicht der Queue-Startfehler. Keine geratenen produktiven Selektoren und kein wiederholter externer Login im Rahmen der Abnahme.
+- Privater Rueckwegsnapshot: `/var/www/vhosts/follow-flow.de/private/followflow-rollout-20261004-051600` mit vorheriger `.env` und Runner-/Servicekonfiguration. Geheimnisse bleiben ausschliesslich auf dem Server. Andere Hostdienste und ClientController-Installationen unveraendert.
+
+Die am Schluss lokal vorhandene spaetere UI-Revision `824c80f3` wurde von diesem Teilauftrag nicht zusaetzlich deployed. Der belegte Reparaturstand ist `bb884586`; vorhandene parallele UI-Arbeit wurde erhalten. Vollstaendiges npm-Dev-Audit bleibt rot, ohne Policy-Ausnahme oder CI-Gate-Bypass; Produktivabhaengigkeiten sind ohne Auditbefund. Detailnachweis: `../.lmzdev/artifacts/reports/workflow-teststart-production-repair-2026-10-04.md` im gemeinsamen Arbeitsbereich.
 
 ## Verifizierter Ausgangspunkt
 
