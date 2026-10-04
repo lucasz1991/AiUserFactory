@@ -154,6 +154,29 @@ class WorkflowRouteMarkupTest extends TestCase
         $this->assertStringContainsString('Doppelklick öffnet direkt die gemeinsamen Task-Einstellungen.', $source);
     }
 
+    public function test_run_maps_keep_execution_evidence_separate_from_semantics_and_have_neutral_arrowheads(): void
+    {
+        $root = dirname(__DIR__, 2);
+        $minimap = file_get_contents($root.'/resources/views/components/workflows/minimap.blade.php');
+        $surface = file_get_contents($root.'/resources/js/components/workflow-route-surface.js');
+        $markers = file_get_contents($root.'/resources/views/components/workflows/route-markers.blade.php');
+
+        $this->assertStringContainsString('data-workflow-route-evidence-mode=', $minimap);
+        $this->assertStringContainsString('routeEvidenceMode:', $minimap);
+        $this->assertStringContainsString('executionOutcome', $minimap);
+        $this->assertStringContainsString('visualTone', $minimap);
+        $this->assertStringContainsString("'executed' => \$executed", $minimap);
+        $this->assertStringContainsString('routeEvidenceMode', $surface);
+        $this->assertStringContainsString('runtimeObserved', $surface);
+        $this->assertStringContainsString('data-route-observed=', $surface);
+        $this->assertStringContainsString('data-route-tone=', $surface);
+        $this->assertStringContainsString('neutral:', $surface);
+        $this->assertStringContainsString("'neutral' =>", $markers);
+        $this->assertStringNotContainsString("\$routeEvent['outcome'] = 'runtime'", $minimap);
+        $this->assertStringContainsString('toggleAllRoutes()', $surface);
+        $this->assertStringContainsString('setHoveredRouteNode(node', $surface);
+    }
+
     private function alpineDefinitionContaining(string $source, string $needle): string
     {
         $document = new DOMDocument;

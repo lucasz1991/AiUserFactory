@@ -1,4 +1,5 @@
 const ROUTE_TONES = {
+    neutral: { color: '#94a3b8', marker: 'neutral', dash: '' },
     success: { color: '#10b981', marker: 'success', dash: '' },
     failed: { color: '#fb7185', marker: 'failed', dash: '6 5' },
     error: { color: '#fb7185', marker: 'failed', dash: '6 5' },
@@ -63,10 +64,17 @@ export function buildWorkflowRouteLines(edges, nodes) {
         const outcome = normalizeOutcome(edge.outcome || edge.line_tone || edge.lineTone || edge.type);
         const key = `${sourceNode}|${targetNode}|${outcome}`;
         const previous = unique.get(key);
+        const runtimeCount = Number(edge.runtimeCount ?? edge.runtime_count ?? 0);
+        // A planned/pending route (or a selected task) is not evidence that
+        // this connection was traversed. Only the run's observed edge is.
+        const observed = edge.runtime === true && (edge.executed === true
+            || (Number.isFinite(runtimeCount) && runtimeCount > 0));
+        const visualTone = String(edge.visualTone || edge.visual_tone || outcome);
         unique.set(key, {
             id: String(previous?.id || edge.id || `route-${index}`), sourceNode, targetNode, source, target, outcome,
             runtimeActive: Boolean(previous?.runtimeActive || edge.runtime_active || edge.runtimeActive || edge.pending || (edge.runtime && edge.executed)),
-            runtimeObserved: Boolean(previous?.runtimeObserved || (edge.runtime && (edge.runtimeCount || edge.runtime_count || edge.executed))),
+            runtimeObserved: Boolean(previous?.runtimeObserved || observed),
+            visualTone: observed ? visualTone : (previous?.visualTone || visualTone),
             ageOpacity: Math.max(previous?.ageOpacity || 0, Number(edge.ageOpacity ?? 0.88)),
         });
     }
@@ -139,6 +147,7 @@ export function buildWorkflowRouteLines(edges, nodes) {
 export function workflowRouteSurface(config = {}) {
     return {
         routeInstance: String(config.instance || 'workflow'),
+        routeEvidenceMode: config.routeEvidenceMode === true,
         focusedTask: '',
         hoveredRouteNode: '',
         activeRouteNode: '',
@@ -332,18 +341,20 @@ export function workflowRouteSurface(config = {}) {
                 // inspectable on hover/selection or through the explicit All control.
                 if (!focusNode && !this.showAllRoutes && !line.runtimeActive && !line.runtimeObserved
                     && (line.sourceNode.endsWith('::*') || !['success', 'implicit', 'default'].includes(outcome))) return '';
-                const tone = ROUTE_TONES[outcome] || ROUTE_TONES.default;
+                const visualTone = this.routeEvidenceMode && !line.runtimeObserved
+                    ? 'neutral' : normalizeOutcome(line.visualTone || outcome);
+                const tone = ROUTE_TONES[visualTone] || ROUTE_TONES.default;
                 const runtimeActive = Boolean(line.runtimeActive);
                 const color = tone.color;
                 const markerName = tone.marker;
-                const dash = tone.dash;
+                const dash = (ROUTE_TONES[outcome] || ROUTE_TONES.default).dash;
                 const ageOpacity = Math.max(0.35, Math.min(1, Number(line.ageOpacity ?? 0.88)));
                 const opacity = hasRelatedLine || runtimeActive ? 1 : (outcome === 'implicit' ? 0.55 : ageOpacity);
                 const strokeWidth = runtimeActive || hasRelatedLine ? 2.6 : 1.8;
                 const dashMarkup = dash ? ` stroke-dasharray="${dash}"` : '';
 
                 const halo = `<path class="ff-route-halo" d="${escapeAttribute(line.path)}" fill="none" stroke-width="${strokeWidth + 3}" stroke-linecap="round" stroke-linejoin="round"></path>`;
-                return halo + `<path data-route-edge="${escapeAttribute(line.id)}" data-route-source="${escapeAttribute(line.sourceNode)}" data-route-target="${escapeAttribute(line.targetNode)}" data-route-outcome="${outcome}" d="${escapeAttribute(line.path)}" fill="none" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" stroke="${color}" opacity="${opacity}"${dashMarkup} marker-end="url(#${escapeAttribute(this.routeInstance)}-arrow-${markerName})"></path>`;
+                return halo + `<path data-route-edge="${escapeAttribute(line.id)}" data-route-source="${escapeAttribute(line.sourceNode)}" data-route-target="${escapeAttribute(line.targetNode)}" data-route-outcome="${outcome}" data-route-tone="${visualTone}" data-route-observed="${Boolean(line.runtimeObserved)}" d="${escapeAttribute(line.path)}" fill="none" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" stroke="${color}" opacity="${opacity}"${dashMarkup} marker-end="url(#${escapeAttribute(this.routeInstance)}-arrow-${markerName})"></path>`;
             }).join('');
         },
 
@@ -416,6 +427,12 @@ export function workflowRouteSurface(config = {}) {
             const stepColumns = Array.from(surface.querySelectorAll('[data-workflow-step-column]'));
             const stepIndexes = new Map(stepColumns.map((column, index) => [column, index]));
             const routeMap = this.readRouteMap();
+            // Livewire preserves this Alpine instance. Read the current
+            // server-rendered flag too, so starting/resetting a run does not
+            // depend on reinitializing x-data (and losing editor state).
+            if (typeof routeMap?.routeEvidenceMode === 'boolean') {
+                this.routeEvidenceMode = routeMap.routeEvidenceMode;
+            }
             const rawEdges = Array.isArray(routeMap?.edges)
                 ? routeMap.edges
                 : this.fallbackEdges(taskNodes);

@@ -15,6 +15,7 @@ use App\Services\Workflows\WorkflowStudioSessionService;
 use DOMDocument;
 use DOMXPath;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Blade;
 use Illuminate\Support\Facades\DB;
 use Livewire\Features\SupportEvents\SupportEvents;
 use Livewire\Features\SupportLockedProperties\CannotUpdateLockedPropertyException;
@@ -277,12 +278,13 @@ class WorkflowWorkspaceFeedbackTest extends TestCase
         $drawnEdges = json_decode($routeScript->item(0)->textContent, true, flags: JSON_THROW_ON_ERROR)['edges'];
         $observedEdge = collect($drawnEdges)->first(fn (array $edge): bool => $edge['sourceNode'] === 'main::first' && $edge['targetNode'] === 'main::current');
         $this->assertNotNull($observedEdge);
-        $this->assertSame('runtime', $observedEdge['outcome'], 'The observed execution path gets its own tone, independent of branch configuration.');
+        $this->assertSame('success', $observedEdge['outcome'], 'Display color must never overwrite the actual routing outcome.');
+        $this->assertSame('runtime', $observedEdge['visualTone'], 'Only observed execution gets the live path tone.');
         $this->assertSame('success', $observedEdge['executionOutcome']);
         $this->assertSame(1, $observedEdge['runtimeCount']);
         $plannedEdges = collect($drawnEdges)->filter(fn (array $edge): bool => ! ($edge['runtime'] ?? false));
         $this->assertNotEmpty($plannedEdges);
-        $this->assertFalse($plannedEdges->contains(fn (array $edge): bool => $edge['outcome'] === 'runtime'), 'Untaken configured routes must not masquerade as an observed path.');
+        $this->assertTrue($plannedEdges->every(fn (array $edge): bool => $edge['visualTone'] === 'neutral'), 'Untaken configured routes must stay neutral, including unchosen error branches.');
         $editor->assertViewHas('routeMap', function (array $routeMap) use ($run): bool {
             $edge = collect($routeMap['edges'])->first(fn (array $edge): bool => $edge['source'] === 'main::first' && $edge['target'] === 'main::current' && ($edge['executed'] ?? false));
 
@@ -290,6 +292,94 @@ class WorkflowWorkspaceFeedbackTest extends TestCase
         });
         $this->assertSame(0, $xpath->query('//*[@data-task-routes]')->count());
         $this->assertSame($step->config_json, $otherStep->fresh()->config_json);
+    }
+
+    #[DataProvider('liveRouteColorEvidence')]
+    public function test_minimap_color_uses_execution_evidence_without_changing_routing_outcomes(bool $hasRun, bool $liveFlow, bool $runtime, bool $executed, int $runtimeCount, bool $pending, string $expectedTone): void
+    {
+        [$workflow, $step, $session] = $this->liveWorkspace();
+        $run = $hasRun ? $this->workspaceRun($workflow, $step, $session, $liveFlow ? 'queued' : 'completed') : null;
+        $routeMap = [
+            'nodes' => [
+                ['id' => 'main::first', 'kind' => 'task', 'title' => 'Erster Task'],
+                ['id' => 'main::current', 'kind' => 'task', 'title' => 'Aktueller Task'],
+            ],
+            'edges' => [[
+                'id' => 'evidence-test', 'source' => 'main::first', 'target' => 'main::current',
+                'outcome' => 'failed', 'runtime' => $runtime, 'executed' => $executed,
+                'runtime_count' => $runtimeCount, 'pending' => $pending, 'origins' => ['definition'],
+            ]],
+        ];
+        $html = Blade::render('<x-workflows.minimap :workflow="$workflow" :workflow-run="$run" :route-map="$routeMap" :live-flow="$liveFlow" />', compact('workflow', 'run', 'routeMap', 'liveFlow'));
+        $xpath = $this->xpath($html);
+        $map = $xpath->query('//*[@data-workflow-route-evidence-mode]');
+        $this->assertSame(1, $map->count());
+        $this->assertSame($hasRun ? 'observed' : 'definition', $map->item(0)->getAttribute('data-workflow-route-evidence-mode'));
+        $script = $xpath->query('//script[@*[name()="x-ref"]="routeMap"]');
+        $this->assertSame(1, $script->count());
+        $edges = json_decode($script->item(0)->textContent, true, flags: JSON_THROW_ON_ERROR)['edges'];
+        $this->assertSame($hasRun, json_decode($script->item(0)->textContent, true, flags: JSON_THROW_ON_ERROR)['routeEvidenceMode']);
+        $this->assertCount(1, $edges);
+        $edge = $edges[0];
+        $this->assertSame('failed', $edge['outcome']);
+        $this->assertSame('failed', $edge['executionOutcome']);
+        $this->assertSame($expectedTone, $edge['visualTone']);
+        $this->assertSame($executed, $edge['executed']);
+        $this->assertSame($runtimeCount, $edge['runtimeCount']);
+        $this->assertSame($pending, $edge['pending']);
+    }
+
+    public static function liveRouteColorEvidence(): array
+    {
+        return [
+            'queued definition before first task' => [true, true, false, false, 0, false, 'neutral'],
+            'pending cursor is not an executed connection' => [true, true, true, false, 0, true, 'neutral'],
+            'runtime flag alone is not evidence' => [true, true, true, false, 0, false, 'neutral'],
+            'negative runtime count is not evidence' => [true, true, true, false, -1, false, 'neutral'],
+            'recorded runtime count' => [true, true, true, false, 2, false, 'runtime'],
+            'explicit executed runtime edge' => [true, true, true, true, 0, false, 'runtime'],
+            'observed and pending remains observed' => [true, true, true, true, 2, true, 'runtime'],
+            'configured edge cannot spoof runtime evidence' => [true, true, false, true, 2, false, 'neutral'],
+            'definition without run retains error semantics' => [false, false, false, false, 0, false, 'failed'],
+            'historical observed error retains error semantics' => [true, false, true, true, 1, false, 'failed'],
+            'historical untaken branch stays neutral' => [true, false, false, false, 0, false, 'neutral'],
+        ];
+    }
+
+    public function test_queued_and_pending_only_live_maps_never_color_unexecuted_success_or_error_branches(): void
+    {
+        [$workflow, $step, $session] = $this->liveWorkspace();
+        $configuration = $step->config_json;
+        $configuration['tasks'][0]['next'] = ['type' => 'card', 'action_key' => 'main', 'card_key' => 'current'];
+        $configuration['tasks'][0]['on_error'] = ['type' => 'card', 'action_key' => 'main', 'card_key' => 'untouched'];
+        $step->update(['config_json' => $configuration]);
+        $run = $this->workspaceRun($workflow, $step, $session, 'queued');
+        app(WorkflowStudioSessionService::class)->attachRun($session, $run);
+        $editor = Livewire::test(WorkflowStudioTaskEditor::class, ['workflow' => $workflow, 'studioSessionId' => $session->id]);
+
+        foreach ([false, true] as $pending) {
+            if ($pending) {
+                $run->update(['status' => 'running', 'context_json' => [
+                    'next_task_key' => 'current', 'next_step_action_key' => 'main',
+                    'next_task_route_source_key' => 'first', 'next_task_route_outcome' => 'success',
+                ]]);
+                $editor->dispatch('workflow-studio-run-status-changed', studioSessionId: $session->id, runId: $run->id, status: 'running');
+            }
+            $xpath = $this->xpath($editor->html());
+            $script = $xpath->query('//*[@data-workflow-live-preview]//script[@*[name()="x-ref"]="routeMap"]');
+            $this->assertSame(1, $script->count());
+            $edges = collect(json_decode($script->item(0)->textContent, true, flags: JSON_THROW_ON_ERROR)['edges']);
+            $this->assertNotEmpty($edges);
+            $this->assertTrue($edges->every(fn (array $edge): bool => $edge['visualTone'] === 'neutral'));
+            $this->assertTrue($edges->every(fn (array $edge): bool => ! $edge['executed'] && $edge['runtimeCount'] === 0));
+            $branches = $edges->where('sourceNode', 'main::first');
+            $this->assertContains('success', $branches->pluck('outcome'));
+            $this->assertContains('failed', $branches->pluck('outcome'));
+            if ($pending) {
+                $this->assertTrue($branches->contains(fn (array $edge): bool => $edge['pending'] && $edge['targetNode'] === 'main::current'));
+            }
+        }
+        $this->assertSame(0, $run->stepRuns()->count());
     }
 
     public function test_historical_parent_does_not_mount_the_live_editor_of_another_active_run(): void
@@ -577,6 +667,13 @@ class WorkflowWorkspaceFeedbackTest extends TestCase
                 'popup' => ['name' => 'popup', 'title' => 'Aktives Fenster', 'url' => 'https://example.test/popup', 'targetId' => 'popup-target'],
             ],
         ]]);
+        $run->stepRuns()->create([
+            'workflow_step_id' => $step->id, 'status' => 'running',
+            'result_json' => ['browserWindows' => [
+                'main' => ['name' => 'main', 'targetId' => 'main-target', 'screenshotUrl' => 'https://example.test/main-shot.png'],
+                'popup' => ['name' => 'popup', 'targetId' => 'popup-target', 'screenshotUrl' => 'https://example.test/popup-shot.png'],
+            ]],
+        ]);
         app(WorkflowStudioSessionService::class)->attachRun($session, $run);
         $studio = Livewire::test(WorkflowStudio::class, [
             'workflow' => $workflow, 'studioSessionId' => $session->id,
@@ -584,8 +681,16 @@ class WorkflowWorkspaceFeedbackTest extends TestCase
         $xpath = $this->xpath($studio->html());
         $this->assertSame('popup', trim($xpath->query('//*[@data-studio-active-browser-name]')->item(0)->textContent));
         $this->assertSame(1, $xpath->query('//*[@data-studio-active-browser-status and @data-connected="true"]')->count());
-        $this->assertSame(1, $xpath->query('//details[@data-studio-additional-browser-windows]/summary')->count());
+        $this->assertSame(2, $xpath->query('//*[@data-studio-browser-mini-list]/article[@data-studio-browser-mini-window]')->count());
+        $this->assertSame(0, $xpath->query('//details[@data-studio-additional-browser-windows]')->count());
         $this->assertSame(1, $xpath->query('//*[@data-studio-browser-preview-trigger]')->count());
+        $activePreview = $xpath->query('//button[@data-studio-browser-mini-preview="popup" and @data-studio-browser-preview-trigger]');
+        $this->assertSame(1, $activePreview->count());
+        $this->assertSame("openToolModal('browser')", $activePreview->item(0)->getAttribute('wire:click'));
+        $this->assertSame('https://example.test/popup-shot.png', $xpath->query('//*[@data-studio-browser-mini-preview="popup"]//img')->item(0)->getAttribute('src'));
+        $this->assertSame('https://example.test/main-shot.png', $xpath->query('//*[@data-studio-browser-mini-preview="main"]//img')->item(0)->getAttribute('src'));
+        $studio->call('openToolModal', 'browser')->assertSet('activeToolModal', 'browser')->assertSeeHtml('data-workflow-browser-tool');
+        $studio->call('closeToolModal')->assertSet('activeToolModal', '');
 
         $run->update(['status' => 'completed']);
         $studio->call('refreshStudio');
@@ -593,6 +698,64 @@ class WorkflowWorkspaceFeedbackTest extends TestCase
         $this->assertSame(1, $xpath->query('//*[@data-studio-active-browser-status and @data-connected="false"]')->count());
         $this->assertSame('Letzte Vorschau', trim($xpath->query('//*[@data-studio-active-browser-status]')->item(0)->textContent));
         $this->assertSame(1, $xpath->query('//*[@data-studio-browser-preview-trigger]')->count(), 'The last observable browser preview remains accessible.');
+    }
+
+    #[DataProvider('browserMiniConnectionStates')]
+    public function test_browser_mini_never_invents_a_live_connection_and_preserves_empty_image_fallback(bool $active, bool $historical, bool $runtime, bool $connected, string $expectedLabel): void
+    {
+        $html = view('livewire.admin.network.workflow-studio.browser-windows', [
+            'session' => (object) ['id' => 100], 'isActive' => $active, 'isPaused' => false,
+            'historicalRunView' => $historical, 'autonomousMode' => false,
+            'browserWindows' => [[
+                'name' => 'main', 'title' => '', 'url' => '', 'active' => true,
+                'runtime' => $runtime, 'connected' => $connected, 'screenshot_url' => null,
+            ]],
+        ])->render();
+        $xpath = $this->xpath($html);
+        $status = $xpath->query('//*[@data-studio-active-browser-status]');
+        $this->assertSame(1, $status->count());
+        $this->assertSame($expectedLabel, trim($status->item(0)->textContent));
+        $this->assertSame($expectedLabel === 'Verbunden' ? 'true' : 'false', $status->item(0)->getAttribute('data-connected'));
+        $this->assertSame(1, $xpath->query('//button[@data-studio-browser-mini-preview="main" and @type="button"]')->count());
+        $this->assertSame(0, $xpath->query('//*[@data-studio-browser-mini-image]')->count());
+        $this->assertSame(1, $xpath->query('//*[@data-studio-browser-mini-fallback]')->count());
+        $this->assertSame(0, $xpath->query('//*[@data-studio-browser-mini-list]/ancestor::details')->count());
+    }
+
+    public static function browserMiniConnectionStates(): array
+    {
+        return [
+            'configured and idle' => [false, false, false, false, 'Noch nicht geöffnet'],
+            'active before browser capture' => [true, false, false, false, 'Wartet auf Browser'],
+            'configured connected flag is not runtime evidence' => [true, false, false, true, 'Wartet auf Browser'],
+            'runtime without target' => [true, false, true, false, 'Wartet auf Browser'],
+            'own active runtime target' => [true, false, true, true, 'Verbunden'],
+            'paused or completed runtime' => [false, false, true, true, 'Letzte Vorschau'],
+            'historical view cannot show another active run' => [true, true, true, true, 'Letzte Vorschau'],
+        ];
+    }
+
+    public function test_browser_mini_escapes_screenshot_and_title_attributes_and_keeps_a_local_image_failure_fallback(): void
+    {
+        $screenshot = 'https://example.test/shot.png?state="quoted"&next=one';
+        $html = view('livewire.admin.network.workflow-studio.browser-windows', [
+            'session' => (object) ['id' => 100], 'isActive' => false, 'isPaused' => true,
+            'historicalRunView' => false, 'autonomousMode' => false,
+            'browserWindows' => [[
+                'name' => 'main', 'title' => '<img onerror="bad()">', 'url' => '', 'active' => true,
+                'runtime' => true, 'connected' => true, 'screenshot_url' => $screenshot,
+            ]],
+        ])->render();
+        $xpath = $this->xpath($html);
+        $image = $xpath->query('//*[@data-studio-browser-mini-image]');
+        $this->assertSame(1, $image->count());
+        $this->assertSame($screenshot, $image->item(0)->getAttribute('src'));
+        $this->assertSame('lazy', $image->item(0)->getAttribute('loading'));
+        $this->assertSame('async', $image->item(0)->getAttribute('decoding'));
+        $this->assertSame('imageFailed = true; imageLoaded = false', $image->item(0)->getAttribute('x-on:error'));
+        $this->assertSame(1, $xpath->query('//*[@data-studio-browser-mini-fallback]')->count());
+        $this->assertSame(0, $xpath->query('//img[@onerror]')->count(), 'Window metadata must never create executable HTML.');
+        $this->assertStringNotContainsString('<img onerror="bad()">', $html);
     }
 
     /** Synthetic task definitions: no portal, browser process or external I/O. */

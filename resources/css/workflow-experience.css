@@ -2075,3 +2075,113 @@
     padding: .5rem .75rem !important;
   }
 }
+
+/* Desktop browser evidence stays visible without taking over the workflow. */
+[data-workflow-studio-shell] .ff-browser-strip--mini {
+  padding-block: .25rem !important;
+}
+
+[data-workflow-studio-shell] .ff-studio-browser-mini-list {
+  display: flex;
+  min-width: 0;
+  gap: .75rem;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--ff-line-strong) transparent;
+  scroll-padding-inline: .25rem;
+}
+
+[data-workflow-studio-shell] .ff-studio-browser-mini-window {
+  display: flex;
+  flex: 0 0 20rem;
+  min-width: 0;
+  height: 5rem;
+  align-items: center;
+  gap: .75rem;
+}
+
+[data-workflow-studio-shell] .ff-studio-browser-mini-window:has(.ff-studio-browser-mini-probe) {
+  flex-basis: 23rem;
+}
+
+[data-workflow-studio-shell] .ff-studio-browser-mini-probe {
+  flex: 0 0 40px;
+}
+
+[data-workflow-studio-shell] .ff-studio-browser-mini-preview {
+  position: relative;
+  flex: 0 0 9rem;
+  width: 9rem !important;
+  height: 5rem !important;
+  min-height: 5rem !important;
+  overflow: hidden;
+  padding: 0;
+  border: 1px solid var(--ff-line);
+  border-radius: .5rem;
+  background: var(--ff-surface-soft);
+  cursor: pointer;
+}
+
+[data-workflow-studio-shell] .ff-studio-browser-mini-window[data-active="true"] .ff-studio-browser-mini-preview,
+[data-workflow-studio-shell] .ff-studio-browser-mini-preview:hover {
+  border-color: var(--ff-accent-line);
+}
+
+[data-workflow-studio-shell] .ff-studio-browser-mini-preview:focus-visible {
+  outline: 2px solid var(--ff-accent);
+  outline-offset: -3px;
+}
+
+[data-workflow-studio-shell] .ff-studio-browser-mini-image,
+[data-workflow-studio-shell] .ff-studio-browser-mini-fallback {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+[data-workflow-studio-shell] .ff-studio-browser-mini-image {
+  object-fit: contain;
+}
+
+[data-workflow-studio-shell] .ff-studio-browser-mini-fallback {
+  display: grid;
+  place-content: center;
+  padding: .5rem;
+  color: var(--ff-muted);
+  font-size: .6875rem;
+  line-height: 1.5;
+}
+
+[data-workflow-studio-shell] .ff-studio-browser-mini-preview[data-has-screenshot="true"][data-image-ready="true"] .ff-studio-browser-mini-fallback {
+  visibility: hidden;
+}
+
+[data-workflow-studio-shell] .ff-studio-browser-mini-caption {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+[data-workflow-studio-shell] .ff-studio-browser-mini-caption .ff-studio-browser-label {
+  flex-wrap: nowrap;
+}
+
+[data-workflow-studio-shell] .ff-studio-browser-mini-caption .ff-studio-browser-label > strong {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+[data-workflow-studio-shell] .ff-studio-browser-mini-active {
+  color: var(--ff-muted);
+  font-size: .625rem;
+  font-weight: 500;
+}
+
+[data-workflow-studio-shell] .ff-studio-browser-mini-caption > .ff-studio-browser-state {
+  margin-top: .25rem;
+}
+
+[data-workflow-studio-shell] .ff-studio-browser-mini-url {
+  font-size: .625rem;
+}

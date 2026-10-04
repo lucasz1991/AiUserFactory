@@ -165,14 +165,44 @@ class WorkflowWorkbenchUiSafetyMarkupTest extends TestCase
         $this->assertStringContainsString('wire:model="personId" @disabled($historicalRunView || $isActive || $isPaused)', $studio);
         $this->assertStringContainsString('data-workflow-studio-builder-trigger @disabled($isActive)', $studio);
         $this->assertStringContainsString('<details data-studio-tool-group=', $tools);
-        $this->assertStringContainsString('<details data-studio-additional-browser-windows', $browser);
-        foreach ([$studio, $tools, $browser] as $markup) {
+        $this->assertStringContainsString('data-studio-browser-mini-list', $browser);
+        $this->assertStringNotContainsString('data-studio-additional-browser-windows', $browser);
+        foreach ([$studio, $tools] as $markup) {
             $this->assertStringContainsString('x-on:keydown.escape.prevent.stop="open = false; $refs.summary.focus()"', $markup);
             $this->assertStringContainsString('x-bind:open="open"', $markup);
             $this->assertStringContainsString('x-on:toggle="open = $el.open"', $markup);
         }
         $this->assertStringContainsString('data-studio-browser-preview-trigger', $browser);
         $this->assertStringNotContainsString('animate-ping', $browser);
-        $this->assertStringContainsString('$browserConnected = $isActive &&', $browser);
+        $this->assertStringContainsString('$windowConnected = $isActive && ! $historicalRunView', $browser);
+    }
+
+    public function test_browser_miniatures_reuse_safe_native_preview_buttons_and_keep_visible_dialog_focus(): void
+    {
+        $root = dirname(__DIR__, 2);
+        $browser = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-studio/browser-windows.blade.php');
+        $styles = file_get_contents($root.'/resources/css/workflow-experience.css');
+        $toolModal = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-studio/tool-modal.blade.php');
+
+        $this->assertStringContainsString('data-studio-browser-mini-list', $browser);
+        $this->assertStringContainsString('data-studio-browser-mini-window="{{ $window[\'name\'] }}"', $browser);
+        $this->assertStringContainsString('data-studio-browser-mini-preview="{{ $window[\'name\'] }}"', $browser);
+        $this->assertStringContainsString('wire:key="studio-browser-window-{{ $session->id }}-{{ $window[\'name\'] }}"', $browser);
+        $this->assertStringContainsString('wire:click="openToolModal(\'browser\')"', $browser);
+        $this->assertStringContainsString('data-studio-browser-preview-trigger', $browser);
+        $this->assertStringContainsString('data-studio-browser-mini-image', $browser);
+        $this->assertStringContainsString('data-studio-browser-mini-fallback', $browser);
+        $this->assertStringContainsString('src="{{ $window[\'screenshot_url\'] }}"', $browser);
+        $this->assertStringContainsString('loading="lazy"', $browser);
+        $this->assertStringContainsString('decoding="async"', $browser);
+        $this->assertStringContainsString('.ff-studio-browser-mini-image {', $styles);
+        $this->assertStringContainsString('object-fit: contain;', $styles);
+        $this->assertStringContainsString('x-on:error="imageFailed = true; imageLoaded = false"', $browser);
+        $this->assertStringContainsString("'browser' => '[data-studio-browser-preview-trigger]'", $toolModal);
+        $this->assertStringContainsString(':return-focus="$toolReturnFocus"', $toolModal);
+        $this->assertStringNotContainsString('<details', $browser);
+        $this->assertStringNotContainsString('fetch(', $browser);
+        $this->assertStringNotContainsString('setInterval(', $browser);
+        $this->assertStringNotContainsString('{!!', $browser);
     }
 }

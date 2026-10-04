@@ -2,6 +2,7 @@
 
 <defs>
     @foreach([
+        'neutral' => '#94a3b8',
         'success' => '#10b981',
         'failed' => '#fb7185',
         'partial' => '#3b82f6',

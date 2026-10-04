@@ -311,7 +311,7 @@
                 class="ff-canvas-grid relative min-h-0 flex-1 overflow-auto overscroll-contain"
                 x-on:scroll.passive.debounce.80ms="queueRouteRefresh()"
             >
-                <script type="application/json" x-ref="routeMap">@json($routeMap ?? ['nodes' => [], 'edges' => []])</script>
+                <script type="application/json" x-ref="routeMap">@json(array_merge($routeMap ?? ['nodes' => [], 'edges' => []], ['routeEvidenceMode' => ($activeRun ?? null) !== null]))</script>
                 <svg
                     x-cloak
                     x-show="showRoutes"

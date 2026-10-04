@@ -2,75 +2,100 @@
     $orderedBrowserWindows = collect($browserWindows)
         ->sortByDesc(fn (array $window): int => ($window['active'] ?? false) ? 1 : 0)
         ->values();
-    $activeBrowserWindow = $orderedBrowserWindows->first() ?? ['name' => 'main', 'title' => '', 'url' => '', 'runtime' => false];
-    $additionalBrowserWindows = $orderedBrowserWindows->skip(1);
-    $browserConnected = $isActive && (bool) ($activeBrowserWindow['connected'] ?? false);
-    $browserStateLabel = $browserConnected
-        ? 'Verbunden'
-        : ($isActive ? 'Wartet auf Browser' : (($activeBrowserWindow['runtime'] ?? false) ? 'Letzte Vorschau' : 'Noch nicht geöffnet'));
+    if ($orderedBrowserWindows->isEmpty()) {
+        $orderedBrowserWindows = collect([['name' => 'main', 'title' => '', 'url' => '', 'runtime' => false, 'connected' => false, 'active' => true, 'screenshot_url' => null]]);
+    }
 @endphp
 
 <section
-    class="ff-browser-strip ff-browser-strip--compact relative z-20 shrink-0 border-b px-3 py-1.5 sm:px-4"
+    class="ff-browser-strip ff-browser-strip--compact ff-browser-strip--mini relative z-20 shrink-0 border-b px-3 py-1.5 sm:px-4"
     data-studio-browser-windows
     wire:key="studio-browser-windows-{{ $session->id }}"
     aria-label="Browserfenster"
 >
-    <div class="ff-studio-browser-row">
-        <div class="ff-studio-browser-current">
-            <svg class="ff-studio-browser-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
-                <rect x="3" y="4" width="18" height="16" rx="2"></rect>
-                <path d="M3 9h18M7 6.5h.01M10 6.5h.01"></path>
-            </svg>
-            <div class="min-w-0">
-                <div class="ff-studio-browser-label">
-                    <strong data-studio-active-browser-name>{{ $activeBrowserWindow['name'] ?? 'Browser' }}</strong>
-                    <span data-studio-active-browser-status class="ff-studio-browser-state" data-connected="{{ $browserConnected ? 'true' : 'false' }}" role="status" aria-live="polite">
-                        <span class="ff-studio-browser-state-dot" aria-hidden="true"></span>
-                        {{ $browserStateLabel }}
-                    </span>
-                </div>
-                <p class="ff-studio-browser-location" title="{{ $activeBrowserWindow['url'] ?: ($activeBrowserWindow['title'] ?: 'Browserfenster erscheint beim Teststart') }}">
-                    {{ $activeBrowserWindow['title'] ?: ($activeBrowserWindow['url'] ?: 'Browserfenster erscheint beim Teststart') }}
-                </p>
-            </div>
-        </div>
+    <div class="ff-studio-browser-mini-list" data-studio-browser-mini-list role="list" aria-label="Browser-Miniansichten">
+        @foreach($orderedBrowserWindows as $window)
+            @php
+                $isPrimaryWindow = $loop->first;
+                $windowConnected = $isActive && ! $historicalRunView
+                    && (bool) ($window['runtime'] ?? false)
+                    && (bool) ($window['connected'] ?? false);
+                $windowStateLabel = $windowConnected
+                    ? 'Verbunden'
+                    : ($isActive && ! $historicalRunView
+                        ? 'Wartet auf Browser'
+                        : (($window['runtime'] ?? false) ? 'Letzte Vorschau' : 'Noch nicht geöffnet'));
+                $hasScreenshot = filled($window['screenshot_url'] ?? null);
+                $previewPlaceholder = $hasScreenshot
+                    ? 'Vorschau wird geladen'
+                    : ($isActive && ! $historicalRunView ? 'Vorschau folgt' : 'Noch keine Vorschau');
+            @endphp
+            <article
+                wire:key="studio-browser-window-{{ $session->id }}-{{ $window['name'] }}"
+                data-studio-browser-mini-window="{{ $window['name'] }}"
+                data-active="{{ ($window['active'] ?? false) ? 'true' : 'false' }}"
+                class="ff-studio-browser-mini-window"
+                role="listitem"
+            >
+                <button
+                    type="button"
+                    wire:click="openToolModal('browser')"
+                    @if($isPrimaryWindow) data-studio-browser-preview-trigger @endif
+                    data-studio-browser-mini-preview="{{ $window['name'] }}"
+                    data-has-screenshot="{{ $hasScreenshot ? 'true' : 'false' }}"
+                    x-data="{ imageFailed: false, imageLoaded: false }"
+                    x-bind:data-image-ready="imageLoaded && ! imageFailed ? 'true' : 'false'"
+                    class="ff-studio-browser-mini-preview h-20 w-36"
+                    aria-label="Browserfenster {{ $window['name'] }}: Vorschau öffnen"
+                    title="Browserfenster {{ $window['name'] }} vergrößern"
+                >
+                    <span
+                        data-studio-browser-mini-fallback
+                        class="ff-studio-browser-mini-fallback"
+                        x-text="imageFailed ? 'Vorschau nicht verfügbar' : @js($previewPlaceholder)"
+                        aria-hidden="true"
+                    >{{ $previewPlaceholder }}</span>
+                    @if($hasScreenshot)
+                        <img
+                            data-studio-browser-mini-image
+                            src="{{ $window['screenshot_url'] }}"
+                            alt=""
+                            aria-hidden="true"
+                            loading="lazy"
+                            decoding="async"
+                            width="144"
+                            height="80"
+                            class="ff-studio-browser-mini-image"
+                            x-bind:class="imageFailed ? 'opacity-0' : ''"
+                            x-on:load="imageFailed = false; imageLoaded = true"
+                            x-on:error="imageFailed = true; imageLoaded = false"
+                        >
+                    @endif
+                </button>
 
-        <div class="ff-studio-browser-actions">
-            <button type="button" wire:click="openToolModal('browser')" data-studio-browser-preview-trigger class="ff-studio-control" aria-label="Browser-Vorschau öffnen">
-                <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 7V3h4m6 0h4v4m0 6v4h-4m-6 0H3v-4" /></svg>
-                Vorschau
-            </button>
-            @if($additionalBrowserWindows->isNotEmpty())
-                <details data-studio-additional-browser-windows wire:key="studio-additional-windows-{{ $session->id }}" class="ff-studio-disclosure" x-data="{ open: false }" x-bind:open="open" x-on:toggle="open = $el.open" x-on:click.outside="open = false" x-on:keydown.escape.prevent.stop="open = false; $refs.summary.focus()">
-                    <summary x-ref="summary" class="ff-studio-control">
-                        Weitere <span class="ff-studio-window-count">{{ $additionalBrowserWindows->count() }}</span>
-                        <svg class="ff-studio-disclosure-chevron" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m6 8 4 4 4-4" /></svg>
-                    </summary>
-                    <div class="ff-studio-disclosure-menu ff-studio-browser-menu">
-                        @foreach($additionalBrowserWindows as $window)
-                            <article wire:key="studio-browser-window-{{ $session->id }}-{{ $window['name'] }}" class="ff-studio-browser-list-item">
-                                <div class="min-w-0 flex-1">
-                                    <strong class="block truncate text-xs">{{ $window['name'] }}</strong>
-                                    <p class="ff-studio-browser-location" title="{{ $window['url'] ?: ($window['title'] ?: 'Noch nicht geöffnet') }}">{{ $window['title'] ?: ($window['url'] ?: 'Noch nicht geöffnet') }}</p>
-                                    <button type="button" wire:click="openToolModal('browser')" x-on:click="open = false" class="ff-studio-control ff-studio-menu-action" aria-label="Vorschau des Browserfensters {{ $window['name'] }} öffnen">Vorschau öffnen</button>
-                                    @if(! $autonomousMode)
-                                        <button type="button" wire:click="openSelectorProbe(@js($window['name']))" x-on:click="open = false" @disabled($historicalRunView || ! $isPaused) title="{{ $isPaused ? 'Echte Browseraktion im pausierten Lauf vorbereiten' : 'Für Live-Proben den Lauf zuerst manuell pausieren' }}" class="ff-studio-control ff-studio-menu-action">Live-Probe</button>
-                                    @endif
-                                </div>
-                                <div class="ff-browser-preview h-20 w-36 shrink-0 overflow-hidden rounded-lg border" aria-hidden="true">
-                                    @if(filled($window['screenshot_url'] ?? null))
-                                        <img src="{{ $window['screenshot_url'] }}" alt="" loading="lazy" class="h-full w-full object-contain">
-                                    @else
-                                        <span class="ff-studio-browser-placeholder">Noch keine Vorschau</span>
-                                    @endif
-                                </div>
-                            </article>
-                        @endforeach
+                <div class="ff-studio-browser-mini-caption">
+                    <div class="ff-studio-browser-label">
+                        <strong @if($isPrimaryWindow) data-studio-active-browser-name @endif title="{{ $window['name'] }}">{{ $window['name'] }}</strong>
+                        @if($window['active'] ?? false)
+                            <span class="ff-studio-browser-mini-active">Aktiv</span>
+                        @endif
                     </div>
-                </details>
-            @endif
-        </div>
+                    <span @if($isPrimaryWindow) data-studio-active-browser-status @endif class="ff-studio-browser-state" data-connected="{{ $windowConnected ? 'true' : 'false' }}" role="status" aria-live="polite">
+                        <span class="ff-studio-browser-state-dot" aria-hidden="true"></span>
+                        {{ $windowStateLabel }}
+                    </span>
+                    <p class="ff-studio-browser-location" title="{{ $window['url'] ?: ($window['title'] ?: 'Browserfenster erscheint beim Teststart') }}">{{ $window['title'] ?: ($window['url'] ?: 'Browserfenster erscheint beim Teststart') }}</p>
+                    @if($window['title'] && $window['url'])
+                        <p class="ff-studio-browser-location ff-studio-browser-mini-url" title="{{ $window['url'] }}">{{ $window['url'] }}</p>
+                    @endif
+                </div>
+                @if(! $autonomousMode)
+                    <button type="button" wire:click="openSelectorProbe(@js($window['name']))" @disabled($historicalRunView || ! $isPaused) class="ff-studio-control ff-studio-control--icon ff-studio-browser-mini-probe" aria-label="Live-Probe im Browserfenster {{ $window['name'] }}" title="{{ $isPaused ? 'Live-Probe im Browserfenster '.$window['name'] : 'Für Live-Proben den Lauf zuerst manuell pausieren' }}">
+                        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M10 2v3m0 10v3M2 10h3m10 0h3" /><circle cx="10" cy="10" r="4" /></svg>
+                    </button>
+                @endif
+            </article>
+        @endforeach
     </div>
-    <p data-studio-browser-description class="sr-only">Aktives Browserfenster und letzte verfügbare Vorschau. Weitere Browserfenster stehen bei Bedarf im Menü.</p>
+    <p data-studio-browser-description class="sr-only">Browser-Miniansichten zeigen die zuletzt verfügbare Vorschau. Ein Klick öffnet den Browserdialog. Weitere Fenster sind horizontal erreichbar.</p>
 </section>

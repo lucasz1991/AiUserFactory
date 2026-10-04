@@ -21,6 +21,7 @@
     // Route-Berechnungen verwenden spaeter lokal ebenfalls `$source`; die
     // oeffentliche Event-Quelle deshalb vorab instanzsicher festhalten.
     $minimapEventSource = $source;
+    $routeEvidenceMode = $workflowRun !== null;
     $workflow = $workflow ?: $workflowRun?->workflow;
     $zoomLevels = [
         'overview' => 'Übersicht',
@@ -537,7 +538,7 @@
                     default => 'Geplante Route',
                 },
                 'lineTone' => match (true) {
-                    $runtime && ($executed || $pending) => 'runtime',
+                    $runtime && $executed => 'runtime',
                     $outcome === 'failed' => 'failed',
                     $outcome === 'timeout' => 'timeout',
                     $outcome === 'success' => 'success',
@@ -552,6 +553,7 @@
                 'configured' => in_array('definition', $edge['origins'] ?? [], true),
                 'runtime' => $runtime,
                 'runtimeCount' => (int) ($edge['runtime_count'] ?? 0),
+                'executed' => $executed,
                 'pending' => $pending,
                 'terminal' => $targetKind === 'terminal',
             ];
@@ -563,19 +565,21 @@
     $routeEventCount = max(1, $routeEvents->count());
     $routeEventsForJs = $routeEvents
         ->values()
-        ->map(function (array $routeEvent, int $eventIndex) use ($routeEventCount, $liveFlow): array {
+        ->map(function (array $routeEvent, int $eventIndex) use ($routeEventCount, $liveFlow, $routeEvidenceMode): array {
             // Juengste Linie 1.0, aelteste 0.35 — deutlich blasser, aber sichtbar.
             $routeEvent['ageOpacity'] = round(0.35 + (0.65 * (($eventIndex + 1) / $routeEventCount)), 3);
             $routeEvent['ageIndex'] = $eventIndex + 1;
             $routeEvent['ageTotal'] = $routeEventCount;
-            // The shared renderer uses outcome as its display tone. Keep the
-            // actual execution outcome alongside it, and distinguish observed
-            // or explicitly pending runtime paths from the planned graph.
-            if ($liveFlow && ($routeEvent['runtime'] ?? false)
-                && ((int) ($routeEvent['runtimeCount'] ?? 0) > 0 || ($routeEvent['pending'] ?? false))) {
-                $routeEvent['executionOutcome'] = $routeEvent['outcome'];
-                $routeEvent['outcome'] = 'runtime';
-            }
+            // Preserve the real outcome for stable route ports/lane geometry.
+            // Pending cursors alone must never color an untraversed edge.
+            $observed = ($routeEvent['runtime'] ?? false)
+                && (($routeEvent['executed'] ?? false) || (int) ($routeEvent['runtimeCount'] ?? 0) > 0);
+            $routeEvent['executionOutcome'] = $routeEvent['outcome'];
+            $routeEvent['visualTone'] = match (true) {
+                $routeEvidenceMode && ! $observed => 'neutral',
+                $liveFlow && $observed => 'runtime',
+                default => $routeEvent['outcome'],
+            };
 
             return $routeEvent;
         })
@@ -613,6 +617,7 @@
     {{ $attributes->merge(['class' => 'space-y-3']) }}
     data-workflow-minimap-instance="{{ $mapInstance }}"
     data-workflow-minimap-source="{{ $mapSource }}"
+    data-workflow-route-evidence-mode="{{ $routeEvidenceMode ? 'observed' : 'definition' }}"
 >
     @if(! $workflow)
         <div class="rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
@@ -640,6 +645,7 @@
                 ...workflowRouteSurface({
                     instance: @js($mapId),
                     initialNode: @js($liveFlow ? '' : $activeRouteNode),
+                    routeEvidenceMode: @js($routeEvidenceMode),
                 }),
                 instance: @js($mapInstance),
                 source: @js($mapSource),
@@ -678,7 +684,7 @@
             data-workflow-preview-scrollbar
             class="relative overflow-x-auto pb-2"
         >
-            <script type="application/json" x-ref="routeMap">@json(['edges' => $routeEventsForJs])</script>
+            <script type="application/json" x-ref="routeMap">@json(['routeEvidenceMode' => $routeEvidenceMode, 'edges' => $routeEventsForJs])</script>
             @if($zoomable)
                 <div
                     class="sticky left-0 top-0 z-30 mb-2 flex w-max max-w-full items-center gap-1 rounded-xl border border-slate-200 bg-white/95 p-1 shadow-sm backdrop-blur"
