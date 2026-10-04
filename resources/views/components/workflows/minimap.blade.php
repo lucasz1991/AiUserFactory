@@ -768,6 +768,9 @@
                                             ? 'not_executed'
                                             : (string) ($feedback['status'] ?? data_get($taskResult, 'status', data_get($task, 'status', 'configured')));
                                         $isTaskActive = $isActiveStep && ($activeTaskKey === '' ? (! $liveFlow && $loop->first && in_array($stepStatus, ['running', 'waiting'], true)) : $taskKey === $activeTaskKey);
+                                        if ($liveFlow && $isTaskActive && ($runtimeTask['source'] ?? '') === 'runtime') {
+                                            $taskStatus = (string) $runtimeTask['status'];
+                                        }
                                         $isTaskSelected = $selectedStepId === (int) $step->id && $selectedTaskKey === $taskKey;
                                         $tone = $taskTone($taskStatus, $isTaskActive);
                                         $taskNode = trim((string) $step->action_key).'::'.$taskKey;

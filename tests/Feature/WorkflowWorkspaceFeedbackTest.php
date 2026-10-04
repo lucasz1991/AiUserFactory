@@ -9,6 +9,7 @@ use App\Models\Workflow;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowStep;
 use App\Models\WorkflowStudioSession;
+use App\Services\Workflows\WorkflowLiveTaskPresenter;
 use App\Services\Workflows\WorkflowRunTaskFeedback;
 use App\Services\Workflows\WorkflowStudioSessionService;
 use DOMDocument;
@@ -439,6 +440,47 @@ class WorkflowWorkspaceFeedbackTest extends TestCase
         $this->assertSame(0, $xpath->query('//*[@data-workflow-live-preview]//*[@aria-current="step"]')->count());
         $this->assertSame(0, $xpath->query('//*[@data-workflow-live-task-node]')->count());
         $this->assertSame(1, $xpath->query('//*[@data-minimap-node="main::first" and @data-workflow-task-status="completed"]')->count());
+    }
+
+    #[DataProvider('publicSnapshotTaskEvidence')]
+    public function test_live_cursor_rejects_ambiguous_or_terminal_snapshots_and_only_accepts_known_task_evidence(array $snapshot, ?string $expectedTask): void
+    {
+        [$workflow, $step, $session] = $this->liveWorkspace();
+        $run = $this->workspaceRun($workflow, $step, $session, 'running');
+        $run->update(['context_json' => ['next_task_key' => null]]);
+        $run->stepRuns()->create([
+            'workflow_step_id' => $step->id, 'status' => 'running', 'result_json' => $snapshot,
+        ]);
+        $cursor = app(WorkflowLiveTaskPresenter::class)->present($workflow, $run->fresh());
+        $this->assertSame($expectedTask, $cursor['task_key'] ?? null);
+        if ($expectedTask !== null) {
+            $this->assertSame($step->id, $cursor['step_id']);
+            $this->assertSame('runtime', $cursor['source']);
+        }
+    }
+
+    public static function publicSnapshotTaskEvidence(): array
+    {
+        return [
+            'ambiguous without a valid hint' => [
+                ['tasks' => [['key' => 'first', 'status' => 'running'], ['key' => 'current', 'status' => 'running']]], null,
+            ],
+            'hint identifies one evidenced active task' => [
+                ['taskKey' => 'current', 'tasks' => [['key' => 'first', 'status' => 'running'], ['key' => 'current', 'status' => 'running']]], 'current',
+            ],
+            'terminal snapshot overrides stale task markers' => [
+                ['state' => 'completed', 'tasks' => [['key' => 'first', 'status' => 'running']]], null,
+            ],
+            'unknown key is not a template task' => [
+                ['taskKey' => 'unknown', 'tasks' => [['key' => 'unknown', 'status' => 'running']]], null,
+            ],
+            'malformed hint cannot replace unambiguous evidence' => [
+                ['taskKey' => ['invented'], 'tasks' => [['key' => 'first', 'status' => 'running']]], 'first',
+            ],
+            'generated task maps to its known parent card' => [
+                ['tasks' => [['key' => 'generated-child', 'parent_task_key' => 'current', 'status' => 'running']]], 'current',
+            ],
+        ];
     }
 
     public function test_compact_browser_strip_reports_the_active_window_and_never_claims_a_finished_run_is_connected(): void

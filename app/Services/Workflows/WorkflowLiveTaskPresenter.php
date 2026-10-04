@@ -18,10 +18,22 @@ final class WorkflowLiveTaskPresenter
         }
 
         $workflow->loadMissing('steps');
-        $run->loadMissing('stepRuns');
         $currentStepId = (int) $run->current_workflow_step_id;
-        $stepRun = $run->stepRuns->take(-32)->reverse()->first(fn ($candidate): bool => in_array($candidate->status, ['running', 'waiting'], true)
+        // Poll invalidation receives an unloaded run. Read only recent scoped
+        // snapshots instead of hydrating its entire execution history.
+        $recentStepRuns = $run->relationLoaded('stepRuns')
+            ? $run->getRelation('stepRuns')->take(-32)->reverse()
+            : $run->stepRuns()
+                ->when($currentStepId > 0, fn ($query) => $query->where('workflow_step_id', $currentStepId))
+                ->reorder('id', 'desc')
+                ->limit(32)
+                ->get();
+        $latestStepRun = $recentStepRuns->first(fn ($candidate): bool => (int) $candidate->workflow_run_id === (int) $run->id
             && ($currentStepId <= 0 || (int) $candidate->workflow_step_id === $currentStepId));
+        // A newer finished attempt must not revive an older stale runner.
+        $stepRun = $latestStepRun && in_array($latestStepRun->status, ['running', 'waiting'], true)
+            ? $latestStepRun
+            : null;
         $step = $workflow->steps->firstWhere('id', $stepRun?->workflow_step_id ?: $currentStepId);
         if (! $step) {
             return null;
