@@ -93,8 +93,9 @@
         };
     @endphp
 
-    <header class="ff-studio-header relative z-30 shrink-0 border-b">
-        <div data-studio-primary-bar class="flex flex-wrap items-center justify-end gap-2 px-3 py-1 sm:px-4">
+    <header class="ff-studio-header ff-studio-header--compact relative z-30 shrink-0 border-b">
+        @if(! $hosted || $autonomousMode)
+        <div data-studio-primary-bar class="ff-studio-primarybar flex flex-wrap items-center justify-end gap-2 px-3 py-1 sm:px-4">
             @if($hosted)
                 <div data-workflow-studio-hosted-status class="sr-only">
                     <div class="flex flex-wrap items-center gap-2.5">
@@ -117,9 +118,9 @@
                     </a>
                 @endif
 
-                <div class="min-w-[220px] flex-1">
+                <div class="ff-studio-heading min-w-0 flex-1">
                     <div class="flex flex-wrap items-center gap-2.5">
-                        <span class="ff-kicker">Workflow-Test</span>
+                        <span class="sr-only">Workflow-Test</span>
                         <h1 class="max-w-xl truncate text-base font-bold tracking-tight text-slate-950">{{ $workflow->name }}</h1>
                         <span class="ff-status-island" data-active="{{ $isActive ? 'true' : 'false' }}" role="status" aria-live="polite">
                             <span class="ff-status-dot" aria-hidden="true"></span>
@@ -130,7 +131,7 @@
                 </div>
             @endif
 
-            <div class="ff-segmented-control" role="group" aria-label="Testmodus">
+            <div class="ff-segmented-control ff-studio-mode-control" role="group" aria-label="Testmodus">
                 <button type="button" wire:click="chooseControlMode('interactive')" aria-pressed="{{ ! $autonomousMode ? 'true' : 'false' }}" @disabled($modeLocked || $historicalRunView) class="h-8 px-3 text-[11px] font-bold {{ ! $autonomousMode ? 'text-slate-950' : 'text-slate-500 hover:text-slate-800' }} disabled:cursor-not-allowed disabled:opacity-40">
                     Eigenes Testen
                 </button>
@@ -142,12 +143,16 @@
                 <button type="button" wire:click="unlockControlMode"
                         wire:confirm="Testmodus fuer diese Sitzung entsperren? Der Modus kann danach neu gewaehlt werden."
                         @disabled($historicalRunView)
-                        class="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 text-[10px] font-bold text-slate-600 transition hover:border-cyan-300 hover:bg-cyan-50 hover:text-cyan-800"
+                        class="ff-studio-control"
+                        aria-label="Modus gesperrt · entsperren"
                         title="Modus ist festgeschrieben – hier entsperren, um ihn neu zu waehlen">
-                    Modus gesperrt · entsperren
+                    Entsperren
                 </button>
             @endif
         </div>
+        @else
+            <span data-workflow-studio-hosted-status class="sr-only" role="status" aria-live="polite">{{ $statusLabel }} · Sitzung #{{ $session->id }} · Revision {{ $workflow->copilot_revision }} · {{ $permissionLabel }}</span>
+        @endif
 
         @if($historicalRunView)
             <div data-workflow-historical-run-readonly class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-violet-200 bg-violet-50 px-4 py-2.5 text-xs text-violet-950 lg:px-6" role="status" aria-live="polite">
@@ -165,33 +170,23 @@
         @endif
 
         @if(! $autonomousMode)
-            <div class="ff-studio-commandbar flex min-w-0 items-center gap-2 overflow-x-auto border-t border-slate-100 px-3 py-2.5 sm:px-4 lg:px-6">
-                {{-- Anders als das Select in den Copilot-Einstellungen bleibt die Personenwahl hier auch nach dem Modus-Lock zwischen Laeufen aenderbar; der Kontext wird erst beim Start in den Run-Context eingefroren --}}
-                <label class="flex shrink-0 items-center gap-2 rounded-xl border border-slate-200 bg-white py-1 pl-3 pr-1" title="Person / Testkontext für diesen Lauf">
-                    <span class="shrink-0 text-[9px] font-black uppercase tracking-[0.16em] text-slate-400">Person</span>
-                    <select wire:model="personId" @disabled($historicalRunView || $isActive || $isPaused) class="h-8 max-w-[200px] rounded-lg border-slate-200 bg-white text-[11px] font-bold text-slate-700 shadow-sm focus:border-cyan-500 focus:ring-cyan-500 disabled:cursor-not-allowed disabled:opacity-40">
-                        <option value="">Keine Person</option>
-                        @foreach($persons as $person)
-                            <option value="{{ $person->id }}">{{ $person->display_name }}</option>
-                        @endforeach
-                    </select>
-                </label>
-
-                <div class="ff-run-island shrink-0" role="group" aria-label="Test starten">
-                    <button type="button" wire:click="runSingleTask" @disabled($historicalRunView || $isActive || ! $selectedTask) class="ff-run-primary inline-flex h-8 items-center gap-2 px-3 text-[11px] font-bold disabled:cursor-not-allowed disabled:opacity-35">
-                        <span aria-hidden="true">▷|</span> Eine Task
+            <div data-studio-run-controls class="ff-studio-run-controls flex min-w-0 flex-wrap items-center gap-1.5 border-t px-3 py-1.5 sm:px-4">
+                <div class="ff-studio-run-actions" role="group" aria-label="Test steuern">
+                    <button type="button" wire:click="startRun" data-studio-run-start-trigger @disabled($historicalRunView || $isActive || $isPaused) class="ff-studio-control {{ ! $isPaused ? 'ff-studio-control--primary' : '' }}">
+                        <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M6 4.5a.75.75 0 0 1 1.14-.64l8 5.5a.75.75 0 0 1 0 1.28l-8 5.5A.75.75 0 0 1 6 15.5v-11Z" /></svg>
+                        Bis Ende
                     </button>
-                    <button type="button" wire:click="startRun" data-studio-run-start-trigger @disabled($historicalRunView || $isActive || $isPaused) class="inline-flex h-8 items-center gap-2 px-3 text-[11px] font-bold disabled:cursor-not-allowed disabled:opacity-35">
-                        <span aria-hidden="true">▶</span> Bis Ende
-                    </button>
-                    <button type="button" wire:click="runRealPlayback" @disabled($historicalRunView || $isActive || $isPaused) title="Wie im echten Ablauf: ohne Screenshots, DOM oder Cursor – am Ende nur das Ergebnis." class="inline-flex h-8 items-center gap-2 px-3 text-[11px] font-bold disabled:cursor-not-allowed disabled:opacity-35">
-                        <span aria-hidden="true">⏵</span> Echter Ablauf
-                    </button>
+                    @if($isPaused)
+                        <button type="button" wire:click="resumeRun" @disabled($historicalRunView || ! $isPaused) class="ff-studio-control ff-studio-control--primary" aria-label="Bis Ende fortsetzen" title="Bis Ende fortsetzen">Fortsetzen</button>
+                    @else
+                        <button type="button" wire:click="pauseRun" @disabled($historicalRunView || ! $isActive) class="ff-studio-control">Pausieren</button>
+                    @endif
+                    <button type="button" wire:click="stopRun" data-studio-run-stop-trigger wire:confirm="Diesen Lauf wirklich stoppen?" @disabled($historicalRunView || (! $isActive && ! $isPaused)) class="ff-studio-control ff-studio-control--stop">Stoppen</button>
                 </div>
 
-                <div class="ff-segmented-control shrink-0" role="group" aria-label="Task-Navigation">
-                    <button type="button" wire:click="selectPreviousTask" aria-label="Vorherige Task auswählen" @disabled(! $hasPreviousTask) class="h-8 px-2.5 text-[11px] font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-30">←</button>
-                    <span class="min-w-12 text-center font-mono text-[10px] font-bold text-slate-400" role="status" aria-live="polite" aria-atomic="true">
+                <div class="ff-studio-task-navigation" role="group" aria-label="Task-Navigation">
+                    <button type="button" wire:click="selectPreviousTask" aria-label="Vorherige Task auswählen" @disabled(! $hasPreviousTask) class="ff-studio-control ff-studio-control--icon">←</button>
+                    <span class="ff-studio-task-counter" role="status" aria-live="polite" aria-atomic="true">
                         @if($selectedTaskNumber)
                             <span class="sr-only">Ausgewählte Task {{ $selectedTaskNumber }} von {{ $taskCount }}</span>
                         @else
@@ -199,30 +194,51 @@
                         @endif
                         <span aria-hidden="true">{{ $selectedTaskNumber ?: '–' }}/{{ $taskCount }}</span>
                     </span>
-                    <button type="button" wire:click="selectNextTask" aria-label="Nächste Task auswählen" @disabled(! $hasNextTask) class="h-8 px-2.5 text-[11px] font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-30">→</button>
+                    <button type="button" wire:click="selectNextTask" aria-label="Nächste Task auswählen" @disabled(! $hasNextTask) class="ff-studio-control ff-studio-control--icon">→</button>
                 </div>
 
-                <button type="button" wire:click="pauseRun" @disabled($historicalRunView || ! $isActive) class="h-9 rounded-lg border border-amber-200 bg-amber-50 px-3 text-[11px] font-bold text-amber-800 transition hover:bg-amber-100 disabled:opacity-30">Pausieren</button>
-                <button type="button" wire:click="resumeRun" @disabled($historicalRunView || ! $isPaused) class="h-9 rounded-lg border border-emerald-200 bg-emerald-50 px-3 text-[11px] font-bold text-emerald-800 transition hover:bg-emerald-100 disabled:opacity-30">Bis Ende fortsetzen</button>
-                <button type="button" wire:click="restartRun" wire:confirm="Aktuellen Lauf beenden und neu starten?" @disabled($historicalRunView) class="h-9 rounded-lg border border-slate-300 bg-white px-3 text-[11px] font-bold text-slate-600 transition hover:bg-slate-100 disabled:opacity-30">Neu versuchen</button>
-                <button type="button" wire:click="stopRun" wire:confirm="Diesen Lauf wirklich stoppen?" @disabled($historicalRunView || (! $isActive && ! $isPaused)) class="h-9 rounded-lg border border-rose-200 bg-white px-3 text-[11px] font-bold text-rose-700 transition hover:bg-rose-50 disabled:opacity-30">Stoppen</button>
-
-                <button
-                    type="button"
-                    wire:click="openDefinitionBuilder"
-                    data-workflow-studio-builder-trigger
-                    title="Task-Bibliothek und Listenverwaltung öffnen"
-                    class="ff-action-trigger ff-action-trigger--primary inline-flex h-9 shrink-0 items-center gap-2 px-3 text-[11px] font-bold"
-                >
-                    <span class="text-base leading-none" aria-hidden="true">+</span> Listen &amp; Tasks
-                </button>
-
                 @if($selectedTask)
-                    <button type="button" wire:click="editSelectedTask" class="ff-selected-task ml-auto flex min-w-[13rem] max-w-sm shrink-0 items-center gap-2 rounded-xl border px-3 py-1.5 text-left transition hover:border-blue-400">
-                        <span class="h-2.5 w-2.5 shrink-0 rounded-full bg-blue-600"></span>
-                        <span class="min-w-0"><span class="block text-[8px] font-black uppercase tracking-[0.16em] text-blue-700">Ausgewählte Task bearbeiten</span><span class="block truncate text-[11px] font-bold text-blue-950">{{ $selectedStep?->name }} / {{ $selectedTask['title'] ?? $selectedTaskKey }}</span></span>
+                    <button type="button" wire:click="editSelectedTask" class="ff-studio-control ff-studio-selected-task" title="{{ $selectedStep?->name }} / {{ $selectedTask['title'] ?? $selectedTaskKey }} bearbeiten">
+                        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m12.5 4 3.5 3.5M3.5 16.5l4-.7L16 7.3a2.5 2.5 0 0 0-3.5-3.5L4.2 12.5l-.7 4Z" /></svg>
+                        <span class="sr-only">Ausgewählte Task bearbeiten:</span>
+                        <span class="truncate">{{ $selectedTask['title'] ?? $selectedTaskKey }}</span>
                     </button>
                 @endif
+
+                <details data-studio-test-options wire:key="studio-test-options-{{ $session->id }}" class="ff-studio-disclosure ff-studio-test-options" x-data="{ open: false }" x-bind:open="open" x-on:toggle="open = $el.open" x-on:click.outside="open = false" x-on:keydown.escape.prevent.stop="open = false; $refs.summary.focus()">
+                    <summary x-ref="summary" class="ff-studio-control">
+                        Testoptionen
+                        <svg class="ff-studio-disclosure-chevron" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m6 8 4 4 4-4" /></svg>
+                    </summary>
+                    <div class="ff-studio-disclosure-menu">
+                        @if($hosted)
+                            <div class="ff-studio-test-mode-options">
+                                <span class="ff-studio-option-label">Testmodus</span>
+                                <div class="ff-segmented-control ff-studio-mode-control" role="group" aria-label="Testmodus">
+                                    <button type="button" wire:click="chooseControlMode('interactive')" x-on:click="open = false" aria-pressed="{{ ! $autonomousMode ? 'true' : 'false' }}" @disabled($modeLocked || $historicalRunView) class="h-8 px-3 text-[11px] disabled:cursor-not-allowed disabled:opacity-40">Eigenes Testen</button>
+                                    <button type="button" wire:click="chooseControlMode('autonomous')" x-on:click="open = false" aria-pressed="{{ $autonomousMode ? 'true' : 'false' }}" @disabled($modeLocked || $historicalRunView) class="h-8 px-3 text-[11px] disabled:cursor-not-allowed disabled:opacity-40">Autonomer Copilot</button>
+                                </div>
+                                @if($modeLocked)
+                                    <button type="button" wire:click="unlockControlMode" x-on:click="open = false" wire:confirm="Testmodus fuer diese Sitzung entsperren? Der Modus kann danach neu gewaehlt werden." @disabled($historicalRunView) class="ff-studio-control ff-studio-menu-action" title="Modus ist festgeschrieben – hier entsperren, um ihn neu zu waehlen">Modus entsperren</button>
+                                @endif
+                            </div>
+                        @endif
+                        {{-- Der Testkontext bleibt zwischen Läufen wählbar und wird erst beim Start eingefroren. --}}
+                        <label class="ff-studio-person-context">
+                            <span>Person / Testkontext</span>
+                            <select wire:model="personId" @disabled($historicalRunView || $isActive || $isPaused)>
+                                <option value="">Keine Person</option>
+                                @foreach($persons as $person)
+                                    <option value="{{ $person->id }}">{{ $person->display_name }}</option>
+                                @endforeach
+                            </select>
+                        </label>
+                        <button type="button" wire:click="runSingleTask" x-on:click="open = false" @disabled($historicalRunView || $isActive || ! $selectedTask) class="ff-studio-control ff-studio-menu-action">Eine Task</button>
+                        <button type="button" wire:click="runRealPlayback" x-on:click="open = false" @disabled($historicalRunView || $isActive || $isPaused) title="Wie im echten Ablauf: ohne Screenshots, DOM oder Cursor – am Ende nur das Ergebnis." class="ff-studio-control ff-studio-menu-action">Echter Ablauf</button>
+                        <button type="button" wire:click="restartRun" x-on:click="open = false" wire:confirm="Aktuellen Lauf beenden und neu starten?" @disabled($historicalRunView) class="ff-studio-control ff-studio-menu-action">Neu versuchen</button>
+                        <button type="button" wire:click="openDefinitionBuilder" x-on:click="open = false" data-workflow-studio-builder-trigger @disabled($isActive) title="{{ $isActive ? 'Den Test pausieren, um Listen und Tasks zu bearbeiten' : 'Task-Bibliothek und Listenverwaltung öffnen' }}" class="ff-studio-control ff-studio-menu-action">Listen &amp; Tasks</button>
+                    </div>
+                </details>
             </div>
         @else
             <div class="flex flex-wrap items-center justify-between gap-3 border-t border-cyan-100 bg-cyan-50 px-4 py-2.5 text-xs text-cyan-950 lg:px-6">

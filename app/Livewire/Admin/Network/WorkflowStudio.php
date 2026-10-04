@@ -18,6 +18,7 @@ use App\Services\Workflows\WorkflowCopilotLaunchService;
 use App\Services\Workflows\WorkflowCopilotSessionService;
 use App\Services\Workflows\WorkflowDefinitionValidator;
 use App\Services\Workflows\WorkflowExecutionService;
+use App\Services\Workflows\WorkflowLiveTaskPresenter;
 use App\Services\Workflows\WorkflowObservabilityPolicy;
 use App\Services\Workflows\WorkflowRetryRouteAutoRepairService;
 use App\Services\Workflows\WorkflowRouteTargetAutoRepairService;
@@ -1378,6 +1379,14 @@ class WorkflowStudio extends Component
             $session,
         );
 
+        $liveTask = app(WorkflowLiveTaskPresenter::class)->present($this->workflow(), $run);
+        // Continuous Node steps update public task snapshots without moving
+        // context.next_task_key. Invalidate only their small observed cursor,
+        // never screenshots, timestamps or the complete runtime payload.
+        if ($liveTask) {
+            unset($liveTask['title']);
+        }
+
         return hash('sha256', json_encode([
             'studio_session_id' => $this->studioSessionId,
             'session_mode' => (string) $session->mode,
@@ -1386,6 +1395,7 @@ class WorkflowStudio extends Component
             'display_run_status' => (string) ($run?->status ?? 'idle'),
             'display_task_feedback' => data_get($run?->context_json, 'task_history_sequence', count((array) data_get($run?->context_json, 'task_history', []))),
             'display_cursor' => [$run?->current_workflow_step_id, data_get($run?->context_json, 'next_task_key')],
+            'display_live_task' => $liveTask,
             'definition_can_edit' => (bool) $policy['can_edit'],
             'definition_can_pause' => (bool) $policy['can_pause_for_edit'],
             'definition_lock_message' => (string) $policy['message'],

@@ -13,6 +13,8 @@
     'instance' => null,
     'source' => null,
     'routeMap' => null,
+    'liveFlow' => false,
+    'runtimeTask' => null,
 ])
 
 @php
@@ -33,6 +35,19 @@
     $runningStepRun = $stepRuns->first(fn ($stepRun) => in_array($stepRun->status, ['running', 'waiting'], true));
     $activeStepId = $activeStepId ?: ($workflowRun?->current_workflow_step_id ?: $runningStepRun?->workflow_step_id);
     $activeTaskKey = trim((string) ($activeTaskKey ?: data_get($workflowRun?->context_json, 'next_task_key', '')));
+    if ($liveFlow) {
+        $runtimeTask = is_array($runtimeTask)
+            ? $runtimeTask
+            : ($workflow ? app(\App\Services\Workflows\WorkflowLiveTaskPresenter::class)->present($workflow, $workflowRun) : null);
+        $activeStepId = $runtimeTask['step_id'] ?? $workflowRun?->current_workflow_step_id;
+        $activeTaskKey = (string) ($runtimeTask['task_key'] ?? '');
+    }
+    // A retained terminal cursor is not a task still running. The ordinary
+    // definition/historical preview keeps its existing selection contract.
+    if ($liveFlow && ! in_array($workflowRun?->status, ['queued', 'running', 'waiting', 'stop_requested', 'unreachable'], true)) {
+        $activeStepId = null;
+        $activeTaskKey = '';
+    }
     $selectedStepId = (int) $selectedStepId;
     $selectedTaskKey = trim((string) $selectedTaskKey);
     $stepRunByStep = $stepRuns->groupBy('workflow_step_id')->map(fn ($runs) => $runs->last());
@@ -548,11 +563,19 @@
     $routeEventCount = max(1, $routeEvents->count());
     $routeEventsForJs = $routeEvents
         ->values()
-        ->map(function (array $routeEvent, int $eventIndex) use ($routeEventCount): array {
+        ->map(function (array $routeEvent, int $eventIndex) use ($routeEventCount, $liveFlow): array {
             // Juengste Linie 1.0, aelteste 0.35 — deutlich blasser, aber sichtbar.
             $routeEvent['ageOpacity'] = round(0.35 + (0.65 * (($eventIndex + 1) / $routeEventCount)), 3);
             $routeEvent['ageIndex'] = $eventIndex + 1;
             $routeEvent['ageTotal'] = $routeEventCount;
+            // The shared renderer uses outcome as its display tone. Keep the
+            // actual execution outcome alongside it, and distinguish observed
+            // or explicitly pending runtime paths from the planned graph.
+            if ($liveFlow && ($routeEvent['runtime'] ?? false)
+                && ((int) ($routeEvent['runtimeCount'] ?? 0) > 0 || ($routeEvent['pending'] ?? false))) {
+                $routeEvent['executionOutcome'] = $routeEvent['outcome'];
+                $routeEvent['outcome'] = 'runtime';
+            }
 
             return $routeEvent;
         })
@@ -616,11 +639,16 @@
             x-data="{
                 ...workflowRouteSurface({
                     instance: @js($mapId),
-                    initialNode: @js($activeRouteNode),
+                    initialNode: @js($liveFlow ? '' : $activeRouteNode),
                 }),
                 instance: @js($mapInstance),
                 source: @js($mapSource),
                 zoomLevel: @js($initialZoom),
+                routeFocusNode() {
+                    return @js($liveFlow)
+                        ? this.hoveredRouteNode || ''
+                        : this.activeRouteNode || this.hoveredRouteNode || this.initialRouteNode || '';
+                },
                 isRenderable() {
                     return this.$root.offsetParent !== null && ! this.$root.closest('[inert]');
                 },
@@ -739,7 +767,7 @@
                                         $taskStatus = $plannedOnlyStep
                                             ? 'not_executed'
                                             : (string) ($feedback['status'] ?? data_get($taskResult, 'status', data_get($task, 'status', 'configured')));
-                                        $isTaskActive = $isActiveStep && ($activeTaskKey === '' ? ($loop->first && in_array($stepStatus, ['running', 'waiting'], true)) : $taskKey === $activeTaskKey);
+                                        $isTaskActive = $isActiveStep && ($activeTaskKey === '' ? (! $liveFlow && $loop->first && in_array($stepStatus, ['running', 'waiting'], true)) : $taskKey === $activeTaskKey);
                                         $isTaskSelected = $selectedStepId === (int) $step->id && $selectedTaskKey === $taskKey;
                                         $tone = $taskTone($taskStatus, $isTaskActive);
                                         $taskNode = trim((string) $step->action_key).'::'.$taskKey;
@@ -754,10 +782,15 @@
                                          data-minimap-node="{{ $taskNode }}"
                                          data-workflow-task-node="{{ $taskNode }}"
                                          data-workflow-step-action="{{ $step->action_key }}"
+                                         data-workflow-step-id="{{ $step->id }}"
+                                         data-workflow-task-key="{{ $taskKey }}"
                                          data-workflow-task-status="{{ $taskStatus }}"
                                          data-task-failed="{{ ($feedback['failed'] ?? false) ? 'true' : 'false' }}"
                                          data-workflow-minimap-active-target="{{ $isTaskActive ? 'true' : 'false' }}"
                                          data-workflow-minimap-selected-task="{{ $isTaskSelected ? 'true' : 'false' }}"
+                                         @if($liveFlow && $isTaskActive)
+                                             aria-current="step"
+                                         @endif
                                         x-on:mouseenter="setHoveredRouteNode(@js($taskNode))"
                                         x-on:mouseleave="setHoveredRouteNode('')"
                                         @if($selectableTasks)

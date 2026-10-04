@@ -10,6 +10,7 @@ import './components/workflow-motion';
 import './components/person-profile-motion';
 import { workflowSelectorField } from './components/workflow-selector-syntax';
 import { workflowRouteSurface } from './components/workflow-route-surface';
+import { workflowLiveWorkspace } from './components/workflow-live-workspace';
 import { workflowDomInspector } from './components/workflow-dom-inspector';
 import './app-shell';
 // Spur W (PWA + Web-Push). Beim App-Shell-Umbau bitte uebernehmen — ohne
@@ -37,6 +38,11 @@ function registerAlpinePlugins() {
     if (!window.Alpine.__workflowRouteSurfaceRegistered) {
         window.Alpine.data('workflowRouteSurface', workflowRouteSurface);
         window.Alpine.__workflowRouteSurfaceRegistered = true;
+    }
+
+    if (!window.Alpine.__workflowLiveWorkspaceRegistered) {
+        window.Alpine.data('workflowLiveWorkspace', workflowLiveWorkspace);
+        window.Alpine.__workflowLiveWorkspaceRegistered = true;
     }
 
     if (!window.Alpine.__workflowDomInspectorRegistered) {

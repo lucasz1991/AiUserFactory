@@ -42,7 +42,13 @@ class WorkflowWorkbenchUiSafetyMarkupTest extends TestCase
             $this->assertStringContainsString('actionsTrigger?.focus({ preventScroll: true })', $markup);
         }
 
-        $this->assertStringContainsString('data-studio-tool-trigger=', $toolModal);
+        // Menu items are hidden again after opening a tool. Restore focus to
+        // their visible summary, not to an inert/hidden former trigger.
+        $this->assertStringContainsString("'browser' => '[data-studio-browser-preview-trigger]'", $toolModal);
+        $this->assertStringContainsString("'[data-studio-tool-group=\"data\"] > summary'", $toolModal);
+        $this->assertStringContainsString("'[data-studio-tool-group=\"diagnostics\"] > summary'", $toolModal);
+        $this->assertStringContainsString(':return-focus="$toolReturnFocus"', $toolModal);
+        $this->assertStringContainsString("\$toolReturnFocus = '[data-workflow-studio-session=", $toolModal);
         $this->assertStringContainsString('data-studio-run-start-trigger', $studio);
         $this->assertStringContainsString('data-studio-copilot-settings-trigger', $studio);
     }
@@ -139,5 +145,34 @@ class WorkflowWorkbenchUiSafetyMarkupTest extends TestCase
         $this->assertDoesNotMatchRegularExpression('/x-cloak\s+x-show\.important="workbenchOpen"/', $manager);
         $this->assertStringContainsString('fixed inset-0 top-0 z-[70]', $manager);
         $this->assertStringContainsString('overflow-hidden bg-slate-100', $manager);
+    }
+
+    public function test_minimal_controls_preserve_execution_guards_and_group_secondary_tools_into_native_disclosures(): void
+    {
+        $root = dirname(__DIR__, 2);
+        $studio = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-studio.blade.php');
+        $tools = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-studio/tool-bar.blade.php');
+        $browser = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-studio/browser-windows.blade.php');
+
+        foreach (['startRun', 'pauseRun', 'resumeRun', 'stopRun', 'runSingleTask', 'runRealPlayback', 'restartRun'] as $action) {
+            $this->assertSame(1, substr_count($studio, 'wire:click="'.$action.'"'));
+        }
+        $this->assertStringContainsString('aria-label="Test steuern"', $studio);
+        $this->assertStringContainsString('data-studio-run-stop-trigger wire:confirm=', $studio);
+        $this->assertStringContainsString('@disabled($historicalRunView || ! $isPaused)', $studio);
+        $this->assertStringContainsString('@disabled($historicalRunView || ! $isActive)', $studio);
+        $this->assertStringContainsString('<details data-studio-test-options', $studio);
+        $this->assertStringContainsString('wire:model="personId" @disabled($historicalRunView || $isActive || $isPaused)', $studio);
+        $this->assertStringContainsString('data-workflow-studio-builder-trigger @disabled($isActive)', $studio);
+        $this->assertStringContainsString('<details data-studio-tool-group=', $tools);
+        $this->assertStringContainsString('<details data-studio-additional-browser-windows', $browser);
+        foreach ([$studio, $tools, $browser] as $markup) {
+            $this->assertStringContainsString('x-on:keydown.escape.prevent.stop="open = false; $refs.summary.focus()"', $markup);
+            $this->assertStringContainsString('x-bind:open="open"', $markup);
+            $this->assertStringContainsString('x-on:toggle="open = $el.open"', $markup);
+        }
+        $this->assertStringContainsString('data-studio-browser-preview-trigger', $browser);
+        $this->assertStringNotContainsString('animate-ping', $browser);
+        $this->assertStringContainsString('$browserConnected = $isActive &&', $browser);
     }
 }

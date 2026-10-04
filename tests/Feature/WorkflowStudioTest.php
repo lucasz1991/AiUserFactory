@@ -1475,7 +1475,7 @@ class WorkflowStudioTest extends TestCase
         $this->assertSame(1, data_get($run->fresh()->result_json, 'process_termination.external_runs'));
     }
 
-    public function test_manager_overview_owns_the_static_minimap_while_the_shared_editor_renders_only_the_canvas(): void
+    public function test_manager_overview_and_persistent_live_minimap_share_routes_without_replacing_the_editor(): void
     {
         [$workflow, $step] = $this->workflow();
         $stepConfig = $step->config_json;
@@ -1501,7 +1501,9 @@ class WorkflowStudioTest extends TestCase
             'studioSessionId' => $session->id,
         ])
             ->assertDontSeeHtml('data-studio-editor-overview')
-            ->assertDontSeeHtml('data-workflow-minimap-zoom-level=')
+            ->assertSeeHtml('data-workflow-live-preview')
+            ->assertSeeHtml('data-workflow-minimap-zoom-level="overview"')
+            ->assertSet('workspaceRunPresentation', 'edit')
             ->assertSeeHtml('data-studio-workflow-canvas')
             ->assertSee('Timeout beenden')
             ->assertSet('overviewSelectedStepId', $step->id)

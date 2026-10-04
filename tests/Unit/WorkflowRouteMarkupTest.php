@@ -51,7 +51,7 @@ class WorkflowRouteMarkupTest extends TestCase
         $source = file_get_contents(dirname(__DIR__, 2).'/resources/views/components/workflows/minimap.blade.php');
         $definition = $this->alpineDefinitionContaining($source, 'workflowRouteSurface');
 
-        $this->assertStringContainsString('initialNode: @js($activeRouteNode)', $definition);
+        $this->assertStringContainsString("initialNode: @js(\$liveFlow ? '' : \$activeRouteNode)", $definition);
         $this->assertStringContainsString('...workflowRouteSurface({', $definition);
         $this->assertStringNotContainsString('refreshRouteLines() {', $definition, 'Keine zweite Geometrie-Implementierung.');
         $this->assertStringContainsString('x-ref="routeMap"', $source);

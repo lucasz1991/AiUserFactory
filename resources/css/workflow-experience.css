@@ -1217,7 +1217,7 @@
     bottom: 8.25rem;
   }
 
-  [data-studio-task-editor] [data-workflow-step-column] {
+  [data-studio-task-editor] [data-studio-workflow-canvas] [data-workflow-step-column] {
     width: min(18.5rem, calc(100vw - 2.5rem)) !important;
     min-width: min(18.5rem, calc(100vw - 2.5rem)) !important;
     max-width: min(18.5rem, calc(100vw - 2.5rem)) !important;
@@ -1565,5 +1565,513 @@
     animation-duration: .01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: .01ms !important;
+  }
+}
+
+/* Compact Studio: execution leads; diagnostics stay available on demand. */
+[data-workflow-studio-shell] .ff-studio-header--compact,
+[data-workflow-studio-shell] .ff-studio-tools--compact,
+[data-workflow-studio-shell] .ff-browser-strip--compact,
+[data-workflow-test-workbench] > header {
+  background: var(--ff-surface) !important;
+  border-color: var(--ff-line) !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+}
+
+[data-workflow-test-workbench] > header {
+  padding-block: .5rem !important;
+}
+
+[data-workflow-studio-shell] .ff-studio-primarybar {
+  padding-block: .25rem !important;
+}
+
+[data-workflow-studio-shell] .ff-studio-heading h1 {
+  font-size: .875rem !important;
+  font-weight: 600 !important;
+}
+
+:is([data-workflow-studio-shell], [data-workflow-test-workbench]) .ff-status-island {
+  min-height: 1.75rem;
+  padding: .25rem .5rem;
+  border: 0;
+  border-radius: .375rem;
+  background: var(--ff-surface-soft);
+  color: var(--ff-ink-soft);
+  box-shadow: none;
+}
+
+:is([data-workflow-studio-shell], [data-workflow-test-workbench]) .ff-status-island .ff-status-dot {
+  background: var(--ff-muted);
+  box-shadow: none;
+  animation: none;
+}
+
+:is([data-workflow-studio-shell], [data-workflow-test-workbench]) .ff-status-island[data-active="true"] .ff-status-dot {
+  background: var(--ff-success);
+}
+
+[data-workflow-studio-shell] .ff-studio-mode-control {
+  border: 0 !important;
+  border-radius: .5rem !important;
+  background: var(--ff-surface-soft) !important;
+  padding: .125rem !important;
+}
+
+[data-workflow-studio-shell] .ff-studio-mode-control > button {
+  border-radius: .375rem !important;
+  font-weight: 600 !important;
+  box-shadow: none !important;
+  transform: none !important;
+  transition: color 120ms ease-out, background-color 120ms ease-out !important;
+}
+
+[data-workflow-studio-shell] .ff-studio-mode-control > button[aria-pressed="true"] {
+  background: var(--ff-surface) !important;
+  box-shadow: inset 0 0 0 1px var(--ff-line) !important;
+}
+
+[data-workflow-studio-shell] .ff-studio-control,
+[data-workflow-test-workbench] > header .ff-action-trigger,
+[data-workflow-studio-shell] .ff-studio-canvas-tools > button {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  justify-content: center;
+  gap: .375rem;
+  padding: .375rem .625rem;
+  border: 1px solid transparent !important;
+  border-radius: .5rem !important;
+  background: transparent !important;
+  color: var(--ff-ink-soft) !important;
+  font-size: .75rem;
+  font-weight: 600;
+  line-height: 1.25;
+  white-space: nowrap;
+  box-shadow: none !important;
+  cursor: pointer;
+  transform: none !important;
+  transition: color 120ms ease-out, background-color 120ms ease-out !important;
+}
+
+[data-workflow-studio-shell] .ff-studio-control > svg {
+  width: 1rem;
+  height: 1rem;
+  flex: 0 0 auto;
+}
+
+[data-workflow-studio-shell] .ff-studio-control:hover:not(:disabled),
+[data-workflow-test-workbench] > header .ff-action-trigger:hover,
+[data-workflow-studio-shell] .ff-studio-canvas-tools > button:hover:not(:disabled) {
+  background: var(--ff-surface-soft) !important;
+}
+
+[data-workflow-studio-shell] .ff-studio-control:focus-visible,
+[data-workflow-studio-shell] .ff-studio-person-context select:focus-visible,
+[data-workflow-test-workbench] > header .ff-action-trigger:focus-visible,
+[data-workflow-studio-shell] .ff-studio-canvas-tools > button:focus-visible {
+  outline: 2px solid var(--ff-accent) !important;
+  outline-offset: 2px;
+}
+
+[data-workflow-studio-shell] .ff-studio-control:disabled {
+  opacity: .4;
+  cursor: not-allowed;
+}
+
+[data-workflow-studio-shell] .ff-studio-control--primary {
+  background: var(--ff-accent) !important;
+  color: var(--ff-surface) !important;
+}
+
+[data-workflow-studio-shell] .ff-studio-control--primary:hover:not(:disabled) {
+  background: var(--ff-accent-bright) !important;
+}
+
+[data-workflow-studio-shell] .ff-studio-control--stop:not(:disabled) {
+  color: var(--ff-danger) !important;
+}
+
+[data-workflow-studio-shell] .ff-studio-run-controls {
+  overflow: visible;
+  border-color: var(--ff-line) !important;
+}
+
+[data-workflow-studio-shell] .ff-studio-run-actions,
+[data-workflow-studio-shell] .ff-studio-task-navigation,
+[data-workflow-studio-shell] .ff-studio-tools-row,
+[data-workflow-studio-shell] .ff-studio-browser-actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: .25rem;
+}
+
+[data-workflow-studio-shell] .ff-studio-run-actions,
+[data-workflow-studio-shell] .ff-studio-task-navigation {
+  flex: 0 0 auto;
+}
+
+[data-workflow-studio-shell] .ff-studio-task-navigation {
+  padding-inline: .25rem;
+  border-inline-start: 1px solid var(--ff-line);
+}
+
+[data-workflow-studio-shell] .ff-studio-control--icon {
+  min-width: 40px;
+  padding-inline: .375rem;
+}
+
+[data-workflow-studio-shell] .ff-studio-task-counter,
+[data-workflow-studio-shell] .ff-studio-window-count {
+  color: var(--ff-muted);
+  font-size: .6875rem;
+  font-variant-numeric: tabular-nums;
+}
+
+[data-workflow-studio-shell] .ff-studio-selected-task {
+  flex: 1 1 8rem;
+  min-width: 0;
+  max-width: 24rem;
+  justify-content: flex-start;
+}
+
+[data-workflow-studio-shell] .ff-studio-test-options,
+[data-workflow-studio-shell] .ff-studio-copilot-settings {
+  margin-inline-start: auto;
+}
+
+[data-workflow-studio-shell] .ff-studio-disclosure {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+[data-workflow-studio-shell] .ff-studio-disclosure > summary {
+  list-style: none;
+}
+
+[data-workflow-studio-shell] .ff-studio-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+[data-workflow-studio-shell] .ff-studio-disclosure-chevron {
+  width: .875rem !important;
+  height: .875rem !important;
+  color: var(--ff-muted);
+}
+
+[data-workflow-studio-shell] .ff-studio-disclosure[open] > summary {
+  background: var(--ff-surface-soft) !important;
+}
+
+[data-workflow-studio-shell] .ff-studio-disclosure[open] .ff-studio-disclosure-chevron {
+  transform: rotate(180deg);
+}
+
+[data-workflow-studio-shell] .ff-studio-disclosure-menu {
+  position: absolute;
+  z-index: 60;
+  inset-inline-end: 0;
+  top: calc(100% + .25rem);
+  width: 17rem;
+  max-width: calc(100vw - 1.5rem);
+  max-height: min(26rem, calc(100dvh - 12rem));
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: .375rem;
+  border: 1px solid var(--ff-line);
+  border-radius: .625rem;
+  background: var(--ff-surface);
+  color: var(--ff-ink-soft);
+  box-shadow: 0 4px 12px rgba(11, 18, 32, .08);
+}
+
+[data-workflow-studio-shell] .ff-studio-menu-action {
+  width: 100%;
+  justify-content: flex-start;
+  text-align: start;
+}
+
+[data-workflow-studio-shell] .ff-studio-person-context {
+  display: grid;
+  gap: .375rem;
+  padding: .5rem .625rem .75rem;
+  border-bottom: 1px solid var(--ff-line);
+  margin-bottom: .25rem;
+  color: var(--ff-muted);
+  font-size: .6875rem;
+  font-weight: 500;
+}
+
+[data-workflow-studio-shell] .ff-studio-test-mode-options {
+  display: grid;
+  gap: .375rem;
+  padding: .5rem .375rem;
+  border-bottom: 1px solid var(--ff-line);
+}
+
+[data-workflow-studio-shell] .ff-studio-option-label {
+  padding-inline: .25rem;
+  color: var(--ff-muted);
+  font-size: .6875rem;
+  font-weight: 500;
+}
+
+[data-workflow-studio-shell] .ff-studio-person-context select {
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  border: 1px solid var(--ff-line);
+  border-radius: .375rem;
+  background-color: var(--ff-surface-soft);
+  color: var(--ff-ink-soft);
+  font-size: .75rem;
+  font-weight: 500;
+}
+
+[data-workflow-studio-shell] .ff-studio-person-context select:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+[data-workflow-studio-shell] .ff-studio-browser-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: .5rem;
+}
+
+[data-workflow-studio-shell] .ff-studio-browser-current {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  align-items: center;
+  gap: .625rem;
+}
+
+[data-workflow-studio-shell] .ff-studio-browser-icon {
+  width: 1.125rem;
+  height: 1.125rem;
+  flex: 0 0 auto;
+  color: var(--ff-muted);
+}
+
+[data-workflow-studio-shell] .ff-studio-browser-label {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .375rem .625rem;
+  font-size: .75rem;
+}
+
+[data-workflow-studio-shell] .ff-studio-browser-label > strong {
+  overflow: hidden;
+  max-width: 16rem;
+  color: var(--ff-ink-soft);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+[data-workflow-studio-shell] .ff-studio-browser-state {
+  display: inline-flex;
+  align-items: center;
+  gap: .375rem;
+  color: var(--ff-muted);
+  font-size: .6875rem;
+}
+
+[data-workflow-studio-shell] .ff-studio-browser-state-dot {
+  width: .375rem;
+  height: .375rem;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--ff-muted);
+}
+
+[data-workflow-studio-shell] .ff-studio-browser-state[data-connected="true"] .ff-studio-browser-state-dot {
+  background: var(--ff-success);
+}
+
+[data-workflow-studio-shell] .ff-studio-browser-location {
+  overflow: hidden;
+  margin: .125rem 0 0;
+  color: var(--ff-muted);
+  font-size: .6875rem;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+[data-workflow-studio-shell] .ff-studio-browser-menu {
+  width: 25rem;
+}
+
+[data-workflow-studio-shell] .ff-studio-browser-list-item {
+  display: flex;
+  align-items: flex-start;
+  gap: .75rem;
+  padding: .5rem;
+}
+
+[data-workflow-studio-shell] .ff-studio-browser-list-item + .ff-studio-browser-list-item {
+  border-top: 1px solid var(--ff-line);
+}
+
+[data-workflow-studio-shell] .ff-studio-browser-list-item .ff-browser-preview {
+  width: 7.5rem !important;
+  height: 4.25rem !important;
+  border-color: var(--ff-line) !important;
+  background: var(--ff-surface-soft);
+}
+
+[data-workflow-studio-shell] .ff-studio-browser-placeholder {
+  display: flex;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  padding: .5rem;
+  color: var(--ff-muted);
+  font-size: .625rem;
+}
+
+[data-workflow-studio-shell] .ff-studio-tools-row {
+  flex-wrap: wrap;
+}
+
+[data-workflow-studio-shell] .ff-studio-tools-row .ff-studio-disclosure-menu {
+  inset-inline-start: 0;
+  inset-inline-end: auto;
+  width: 13rem;
+}
+
+[data-workflow-studio-shell] .ff-workflow-live-summary {
+  min-width: 0;
+  background: var(--ff-surface);
+  border-color: var(--ff-line) !important;
+  font-variant-numeric: tabular-nums;
+}
+
+[data-workflow-studio-shell] .ff-workflow-live-preview {
+  min-width: 0;
+  min-height: 0;
+  scroll-padding: .75rem;
+  background: var(--ff-canvas);
+}
+
+[data-workflow-live-preview] [data-workflow-minimap-zoom] {
+  flex-wrap: wrap;
+  width: fit-content !important;
+  max-width: 100% !important;
+  box-shadow: none !important;
+}
+
+[data-workflow-live-preview] [data-workflow-minimap-zoom] > button {
+  flex: 0 0 auto;
+  min-width: 0 !important;
+  white-space: nowrap;
+}
+
+[data-workflow-studio-shell] .ff-canvas-toolbar {
+  gap: .5rem !important;
+  padding: .5rem .75rem !important;
+  background: var(--ff-surface) !important;
+  box-shadow: none !important;
+}
+
+@media (max-width: 767px), (hover: none), (pointer: coarse) {
+  [data-workflow-studio-shell] .ff-studio-control,
+  [data-workflow-studio-shell] .ff-studio-person-context select,
+  [data-workflow-studio-shell] .ff-studio-canvas-tools > button {
+    min-height: 44px !important;
+  }
+
+  [data-workflow-studio-shell] .ff-studio-control--icon {
+    min-width: 44px !important;
+  }
+}
+
+@media (max-width: 767px) {
+  [data-workflow-studio-shell] .ff-studio-primarybar {
+    align-items: center !important;
+  }
+
+  [data-workflow-studio-shell] .ff-studio-primarybar > .ff-studio-mode-control {
+    width: auto;
+    flex: 1 1 auto;
+    overflow: visible;
+  }
+
+  [data-workflow-studio-shell] .ff-studio-mode-control > button {
+    padding-inline: .625rem !important;
+  }
+
+  [data-workflow-studio-shell] .ff-studio-run-actions {
+    order: 0;
+  }
+
+  [data-workflow-studio-shell] .ff-studio-test-options {
+    order: 1;
+  }
+
+  [data-workflow-studio-shell] .ff-studio-task-navigation {
+    order: 2;
+    border-inline-start: 0;
+    padding-inline: 0;
+  }
+
+  [data-workflow-studio-shell] .ff-studio-selected-task {
+    order: 3;
+    flex-basis: calc(100% - 8rem);
+  }
+
+  [data-workflow-studio-shell] .ff-studio-run-actions .ff-studio-control,
+  [data-workflow-studio-shell] .ff-studio-test-options > summary {
+    padding-inline: .5rem;
+    font-size: .6875rem;
+  }
+
+  [data-workflow-studio-shell] .ff-studio-settings-label {
+    display: none;
+  }
+
+  [data-workflow-studio-shell] .ff-studio-tools-row {
+    gap: .125rem;
+  }
+
+  [data-workflow-studio-shell] .ff-studio-tools-row .ff-studio-control {
+    padding-inline: .5rem;
+    font-size: .6875rem;
+  }
+
+  [data-workflow-studio-shell] .ff-studio-tools-row .ff-studio-disclosure-menu {
+    width: 11rem;
+  }
+
+  [data-workflow-studio-shell] .ff-studio-browser-current {
+    gap: .375rem;
+  }
+
+  [data-workflow-studio-shell] .ff-studio-browser-current .ff-studio-browser-icon {
+    display: none;
+  }
+
+  [data-workflow-studio-shell] .ff-studio-browser-label {
+    gap: .25rem .5rem;
+  }
+
+  [data-workflow-studio-shell] .ff-studio-browser-actions > .ff-studio-control,
+  [data-workflow-studio-shell] .ff-studio-browser-actions summary {
+    padding-inline: .5rem;
+    font-size: .6875rem;
+  }
+
+  [data-workflow-studio-shell] .ff-workflow-live-summary {
+    flex-wrap: wrap;
+    gap: .5rem;
+    padding: .5rem .75rem !important;
   }
 }

@@ -5,6 +5,7 @@ namespace App\Livewire\Admin\Network;
 use App\Models\Workflow;
 use App\Models\WorkflowStep;
 use App\Models\WorkflowStudioSession;
+use App\Services\Workflows\WorkflowLiveTaskPresenter;
 use App\Services\Workflows\WorkflowRouteMapPresenter;
 use App\Services\Workflows\WorkflowRunTaskFeedback;
 use App\Services\Workflows\WorkflowStudioDefinitionMutationPolicy;
@@ -14,6 +15,7 @@ use Closure;
 use DomainException;
 use Illuminate\Support\Collection;
 use Illuminate\Validation\ValidationException;
+use Livewire\Attributes\Locked;
 use Livewire\Attributes\On;
 use Throwable;
 
@@ -34,6 +36,15 @@ class WorkflowStudioTaskEditor extends WorkflowManager
     public string $taskEditRunStatus = 'idle';
 
     public string $taskEditLockMessage = '';
+
+    #[Locked]
+    public ?int $workspaceRunId = null;
+
+    #[Locked]
+    public string $workspaceRunPresentation = 'edit';
+
+    #[Locked]
+    public string $workspaceCursorNode = '';
 
     public function mount(Workflow $workflow, ?int $studioSessionId = null, bool $modalOnly = false, int $initialStepId = 0, string $initialTaskKey = ''): void
     {
@@ -660,6 +671,10 @@ class WorkflowStudioTaskEditor extends WorkflowManager
                     ? WorkflowRouteMapPresenter::MODE_COMBINED
                     : WorkflowRouteMapPresenter::MODE_DEFINITION,
             );
+        $workspaceLiveTask = app(WorkflowLiveTaskPresenter::class)->present($workflow, $activeRun);
+        $this->workspaceCursorNode = $this->workspaceRunPresentation === 'live'
+            ? (string) ($workspaceLiveTask['node'] ?? '')
+            : '';
         $selectedOverviewStep = $steps->firstWhere('id', $this->overviewSelectedStepId);
 
         if (! $selectedOverviewStep) {
@@ -687,6 +702,9 @@ class WorkflowStudioTaskEditor extends WorkflowManager
             'activeRun' => $activeRun,
             'routeMap' => $routeMap,
             'taskFeedback' => app(WorkflowRunTaskFeedback::class)->tasks($workflow, $activeRun),
+            'workspaceRunId' => $this->workspaceRunId,
+            'workspaceRunPresentation' => $this->workspaceRunPresentation,
+            'workspaceLiveTask' => $workspaceLiveTask,
             'modalOnly' => $this->modalOnly,
             'definitionDrawerOpen' => $definitionDrawerOpen,
             'taskEditReadOnly' => $this->taskEditReadOnly,
@@ -795,6 +813,12 @@ class WorkflowStudioTaskEditor extends WorkflowManager
                 'message' => 'Der Workflow wurde nicht gefunden.',
             ];
         $this->taskEditRunStatus = (string) ($activeRun?->status ?? 'idle');
+        $this->workspaceRunId = $activeRun ? (int) $activeRun->getKey() : null;
+        $this->workspaceRunPresentation = match (true) {
+            in_array($this->taskEditRunStatus, ['queued', 'running', 'waiting', 'stop_requested', 'unreachable'], true) => 'live',
+            in_array($this->taskEditRunStatus, ['completed', 'failed', 'timed_out', 'cancelled', 'stopped', 'lost', 'budget_exhausted'], true) => 'result',
+            default => 'edit',
+        };
         $this->taskEditReadOnly = ! $policy['can_edit'];
 
         if (! $this->taskEditReadOnly) {

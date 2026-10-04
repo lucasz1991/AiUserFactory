@@ -29,6 +29,18 @@
     // Definition und Testlauf verwenden denselben dauerhaft montierten Canvas.
     $definitionDrawerOpen = (bool) ($definitionDrawerOpen ?? false);
     $showDefinitionSurface = ! $modalOnly || $definitionDrawerOpen;
+    $definitionReturnFocus = $modalOnly
+        ? '[data-workflow-studio-session="'.$studioSessionId.'"] [data-workflow-historical-run-readonly] [data-workflow-studio-builder-trigger]'
+        : '[data-workflow-studio-builder-trigger]';
+    $workspaceRunId = $workspaceRunId ?? null;
+    $workspaceRunPresentation = (string) ($workspaceRunPresentation ?? 'edit');
+    $livePreviewInstance = $editorInstance.'-live-preview';
+    $liveTaskNode = $workspaceLiveTask ?? null;
+    $liveTaskLabel = match ((string) ($liveTaskNode['status'] ?? '')) {
+        'running' => 'Läuft',
+        'waiting' => 'Wartet',
+        default => 'Nächster Task',
+    };
 @endphp
 
 <div
@@ -38,15 +50,18 @@
     data-workflow-editor-instance="{{ $editorInstance }}"
     data-definition-surface-mode="{{ $definitionSurfaceMode }}"
     data-definition-read-only="{{ $canEdit ? 'false' : 'true' }}"
+    data-workflow-run-presentation="{{ $workspaceRunPresentation }}"
+    data-workflow-run-id="{{ $workspaceRunId }}"
     x-data="{
-        ...workflowRouteSurface({
+        ...workflowLiveWorkspace({
+            runId: @js($workspaceRunId),
+            presentation: @js($workspaceRunPresentation),
+            previewInstance: @js($livePreviewInstance),
+        }, workflowRouteSurface({
             instance: @js($routeMarkerId),
             initialNode: @js($initialRouteNode),
-        }),
+        })),
         editorInstance: @js($editorInstance),
-        desktopSidebar: window.matchMedia('(min-width: 720px)').matches,
-        mobileLibraryOpen: false,
-        libraryExpanded: true,
         focusedTask: @js($initialFocusedTask),
         eventTargetsThisEditor(detail = {}) {
             const source = String(detail?.editorInstance || detail?.instance || detail?.source || '');
@@ -56,37 +71,6 @@
             }
 
             return this.$root.offsetParent !== null && ! this.$root.closest('[inert]');
-        },
-        enterDefinitionWorkbench(detail = {}) {
-            if (! this.eventTargetsThisEditor(detail)) return;
-
-            this.desktopSidebar = window.matchMedia('(min-width: 720px)').matches;
-            this.libraryExpanded = true;
-            this.mobileLibraryOpen = false;
-            this.$nextTick(() => this.queueRouteRefresh());
-        },
-        isLibraryVisible() {
-            return this.desktopSidebar ? this.libraryExpanded : this.mobileLibraryOpen;
-        },
-        setLibraryExpanded(expanded, focusToggle = false) {
-            const nextState = Boolean(expanded);
-            if (this.desktopSidebar) {
-                this.libraryExpanded = nextState;
-            } else {
-                this.mobileLibraryOpen = nextState;
-            }
-            this.$nextTick(() => {
-                this.queueRouteRefresh();
-                if (focusToggle) {
-                    const target = this.isLibraryVisible()
-                        ? this.$refs.libraryCollapseButton
-                        : this.$refs.libraryOpenButton;
-                    target?.focus({ preventScroll: true });
-                }
-            });
-        },
-        toggleLibrary() {
-            this.setLibraryExpanded(! this.isLibraryVisible(), true);
         },
         closeMobileLibrary(detail = {}) {
             if (! this.eventTargetsThisEditor(detail) || this.desktopSidebar || ! this.mobileLibraryOpen) {
@@ -99,6 +83,7 @@
             return window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
         },
         armTaskInsert(stepId) {
+            if (this.isLiveRun()) return;
             this.setLibraryExpanded(true, ! this.desktopSidebar);
             $wire.selectCatalogTarget(stepId);
             this.$nextTick(() => {
@@ -113,12 +98,21 @@
             if (!stepId) return;
 
             if (Number($wire.overviewSelectedStepId) !== stepId || String($wire.overviewSelectedTaskKey || '') !== taskKey) {
-                await $wire.selectOverviewTask(stepId, taskKey);
+                await $wire.selectTaskForTest(stepId, taskKey);
             }
             if (! this.desktopSidebar) this.mobileLibraryOpen = false;
             this.focusedTask = taskKey ? `${stepId}::${taskKey}` : '';
             this.$nextTick(() => {
-                const stepTarget = Array.from(this.$root.querySelectorAll('[data-workflow-step-id]'))
+                if (this.showLivePreview()) {
+                    const preview = this.$root.querySelector('[data-workflow-live-preview]');
+                    const target = Array.from(preview?.querySelectorAll('[data-minimap-node]') || [])
+                        .find((node) => node.dataset.minimapNode === String(detail?.node || '')
+                            || (node.dataset.workflowStepId === String(stepId) && node.dataset.workflowTaskKey === taskKey));
+                    target?.scrollIntoView({ behavior: this.scrollBehavior(), block: 'nearest', inline: 'center' });
+                    target?.focus({ preventScroll: true });
+                    return;
+                }
+                const stepTarget = Array.from(this.$refs.routeSurface?.querySelectorAll('[data-workflow-step-id]') || [])
                     .find((node) => Number(node.dataset.workflowStepId || 0) === stepId);
                 const taskTarget = taskKey
                     ? Array.from(stepTarget?.querySelectorAll('[data-workflow-task-key]') || [])
@@ -171,7 +165,7 @@
         data-studio-definition-drawer
         :open="true"
         close-action="closeDefinitionDrawer"
-        return-focus="[data-workflow-studio-builder-trigger]"
+        :return-focus="$definitionReturnFocus"
         max-width="screen"
         panel-class="h-full"
         body-class="flex flex-col"
@@ -197,6 +191,7 @@
 
     <div
         data-studio-task-layout
+        data-library-expanded="{{ in_array($workspaceRunPresentation, ['live', 'result'], true) ? 'false' : 'true' }}"
         x-bind:data-library-expanded="isLibraryVisible() ? 'true' : 'false'"
         x-on:transitionend.self="if ($event.propertyName === 'grid-template-columns') queueRouteRefresh()"
         x-on:transitioncancel.self="queueRouteRefresh()"
@@ -209,10 +204,10 @@
             data-studio-editor-canvas-panel
             class="order-1 flex h-full min-h-0 w-full min-w-0 max-w-full shrink-0 flex-col overflow-hidden bg-slate-50 md:col-start-1 md:row-start-1"
         >
-            @if(! $canEdit)
+            @if(! $canEdit && $workspaceRunPresentation !== 'live')
                 <p class="shrink-0 border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-900" role="status">{{ $taskEditLockMessageState ?: 'Bearbeitung ist für diesen Lauf gesperrt. Pausiere den interaktiven Test am sicheren Haltepunkt.' }}</p>
             @endif
-            <div class="ff-canvas-toolbar flex shrink-0 flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
+            <div x-cloak x-show.important="! showLivePreview()" class="ff-canvas-toolbar flex shrink-0 flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
                 <div class="flex min-w-0 items-start gap-3">
                     <div class="min-w-0">
                     <div class="flex items-center gap-2">
@@ -225,12 +220,12 @@
                     <p class="sr-only">Auswählen zum Testen · Doppelklick zum Bearbeiten</p>
                     </div>
                 </div>
-                <div class="flex flex-wrap items-center justify-end gap-2">
+                <div class="ff-studio-canvas-tools flex flex-wrap items-center justify-end gap-2">
                     <button
                         type="button"
                         x-ref="libraryOpenButton"
                         x-cloak
-                        x-show.important="! isLibraryVisible()"
+                        x-show.important="! isLibraryVisible() && ! isLiveRun()"
                         x-on:click="toggleLibrary()"
                         x-bind:aria-expanded="isLibraryVisible()"
                         aria-controls="{{ $fieldIdPrefix }}-studio-task-catalog-panel"
@@ -274,17 +269,43 @@
 
 
 
-            @if(! $canEdit)
-                <div class="flex shrink-0 items-center justify-between gap-3 border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-900">
-                    <span><strong>Bearbeitung gesperrt:</strong> {{ $taskEditLockMessageState ?: 'Der Lauf ist '.($runStatus ?: 'aktiv').'. Pausiere ihn, damit Browserzustand und Task-Reihenfolge konsistent bleiben.' }}</span>
-                </div>
-            @endif
             @error('studioBuilder')
                 <div class="shrink-0 border-b border-rose-200 bg-rose-50 px-4 py-2.5 text-xs font-semibold text-rose-700">{{ $message }}</div>
             @enderror
 
+            <div x-cloak x-show.important="showLivePreview()" class="ff-workflow-live-summary flex shrink-0 items-center justify-between gap-3 border-b border-slate-200 px-3 py-2" data-workflow-live-summary>
+                <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                    <span class="shrink-0 font-semibold text-slate-700">Lauf #{{ $workspaceRunId }}</span>
+                    <x-workflows.status-badge :status="$runStatus ?: 'idle'" />
+                    @if($liveTaskNode && $workspaceRunPresentation === 'live')
+                        <span class="min-w-0 truncate text-slate-600" data-workflow-live-task-node="{{ $liveTaskNode['node'] }}">{{ $liveTaskLabel }}: <strong class="font-semibold text-slate-900">{{ $liveTaskNode['title'] }}</strong></span>
+                    @endif
+                </div>
+                <button type="button" x-cloak x-show.important="! isLiveRun()" x-on:click="editRunResult()" class="inline-flex min-h-11 shrink-0 items-center rounded-lg px-3 text-xs font-semibold text-slate-700 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500" data-workflow-live-edit-action>Bearbeiten</button>
+            </div>
+
+            <div x-cloak x-show.important="showLivePreview()" class="ff-workflow-live-preview min-h-0 flex-1 overflow-auto overscroll-contain p-3" data-workflow-live-preview>
+                <x-workflows.minimap
+                    :workflow="$workflow"
+                    :workflow-run="$activeRun"
+                    :route-map="$routeMap"
+                    :selected-step-id="$overviewSelectedStepId ?: null"
+                    :selected-task-key="$overviewSelectedTaskKey ?: null"
+                    :show-header="false"
+                    :selectable-tasks="true"
+                    :zoomable="true"
+                    :live-flow="true"
+                    :runtime-task="$workspaceLiveTask ?? null"
+                    initial-zoom="overview"
+                    :instance="$livePreviewInstance"
+                    :source="$editorInstance"
+                />
+            </div>
+
             <div
                 x-ref="routeSurface"
+                x-cloak
+                x-show.important="! showLivePreview()"
                 data-studio-workflow-canvas
                 data-workflow-route-surface
                 class="ff-canvas-grid relative min-h-0 flex-1 overflow-auto overscroll-contain"
@@ -361,6 +382,8 @@
 
         <aside
             id="{{ $fieldIdPrefix }}-studio-task-catalog-panel"
+            x-cloak
+            x-show.important="isLibraryVisible()"
             x-trap.noscroll="! desktopSidebar && mobileLibraryOpen"
             x-bind:inert="! isLibraryVisible()"
             x-bind:aria-hidden="(! isLibraryVisible()).toString()"

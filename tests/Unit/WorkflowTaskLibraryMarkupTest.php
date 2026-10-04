@@ -10,6 +10,7 @@ class WorkflowTaskLibraryMarkupTest extends TestCase
     {
         $root = dirname(__DIR__, 2);
         $source = file_get_contents($root.'/resources/views/livewire/admin/network/partials/workflow-definition-editor.blade.php');
+        $workspace = file_get_contents($root.'/resources/js/components/workflow-live-workspace.js');
         $studioWrapper = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-studio-task-editor.blade.php');
         $studioCanvas = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-studio/browser.blade.php');
         $manager = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-manager.blade.php');
@@ -17,7 +18,7 @@ class WorkflowTaskLibraryMarkupTest extends TestCase
         $this->assertStringContainsString('data-workflow-definition-editor', $source);
         $this->assertStringNotContainsString('mobilePanel', $source);
         $this->assertStringNotContainsString('data-studio-mobile-switch', $source);
-        $this->assertStringContainsString('mobileLibraryOpen: false', $source);
+        $this->assertStringContainsString('mobileLibraryOpen: false', $workspace);
         $this->assertStringContainsString('isLibraryVisible()', $source);
         $this->assertStringContainsString('data-studio-library-backdrop', $source);
         $this->assertStringContainsString('x-on:workflow-library-close-requested.window="closeMobileLibrary()"', $source);
@@ -27,7 +28,8 @@ class WorkflowTaskLibraryMarkupTest extends TestCase
         $this->assertStringContainsString('$definitionSurfaceMode = (string)', $source);
         $this->assertStringContainsString('data-definition-surface-mode="{{ $definitionSurfaceMode }}"', $source);
         $this->assertStringNotContainsString('data-studio-editor-overview', $source);
-        $this->assertStringNotContainsString('<x-workflows.minimap', $source);
+        $this->assertSame(1, substr_count($source, '<x-workflows.minimap'));
+        $this->assertStringContainsString('x-show.important="showLivePreview()"', $source);
         $this->assertStringNotContainsString('overviewOpen', $source);
         $this->assertStringNotContainsString('x-collapse.duration.180ms', $source);
         $this->assertStringContainsString("window.matchMedia('(pointer: fine)').matches", $source);
@@ -46,6 +48,7 @@ class WorkflowTaskLibraryMarkupTest extends TestCase
     {
         $root = dirname(__DIR__, 2);
         $source = file_get_contents($root.'/resources/views/livewire/admin/network/partials/workflow-definition-editor.blade.php');
+        $workspace = file_get_contents($root.'/resources/js/components/workflow-live-workspace.js');
         $styles = file_get_contents($root.'/resources/css/workflow-experience.css');
         $manager = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-manager.blade.php');
 
@@ -56,7 +59,7 @@ class WorkflowTaskLibraryMarkupTest extends TestCase
         $this->assertStringContainsString('md:col-start-2 md:row-start-1', $source);
         $this->assertStringContainsString('class="order-1 flex h-full min-h-0', $source);
         $this->assertStringContainsString('md:col-start-1 md:row-start-1', $source);
-        $this->assertStringContainsString("desktopSidebar: window.matchMedia('(min-width: 720px)').matches", $source);
+        $this->assertStringContainsString("this.desktopSidebar = window.matchMedia('(min-width: 720px)').matches", $workspace);
         $this->assertStringContainsString('x-bind:inert="! isLibraryVisible()"', $source);
         $this->assertStringContainsString('x-trap.noscroll="! desktopSidebar && mobileLibraryOpen"', $source);
         $this->assertStringContainsString('x-bind:aria-hidden="(! isLibraryVisible()).toString()"', $source);
@@ -81,9 +84,9 @@ class WorkflowTaskLibraryMarkupTest extends TestCase
         $this->assertStringContainsString('transition: none !important;', $styles);
         $this->assertStringContainsString('@media (max-width: 719px)', $styles);
         $this->assertStringNotContainsString('@media (max-width: 1279px)', $styles);
-        $this->assertStringContainsString('libraryExpanded: true', $source);
-        $this->assertStringContainsString('enterDefinitionWorkbench(detail = {})', $source);
-        $this->assertStringContainsString('this.libraryExpanded = true;', $source);
+        $this->assertStringContainsString('libraryExpanded: true', $workspace);
+        $this->assertStringContainsString('enterDefinitionWorkbench(detail = {})', $workspace);
+        $this->assertStringContainsString('this.libraryExpanded = true;', $workspace);
         $this->assertStringContainsString('this.mobileLibraryOpen = false;', $source);
         $this->assertStringContainsString('x-on:workflow-definition-workbench-entered.window', $source);
         $this->assertStringNotContainsString("window.localStorage.getItem('followflow.workflow-library-expanded')", $source);
@@ -93,8 +96,8 @@ class WorkflowTaskLibraryMarkupTest extends TestCase
         $this->assertStringContainsString('Bibliothek öffnen', $source);
         $this->assertStringContainsString('x-ref="libraryCollapseButton"', $source);
         $this->assertStringContainsString('x-ref="libraryOpenButton"', $source);
-        $this->assertStringContainsString('target?.focus({ preventScroll: true });', $source);
-        $this->assertStringContainsString('x-show.important="! isLibraryVisible()"', $source);
+        $this->assertStringContainsString('target?.focus({ preventScroll: true });', $workspace);
+        $this->assertStringContainsString('x-show.important="! isLibraryVisible() && ! isLiveRun()"', $source);
         $this->assertStringNotContainsString('xl:grid-cols-[72px_minmax(0,1fr)]', $source);
         $this->assertStringNotContainsString('[writing-mode:vertical-rl]', $source);
         $this->assertStringNotContainsString('mobilePanel', $source);

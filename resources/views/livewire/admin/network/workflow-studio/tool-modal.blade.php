@@ -11,6 +11,12 @@
         'artifacts' => ['Debug-Artefakte', 'Screenshots und DOM-Snapshots des Laufs'],
     ];
     [$toolTitle, $toolDescription] = $toolMeta[$activeToolModal] ?? ['Werkzeug', 'Workflow-Diagnose'];
+    $toolVisibleTrigger = match ($activeToolModal) {
+        'browser' => '[data-studio-browser-preview-trigger]',
+        'data', 'steps', 'tasks', 'variables' => '[data-studio-tool-group="data"] > summary',
+        default => '[data-studio-tool-group="diagnostics"] > summary',
+    };
+    $toolReturnFocus = '[data-workflow-studio-session="'.$session->id.'"] '.$toolVisibleTrigger;
 @endphp
 
 <x-ui.modal
@@ -18,7 +24,7 @@
     wire:key="workflow-studio-tool-modal-{{ $activeToolModal }}"
     :open="true"
     close-action="closeToolModal"
-    :return-focus="'[data-workflow-studio-shell] [data-studio-tool-trigger='.$activeToolModal.']'"
+    :return-focus="$toolReturnFocus"
     :max-width="$activeToolModal === 'browser' ? 'screen' : '6xl'"
 >
     <x-slot name="title">

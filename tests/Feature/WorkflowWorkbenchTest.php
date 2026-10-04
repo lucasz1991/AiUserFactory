@@ -429,7 +429,12 @@ class WorkflowWorkbenchTest extends TestCase
         $this->assertStringContainsString('data-workflow-edit-cta', $manager);
         $this->assertMatchesRegularExpression('/data-workflow-edit-cta[\s\S]{0,500}min-h-11/', $manager);
 
-        $this->assertStringNotContainsString('<x-workflows.minimap', $definition);
+        // The editor remains mounted; its read-only minimap uses the same run
+        // and route evidence when automatic live presentation is enabled.
+        $this->assertSame(1, substr_count($definition, '<x-workflows.minimap'));
+        $this->assertStringContainsString(':workflow-run="$activeRun"', $definition);
+        $this->assertStringContainsString(':route-map="$routeMap"', $definition);
+        $this->assertStringContainsString('data-workflow-live-preview', $definition);
         $this->assertStringNotContainsString('overviewOpen', $definition);
         $this->assertStringNotContainsString('x-collapse', $definition);
         $this->assertStringContainsString('data-studio-workflow-canvas', $definition);
