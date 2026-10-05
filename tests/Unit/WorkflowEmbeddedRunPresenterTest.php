@@ -368,6 +368,20 @@ class WorkflowEmbeddedRunPresenterTest extends TestCase
         $this->assertSame('running', $feedback[40]['deep-task']['status']);
     }
 
+    public function test_browser_caption_keeps_deepest_lineage_when_an_ancestor_reuses_the_window(): void
+    {
+        [$workflow, $run] = $this->fixture();
+        $snapshot = $run->stepRuns[0]->result_json;
+        $consumer = $snapshot['tasks'][6];
+        $consumer['browser_window'] = 'mail-leaf-popup';
+        $snapshot['tasks'][] = $consumer;
+        $run->stepRuns[0]->result_json = $snapshot;
+        $run->setRelation('artifacts', collect());
+        $cards = (new ReflectionMethod(WorkflowStudio::class, 'browserWindowCards'))->invoke(new WorkflowStudio, $workflow, $run);
+        $popup = collect($cards)->keyBy('name')['mail-leaf-popup'];
+        $this->assertSame('Frozen outer › Frozen inner › Frozen deep', $popup['workflow_path']);
+    }
+
     private function fixture(): array
     {
         $workflow = new Workflow(['name' => 'Root']);

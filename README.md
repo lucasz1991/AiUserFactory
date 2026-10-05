@@ -1506,6 +1506,24 @@ Methodenaufrufe. Task-Auswahl aus der eigenen Live-Miniinstanz wird akzeptiert;
 fremde Editor-/Studioinstanzen bleiben ausgeschlossen. Der aktuelle UI-Auftrag
 und die abschliessende Browserabnahme konzentrieren sich auf Desktop.
 
+Eingebettete Workflows werden rekursiv in einem gemeinsamen Browserlauf
+ausgefuehrt. Ihre Fenster erscheinen mit vollstaendigen physischen Namen
+(beispielsweise `mail-leaf-popup`) in derselben Browserzeile und in der
+Fensterauswahl des Task-Editors; uebergeordnete Tasks koennen sie exakt
+referenzieren. Implizite Wiederholungen sind getrennt, explizit gleiche Aliase
+teilen bewusst ein Fenster. Mehrdeutige Fensterzuordnungen werden vor dem
+Start abgewiesen.
+
+Unterhalb der Hauptkarte zeigt der Testlauf fuer jede Include-Instanz eine
+eigene kompakte Minimap mit Hierarchie, aktuellen Tasks und echten Laufwegen.
+Die Darstellung verwendet eingefrorene Konfigurationen des eigenen Runs,
+nicht spaeter geaenderte Unter-Workflow-Definitionen. Laufende Tasks bleiben
+gelb, erfolgreiche gruen, Fehler rot; ungetretene Verbindungen bleiben grau.
+Groessere Unterkarten sind mit Maus und Tastatur intern scrollbar. Alte Runs
+ohne gespeicherte Include-Pfade erhalten keine nachtraeglich erfundene
+Unterkarte. Laufende Tests vor einem Runtime-Rollout regulaer beenden und
+danach neue Tests starten; keine neuen ENV-Eintraege oder Migration erforderlich.
+
 Das Studio kennt zwei Modi:
 
 - `interactive`: Der Benutzer kann starten, pausieren, fortsetzen, einen

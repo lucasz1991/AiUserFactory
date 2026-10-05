@@ -53,6 +53,8 @@ function execute(tasks, options = {}) {
     tasks: tasks.map((item) => ({ node_script: probePath, ...item })),
     testBrowser: {
       pages: options.pages || [],
+      blockEvaluate: options.blockEvaluate === true,
+      screenshotDelayMs: options.screenshotDelayMs || 0,
       browserLogPath,
       capturedStartPath,
     },
@@ -60,7 +62,7 @@ function execute(tasks, options = {}) {
 
   fs.writeFileSync(probePath, `'use strict';
 const fs = require('node:fs');
-const { captureTaskPreview } = require(${JSON.stringify(previewPath)});
+const { captureTaskPreview, startTaskPreview } = require(${JSON.stringify(previewPath)});
 module.exports = { async run(context) {
   if (context.input.forceError) throw new Error('Synthetic failed task');
   const status = JSON.parse(fs.readFileSync(${JSON.stringify(statusPath)}, 'utf8'));
@@ -69,10 +71,13 @@ module.exports = { async run(context) {
     await context.browserWindows.find((entry) => entry.key === context.input.closeSibling)?.page.close();
   }
   if (context.input.url) await context.page.goto(context.input.url);
+  if (context.input.startTaskPreview) startTaskPreview(context);
   return captureTaskPreview(context, {
     ok: true, status: 'success',
     boundTarget: context.page.target()._targetId,
     observedWindows: context.browserWindows.map((entry) => ({ key: entry.key, targetId: entry.page.target()._targetId })),
+    runnerPreviewActive: context.__workflowRunnerPreviewActive === true,
+    duplicateTaskPreviewActive: Boolean(context.__workflowPreviewTimer),
   }, true);
 }};
 `);
@@ -98,10 +103,16 @@ function page(id, url = 'about:blank') {
     url: () => url, title: async () => 'Fixture ' + id,
     target: () => ({ _targetId: id }), isClosed: () => closed,
     waitForSelector: async () => null,
-    evaluate: async () => 'complete',
+    evaluate: async () => {
+      if (config.testBrowser.blockEvaluate) throw new Error('DOM probe must not be used as window identity');
+      return 'complete';
+    },
     emulateTimezone: async () => {},
     goto: async (next) => { url = next; },
-    screenshot: async (options) => { fs.writeFileSync(options.path, id); },
+    screenshot: async (options) => {
+      if (config.testBrowser.screenshotDelayMs) await new Promise((resolve) => setTimeout(resolve, config.testBrowser.screenshotDelayMs));
+      fs.writeFileSync(options.path, id);
+    },
     close: async () => { closed = true; log.closedPages.push(id); flush(); },
   };
 }
@@ -160,6 +171,34 @@ const existingWindows = [
   { key: 'sibling', targetId: 'sibling-target', url: 'https://fixture.test/sibling' },
 ];
 const existingPages = existingWindows.map((entry) => ({ id: entry.targetId, url: entry.url }));
+
+test('the actual runner owns one preview timer and task modules do not start a duplicate', () => {
+  const { result } = execute([task('task-preview', 'main', { startTaskPreview: true })]);
+  assert.equal(result.ok, true);
+  assert.equal(result.tasks[0].runnerPreviewActive, true);
+  assert.equal(result.tasks[0].duplicateTaskPreviewActive, false);
+});
+
+test('registered exact windows are reused without an unrelated DOM readyState probe', () => {
+  const { result, log } = execute([
+    task('root-open', 'main'),
+    task('child-open', 'child'),
+    task('root-reuses-child', 'child'),
+  ], { blockEvaluate: true });
+  assert.equal(result.ok, true);
+  assert.equal(log.newPages, 2);
+  assert.equal(result.tasks[1].boundTarget, result.tasks[2].boundTarget);
+});
+
+test('a slow optional screenshot does not hold business task results or flip the final lifecycle state', () => {
+  const { result, status, log } = execute([task('root-open', 'main')], { screenshotDelayMs: 1900 });
+  assert.equal(result.ok, true);
+  assert.equal(result.tasks[0].status, 'success');
+  assert.equal(result.tasks[0].browserWindows[0].targetId, 'created-1');
+  assert.equal(result.tasks[0].browserWindows[0].capturedAt, undefined);
+  assert.equal(status.state, 'completed');
+  assert.equal(log.statuses.at(-1).state, 'completed');
+});
 
 test('resumed ancestor captures every existing child, grandchild and sibling without opening replacement tabs', () => {
   const { result, log, screenshots } = execute([task('root-task', 'main')], { windows: existingWindows, pages: existingPages });

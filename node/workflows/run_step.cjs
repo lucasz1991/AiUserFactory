@@ -1188,22 +1188,6 @@ async function existingPageForWindow(currentBrowser, windowName = 'main', knownP
     || null;
 }
 
-async function pageIsUsable(candidatePage) {
-  if (
-    !candidatePage
-    || typeof candidatePage.screenshot !== 'function'
-    || (candidatePage.isClosed && candidatePage.isClosed())
-  ) {
-    return false;
-  }
-
-  if (typeof candidatePage.evaluate !== 'function') {
-    return true;
-  }
-
-  return candidatePage.evaluate(() => document.readyState).then(() => true).catch(() => false);
-}
-
 async function restoreBrowserWindowState(context, nextPage, windowName = 'main') {
   const state = workflowBrowserWindowState(windowName);
   const url = String(state?.url || '').trim();
@@ -2340,6 +2324,12 @@ function updateKnownBrowserWindows(context, captures = []) {
 
   for (const capture of captures) {
     const name = normalizeBrowserWindowName(capture?.key || capture?.name);
+    const registered = browserWindowsByName.get(name);
+    const capturedTargetId = String(capture?.targetId || '').trim();
+
+    if (registered?.page && capturedTargetId !== '' && capturedTargetId !== pageTargetId(registered.page)) {
+      continue;
+    }
 
     if (!closedBrowserWindowNames.has(name)) {
       const entry = { ...(knownWindows.get(name) || {}), ...capture, stale: capture.stale === true };
@@ -2440,14 +2430,14 @@ async function ensurePage(context, windowName = 'main', label = '') {
     && typeof registered.page.screenshot === 'function'
     && (!registered.page.isClosed || !registered.page.isClosed())
   ) {
-    if (await pageIsUsable(registered.page)) {
-      return registerBrowserWindow(context, registered.page, normalizedName, registered.label || label);
+    if (browserDisconnected || (typeof browser?.isConnected === 'function' && !browser.isConnected())) {
+      throw new Error(`Workflow-Browserfenster "${normalizedName}" ist nicht mehr verbunden. Es wird kein Ersatzfenster geoeffnet.`);
     }
 
-    browserWindowsByName.delete(normalizedName);
-    pushEvent('workflow-browser-window-stale', 'Gespeicherter Page-Handle ist nicht mehr nutzbar; Browserfenster wird neu zugeordnet.', {
-      browserWindow: normalizedName,
-    });
+    // The registered physical handle already establishes window identity.
+    // A readyState evaluate can hang independently and is not a liveness or
+    // identity proof; actual browser tasks perform their own DOM/navigation.
+    return registerBrowserWindow(context, registered.page, normalizedName, registered.label || label);
   }
 
   const currentBrowser = await loadBrowser();
@@ -2545,9 +2535,14 @@ function startPreviewLoop(context) {
 
   const intervalMs = Math.max(1000, Number(runtime.livePreviewIntervalMs || 3000));
 
+  context.__workflowRunnerPreviewActive = true;
   previewTimer = setInterval(async () => {
     try {
       const preview = await captureTaskPreview(context, {}, false);
+
+      if (context.__workflowRunnerPreviewActive !== true || shutdownInProgress || fatalErrorHandled) {
+        return;
+      }
 
       if (Array.isArray(preview.browserWindows)) {
         updateKnownBrowserWindows(context, preview.browserWindows);
@@ -2569,6 +2564,7 @@ function stopPreviewLoop(context) {
     previewTimer = null;
   }
 
+  context.__workflowRunnerPreviewActive = false;
   stopTaskPreview(context);
 }
 

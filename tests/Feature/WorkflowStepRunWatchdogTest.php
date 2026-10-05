@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Jobs\MonitorWorkflowStepRunJob;
+use App\Models\ManagedProcess;
 use App\Models\Workflow;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowStep;
@@ -35,7 +36,9 @@ class WorkflowStepRunWatchdogTest extends TestCase
     public function test_dead_process_with_stale_heartbeat_fails_the_step_run_with_a_single_watchdog_event(): void
     {
         Queue::fake();
-        Process::fake(['*' => Process::result('', '', 1)]);
+        Process::fake(['*' => PHP_OS_FAMILY === 'Windows'
+            ? Process::result('INFO: No tasks are running which match the specified criteria.', '', 0)
+            : Process::result('', '', 1)]);
         [$workflow, $step] = $this->workflow();
         $studio = app(WorkflowStudioSessionService::class)->open($workflow);
         [$run, $stepRun] = $this->waitingWorkflowTaskRun($workflow, $step);
@@ -108,6 +111,71 @@ class WorkflowStepRunWatchdogTest extends TestCase
             MonitorWorkflowStepRunJob::class,
             fn (MonitorWorkflowStepRunJob $job): bool => $job->workflowStepRunId === $stepRun->id,
         );
+    }
+
+    public function test_windows_native_probe_requires_the_exact_pid_csv_row_without_cmd_quoting(): void
+    {
+        Process::fake(['*' => Process::result('"node.exe","4242","Console","1","20.000 K"', '', 0)]);
+
+        $this->assertTrue(WorkflowTaskRunner::windowsProcessIsRunning(4242));
+        Process::assertRan(fn ($process): bool => $process->command === ['tasklist.exe', '/FI', 'PID eq 4242', '/FO', 'CSV', '/NH']);
+    }
+
+    public function test_windows_native_probe_does_not_claim_another_pid_is_the_requested_runner(): void
+    {
+        Process::fake(['*' => Process::result('"node.exe","14242","Console","1","20.000 K"', '', 0)]);
+
+        $this->assertNull(WorkflowTaskRunner::windowsProcessIsRunning(4242));
+    }
+
+    public function test_windows_native_probe_only_treats_successful_no_match_as_process_exit(): void
+    {
+        Process::fake(['*' => Process::result('INFORMATION: Es werden keine Aufgaben mit den angegebenen Kriterien ausgefuehrt.', '', 0)]);
+        $this->assertFalse(WorkflowTaskRunner::windowsProcessIsRunning(4242));
+        Process::fake(['*' => Process::result('', 'FEHLER: Argument/Option ungueltig - "eq".', 1)]);
+        $this->assertNull(WorkflowTaskRunner::windowsProcessIsRunning(4242));
+        Process::fake(['*' => Process::result('unexpected output', '', 0)]);
+        $this->assertNull(WorkflowTaskRunner::windowsProcessIsRunning(4242));
+    }
+
+    public function test_stale_inventory_exit_cannot_override_current_live_windows_pid(): void
+    {
+        if (PHP_OS_FAMILY !== 'Windows') {
+            $this->markTestSkipped('Windows PID-observation regression.');
+        }
+        Queue::fake();
+        Process::fake(['*' => Process::result('"node.exe","4242","Console","1","20.000 K"', '', 0)]);
+        [$workflow, $step] = $this->workflow();
+        [$run, $stepRun] = $this->waitingWorkflowTaskRun($workflow, $step);
+        ManagedProcess::create([
+            'pid' => 4242, 'run_id' => $stepRun->external_run_id, 'run_type' => 'workflow-task',
+            'status' => 'exited', 'is_root' => true, 'is_managed' => true, 'last_seen_at' => now()->subSeconds(240),
+        ]);
+        $this->mockTaskRunnerWithStatus($this->externalStatus(now()->subSeconds(240)));
+
+        app(WorkflowExecutionService::class)->monitorStepRun($stepRun->id);
+
+        $this->assertSame('waiting', $stepRun->fresh()->status);
+        $this->assertSame('running', $run->fresh()->status);
+        $this->assertCount(1, collect(data_get($run->fresh()->context_json, 'watchdog_events', []))->where('key', 'run.heartbeat_stale'));
+    }
+
+    public function test_windows_probe_failure_keeps_a_stale_runner_and_records_warning(): void
+    {
+        if (PHP_OS_FAMILY !== 'Windows') {
+            $this->markTestSkipped('Windows PID-observation regression.');
+        }
+        Queue::fake();
+        Process::fake(['*' => Process::result('', 'tasklist failed', 1)]);
+        [$workflow, $step] = $this->workflow();
+        [$run, $stepRun] = $this->waitingWorkflowTaskRun($workflow, $step);
+        $this->mockTaskRunnerWithStatus($this->externalStatus(now()->subSeconds(240)));
+
+        app(WorkflowExecutionService::class)->monitorStepRun($stepRun->id);
+
+        $this->assertSame('waiting', $stepRun->fresh()->status);
+        $this->assertCount(1, collect(data_get($run->fresh()->context_json, 'watchdog_events', []))->where('key', 'run.heartbeat_stale'));
+        $this->assertCount(0, collect(data_get($run->fresh()->context_json, 'watchdog_events', []))->where('key', 'run.watchdog_stalled'));
     }
 
     public function test_copilot_session_runs_are_excluded_from_the_watchdog(): void

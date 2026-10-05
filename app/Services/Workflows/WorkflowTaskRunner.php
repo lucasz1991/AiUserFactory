@@ -204,6 +204,7 @@ class WorkflowTaskRunner
         }
 
         $initialBrowserWindows = $this->browserWindowsFromRuntimeContext($runtimeContext);
+        $configuredTasks = $this->configuredTasks($tasks);
 
         $this->writeJsonFile($statusPath, [
             'runId' => $runId,
@@ -217,7 +218,8 @@ class WorkflowTaskRunner
             'livePreviewEnabled' => $livePreviewEnabled,
             'livePreviewIntervalSeconds' => $livePreviewIntervalSeconds,
             'livePreviewPollIntervalSeconds' => $livePreviewIntervalSeconds,
-            'tasks' => $this->configuredTasks($tasks),
+            'tasks' => $configuredTasks,
+            'configuredTasks' => $configuredTasks,
             'events' => [],
             'browserWindows' => $initialBrowserWindows,
             'at' => now()->toIso8601String(),
@@ -243,7 +245,8 @@ class WorkflowTaskRunner
                 'state' => 'failed',
                 'stage' => 'process-start-failed',
                 'message' => $exception->getMessage(),
-                'tasks' => $this->configuredTasks($tasks),
+                'tasks' => $configuredTasks,
+                'configuredTasks' => $configuredTasks,
                 'events' => [],
                 'browserWindows' => $initialBrowserWindows,
                 'at' => now()->toIso8601String(),
@@ -2056,12 +2059,15 @@ class WorkflowTaskRunner
             try {
                 app(ManagedProcessInventory::class)->sync();
 
-                return ManagedProcess::query()
+                $knownRunning = ManagedProcess::query()
                     ->where('run_id', $runId)
                     ->where('run_type', 'workflow-task')
                     ->where('is_root', true)
                     ->whereIn('status', ['running', 'terminate_requested', 'kill_requested'])
                     ->exists();
+                if ($knownRunning) {
+                    return true;
+                }
             } catch (\Throwable) {
                 // Fall through to the lightweight PID check.
             }
@@ -2072,16 +2078,41 @@ class WorkflowTaskRunner
         }
 
         if (PHP_OS_FAMILY === 'Windows') {
-            $result = Process::timeout(5)->run([
-                'cmd.exe',
-                '/C',
-                'tasklist /FI "PID eq '.$pid.'" | findstr /R "\\<'.$pid.'\\>"',
-            ]);
-
-            return $result->successful();
+            return self::windowsProcessIsRunning($pid) ?? true;
         }
 
         return Process::timeout(5)->run(['kill', '-0', (string) $pid])->successful();
+    }
+
+    /** A failed observation is unknown, never proof that a live runner died. */
+    public static function windowsProcessIsRunning(int $pid): ?bool
+    {
+        if ($pid <= 1) {
+            return null;
+        }
+        try {
+            $result = Process::timeout(5)->run(['tasklist.exe', '/FI', 'PID eq '.$pid, '/FO', 'CSV', '/NH']);
+            if (! $result->successful() || trim($result->errorOutput()) !== '') {
+                return null;
+            }
+            $output = trim($result->output());
+            foreach (preg_split('/\R/', $output) ?: [] as $line) {
+                $columns = str_getcsv($line, ',', '"', '');
+                if (count($columns) >= 5 && ctype_digit(trim((string) $columns[1]))
+                    && (int) $columns[1] === $pid) {
+                    return true;
+                }
+            }
+            // Native tasklist uses INFO (English) / INFORMATION (German)
+            // for a successful exact-PID filter with no matching process.
+            if (preg_match('/^(?:INFO|INFORMATION):\s/i', $output) === 1) {
+                return false;
+            }
+
+            return null;
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     protected function powershellQuote(string $value): string

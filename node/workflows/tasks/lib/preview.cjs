@@ -11,7 +11,10 @@ const {
 } = require('./cursor.cjs');
 
 const pageKeys = new WeakMap();
+const pageCaptures = new WeakMap();
+const contextCaptures = new WeakMap();
 let nextPageKey = 1;
+const OPTIONAL_PREVIEW_WAIT_MS = 1500;
 
 const OBSERVABILITY_LEVELS = Object.freeze({
   off: 0,
@@ -316,6 +319,8 @@ function normalizeWindows(context = {}) {
         key,
         page,
         label,
+        targetId: pageTargetId(page),
+        url: typeof page.url === 'function' ? String(page.url() || '') : '',
         livePreviewPath: windowPath(context, seen.size - 1, config),
         livePreviewRelativePath: windowRelativePath(context, seen.size - 1, config),
       };
@@ -559,7 +564,7 @@ async function captureDebugDom(windowConfig, context = {}, capture = {}) {
   };
 }
 
-async function captureWindow(windowConfig, context = {}, force = false) {
+async function captureWindowContents(windowConfig, context = {}, force = false) {
   if (!enabled(context) || !windowConfig.livePreviewPath) {
     return null;
   }
@@ -617,7 +622,26 @@ async function captureWindow(windowConfig, context = {}, force = false) {
   };
 }
 
-async function captureTaskPreview(context = {}, result = {}, force = true) {
+async function captureWindow(windowConfig, context = {}, force = false) {
+  const previous = pageCaptures.get(windowConfig.page);
+  const pending = Promise.resolve(previous).catch(() => {}).then(
+    () => captureWindowContents(windowConfig, context, force),
+  );
+
+  // A page may be shared by two task contexts. Serialize the complete capture,
+  // including title/DOM metadata, so one caller cannot publish another's shot.
+  pageCaptures.set(windowConfig.page, pending);
+
+  try {
+    return await pending;
+  } finally {
+    if (pageCaptures.get(windowConfig.page) === pending) {
+      pageCaptures.delete(windowConfig.page);
+    }
+  }
+}
+
+async function capturePreviewWindows(context, force) {
   const windows = normalizeWindows(context);
   const captures = [];
 
@@ -650,16 +674,150 @@ async function captureTaskPreview(context = {}, result = {}, force = true) {
     }
   }
 
-  if (captures.length === 0) {
-    return result;
-  }
+  return captures;
+}
 
-  return {
+function startCaptureBatch(context, state, force) {
+  const pending = Promise.resolve().then(() => capturePreviewWindows(context, force));
+  state.inFlight = pending;
+
+  const release = () => {
+    if (state.inFlight === pending) {
+      state.inFlight = null;
+    }
+
+    if (!state.inFlight && !state.forcedFollowup) {
+      state.budgetExpired = false;
+    }
+  };
+
+  pending.then((captures) => {
+    state.readyCapture = { pending, captures };
+    release();
+  }, release);
+
+  return pending;
+}
+
+function currentPreviewCaptures(context, captures) {
+  const windows = new Map(normalizeWindows(context).map((windowConfig) => [windowConfig.key, windowConfig]));
+
+  return captures.filter((capture) => {
+    const windowConfig = windows.get(capture.key);
+
+    // A delayed shot must never restore a closed/replaced physical window, nor
+    // label a previous navigation's pixels as the current browser destination.
+    return windowConfig
+      && capture.targetId === windowConfig.targetId
+      && (capture.stale === true || !capture.url || capture.url === windowConfig.url);
+  });
+}
+
+function previewResult(context, result, captures) {
+  const currentCaptures = currentPreviewCaptures(context, captures);
+
+  return currentCaptures.length === 0 ? result : {
     ...result,
-    browserWindows: captures,
+    browserWindows: currentCaptures,
     livePreviewIntervalMs: intervalMs(context),
     livePreviewIntervalSeconds: Math.ceil(intervalMs(context) / 1000),
   };
+}
+
+function waitForOptionalPreview(pending, state) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      // This is only a caller budget. Do not release the real context/page
+      // capture guards: Puppeteer may still be using its screenshot mutex.
+      state.budgetExpired = true;
+      resolve(null);
+    }, OPTIONAL_PREVIEW_WAIT_MS);
+
+    pending.then((captures) => {
+      clearTimeout(timer);
+      resolve(captures);
+    }, (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
+}
+
+async function captureTaskPreview(context = {}, result = {}, force = true) {
+  if (!enabled(context)) {
+    return result;
+  }
+
+  let state = contextCaptures.get(context);
+
+  if (!state) {
+    state = { inFlight: null, forcedFollowup: null, readyCapture: null, budgetExpired: false };
+    contextCaptures.set(context, state);
+  }
+
+  const optionalPreview = observabilityLevel(context) === 'preview'
+    && context.__workflowRunnerPreviewActive === true;
+
+  // A previously budget-limited physical capture can be published by the next
+  // runner tick once it really completes, without starting another screenshot.
+  if (optionalPreview && !force && state.readyCapture) {
+    const { captures } = state.readyCapture;
+    state.readyCapture = null;
+
+    return previewResult(context, result, captures);
+  }
+
+  if (optionalPreview && state.budgetExpired && (state.inFlight || state.forcedFollowup)) {
+    return result;
+  }
+
+  let pending;
+
+  if (state.forcedFollowup || state.inFlight) {
+    // Background ticks must not accumulate behind a slow Puppeteer screenshot.
+    // Keep the last published status unchanged until a real new capture exists.
+    if (!force) {
+      return result;
+    }
+
+    if (!state.forcedFollowup) {
+      const followup = state.inFlight.catch(() => {}).then(
+        () => optionalPreview && context.__workflowRunnerPreviewActive !== true
+          ? []
+          : startCaptureBatch(context, state, true),
+      );
+      state.forcedFollowup = followup;
+      const release = () => {
+        if (state.forcedFollowup === followup) {
+          state.forcedFollowup = null;
+        }
+
+        if (!state.inFlight && !state.forcedFollowup) {
+          state.budgetExpired = false;
+        }
+      };
+
+      followup.then(release, release);
+    }
+
+    pending = state.forcedFollowup;
+  } else {
+    pending = startCaptureBatch(context, state, force);
+  }
+
+  const captures = optionalPreview
+    ? await waitForOptionalPreview(pending, state)
+    : await pending;
+
+  if (!captures) {
+    return result;
+  }
+
+  if (state.readyCapture?.pending === pending) {
+    state.readyCapture = null;
+  }
+
+  return previewResult(context, result, captures);
 }
 
 function startTaskPreview(context = {}) {
@@ -667,7 +825,7 @@ function startTaskPreview(context = {}) {
     return;
   }
 
-  if (context.__workflowPreviewTimer) {
+  if (context.__workflowRunnerPreviewActive === true || context.__workflowPreviewTimer) {
     return;
   }
 

@@ -1813,7 +1813,9 @@ class WorkflowStudioTest extends TestCase
             'state' => 'running',
             'isRunning' => true,
         ], JSON_THROW_ON_ERROR));
-        Process::fake();
+        Process::fake(fn ($process) => Process::result(output: $process->command === [
+            'tasklist.exe', '/FI', 'PID eq 4242', '/FO', 'CSV', '/NH',
+        ] ? 'INFO: No tasks are running which match the specified criteria.' : ''));
 
         try {
             $result = app(WorkflowTaskRunner::class)->cancelRun($runId, true, 'Erzwungen beendet.');

@@ -37,7 +37,24 @@ function writeJsonFile(filePath, payload) {
     fs.writeFileSync(descriptor, JSON.stringify(payload, null, 2), 'utf8');
     fs.closeSync(descriptor);
     descriptor = null;
-    fs.renameSync(temporaryPath, filePath);
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        fs.renameSync(temporaryPath, filePath);
+        break;
+      } catch (error) {
+        // Windows readers can briefly deny shared-delete access. Retry only
+        // that transient case, preserving the destination until atomic rename.
+        if (
+          process.platform !== 'win32'
+          || !['EPERM', 'EACCES', 'EBUSY'].includes(error?.code)
+          || attempt === 4
+        ) {
+          throw error;
+        }
+
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10 * (attempt + 1));
+      }
+    }
   } catch (error) {
     if (descriptor !== null) {
       fs.closeSync(descriptor);

@@ -5217,14 +5217,10 @@ class WorkflowExecutionService
                     ->first();
 
                 if ($root) {
-                    if (! $root->isRunning()) {
-                        return false;
-                    }
-
                     $seenRecently = $root->last_seen_at instanceof Carbon
                         && $root->last_seen_at->gt(now()->subSeconds(self::WATCHDOG_STALL_SECONDS));
 
-                    if ($seenRecently) {
+                    if ($root->isRunning() && $seenRecently) {
                         return true;
                     }
                     // Veralteter 'running'-Eintrag ohne frische Sichtung:
@@ -5241,11 +5237,7 @@ class WorkflowExecutionService
 
         try {
             if (PHP_OS_FAMILY === 'Windows') {
-                return Process::timeout(5)->run([
-                    'cmd.exe',
-                    '/C',
-                    'tasklist /FI "PID eq '.$pid.'" | findstr /R "\\<'.$pid.'\\>"',
-                ])->successful();
+                return WorkflowTaskRunner::windowsProcessIsRunning($pid) ?? true;
             }
 
             return Process::timeout(5)->run(['kill', '-0', (string) $pid])->successful();

@@ -1720,8 +1720,9 @@ class WorkflowStudio extends Component
             ]);
             $card['task_count']++;
             $path = (array) ($task['embedded_workflow_path'] ?? []);
-            if ($path !== []) {
+            if ($path !== [] && count($path) > (int) ($card['workflow_path_depth'] ?? 0)) {
                 $card['workflow_path'] = collect($path)->pluck('workflow_name')->filter()->implode(' › ');
+                $card['workflow_path_depth'] = count($path);
             }
             $cards->put($name, $card);
         }
