@@ -133,6 +133,26 @@ class AppShellMarkupTest extends TestCase
         $this->assertStringContainsString('role="menuitem"', $workflowActions);
     }
 
+    public function test_workflow_dropdown_keeps_its_teleported_panel_identity_during_livewire_morphs(): void
+    {
+        $root = dirname(__DIR__, 2);
+        $dropdown = file_get_contents($root.'/resources/views/components/ui/dropdown.blade.php');
+        $manager = file_get_contents($root.'/resources/views/livewire/admin/network/workflow-manager.blade.php');
+
+        $this->assertStringContainsString("\$attributes->merge(['class' => 'relative'])", $dropdown);
+        $this->assertStringContainsString("@if(\$attributes->has('wire:key')) wire:key=\"{{ \$attributes->get('wire:key') }}-panel\"", $dropdown);
+        $this->assertStringContainsString(":wire:key=\"'workflow-overview-actions-'.\$selectedWorkflow->id\"", $manager);
+        $this->assertStringContainsString('wire:key="workflow-overview-actions-trigger-{{ $selectedWorkflow->id }}"', $manager);
+        $this->assertStringContainsString('id="workflow-overview-actions-trigger-{{ $selectedWorkflow->id }}"', $manager);
+        $this->assertStringContainsString('viewportHeight: window.innerHeight', $dropdown);
+        $this->assertStringContainsString('this.viewportHeight - trigger.bottom - 16', $dropdown);
+        $this->assertStringContainsString("x-bind:style=\"{ maxHeight: panelMaxHeight() + 'px' }\"", $dropdown);
+        $this->assertStringContainsString('@resize.window="viewportHeight = window.innerHeight"', $dropdown);
+        $this->assertStringContainsString('panel.scrollTop += itemBounds.bottom - panelBounds.bottom;', $dropdown);
+        $this->assertStringContainsString('this.focusItem(items[nextIndex]);', $dropdown);
+        $this->assertStringContainsString('@keydown.end.prevent.stop="focusItem(menuItems()[menuItems().length - 1])"', $dropdown);
+    }
+
     public function test_manager_workbench_and_standalone_studio_stay_above_the_shell(): void
     {
         $root = dirname(__DIR__, 2);

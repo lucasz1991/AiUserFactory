@@ -109,14 +109,14 @@ class WorkflowWorkbenchUiSafetyMarkupTest extends TestCase
         $minimap = file_get_contents($root.'/resources/views/components/workflows/minimap.blade.php');
 
         $this->assertStringContainsString('data-workflow-edit-cta', $manager);
-        $this->assertStringContainsString('rememberWorkbenchTrigger($refs.overviewEditCta);', $manager);
+        $this->assertStringContainsString("rememberWorkbenchTrigger(\$refs.overviewActions.querySelector('button'));", $manager);
         $this->assertStringNotContainsString('x-ref="overviewMapTrigger"', $manager);
         $this->assertStringContainsString("closest('[data-workflow-minimap-zoom]')", $manager);
         $this->assertStringContainsString('x-on:click.stop="setZoom(', $minimap);
-        $this->assertStringContainsString("wire:click=\"openTestWorkbench('interactive')\" x-on:click=\"rememberWorkbenchTrigger(\$el); open = false\"", $manager);
-        $this->assertStringContainsString("wire:click=\"openTestWorkbench('autonomous')\" x-on:click=\"rememberWorkbenchTrigger(\$el); open = false\"", $manager);
-        $this->assertStringContainsString('wire:click="openDefinitionWorkbench" x-on:click="rememberWorkbenchTrigger($el); open = false"', $manager);
-        $this->assertStringContainsString("wire:click=\"openDefinitionWorkbench('add-step')\" x-on:click=\"rememberWorkbenchTrigger(\$el); open = false\"", $manager);
+        foreach (["openTestWorkbench('interactive')", "openTestWorkbench('autonomous')", 'openDefinitionWorkbench', "openDefinitionWorkbench('add-step')"] as $action) {
+            $this->assertStringContainsString('wire:click="'.$action.'" x-on:click="rememberWorkbenchTrigger($refs.overviewActions.querySelector(\'button\'))"', $manager);
+        }
+        $this->assertStringContainsString('<x-ui.dropdown align="right"', $manager);
         $this->assertStringContainsString("requested?.closest?.('.ff-menu')", $manager);
         $this->assertStringContainsString("querySelector(':scope > button[aria-expanded]')", $manager);
 

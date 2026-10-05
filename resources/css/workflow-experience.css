@@ -138,15 +138,10 @@
   [data-workflow-route-surface] .ff-task-card,
   [data-workflow-route-surface] .ff-task-card:hover { transform: none !important; transition-property: border-color, box-shadow !important; }
 }
-.ff-workflow-manager-bar .ff-workflow-index-bar__stats { margin-right: auto; }
 [data-workflow-unified-workspace] .ff-canvas-toolbar { padding: .5rem .75rem !important; gap: .5rem !important; }
 [data-workflow-unified-workspace] .ff-tool-dock { padding: .25rem .75rem !important; }
 [data-workflow-unified-workspace] .ff-browser-strip { padding: .25rem .75rem !important; }
 [data-workflow-unified-workspace] [data-studio-primary-bar] { min-height: 44px; }
-@media (max-width: 639.98px) {
-    .ff-workflow-manager-bar .ff-workflow-index-bar__stats { width: auto !important; flex: 1; }
-    .ff-workflow-manager-bar .ff-workflow-back { align-self: flex-start; }
-}
 
 .ff-command-surface.ff-workflow-index-bar {
   display: flex;
@@ -178,10 +173,58 @@
   .ff-workflow-index-bar__actions { position: relative; }
   .ff-workflow-index-bar__actions > div { position: static !important; }
   .ff-workflow-index-bar__actions .ff-menu { top: 100%; max-width: calc(100vw - 3rem); }
-  .ff-workflow-manager-bar .ff-workflow-index-bar__stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .ff-workflow-manager-bar .ff-workflow-index-bar__actions { width: 100%; flex-wrap: wrap; justify-content: flex-end; }
-  .ff-workflow-manager-bar .ff-workflow-index-bar__actions > div > button { padding-left: .5rem !important; padding-right: .5rem !important; font-size: .75rem !important; gap: .25rem !important; }
-  .ff-workflow-manager-bar .ff-workflow-index-bar__actions > div > button > span[aria-hidden] { display: none !important; }
+}
+
+/* One overview surface: identity/actions, quiet KPIs, then the viewport canvas. */
+.ff-workflow-overview {
+  --ff-overview-page-space: clamp(2rem, 4.4vw, 4rem);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 24rem;
+  height: calc(100dvh - var(--ff-shell-topbar-height, 70px) - var(--ff-overview-page-space) - 1rem);
+  border: 1px solid var(--ff-shell-border, var(--ff-line));
+  border-radius: .75rem;
+  background: var(--ff-shell-surface, var(--ff-surface));
+}
+.ff-workflow-overview__header { min-width: 0; padding: .5rem .75rem; border-bottom: 1px solid var(--ff-shell-border, var(--ff-line)); }
+.ff-workflow-overview__top { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; align-items: center; gap: .5rem; }
+.ff-workflow-overview__identity { display: flex; align-items: center; gap: .5rem; min-width: 0; }
+.ff-workflow-overview__identity h1 { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; margin: 0; font-size: .9375rem; font-weight: 700; line-height: 1.5; letter-spacing: -.02em; color: var(--ff-ink); }
+.ff-workflow-overview__stats { display: flex; flex-wrap: wrap; align-items: baseline; gap: .375rem 1.25rem; margin: .375rem 0 .125rem; padding-inline: .5rem; }
+.ff-workflow-overview__stats > div { display: flex; align-items: baseline; gap: .375rem; min-width: 0; }
+.ff-workflow-overview__stats dt { font-size: .6875rem; font-weight: 500; color: var(--ff-muted); }
+.ff-workflow-overview__stats dd { margin: 0; font-size: .75rem; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--ff-ink); }
+.ff-workflow-overview__map { min-width: 0; min-height: 0; padding: .75rem; background: var(--ff-surface-soft); border-radius: 0 0 .75rem .75rem; }
+.ff-workflow-overview__map > [data-workflow-minimap-instance] { height: 100%; min-height: 0; }
+.ff-workflow-overview__map [data-workflow-minimap-scroll-container] { height: 100%; overflow: auto !important; }
+.ff-workflow-overview__map [data-workflow-minimap-stage] { padding-block: 80px !important; }
+.ff-workflow-overview__map [data-minimap-task-node] { min-height: 2rem; display: flex; flex-direction: column; justify-content: center; }
+.ff-workflow-actions-popover { width: 18rem; }
+.ff-workflow-actions-menu { padding: .375rem; background: var(--ff-shell-surface, #fff); color: var(--ff-shell-text, #0b1220); }
+.ff-workflow-actions-menu > [role='group'] + [role='group'] { margin-top: .375rem; padding-top: .375rem; border-top: 1px solid var(--ff-shell-border, #dde3ec); }
+.ff-workflow-actions-menu__label { margin: 0; padding: .375rem .625rem; font-size: .625rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--ff-shell-muted, #64748b); }
+.ff-workflow-actions-menu__item { display: block; width: 100%; min-height: 40px; padding: .625rem; border: 0; border-radius: .375rem; background: transparent; color: inherit; font-size: .8125rem; font-weight: 500; line-height: 1.4; text-align: left; text-decoration: none; }
+.ff-workflow-actions-menu__item:is(:hover, :focus-visible) { outline: none; background: var(--ff-shell-surface-muted, #f1f5f9); }
+.ff-workflow-actions-menu__item:focus-visible { box-shadow: inset 0 0 0 2px var(--ff-shell-accent, #2563eb); }
+.ff-workflow-actions-menu__item--primary { font-weight: 700; color: var(--ff-shell-accent, #2563eb); }
+.ff-workflow-actions-menu__item--danger { color: var(--ff-shell-danger, #be123c); }
+.ff-workflow-actions-menu__item:disabled { opacity: .4; cursor: not-allowed; }
+.ff-workflow-actions-menu__meta { display: block; margin-top: .25rem; color: var(--ff-shell-muted, #64748b); font-size: .6875rem; overflow-wrap: anywhere; }
+@media (max-width: 1023.98px) {
+  .ff-workflow-overview { --ff-overview-page-space: 2rem; }
+}
+@media (max-width: 639.98px) {
+  .ff-workflow-overview__header { padding-inline: .5rem; }
+  .ff-workflow-overview__top { gap: .25rem; }
+  .ff-workflow-overview__identity h1 { font-size: .8125rem; }
+  .ff-workflow-overview__stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); column-gap: .5rem; }
+  .ff-workflow-overview__map { padding: .5rem; }
+  .ff-workflow-overview__map [data-workflow-minimap-zoom] { gap: 0 !important; }
+  .ff-workflow-overview__map [data-workflow-minimap-zoom] button { padding-inline: .5rem !important; }
+}
+@media (max-width: 479.98px) {
+  .ff-workflow-overview { --ff-overview-page-space: 1.5rem; }
 }
 
 .ff-kicker {

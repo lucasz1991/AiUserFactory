@@ -152,7 +152,12 @@ class WorkflowCopilotUiMarkupTest extends TestCase
         // das Markup heute steht — der Schutzzweck bleibt identisch.
         $editor = file_get_contents($root.'/resources/views/livewire/admin/network/partials/workflow-definition-editor.blade.php');
 
-        $this->assertStringContainsString('ff-command-surface overflow-visible', $manager);
+        // Manager actions use the shared teleported dropdown, independent of
+        // canvas overflow; the index still uses the compact command surface.
+        $dropdown = file_get_contents($root.'/resources/views/components/ui/dropdown.blade.php');
+        $this->assertStringContainsString('<x-ui.dropdown align="right"', $manager);
+        $this->assertStringContainsString('<template x-teleport="body">', $dropdown);
+        $this->assertStringContainsString('data-ff-dropdown-panel', $dropdown);
         $this->assertStringContainsString('ff-command-surface overflow-visible', $index);
         $this->assertStringContainsString('showRoutes', $editor);
         $this->assertStringContainsString('taskInsertTarget', $manager);

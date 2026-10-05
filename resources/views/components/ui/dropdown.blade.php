@@ -22,9 +22,20 @@
 @endphp
 
 <div
-    class="relative"
+    {{ $attributes->merge(['class' => 'relative']) }}
     x-data="{
         open: false,
+        viewportHeight: window.innerHeight,
+
+        panelMaxHeight() {
+            const trigger = this.$refs.trigger?.getBoundingClientRect();
+            if (!this.open || !trigger) return Math.max(48, this.viewportHeight - 16);
+
+            // Anchor offset plus an 8px viewport gutter; allow flipping above.
+            const below = this.viewportHeight - trigger.bottom - 16;
+            const above = trigger.top - 16;
+            return Math.max(48, Math.min(this.viewportHeight - 16, Math.max(below, above)));
+        },
 
         triggerElement() {
             return this.$refs.trigger?.querySelector('button, a, [tabindex]') ?? this.$refs.trigger;
@@ -40,12 +51,27 @@
             );
         },
 
+        focusItem(item) {
+            if (!item || !this.$refs.panel) return;
+
+            item.focus({ preventScroll: true });
+            const panel = this.$refs.panel;
+            const panelBounds = panel.getBoundingClientRect();
+            const itemBounds = item.getBoundingClientRect();
+
+            if (itemBounds.top < panelBounds.top) {
+                panel.scrollTop += itemBounds.top - panelBounds.top;
+            } else if (itemBounds.bottom > panelBounds.bottom) {
+                panel.scrollTop += itemBounds.bottom - panelBounds.bottom;
+            }
+        },
+
         show(edge = 'first') {
             this.open = true;
             this.$nextTick(() => {
                 const items = this.menuItems();
                 const item = edge === 'last' ? items[items.length - 1] : items[0];
-                item?.focus({ preventScroll: true });
+                this.focusItem(item);
             });
         },
 
@@ -75,7 +101,7 @@
             const activeIndex = items.indexOf(document.activeElement);
             const startIndex = activeIndex < 0 ? (offset > 0 ? -1 : 0) : activeIndex;
             const nextIndex = (startIndex + offset + items.length) % items.length;
-            items[nextIndex]?.focus({ preventScroll: true });
+            this.focusItem(items[nextIndex]);
         },
     }"
     x-id="['ff-dropdown-menu']"
@@ -107,6 +133,7 @@
         }
     "
     @close.stop="hide(false)"
+    @resize.window="viewportHeight = window.innerHeight"
 >
     <div
         x-ref="trigger"
@@ -119,11 +146,14 @@
 
     <template x-teleport="body">
         <div
+            {{-- Keep morph identity independent of Alpine's generated accessibility ID. --}}
+            @if($attributes->has('wire:key')) wire:key="{{ $attributes->get('wire:key') }}-panel" @endif
             x-cloak
             x-show="open"
             x-ref="panel"
             x-bind:id="$id('ff-dropdown-menu')"
             x-bind:aria-labelledby="triggerElement()?.id"
+            x-bind:style="{ maxHeight: panelMaxHeight() + 'px' }"
             x-anchor.{{ $anchorPlacement }}.offset.8.flip.shift="$refs.trigger"
             x-transition:enter="transition ease-out duration-200"
             x-transition:enter-start="transform opacity-0 scale-95"
@@ -148,8 +178,8 @@
             @keydown.escape.prevent.stop="hide(true)"
             @keydown.arrow-down.prevent.stop="moveFocus(1)"
             @keydown.arrow-up.prevent.stop="moveFocus(-1)"
-            @keydown.home.prevent.stop="menuItems()[0]?.focus({ preventScroll: true })"
-            @keydown.end.prevent.stop="menuItems()[menuItems().length - 1]?.focus({ preventScroll: true })"
+            @keydown.home.prevent.stop="focusItem(menuItems()[0])"
+            @keydown.end.prevent.stop="focusItem(menuItems()[menuItems().length - 1])"
         >
             <div class="rounded-md ring-1 ring-black ring-opacity-5 {{ $contentClasses }}">
                 {{ $content }}

@@ -227,103 +227,103 @@ $managerWorkbenchPollEnabled = false; // The hosted workspace owns the single po
     "
     x-on:keydown.escape.window="handleWorkbenchEscape($event)"
 >
-    <section class="ff-command-surface overflow-visible ff-workflow-index-bar ff-workflow-manager-bar" aria-labelledby="workflow-manager-title" data-workflow-manager-toolbar title="{{ $selectedWorkflow?->name }}">
-        <a href="{{ route('network.workflows') }}" wire:navigate class="ff-workflow-back inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-slate-600 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500" aria-label="Zurück zu den Workflows" title="Zurück zu den Workflows">
-            <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m14 6-6 6 6 6M8 12h12"/></svg>
-        </a>
-        <h1 id="workflow-manager-title" class="sr-only">{{ $selectedWorkflow?->name ?? 'Workflow Management' }}</h1>
-        @if($selectedWorkflow)
-            <dl class="ff-workflow-index-bar__stats" aria-label="Workflow-Statistik">
-                        @foreach([
-                            ['Aufgaben', $summary['actions']],
-                            ['Listen', $summary['lists']],
-                            ['Tasks', $summary['task_cards']],
-                            ['Testläufe', $summary['runs']],
-                            ['Erfolgreich', $summary['successful_runs']],
-                            ['Fehlerhaft', $summary['failed_runs']],
-                        ] as [$label, $value])
-                            <div >
-                                <dt>{{ $label }}</dt>
-                                <dd>{{ $value }}</dd>
-                            </div>
-                        @endforeach
-                    </dl>
-            @if($workflowLocked)
-                        <span title="{{ $selectedWorkflow->lock_reason }}" class="inline-flex h-7 w-7 items-center justify-center rounded-full bg-amber-100 text-amber-700" aria-label="Workflow gesperrt">
-                            <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-                                <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 0 0-9 0v3.75m-.75 0h10.5A2.25 2.25 0 0 1 19.5 12.75v6A2.25 2.25 0 0 1 17.25 21H6.75a2.25 2.25 0 0 1-2.25-2.25v-6A2.25 2.25 0 0 1 6.75 10.5Z" />
-                            </svg>
+    <section class="ff-workflow-overview" data-workflow-overview-card aria-labelledby="workflow-manager-title">
+        <header class="ff-workflow-overview__header" data-workflow-manager-toolbar>
+            <div class="ff-workflow-overview__top">
+                <a href="{{ route('network.workflows') }}" wire:navigate class="ff-workflow-back inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-slate-600 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500" aria-label="Zurück zu den Workflows" title="Zurück zu den Workflows">
+                    <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m14 6-6 6 6 6M8 12h12"/></svg>
+                </a>
+                <div class="ff-workflow-overview__identity">
+                    <h1 id="workflow-manager-title" title="{{ $selectedWorkflow?->name }}">{{ $selectedWorkflow?->name ?? 'Workflow Management' }}</h1>
+                    @if($selectedWorkflow && $workflowLocked)
+                        <span title="{{ $selectedWorkflow->lock_reason }}" class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-700" aria-label="Workflow gesperrt">
+                            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 0 0-9 0v3.75m-.75 0h10.5A2.25 2.25 0 0 1 19.5 12.75v6A2.25 2.25 0 0 1 17.25 21H6.75a2.25 2.25 0 0 1-2.25-2.25v-6A2.25 2.25 0 0 1 6.75 10.5Z"/></svg>
                         </span>
                     @endif
-            <div class="ff-workflow-index-bar__actions">
-                <div class="relative" x-data="{ open: false }" x-on:keydown.escape.window="open = false">
-                            <button type="button" x-on:click="rememberWorkbenchTrigger($el); open = ! open" x-bind:aria-expanded="open" class="ff-action-trigger ff-action-trigger--primary inline-flex min-h-11 items-center gap-2 px-4 py-2 text-sm font-semibold">
-                                <span class="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-white/10" aria-hidden="true">▶</span>
-                                Arbeitsfläche
-                                <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" /></svg>
-                            </button>
-                            <div x-cloak x-show="open" x-transition.origin.top.right x-on:click.outside="open = false" class="ff-menu absolute right-0 z-50 mt-2 w-72 p-1.5">
-                                <button type="button" wire:click="openTestWorkbench('interactive')" x-on:click="rememberWorkbenchTrigger($el); open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-slate-900 hover:bg-slate-100">
-                                    Eine Task nach der anderen
-                                    <span class="mt-0.5 block text-xs font-medium text-slate-500">Auswählen, ausführen, prüfen und direkt bearbeiten</span>
+                </div>
+                @if($selectedWorkflow)
+                    <div class="ff-workflow-overview__actions" x-ref="overviewActions">
+                        <x-ui.dropdown align="right" width="auto" contentClasses="ff-workflow-actions-menu" dropdownClasses="ff-workflow-actions-popover" :wire:key="'workflow-overview-actions-'.$selectedWorkflow->id">
+                            <x-slot name="trigger">
+                                <button type="button" id="workflow-overview-actions-trigger-{{ $selectedWorkflow->id }}" wire:key="workflow-overview-actions-trigger-{{ $selectedWorkflow->id }}" data-workflow-edit-cta class="ff-action-trigger inline-flex min-h-11 items-center gap-2 px-3 py-2 text-sm font-semibold" aria-label="Workflow-Aktionen">
+                                    Aktionen
+                                    <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5"/></svg>
                                 </button>
-                                <button type="button" wire:click="openTestWorkbench('autonomous')" x-on:click="rememberWorkbenchTrigger($el); open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-cyan-800 hover:bg-cyan-50">
-                                    Autonom optimieren
-                                    <span class="mt-0.5 block text-xs font-medium text-cyan-600">Copilot plant, testet und repariert exklusiv</span>
-                                </button>
-                                <button type="button" wire:click="$set('showCopilotRunsModal', true)" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-cyan-800 hover:bg-cyan-50">
-                                    Optimierungslaeufe anzeigen
-                                    <span class="mt-0.5 block text-xs font-medium text-cyan-600">Kosten, Tests, Logs und Daten</span>
-                                </button>
-                                <button type="button" @if($quickPreviewRun) wire:click="openTestWorkbench('{{ $activeCopilotSession ? 'autonomous' : 'interactive' }}', {{ $quickPreviewRun->id }})" @endif x-on:click="rememberWorkbenchTrigger($el); open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-indigo-700 hover:bg-indigo-50 {{ $quickPreviewRun ? '' : 'pointer-events-none opacity-40' }}">
-                                    {{ $quickPreviewRun && in_array($quickPreviewRun->status, ['queued', 'running', 'waiting'], true) ? 'Laufenden Test öffnen' : 'Letzten Test öffnen' }}
-                                    @if($quickPreviewDurationLabel)
-                                        <span class="mt-0.5 block text-xs font-medium text-indigo-500">Dauer: {{ $quickPreviewDurationLabel }}</span>
+                            </x-slot>
+                            <x-slot name="content">
+                                <div role="group" aria-label="Arbeitsfläche">
+                                    <p class="ff-workflow-actions-menu__label">Arbeitsfläche</p>
+                                    <button type="button" role="menuitem" wire:click="openDefinitionWorkbench" x-on:click="rememberWorkbenchTrigger($refs.overviewActions.querySelector('button'))" class="ff-workflow-actions-menu__item ff-workflow-actions-menu__item--primary">Bearbeiten &amp; testen</button>
+                                    <button type="button" role="menuitem" wire:click="openTestWorkbench('interactive')" x-on:click="rememberWorkbenchTrigger($refs.overviewActions.querySelector('button'))" class="ff-workflow-actions-menu__item">Eine Task nach der anderen</button>
+                                    <button type="button" role="menuitem" wire:click="openTestWorkbench('autonomous')" x-on:click="rememberWorkbenchTrigger($refs.overviewActions.querySelector('button'))" class="ff-workflow-actions-menu__item">Autonom optimieren</button>
+                                    <button type="button" role="menuitem" @if($quickPreviewRun) wire:click="openTestWorkbench('{{ $activeCopilotSession ? 'autonomous' : 'interactive' }}', {{ $quickPreviewRun->id }})" @endif @disabled(! $quickPreviewRun) x-on:click="rememberWorkbenchTrigger($refs.overviewActions.querySelector('button'))" class="ff-workflow-actions-menu__item">
+                                        {{ $quickPreviewRun && in_array($quickPreviewRun->status, ['queued', 'running', 'waiting'], true) ? 'Laufenden Test öffnen' : 'Letzten Test öffnen' }}
+                                        @if($quickPreviewDurationLabel)
+                                            <span class="ff-workflow-actions-menu__meta">Dauer: {{ $quickPreviewDurationLabel }}</span>
+                                        @endif
+                                        @if($quickPreviewReturnLabel)
+                                            <span class="ff-workflow-actions-menu__meta">{{ $quickPreviewReturnLabel }}</span>
+                                        @endif
+                                    </button>
+                                    <button type="button" role="menuitem" wire:click="$set('showCopilotRunsModal', true)" class="ff-workflow-actions-menu__item">Optimierungsläufe anzeigen</button>
+                                </div>
+                                <div role="group" aria-label="Workflow">
+                                    <p class="ff-workflow-actions-menu__label">Workflow</p>
+                                    <button type="button" role="menuitem" wire:click="$set('showWorkflowModal', true)" class="ff-workflow-actions-menu__item">Workflow-Einstellungen</button>
+                                    <button type="button" role="menuitem" wire:click="openDefinitionWorkbench('add-step')" x-on:click="rememberWorkbenchTrigger($refs.overviewActions.querySelector('button'))" class="ff-workflow-actions-menu__item">Liste hinzufügen</button>
+                                    <button type="button" role="menuitem" wire:click="$set('showActionLibraryModal', true)" class="ff-workflow-actions-menu__item">Aktionsbibliothek</button>
+                                    <button type="button" role="menuitem" wire:click="openRevisionHistory" class="ff-workflow-actions-menu__item">Revisionen</button>
+                                </div>
+                                <div role="group" aria-label="Weitere Aktionen">
+                                    <p class="ff-workflow-actions-menu__label">Weitere</p>
+                                    <button type="button" role="menuitem" wire:click="exportWorkflow" class="ff-workflow-actions-menu__item">Als ZIP exportieren</button>
+                                    <button type="button" role="menuitem" wire:click="downloadLatestRunDebugPackage" @disabled(! $quickPreviewRun) class="ff-workflow-actions-menu__item">Debug-Paket herunterladen</button>
+                                    <a role="menuitem" href="{{ route('network.workflows') }}" class="ff-workflow-actions-menu__item">Alle Workflows</a>
+                                    <a role="menuitem" href="{{ route('processes.index') }}" class="ff-workflow-actions-menu__item">Prozesse öffnen</a>
+                                    @if(! $workflowLocked)
+                                        <button type="button" role="menuitem" wire:click="deleteWorkflow" wire:confirm="Workflow samt Aufgaben, Tasks und Ausfuehrungen wirklich loeschen?" class="ff-workflow-actions-menu__item ff-workflow-actions-menu__item--danger">Workflow löschen</button>
                                     @endif
-                                    @if($quickPreviewReturnLabel)
-                                        <span class="mt-0.5 block break-words text-xs font-medium text-indigo-500">{{ $quickPreviewReturnLabel }}</span>
-                                    @endif
-                                </button>
-                                <button type="button" wire:click="downloadLatestRunDebugPackage" x-on:click="open = false" @disabled(! $quickPreviewRun) class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-40">
-                                    Debug-Paket herunterladen
-                                    <span class="mt-0.5 block text-xs font-medium text-emerald-500">CSV, letzter Run, DOM</span>
-                                </button>
-                            </div>
-                        </div>
-
-                        <div class="relative" x-data="{ open: false }" x-on:keydown.escape.window="open = false">
-                            <button type="button" x-on:click="rememberWorkbenchTrigger($el); open = ! open" x-bind:aria-expanded="open" class="ff-action-trigger inline-flex min-h-11 items-center gap-2 px-3 py-2 text-sm font-semibold">
-                                Workflow
-                                <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" /></svg>
-                            </button>
-                            <div x-cloak x-show="open" x-transition.origin.top.right x-on:click.outside="open = false" class="ff-menu absolute right-0 z-50 mt-2 w-64 p-1.5">
-                                <button type="button" wire:click="openDefinitionWorkbench" x-on:click="rememberWorkbenchTrigger($el); open = false" class="block min-h-11 w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-blue-800 hover:bg-blue-50">Workflow im Vollbild bearbeiten</button>
-                                <button type="button" wire:click="$set('showWorkflowModal', true)" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-100">Workflow-Einstellungen</button>
-                                <button type="button" wire:click="openDefinitionWorkbench('add-step')" x-on:click="rememberWorkbenchTrigger($el); open = false" class="block min-h-11 w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-100">Liste hinzufügen</button>
-                                <button type="button" wire:click="$set('showActionLibraryModal', true)" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-amber-700 hover:bg-amber-50">Aktionsbibliothek</button>
-                            </div>
-                        </div>
-
-                        <div class="relative" x-data="{ open: false }" x-on:keydown.escape.window="open = false">
-                            <button type="button" x-on:click="open = ! open" x-bind:aria-expanded="open" class="ff-action-trigger inline-flex items-center gap-2 px-3 py-2 text-sm font-semibold">
-                                Weitere
-                                <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" /></svg>
-                            </button>
-                            <div x-cloak x-show="open" x-transition.origin.top.right x-on:click.outside="open = false" class="ff-menu absolute right-0 z-50 mt-2 w-64 p-1.5">
-                                <button type="button" wire:click="openRevisionHistory" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-violet-700 hover:bg-violet-50">
-                                    Revisionen
-                                    <span class="mt-0.5 block text-xs font-medium text-violet-500">Einsehen, vergleichen, zurücksetzen</span>
-                                </button>
-                                <div class="my-1 border-t border-slate-100"></div>
-                                <button type="button" wire:click="exportWorkflow" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-blue-700 hover:bg-blue-50">Als ZIP exportieren</button>
-                                <a href="{{ route('network.workflows') }}" class="block rounded-md px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">Alle Workflows</a>
-                                <a href="{{ route('processes.index') }}" class="block rounded-md px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">Prozesse öffnen</a>
-                                @if(! $workflowLocked)
-                                    <div class="my-1 border-t border-slate-100"></div>
-                                    <button type="button" wire:click="deleteWorkflow" wire:confirm="Workflow samt Aufgaben, Tasks und Ausfuehrungen wirklich loeschen?" x-on:click="open = false" class="block w-full rounded-md px-3 py-2 text-left text-sm font-semibold text-red-700 hover:bg-red-50">Workflow löschen</button>
-                                @endif
-                            </div>
-                        </div>
+                                </div>
+                            </x-slot>
+                        </x-ui.dropdown>
+                    </div>
+                @endif
+            </div>
+            @if($selectedWorkflow)
+                <dl class="ff-workflow-overview__stats" aria-label="Workflow-Statistik">
+                    @foreach([
+                        ['Aufgaben', $summary['actions']],
+                        ['Listen', $summary['lists']],
+                        ['Tasks', $summary['task_cards']],
+                        ['Testläufe', $summary['runs']],
+                        ['Erfolgreich', $summary['successful_runs']],
+                        ['Fehlerhaft', $summary['failed_runs']],
+                    ] as [$label, $value])
+                        <div><dt>{{ $label }}</dt><dd>{{ $value }}</dd></div>
+                    @endforeach
+                </dl>
+            @endif
+        </header>
+        @if($selectedWorkflow)
+            <div
+                class="ff-workflow-overview__map"
+                x-on:click="
+                    if ($event.target.closest('[data-workflow-minimap-zoom]')) return;
+                    rememberWorkbenchTrigger($refs.overviewActions.querySelector('button'));
+                    $wire.openDefinitionWorkbench();
+                "
+                aria-label="Workflow-Karte anklicken, um den Editor zu öffnen"
+            >
+                <x-workflows.minimap
+                    :workflow="$selectedWorkflow"
+                    :route-map="$routeMap"
+                    :selectable-tasks="false"
+                    :zoomable="true"
+                    initial-zoom="standard"
+                    :show-header="false"
+                    :instance="'manager-overview-'.$selectedWorkflow->id"
+                    :source="'manager-overview-'.$selectedWorkflow->id"
+                />
             </div>
         @endif
     </section>
@@ -353,51 +353,7 @@ $managerWorkbenchPollEnabled = false; // The hosted workspace owns the single po
             </div>
         @endif
 
-        <section
-            data-workflow-overview-card
-            class="group overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_22px_60px_-42px_rgba(15,23,42,.45)] transition hover:border-blue-300 hover:shadow-[0_26px_70px_-40px_rgba(37,99,235,.35)]"
-            aria-labelledby="workflow-overview-card-title"
-        >
-            <header class="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 bg-white px-4 py-4 sm:px-5">
-                <div class="min-w-0">
-                    <p class="ff-kicker">Workflow-Karte</p>
-                    <h2 id="workflow-overview-card-title" class="mt-1 text-lg font-bold tracking-tight text-slate-950">Ablauf auf einen Blick</h2>
-                    <p class="mt-1 text-xs leading-5 text-slate-500">Task-Routen per Hover ansehen. Bearbeiten und Testen teilen sich eine Arbeitsfläche.</p>
-                </div>
-                <button
-                    type="button"
-                    x-ref="overviewEditCta"
-                    data-workflow-edit-cta
-                    wire:click.stop="openDefinitionWorkbench"
-                    x-on:click.stop="rememberWorkbenchTrigger($el)"
-                    class="ff-action-trigger ff-action-trigger--primary inline-flex min-h-11 items-center gap-2 px-4 text-sm font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
-                >
-                    Bearbeiten &amp; testen
-                    <span aria-hidden="true">↗</span>
-                </button>
-            </header>
 
-            <div
-                x-on:click="
-                    if ($event.target.closest('[data-workflow-minimap-zoom]')) return;
-                    rememberWorkbenchTrigger($refs.overviewEditCta);
-                    $wire.openDefinitionWorkbench();
-                "
-                class="cursor-pointer bg-slate-50/70 p-3 sm:p-5"
-                aria-label="Workflow-Karte anklicken, um den Editor zu öffnen"
-            >
-                <x-workflows.minimap
-                    :workflow="$selectedWorkflow"
-                    :route-map="$routeMap"
-                    :selectable-tasks="false"
-                    :zoomable="true"
-                    initial-zoom="overview"
-                    :show-header="false"
-                    :instance="'manager-overview-'.$selectedWorkflow->id"
-                    :source="'manager-overview-'.$selectedWorkflow->id"
-                />
-            </div>
-        </section>
 
 
         <x-ui.dialog-modal wire:model="showWorkflowModal" maxWidth="2xl">
