@@ -15,7 +15,7 @@ class WorkflowRunTaskFeedback
             return [];
         }
 
-        $workflow->load('steps');
+        $workflow->loadMissing('steps');
         $known = [];
         foreach ($workflow->steps as $step) {
             foreach ($step->task_cards as $task) {
@@ -45,7 +45,11 @@ class WorkflowRunTaskFeedback
                 $record((int) ($entry['workflow_step_id'] ?? 0), (string) ($entry['task_key'] ?? ''), $entry);
             }
         }
-        foreach ($run->stepRuns()->orderBy('id')->get() as $stepRun) {
+        $stepRuns = $run->relationLoaded('stepRuns') ? $run->stepRuns : $run->stepRuns()->orderBy('id')->get();
+        foreach ($stepRuns as $stepRun) {
+            if ((int) $stepRun->workflow_run_id !== (int) $run->id) {
+                continue;
+            }
             foreach ((array) data_get($stepRun->result_json, 'tasks', []) as $entry) {
                 if (is_array($entry)) {
                     if (! isset($entry['error_message']) && ! isset($entry['statusMessage']) && ! isset($entry['message']) && $stepRun->error_message) {

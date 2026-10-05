@@ -5578,6 +5578,11 @@ class WorkflowExecutionService
 
     protected function publicRunSnapshot(array $payload): array
     {
+        if (isset($payload['configuredTasks']) && is_array($payload['configuredTasks'])) {
+            // Frozen diagram definitions have the same secret boundary as task results.
+            $payload['configuredTasks'] = $this->publicRunSnapshot(['tasks' => $payload['configuredTasks']])['tasks'];
+        }
+
         unset(
             $payload['encryptedSessionPayload'],
             $payload['password'],

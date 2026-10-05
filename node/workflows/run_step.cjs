@@ -61,6 +61,8 @@ let browser = null;
 let browserDriver = '';
 let page = null;
 const browserWindowsByName = new Map();
+const closedBrowserWindowNames = new Set();
+let persistedBrowserWindowsHydrated = false;
 let previewTimer = null;
 let lastBrowserWindows = observableBrowserWindows(initialBrowserWindowsFromWorkflow());
 let requestedBrowserEngine = null;
@@ -370,6 +372,8 @@ function statusPayload(state, stage, message, extra = {}) {
     browserProfilePath: runtime.browserProfilePath || null,
     browserWsEndpoint: browserWsEndpoint(),
     browserIdentity: browserIdentityPayload(),
+    activeBrowserWindow: activeBrowserWindowName(),
+    configuredTasks: configuredPublicTasks(),
     tasks: configuredPublicTasks().map((task) => {
       const result = taskResultsByKey.get(task.key);
 
@@ -1013,6 +1017,11 @@ function startedFromFailureRoute() {
 
 function workflowBrowserWindowState(windowName = 'main') {
   const normalizedName = normalizeBrowserWindowName(windowName);
+
+  if (closedBrowserWindowNames.has(normalizedName)) {
+    return null;
+  }
+
   const workflow = runtime.workflow || {};
   const windows = workflow.browserWindows || workflow.browser_windows || {};
 
@@ -1110,7 +1119,21 @@ function pageTargetId(candidatePage) {
   }
 }
 
-async function existingPageForWindow(currentBrowser, windowName = 'main') {
+function activeBrowserWindowName() {
+  if (!page || page.isClosed?.()) {
+    return null;
+  }
+
+  const targetId = pageTargetId(page);
+  const activeWindow = Array.from(browserWindowsByName).find(([, config]) => (
+    !config.page?.isClosed?.()
+    && (config.page === page || (targetId !== '' && pageTargetId(config.page) === targetId))
+  ));
+
+  return activeWindow ? activeWindow[0] : null;
+}
+
+async function existingPageForWindow(currentBrowser, windowName = 'main', knownPages = null) {
   const normalizedName = normalizeBrowserWindowName(windowName);
   const state = workflowBrowserWindowState(windowName);
   const targetId = String(state?.targetId || state?.target_id || '').trim();
@@ -1120,11 +1143,15 @@ async function existingPageForWindow(currentBrowser, windowName = 'main') {
     return null;
   }
 
-  const pages = await currentBrowser.pages().catch(() => []);
+  const pages = knownPages || await currentBrowser.pages().catch(() => []);
   const openPages = pages.filter((candidatePage) => (
     candidatePage
     && typeof candidatePage.screenshot === 'function'
     && (!candidatePage.isClosed || !candidatePage.isClosed())
+    && !Array.from(browserWindowsByName).some(([name, config]) => (
+      name !== normalizedName
+      && (config.page === candidatePage || (pageTargetId(candidatePage) !== '' && pageTargetId(config.page) === pageTargetId(candidatePage)))
+    ))
   ));
 
   if (targetId !== '') {
@@ -1140,17 +1167,19 @@ async function existingPageForWindow(currentBrowser, windowName = 'main') {
   }
 
   if (/^https?:\/\//i.test(url)) {
-    const exactUrlPage = openPages.find((candidatePage) => (
+    const exactUrlPages = openPages.filter((candidatePage) => (
       typeof candidatePage.url === 'function'
       && String(candidatePage.url() || '') === url
     ));
 
-    if (exactUrlPage) {
-      return exactUrlPage;
+    if (exactUrlPages.length === 1) {
+      return exactUrlPages[0];
     }
+
+    return null;
   }
 
-  if (!state && normalizedName !== 'main') {
+  if (normalizedName !== 'main') {
     return null;
   }
 
@@ -1761,6 +1790,10 @@ async function captureStepArtifactPhase(context, phase, task = {}) {
     embedded_workflow_name: task.embedded_workflow_name || '',
     embedded_workflow_frame_key: task.embedded_workflow_frame_key || '',
     parent_task_key: task.parent_task_key || '',
+    embedded_workflow_path: Array.isArray(task.embedded_workflow_path) ? task.embedded_workflow_path : [],
+    embedded_source_step_id: task.embedded_source_step_id || null,
+    embedded_source_action_key: task.embedded_source_action_key || '',
+    embedded_source_task_key: task.embedded_source_task_key || '',
   };
 
   config.currentTaskKey = taskKey;
@@ -2269,7 +2302,73 @@ function patchPuppeteerPage(nextPage) {
   return nextPage;
 }
 
-function registerBrowserWindow(context, nextPage, windowName = 'main', label = '') {
+function browserPreviewPathForWindow(basePreviewPath, windowName) {
+  if (!basePreviewPath || windowName === 'main') {
+    return basePreviewPath || '';
+  }
+
+  const extension = path.extname(basePreviewPath) || '.png';
+  const base = path.extname(basePreviewPath)
+    ? basePreviewPath.slice(0, -extension.length)
+    : basePreviewPath;
+
+  return `${base}-${windowName}${extension}`;
+}
+
+function updateKnownBrowserWindows(context, captures = []) {
+  const knownWindows = new Map((Array.isArray(lastBrowserWindows) ? lastBrowserWindows : [])
+    .filter((entry) => !closedBrowserWindowNames.has(normalizeBrowserWindowName(entry?.key || entry?.name)))
+    .map((entry) => [normalizeBrowserWindowName(entry?.key || entry?.name), { ...entry }]));
+
+  for (const [name, config] of browserWindowsByName) {
+    if (config.page?.isClosed?.()) {
+      browserWindowsByName.delete(name);
+      continue;
+    }
+
+    knownWindows.set(name, {
+      ...(knownWindows.get(name) || {}),
+      key: name,
+      name,
+      label: config.label,
+      url: typeof config.page?.url === 'function' ? String(config.page.url() || '') : '',
+      targetId: pageTargetId(config.page),
+      livePreviewRelativePath: config.livePreviewRelativePath || null,
+      connected: !browserDisconnected,
+    });
+  }
+
+  for (const capture of captures) {
+    const name = normalizeBrowserWindowName(capture?.key || capture?.name);
+
+    if (!closedBrowserWindowNames.has(name)) {
+      const entry = { ...(knownWindows.get(name) || {}), ...capture, stale: capture.stale === true };
+
+      if (!capture.error) {
+        delete entry.error;
+      }
+
+      knownWindows.set(name, entry);
+    }
+  }
+
+  if (persistedBrowserWindowsHydrated) {
+    for (const [name, entry] of knownWindows) {
+      if (!browserWindowsByName.has(name)) {
+        knownWindows.set(name, { ...entry, connected: false, stale: true });
+      }
+    }
+  }
+
+  context.browserWindows = Array.from(browserWindowsByName.values());
+  context.windows = context.browserWindows;
+  context.pages = Array.from(new Set(context.browserWindows.map((entry) => entry.page)));
+  lastBrowserWindows = observableBrowserWindows(Array.from(knownWindows.values()));
+
+  return lastBrowserWindows;
+}
+
+function registerBrowserWindow(context, nextPage, windowName = 'main', label = '', activate = true) {
   const normalizedName = normalizeBrowserWindowName(windowName);
   const patchedPage = patchPuppeteerPage(nextPage);
   const existing = browserWindowsByName.get(normalizedName);
@@ -2280,19 +2379,56 @@ function registerBrowserWindow(context, nextPage, windowName = 'main', label = '
     windowName: normalizedName,
     browserWindow: normalizedName,
     browser_window: normalizedName,
-    label: label || browserWindowLabel(normalizedName),
+    label: existing?.label || label || browserWindowLabel(normalizedName),
+    livePreviewPath: browserPreviewPathForWindow(context.livePreviewPath, normalizedName),
+    livePreviewRelativePath: browserPreviewPathForWindow(context.livePreviewRelativePath, normalizedName),
     page: patchedPage,
   };
 
+  closedBrowserWindowNames.delete(normalizedName);
   browserWindowsByName.set(normalizedName, windowConfig);
-  context.browserWindows = Array.from(browserWindowsByName.values());
-  context.windows = context.browserWindows;
-  context.pages = Array.from(new Set(context.browserWindows.map((windowEntry) => windowEntry.page)));
-  context.page = patchedPage;
-  context.activeBrowserWindow = normalizedName;
-  page = patchedPage;
+  updateKnownBrowserWindows(context);
+
+  if (activate) {
+    context.page = patchedPage;
+    context.activeBrowserWindow = normalizedName;
+    page = patchedPage;
+  }
 
   return patchedPage;
+}
+
+async function hydratePersistedBrowserWindows(context, currentBrowser) {
+  if (persistedBrowserWindowsHydrated) {
+    return;
+  }
+
+  const pages = await currentBrowser.pages().catch(() => []);
+  const claimedTargets = new Set();
+
+  for (const state of initialBrowserWindowsFromWorkflow()) {
+    const name = normalizeBrowserWindowName(state?.key || state?.name);
+
+    if (closedBrowserWindowNames.has(name) || browserWindowsByName.has(name)) {
+      continue;
+    }
+
+    const existingPage = await existingPageForWindow(currentBrowser, name, pages);
+    const targetId = pageTargetId(existingPage);
+
+    if (!existingPage || (targetId !== '' && claimedTargets.has(targetId))) {
+      continue;
+    }
+
+    if (targetId !== '') {
+      claimedTargets.add(targetId);
+    }
+
+    registerBrowserWindow(context, existingPage, name, String(state.label || browserWindowLabel(name)), false);
+  }
+
+  persistedBrowserWindowsHydrated = true;
+  updateKnownBrowserWindows(context);
 }
 
 async function ensurePage(context, windowName = 'main', label = '') {
@@ -2315,6 +2451,7 @@ async function ensurePage(context, windowName = 'main', label = '') {
   }
 
   const currentBrowser = await loadBrowser();
+  await hydratePersistedBrowserWindows(context, currentBrowser);
   const existingPage = await existingPageForWindow(currentBrowser, normalizedName);
 
   if (existingPage) {
@@ -2378,6 +2515,7 @@ async function selectWorkflowPageForClose(context, windowName = 'main') {
   }
 
   const currentBrowser = await loadBrowser();
+  await hydratePersistedBrowserWindows(context, currentBrowser);
   const existingPage = await existingPageForWindow(currentBrowser, normalizedName);
 
   if (!existingPage) {
@@ -2412,7 +2550,7 @@ function startPreviewLoop(context) {
       const preview = await captureTaskPreview(context, {}, false);
 
       if (Array.isArray(preview.browserWindows)) {
-        lastBrowserWindows = observableBrowserWindows(preview.browserWindows);
+        updateKnownBrowserWindows(context, preview.browserWindows);
         writeStatus('running', 'browser-preview', 'Browser-Screenshot aktualisiert.');
       }
     } catch (error) {
@@ -2672,6 +2810,8 @@ async function handleShutdownSignal(signal) {
     status: 'cancelled',
     statusMessage: 'Workflow-Task-Lauf wurde gestoppt.',
     signal,
+    activeBrowserWindow: activeBrowserWindowName(),
+    configuredTasks: configuredPublicTasks(),
     tasks: taskResults,
     browserWindows: observableBrowserWindows(lastBrowserWindows),
     browserWsEndpoint: browserWsEndpoint(),
@@ -2718,6 +2858,8 @@ function handleFatalError(source, error) {
     status: 'failed',
     statusMessage: `Runner-Absturz (${source}): ${messageText}`,
     error: (error && error.stack) || messageText,
+    activeBrowserWindow: activeBrowserWindowName(),
+    configuredTasks: configuredPublicTasks(),
     tasks: taskResults,
     browserWindows: observableBrowserWindows(lastBrowserWindows),
     browserWsEndpoint: browserWsEndpoint(),
@@ -3169,16 +3311,25 @@ async function run() {
     const taskStartedAt = now();
     const taskLabel = task.title || task.task_key || task.key || 'Task';
 
-    pushEvent('task-started', taskLabel, { taskKey: task.key, taskType: task.task_key });
+    const taskIdentity = {
+      taskKey: task.key,
+      taskType: task.task_key,
+      browserWindow: browserWindowNameForTask(task),
+      embedded_workflow_path: Array.isArray(task.embedded_workflow_path) ? task.embedded_workflow_path : [],
+      embedded_source_step_id: task.embedded_source_step_id || null,
+      embedded_source_action_key: task.embedded_source_action_key || '',
+      embedded_source_task_key: task.embedded_source_task_key || '',
+    };
+    pushEvent('task-started', taskLabel, taskIdentity);
     const existingTaskResult = taskResults.find((candidate) => candidate.key === task.key);
 
     if (existingTaskResult) {
       Object.assign(existingTaskResult, { title: taskLabel, status: 'running', startedAt: taskStartedAt });
     } else {
-      taskResults.push({ key: task.key, title: taskLabel, status: 'running', startedAt: taskStartedAt });
+      taskResults.push({ ...cleanForJson(task), key: task.key, title: taskLabel, status: 'running', startedAt: taskStartedAt });
     }
 
-    writeStatus('running', 'task-started', taskLabel, { taskKey: task.key });
+    writeStatus('running', 'task-started', taskLabel, taskIdentity);
 
     let result;
 
@@ -3289,6 +3440,12 @@ async function run() {
             skippedBrowserClose: true,
             browserWindow: targetBrowserWindow,
           }));
+        } else if (task.task_key === 'browser.close' && !context.page) {
+          result = {
+            ok: true,
+            status: 'skipped',
+            statusMessage: 'Kein Browser-Handle zum Schliessen vorhanden.',
+          };
         } else {
           await captureStepArtifactPhase(context, 'before', debugTask).catch((error) => {
             pushEvent('dev-debug-before-failed', error.message, { taskKey: task.key });
@@ -3299,6 +3456,7 @@ async function run() {
 
         if (task.task_key === 'browser.close' && !result?.skippedBrowserClose) {
           result = result || {};
+          closedBrowserWindowNames.add(targetBrowserWindow);
           browserWindowsByName.delete(targetBrowserWindow);
           context.browserWindows = Array.from(browserWindowsByName.values());
           context.windows = context.browserWindows;
@@ -3314,7 +3472,7 @@ async function run() {
             .filter((windowEntry) => {
               const key = normalizeBrowserWindowName(windowEntry?.key || windowEntry?.name || '');
 
-              return key !== targetBrowserWindow;
+              return !closedBrowserWindowNames.has(key);
             })
             .map((windowEntry) => [
               normalizeBrowserWindowName(windowEntry?.key || windowEntry?.name || 'main'),
@@ -3457,8 +3615,9 @@ async function run() {
     }
 
     if (Array.isArray(result.browserWindows)) {
-      result.browserWindows = observableBrowserWindows(result.browserWindows);
-      lastBrowserWindows = result.browserWindows;
+      result.browserWindows = updateKnownBrowserWindows(context, result.browserWindows);
+    } else if (browserWindowsByName.size > 0) {
+      result.browserWindows = updateKnownBrowserWindows(context);
     }
 
     const branchOutcome = String(result.branchOutcome || result.branch_outcome || '').trim().toLowerCase();
@@ -3488,7 +3647,7 @@ async function run() {
     const taskEventStage = branchFailed
       ? 'task-condition-not-met'
       : (ok ? 'task-completed' : 'task-failed');
-    pushEvent(taskEventStage, result.statusMessage || taskLabel, { taskKey: task.key, status, branchOutcome });
+    pushEvent(taskEventStage, result.statusMessage || taskLabel, { ...taskIdentity, status, branchOutcome });
     writeStatus('running', taskEventStage, result.statusMessage || taskLabel);
 
     await captureStepArtifactPhase(context, 'after', debugTask).catch((error) => {
@@ -3634,7 +3793,7 @@ async function run() {
         : await captureTaskPreview(context, result, true).catch(() => ({}));
 
       if (Array.isArray(failurePreview.browserWindows)) {
-        lastBrowserWindows = observableBrowserWindows(failurePreview.browserWindows);
+        updateKnownBrowserWindows(context, failurePreview.browserWindows);
         result = {
           ...result,
           browserWindows: failurePreview.browserWindows,
@@ -3798,6 +3957,8 @@ async function run() {
         workflow_return_ok: context.workflow_return_ok ?? null,
         workflow_variables: context.workflow_variables || null,
         workflowVariables: context.workflowVariables || null,
+        activeBrowserWindow: activeBrowserWindowName(),
+        configuredTasks: configuredPublicTasks(),
         tasks: taskResults,
         ...browserSessionPersistenceFields(),
         browserWindows: observableBrowserWindows(lastBrowserWindows),
@@ -3817,6 +3978,7 @@ async function run() {
         failedResult.debugArtifacts = debugArtifacts;
       }
 
+      finalRunState = 'failed';
       flushDebugArtifactManifest(true);
       writeJson(runtime.resultPath, failedResult);
       writeStatus('failed', 'failed', failedResult.statusMessage, { result: failedResult });
@@ -3929,7 +4091,7 @@ async function run() {
   const finalPreview = await captureTaskPreview(context, {}, true).catch(() => ({}));
 
   if (Array.isArray(finalPreview.browserWindows)) {
-    lastBrowserWindows = observableBrowserWindows(finalPreview.browserWindows);
+    updateKnownBrowserWindows(context, finalPreview.browserWindows);
   }
 
   const result = {
@@ -3949,6 +4111,8 @@ async function run() {
     workflow_return_ok: context.workflow_return_ok ?? null,
     workflow_variables: context.workflow_variables || null,
     workflowVariables: context.workflowVariables || null,
+    activeBrowserWindow: activeBrowserWindowName(),
+    configuredTasks: configuredPublicTasks(),
     tasks: taskResults,
     ...browserSessionPersistenceFields(),
     ...(lastCompletedTaskKey ? {
@@ -4020,6 +4184,8 @@ run()
       status: 'failed',
       statusMessage: error.message,
       error: error.stack || error.message,
+      activeBrowserWindow: activeBrowserWindowName(),
+      configuredTasks: configuredPublicTasks(),
       tasks: taskResults,
       ...(debugObservabilityEnabled() ? { debugArtifacts } : {}),
     browserWindows: observableBrowserWindows(lastBrowserWindows),

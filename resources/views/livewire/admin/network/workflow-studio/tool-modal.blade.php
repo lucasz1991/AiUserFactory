@@ -36,10 +36,10 @@
             @if($activeToolModal === 'browser')
                 <div class="space-y-5" data-workflow-browser-tool>
                     @foreach($browserWindows as $window)
-                        <article wire:key="studio-browser-window-{{ $session->id }}-{{ $window['name'] }}" class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                        <article wire:key="studio-browser-modal-window-{{ $session->id }}-{{ $window['name'] }}" class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
                             <div class="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 px-4 py-3">
                                 <div class="min-w-0">
-                                    <div class="flex items-center gap-2"><span class="h-2.5 w-2.5 rounded-full {{ $window['connected'] ? 'bg-emerald-500' : 'bg-slate-300' }}"></span><h3 class="truncate text-sm font-bold text-slate-900">{{ $window['name'] }}</h3>@if($window['active'])<span class="rounded bg-cyan-100 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wide text-cyan-800">aktiv</span>@endif</div>
+                                    <div class="flex items-center gap-2"><span class="h-2.5 w-2.5 rounded-full {{ $isActive && ! $historicalRunView && $window['connected'] ? 'bg-emerald-500' : 'bg-slate-300' }}"></span><h3 class="truncate text-sm font-bold text-slate-900">{{ $window['name'] }}</h3>@if($window['active'])<span class="rounded bg-cyan-100 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wide text-cyan-800">aktiv</span>@endif</div>
                                     <p class="mt-1 truncate text-[10px] text-slate-500">{{ $window['url'] ?: 'Noch keine URL erfasst' }}</p>
                                 </div>
                                 @if(! $autonomousMode)

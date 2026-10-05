@@ -17,6 +17,7 @@ use App\Services\Workflows\WorkflowCopilotLaunchRequest;
 use App\Services\Workflows\WorkflowCopilotLaunchService;
 use App\Services\Workflows\WorkflowCopilotSessionService;
 use App\Services\Workflows\WorkflowDefinitionValidator;
+use App\Services\Workflows\WorkflowEmbeddedRunPresenter;
 use App\Services\Workflows\WorkflowExecutionService;
 use App\Services\Workflows\WorkflowLiveTaskPresenter;
 use App\Services\Workflows\WorkflowObservabilityPolicy;
@@ -31,6 +32,7 @@ use App\Services\Workflows\WorkflowStudioRevisionService;
 use App\Services\Workflows\WorkflowStudioSessionService;
 use App\Services\Workflows\WorkflowTaskCatalog;
 use App\Services\Workflows\WorkflowTaskOrderingService;
+use App\Services\Workflows\WorkflowTaskRunner;
 use DomainException;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -1283,6 +1285,7 @@ class WorkflowStudio extends Component
                 ? app(WorkflowObservabilityPolicy::class)->resultOnly($run)
                 : false,
             'browserWindows' => $this->browserWindowCards($workflow, $run),
+            'embeddedWorkflowMaps' => app(WorkflowEmbeddedRunPresenter::class)->present($workflow, $run),
             'steps' => $workflow->steps,
             'events' => $session->events()->latest('sequence')->limit(40)->get()->reverse()->values(),
             'checkpoints' => $run?->checkpoints()->latest('sequence')->limit(30)->get() ?? collect(),
@@ -1620,13 +1623,34 @@ class WorkflowStudio extends Component
     private function browserWindowCards(Workflow $workflow, ?WorkflowRun $run): array
     {
         $context = $run && is_array($run->context_json) ? $run->context_json : [];
-        $runtimeWindows = data_get($context, 'browser_windows', []);
+        $runtimeWindows = $context['browserWindows'] ?? $context['browser_windows'] ?? [];
         $snapshots = $this->browserWindowSnapshots($run);
 
         if (! is_array($runtimeWindows) || $runtimeWindows === []) {
             $runtimeWindows = data_get($context, 'manual_pause_checkpoint.browser_windows', []);
         }
         $activeWindow = trim((string) ($context['activeBrowserWindow'] ?? $context['active_browser_window'] ?? 'main')) ?: 'main';
+        $liveRegistry = null;
+        foreach ($run?->stepRuns?->sortByDesc('id') ?? [] as $stepRun) {
+            if ((int) $stepRun->workflow_run_id !== (int) $run->id) {
+                continue;
+            }
+            $result = is_array($stepRun->result_json) ? $stepRun->result_json : [];
+            foreach (['workflowRunId' => $run->id, 'workflowStepRunId' => $stepRun->id, 'workflowStepId' => $stepRun->workflow_step_id] as $field => $id) {
+                if (isset($result[$field]) && (int) $result[$field] !== (int) $id) {
+                    continue 2;
+                }
+            }
+            if (is_array($result['browserWindows'] ?? null)) {
+                $liveRegistry = collect($result['browserWindows'])->filter(fn ($window) => is_array($window))
+                    ->mapWithKeys(fn ($window, $key) => [(string) ($window['key'] ?? $window['name'] ?? $key) => (string) ($window['targetId'] ?? $window['target_id'] ?? '')])->all();
+            }
+            $name = $result['activeBrowserWindow'] ?? $result['active_browser_window'] ?? null;
+            if (is_string($name) && trim($name) !== '') {
+                $activeWindow = trim($name);
+            }
+            break;
+        }
 
         $cards = collect(is_array($runtimeWindows) ? $runtimeWindows : [])
             ->filter(fn (mixed $window): bool => is_array($window))
@@ -1638,7 +1662,8 @@ class WorkflowStudio extends Component
                     'title' => trim((string) ($window['title'] ?? '')),
                     'url' => trim((string) ($window['url'] ?? $window['currentUrl'] ?? '')),
                     'target_id' => trim((string) ($window['targetId'] ?? $window['target_id'] ?? '')),
-                    'connected' => filled($window['targetId'] ?? $window['target_id'] ?? null),
+                    'connected' => ($window['closed'] ?? false) !== true && ($window['isClosed'] ?? false) !== true
+                        && ($window['connected'] ?? true) !== false && filled($window['targetId'] ?? $window['target_id'] ?? null),
                     'active' => $name === $activeWindow,
                     'runtime' => true,
                     'task_count' => 0,
@@ -1649,31 +1674,56 @@ class WorkflowStudio extends Component
                 ]];
             });
 
-        foreach ($workflow->steps as $step) {
-            foreach ($step->task_cards as $task) {
-                $name = trim((string) ($task['browser_window_name'] ?? $task['browser_window'] ?? ''));
-
-                if ($name === '') {
-                    continue;
+        // Running/historical views use their frozen composed cards. Never
+        // re-expand another workflow's edited definition on every live poll.
+        if ($run) {
+            $configuredTasks = $run->stepRuns->flatMap(function ($stepRun) use ($run): array {
+                if ((int) $stepRun->workflow_run_id !== (int) $run->id) {
+                    return [];
                 }
+                $snapshot = is_array($stepRun->result_json) ? $stepRun->result_json : [];
 
-                $card = $cards->get($name, [
-                    'name' => $name,
-                    'title' => '',
-                    'url' => '',
-                    'target_id' => '',
-                    'connected' => false,
-                    'active' => $name === $activeWindow,
-                    'runtime' => false,
-                    'task_count' => 0,
-                    'screenshot_url' => null,
-                    'dom_url' => null,
-                    'dom_tree' => null,
-                    'cursor' => null,
-                ]);
-                $card['task_count']++;
-                $cards->put($name, $card);
+                return (array) ($snapshot['configuredTasks'] ?? $snapshot['tasks'] ?? []);
+            })->all();
+        } else {
+            try {
+                $configuredTasks = app(WorkflowTaskRunner::class)->composedTasksForWorkflow($workflow);
+            } catch (\RuntimeException) {
+                // Keep an invalid/deactivated child editable. Starting the test
+                // still uses the real validator and reports its exact failure.
+                $configuredTasks = $workflow->steps->flatMap(fn ($step) => $step->task_cards)->all();
             }
+        }
+        foreach ($configuredTasks as $task) {
+            if (! is_array($task)) {
+                continue;
+            }
+            $name = trim((string) ($task['browser_window_name'] ?? $task['browser_window'] ?? ''));
+
+            if ($name === '') {
+                continue;
+            }
+
+            $card = $cards->get($name, [
+                'name' => $name,
+                'title' => '',
+                'url' => '',
+                'target_id' => '',
+                'connected' => false,
+                'active' => $name === $activeWindow,
+                'runtime' => false,
+                'task_count' => 0,
+                'screenshot_url' => null,
+                'dom_url' => null,
+                'dom_tree' => null,
+                'cursor' => null,
+            ]);
+            $card['task_count']++;
+            $path = (array) ($task['embedded_workflow_path'] ?? []);
+            if ($path !== []) {
+                $card['workflow_path'] = collect($path)->pluck('workflow_name')->filter()->implode(' › ');
+            }
+            $cards->put($name, $card);
         }
 
         foreach ($snapshots as $name => $snapshot) {
@@ -1691,7 +1741,18 @@ class WorkflowStudio extends Component
                 'dom_tree' => null,
                 'cursor' => null,
             ]);
-            $cards->put($name, array_replace($card, array_filter($snapshot, fn (mixed $value): bool => filled($value))));
+            $cards->put($name, array_replace($card, $snapshot));
+        }
+
+        if ($liveRegistry !== null) {
+            $cards = $cards->map(function (array $card) use ($liveRegistry): array {
+                $name = $card['name'];
+                $card['connected'] = $card['connected'] && isset($liveRegistry[$name])
+                    && $liveRegistry[$name] !== '' && $liveRegistry[$name] === $card['target_id'];
+                $card['active'] = $card['active'] && $card['connected'];
+
+                return $card;
+            });
         }
 
         if ($cards->isEmpty()) {
@@ -1722,7 +1783,15 @@ class WorkflowStudio extends Component
 
         $snapshots = [];
         foreach ($run->stepRuns->sortByDesc('id') as $stepRun) {
+            if ((int) $stepRun->workflow_run_id !== (int) $run->id) {
+                continue;
+            }
             $result = is_array($stepRun->result_json) ? $stepRun->result_json : [];
+            foreach (['workflowRunId' => $run->id, 'workflowStepRunId' => $stepRun->id, 'workflowStepId' => $stepRun->workflow_step_id] as $field => $id) {
+                if (isset($result[$field]) && (int) $result[$field] !== (int) $id) {
+                    continue 2;
+                }
+            }
             foreach ((array) data_get($result, 'browserWindows', []) as $key => $window) {
                 if (! is_array($window)) {
                     continue;
@@ -1733,7 +1802,8 @@ class WorkflowStudio extends Component
                     'title' => trim((string) ($window['title'] ?? $window['label'] ?? '')),
                     'url' => trim((string) ($window['url'] ?? $window['currentUrl'] ?? '')),
                     'target_id' => trim((string) ($window['targetId'] ?? $window['target_id'] ?? '')),
-                    'connected' => filled($window['targetId'] ?? $window['target_id'] ?? null),
+                    'connected' => ($window['closed'] ?? false) !== true && ($window['isClosed'] ?? false) !== true
+                        && ($window['connected'] ?? true) !== false && filled($window['targetId'] ?? $window['target_id'] ?? null),
                     'runtime' => true,
                     'screenshot_url' => $this->runtimePreviewUrl($window['screenshotUrl'] ?? null, $window['livePreviewRelativePath'] ?? null),
                     'dom_url' => $this->runtimePreviewUrl($window['debugDomUrl'] ?? null, $window['debugDomRelativePath'] ?? null),
@@ -1742,8 +1812,10 @@ class WorkflowStudio extends Component
                 ];
             }
 
-            if (! isset($snapshots['main']) && filled(data_get($result, 'screenshotUrl'))) {
-                $snapshots['main'] = [
+            $legacyName = trim((string) ($result['activeBrowserWindow'] ?? $result['active_browser_window']
+                ?? data_get($result, 'windowStatus.key') ?? data_get($result, 'windowStatus.name') ?? 'main')) ?: 'main';
+            if (! isset($snapshots[$legacyName]) && filled(data_get($result, 'screenshotUrl'))) {
+                $snapshots[$legacyName] = [
                     'title' => 'Browser',
                     'url' => trim((string) data_get($result, 'windowStatus.url', '')),
                     'target_id' => trim((string) data_get($result, 'windowStatus.targetId', '')),

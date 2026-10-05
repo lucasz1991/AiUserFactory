@@ -80,6 +80,9 @@
                             <span class="ff-studio-browser-mini-active">Aktiv</span>
                         @endif
                     </div>
+                    @if(filled($window['workflow_path'] ?? null))
+                        <p data-studio-browser-workflow-path class="ff-studio-browser-location" title="{{ $window['workflow_path'] }}">{{ $window['workflow_path'] }}</p>
+                    @endif
                     <span @if($isPrimaryWindow) data-studio-active-browser-status @endif class="ff-studio-browser-state" data-connected="{{ $windowConnected ? 'true' : 'false' }}" role="status" aria-live="polite">
                         <span class="ff-studio-browser-state-dot" aria-hidden="true"></span>
                         {{ $windowStateLabel }}

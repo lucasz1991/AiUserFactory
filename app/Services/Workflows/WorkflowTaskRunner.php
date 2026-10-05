@@ -28,6 +28,9 @@ class WorkflowTaskRunner
 
     protected ?WorkflowObservabilityPolicy $observabilityPolicy = null;
 
+    /** Definitions are read once per composition, not once per include/pass. */
+    private array $compositionWorkflows = [];
+
     public function __construct(
         protected MailAccountRegistrationRunner $mailSettings,
         ?WorkflowTaskCatalog $taskCatalog = null,
@@ -551,10 +554,110 @@ class WorkflowTaskRunner
             }
         }
 
-        return $this->expandRuntimeTasks(
-            $tasks,
-            [(int) $step->workflow_id],
-        );
+        $workflow = Workflow::query()->with(['steps' => fn ($query) => $query->ordered()])->find($step->workflow_id);
+        if (! $workflow) {
+            $workflow = (new Workflow)->forceFill(['id' => (int) $step->workflow_id]);
+            $workflow->setRelation('steps', collect());
+        }
+        // Probes and Copilot can supply an unsaved/generated step definition.
+        // Compose that exact source, never substitute the persisted card list.
+        $runtimeStep = clone $step;
+        $runtimeStep->is_enabled = true;
+        $workflow->setRelation('steps', $workflow->steps->map(fn (WorkflowStep $candidate): WorkflowStep => (int) $candidate->id === (int) $step->id ? $runtimeStep : $candidate));
+        if (! $workflow->steps->contains(fn (WorkflowStep $candidate): bool => (int) $candidate->id === (int) $step->id)) {
+            $workflow->setRelation('steps', $workflow->steps->push($runtimeStep));
+        }
+        $composed = $this->composedTasksForWorkflow($workflow);
+        $selectedKeys = array_map(fn (array $task): string => (string) ($task['key'] ?? ''), $tasks);
+
+        return array_values(array_filter($composed, fn (array $task): bool => (int) ($task['composition_root_step_id'] ?? 0) === (int) $step->id
+            && in_array((string) ($task['composition_root_task_key'] ?? ''), $selectedKeys, true)));
+    }
+
+    /** Read-only frozen projection shared by execution and editor window choices. */
+    public function composedTasksForWorkflow(Workflow $workflow): array
+    {
+        $this->compositionWorkflows = [];
+        $workflow->loadMissing(['steps' => fn ($query) => $query->ordered()]);
+        $context = ['names' => [], 'aliases' => [], 'locals' => []];
+
+        // Resolve exact physical references after all child producers are known.
+        // A bounded fixed point also covers a sibling included in a later list.
+        for ($pass = 0; $pass < 16; $pass++) {
+            $composed = [];
+            foreach ($workflow->steps->where('is_enabled', true)->sortBy('position') as $sourceStep) {
+                $composed = [...$composed, ...$this->expandRuntimeTasks(
+                    $sourceStep->task_cards,
+                    [(int) $workflow->id],
+                    sourceStepActionKey: $sourceStep->action_key,
+                    sourceStep: $sourceStep,
+                    windowContext: $context,
+                )];
+            }
+
+            $next = $this->compositionWindowContext($composed, $context['aliases']);
+            if ($next === $context) {
+                return $composed;
+            }
+            $context = $next;
+        }
+
+        throw new \RuntimeException('Die Browserfenster-Zuordnung der eingebetteten Workflows ist nicht eindeutig.');
+    }
+
+    protected function compositionWindowContext(array $tasks, array $aliases = []): array
+    {
+        $names = [];
+        $implicit = [];
+        $locals = [];
+        $owners = [];
+        $producers = [];
+        foreach ($tasks as $task) {
+            $name = $task['browser_window_name'] ?? $task['embedded_workflow_browser_window'] ?? null;
+            $producer = in_array((string) ($task['task_key'] ?? ''), ['browser.open', 'browser.open_url', 'browser.open_browser_session'], true);
+            if (is_string($name) && $name !== '' && ($producer || ($task['runner'] ?? '') === 'workflow-boundary')) {
+                $frame = (string) ($task['embedded_workflow_frame_key'] ?? '__root');
+                $owners[$name][$frame] = true;
+                $source = $task['composition_browser_window_source'] ?? null;
+                $generated = $producer
+                    ? ($source !== null && $source !== 'main' && $source !== $name)
+                    : (bool) ($task['embedded_workflow_window_implicit'] ?? false);
+                $names[$name] = ($names[$name] ?? false) || $generated;
+                if ($producer) {
+                    $path = $task['embedded_workflow_path'] ?? [];
+                    $base = $path !== [] ? (string) $path[array_key_last($path)]['browser_window'] : '__root';
+                    foreach ($producers[$name] ?? [] as $previous) {
+                        if ($base !== $previous['base'] && $source !== $name && $previous['source'] !== $name) {
+                            throw new \RuntimeException('Mehrdeutige Browserfenster-Zuordnung: Zwei lokale Fenster ergeben denselben physischen Namen. Bitte explizit unterschiedliche Fenster waehlen.');
+                        }
+                    }
+                    $producers[$name][] = ['base' => $base, 'source' => $source];
+                }
+            }
+            if (($task['runner'] ?? '') === 'workflow-boundary' && ($task['embedded_workflow_window_implicit'] ?? false)) {
+                $implicit[$name][] = (string) $task['embedded_workflow_frame_key'];
+            }
+            if ($producer && is_string($name) && $name !== '' && ! empty($task['embedded_workflow_frame_key'])) {
+                $local = (string) ($task['composition_browser_window_source'] ?? 'main');
+                $locals[(string) $task['embedded_workflow_frame_key']][$local] = $name;
+            }
+        }
+        foreach ($implicit as $name => $frames) {
+            if (count($owners[$name] ?? []) > 1) {
+                foreach ($frames as $frame) {
+                    $aliases[$frame] ??= $this->normalizeBrowserWindowName($name.'-'.substr(hash('sha256', $frame), 0, 10));
+                }
+            }
+        }
+        ksort($names);
+        ksort($aliases);
+        foreach ($locals as &$localNames) {
+            ksort($localNames);
+        }
+        unset($localNames);
+        ksort($locals);
+
+        return ['names' => $names, 'aliases' => $aliases, 'locals' => $locals];
     }
 
     protected function shouldSegmentTasks(array $runtimeContext): bool
@@ -649,11 +752,14 @@ class WorkflowTaskRunner
         array $embeddedRouteMap = [],
         ?string $embeddedBoundaryTaskKey = null,
         ?string $sourceStepActionKey = null,
+        ?WorkflowStep $sourceStep = null,
+        array $embeddedWorkflowPath = [],
+        array $windowContext = [],
     ): array {
         $expanded = [];
         $embeddedBrowserWindowName = $this->normalizeBrowserWindowName($embeddedBrowserWindowName);
 
-        foreach ($tasks as $task) {
+        foreach ($tasks as $taskOrder => $task) {
             if (! is_array($task)) {
                 continue;
             }
@@ -668,8 +774,26 @@ class WorkflowTaskRunner
 
             if (! $this->isEmbeddedWorkflowTask($task)) {
                 $runtimeTask = $this->taskCatalog()->resolveRuntimeTask($task);
+                $runtimeTask['composition_root_step_id'] = $embeddedWorkflowPath[0]['source_step_id'] ?? $sourceStep?->id;
+                $runtimeTask['composition_root_task_key'] = $parentTaskKey ?? (string) ($task['key'] ?? 'task');
+                $runtimeTask['composition_browser_window_source'] = $this->normalizeBrowserWindowName($runtimeTask['browser_window_name'] ?? $runtimeTask['browser_window'] ?? null);
                 $mailboxSource = $this->effectiveEmbeddedMailboxSource($runtimeTask, $inheritedMailboxSource);
-                $browserWindow = $this->mappedEmbeddedBrowserWindowName($embeddedBrowserWindowName, $runtimeTask);
+                $browserWindow = $this->mappedEmbeddedBrowserWindowName(
+                    $embeddedBrowserWindowName,
+                    $runtimeTask,
+                    $windowContext['names'] ?? [],
+                    $windowContext['locals'][$embeddedWorkflowFrameKey ?? ''] ?? [],
+                );
+
+                if ($embeddedWorkflowPath !== []) {
+                    $runtimeTask['embedded_workflow_path'] = $embeddedWorkflowPath;
+                    $runtimeTask['embedded_source_step_id'] = $sourceStep?->id;
+                    $runtimeTask['embedded_source_action_key'] = $sourceStepActionKey;
+                    $runtimeTask['embedded_source_step_name'] = $sourceStep?->name;
+                    $runtimeTask['embedded_source_step_position'] = $sourceStep?->position;
+                    $runtimeTask['embedded_source_task_key'] = (string) ($task['key'] ?? 'task');
+                    $runtimeTask['embedded_source_task_order'] = $taskOrder;
+                }
 
                 if ($mailboxSource !== null) {
                     $runtimeTask['mailbox_source'] = $mailboxSource;
@@ -737,9 +861,12 @@ class WorkflowTaskRunner
                 throw new \RuntimeException('Zyklische Workflow-Einbindung erkannt (Workflow #'.$workflowId.').');
             }
 
-            $workflow = Workflow::query()
-                ->with(['steps' => fn ($query) => $query->ordered()])
-                ->find($workflowId);
+            if (count($workflowStack) >= 16) {
+                throw new \RuntimeException('Die Workflow-Einbindung ist zu tief verschachtelt (maximal 15 Unter-Workflows).');
+            }
+
+            $workflow = $this->compositionWorkflows[$workflowId] ??= Workflow::query()
+                ->with(['steps' => fn ($query) => $query->ordered()])->find($workflowId);
 
             if (! $workflow) {
                 throw new \RuntimeException('Der eingebettete Workflow #'.$workflowId.' wurde nicht gefunden.');
@@ -749,10 +876,13 @@ class WorkflowTaskRunner
                 throw new \RuntimeException('Der eingebettete Workflow "'.$workflow->name.'" ist deaktiviert.');
             }
 
-            $workflowBrowserWindow = $this->embeddedWorkflowBrowserWindowName(
+            $scopePrefix = $keyPrefix !== '' ? $keyPrefix : 'root-step-'.($sourceStep?->id ?? 0);
+            $workflowFrameKey = Str::slug(trim($scopePrefix.'-workflow-'.$workflow->id.'-'.$taskKey, '-'));
+            $workflowBrowserWindow = $windowContext['aliases'][$workflowFrameKey] ?? $this->embeddedWorkflowBrowserWindowName(
                 $task,
                 $embeddedBrowserWindowName,
                 $workflow,
+                $windowContext['names'] ?? [],
             );
             $workflowInputs = array_replace(
                 $embeddedWorkflowInputs,
@@ -766,8 +896,21 @@ class WorkflowTaskRunner
                 throw new \RuntimeException('Der eingebettete Workflow "'.$workflow->name.'" hat keine aktiven Listen.');
             }
 
-            $workflowFrameKey = Str::slug(trim($keyPrefix.'-workflow-'.$workflow->id.'-'.$taskKey, '-'));
             $boundaryTaskKey = $workflowFrameKey.'-boundary';
+            $workflowPath = [...$embeddedWorkflowPath, [
+                'frame_key' => $workflowFrameKey,
+                'parent_frame_key' => $embeddedWorkflowFrameKey,
+                'workflow_id' => $workflow->id,
+                'workflow_name' => $workflow->name,
+                'include_task_key' => $taskKey,
+                'include_task_title' => (string) ($task['title'] ?? $workflow->name),
+                'include_task_order' => $taskOrder,
+                'source_step_id' => $sourceStep?->id,
+                'source_step_action_key' => $sourceStepActionKey,
+                'source_step_name' => $sourceStep?->name,
+                'source_step_position' => $sourceStep?->position,
+                'browser_window' => $workflowBrowserWindow,
+            ]];
             $nestedGroups = [];
             $workflowRouteMap = [
                 'cards' => [],
@@ -801,7 +944,7 @@ class WorkflowTaskRunner
                 }
 
                 $nestedTasks = $this->applyEmbeddedStepRoutesToTasks($nestedStep, $nestedTasks);
-                $nestedPrefix = trim($keyPrefix.'-workflow-'.$workflow->id.'-'.$taskKey.'-step-'.$nestedStep->id, '-');
+                $nestedPrefix = $workflowFrameKey.'-step-'.$nestedStep->id;
                 $nestedActionKey = trim((string) $nestedStep->action_key);
                 $nextStep = $steps->get($stepIndex + 1);
 
@@ -815,7 +958,7 @@ class WorkflowTaskRunner
                     }
 
                     $originalKey = trim((string) ($nestedTask['key'] ?? 'task')) ?: 'task';
-                    $runtimeKey = Str::slug($nestedPrefix.'-'.$originalKey);
+                    $runtimeKey = $this->embeddedRuntimeEntryKey($nestedTask, $nestedPrefix, [...$workflowStack, $workflowId]);
 
                     if ($nestedTaskIndex === 0 && $nestedActionKey !== '') {
                         $workflowRouteMap['first_tasks'][$nestedActionKey] = $runtimeKey;
@@ -847,6 +990,9 @@ class WorkflowTaskRunner
                     $workflowRouteMap,
                     $boundaryTaskKey,
                     $nestedGroup['action_key'],
+                    $nestedGroup['step'],
+                    $workflowPath,
+                    $windowContext,
                 );
 
                 foreach ($nestedExpanded as $nestedTask) {
@@ -870,6 +1016,16 @@ class WorkflowTaskRunner
                 'embedded_workflow_frame_key' => $workflowFrameKey,
                 'embedded_workflow_browser_window' => $workflowBrowserWindow,
                 'embedded_workflow_inputs' => $workflowInputs,
+                'embedded_workflow_path' => $workflowPath,
+                'embedded_workflow_window_implicit' => $this->configuredEmbeddedBrowserWindowName($task) === null,
+                'embedded_source_step_id' => $sourceStep?->id,
+                'embedded_source_action_key' => $sourceStepActionKey,
+                'embedded_source_step_name' => $sourceStep?->name,
+                'embedded_source_step_position' => $sourceStep?->position,
+                'embedded_source_task_key' => $taskKey,
+                'embedded_source_task_order' => $taskOrder,
+                'composition_root_step_id' => $workflowPath[0]['source_step_id'],
+                'composition_root_task_key' => $rootTaskKey,
             ];
 
             if ($embeddedWorkflowFrameKey !== null) {
@@ -880,22 +1036,50 @@ class WorkflowTaskRunner
                 $boundaryTask['enclosing_embedded_workflow_boundary_key'] = $embeddedBoundaryTaskKey;
             }
 
-            foreach (['next', 'on_error'] as $routeKey) {
+            foreach (['next', 'on_error', 'on_partial', 'status_routes'] as $routeKey) {
                 if (is_array($task[$routeKey] ?? null)) {
-                    $boundaryTask[$routeKey] = $this->remapEmbeddedRoute(
-                        $task[$routeKey],
-                        $embeddedRouteMap,
-                        $embeddedBoundaryTaskKey,
-                        $sourceStepActionKey,
-                        $routeKey,
-                    );
+                    $boundaryTask[$routeKey] = $task[$routeKey];
                 }
             }
+            $boundaryTask = $this->remapEmbeddedTaskRoutes($boundaryTask, $embeddedRouteMap, $embeddedBoundaryTaskKey, $sourceStepActionKey);
 
             $expanded[] = $boundaryTask;
         }
 
         return $expanded;
+    }
+
+    /** Routes into an include enter its real first leaf, never a removed placeholder. */
+    protected function embeddedRuntimeEntryKey(array $task, string $prefix, array $workflowStack): string
+    {
+        $key = trim((string) ($task['key'] ?? 'task')) ?: 'task';
+        if (! $this->isEmbeddedWorkflowTask($task)) {
+            return Str::slug($prefix.'-'.$key);
+        }
+
+        $workflowId = (int) ($task['workflow_id'] ?? 0);
+        if (in_array($workflowId, $workflowStack, true)) {
+            throw new \RuntimeException('Zyklische Workflow-Einbindung erkannt (Workflow #'.$workflowId.').');
+        }
+        if (count($workflowStack) >= 16) {
+            throw new \RuntimeException('Die Workflow-Einbindung ist zu tief verschachtelt (maximal 15 Unter-Workflows).');
+        }
+        $workflow = $this->compositionWorkflows[$workflowId] ??= Workflow::query()
+            ->with(['steps' => fn ($query) => $query->ordered()])->find($workflowId);
+        $step = $workflow?->steps->firstWhere('is_enabled', true);
+        if (! $step instanceof WorkflowStep) {
+            throw new \RuntimeException('Die eingebettete Workflow-Referenz enthaelt keine aktive Liste.');
+        }
+        $first = $step->task_cards[0] ?? null;
+        if (! is_array($first) && $step->type === WorkflowStep::TYPE_WAIT) {
+            $first = ['key' => 'warten'];
+        }
+        if (! is_array($first)) {
+            throw new \RuntimeException('Die erste eingebettete Workflow-Liste enthaelt keine ausfuehrbare Task.');
+        }
+        $nestedPrefix = Str::slug($prefix.'-workflow-'.$workflowId.'-'.$key).'-step-'.$step->id;
+
+        return $this->embeddedRuntimeEntryKey($first, $nestedPrefix, [...$workflowStack, $workflowId]);
     }
 
     protected function applyEmbeddedStepRoutesToTasks(WorkflowStep $step, array $tasks): array
@@ -1061,7 +1245,7 @@ class WorkflowTaskRunner
         return $route;
     }
 
-    protected function mappedEmbeddedBrowserWindowName(?string $embeddedBrowserWindowName, array $task): ?string
+    protected function mappedEmbeddedBrowserWindowName(?string $embeddedBrowserWindowName, array $task, array $physicalNames = [], array $localNames = []): ?string
     {
         $embeddedBrowserWindowName = $this->normalizeBrowserWindowName($embeddedBrowserWindowName);
         $taskBrowserWindow = $this->normalizeBrowserWindowName(
@@ -1076,11 +1260,21 @@ class WorkflowTaskRunner
             return $taskBrowserWindow;
         }
 
+        $producer = in_array((string) ($task['task_key'] ?? ''), ['browser.open', 'browser.open_url', 'browser.open_browser_session'], true);
+        if (! $producer && $taskBrowserWindow !== null && isset($localNames[$taskBrowserWindow])) {
+            return $localNames[$taskBrowserWindow];
+        }
+        if ($taskBrowserWindow !== null && $taskBrowserWindow !== 'main'
+            && isset($physicalNames[$taskBrowserWindow])
+            && (! $producer || $physicalNames[$taskBrowserWindow])) {
+            return $taskBrowserWindow;
+        }
+
         if ($taskBrowserWindow === null || $taskBrowserWindow === 'main') {
             return $embeddedBrowserWindowName;
         }
 
-        if ($taskBrowserWindow === $embeddedBrowserWindowName || str_starts_with($taskBrowserWindow, $embeddedBrowserWindowName.'-')) {
+        if ($taskBrowserWindow === $embeddedBrowserWindowName) {
             return $taskBrowserWindow;
         }
 
@@ -1138,10 +1332,9 @@ class WorkflowTaskRunner
         return $configured;
     }
 
-    protected function embeddedWorkflowBrowserWindowName(array $task, ?string $parentBrowserWindowName, Workflow $workflow): string
+    protected function configuredEmbeddedBrowserWindowName(array $task): ?string
     {
-        $parentBrowserWindowName = $this->normalizeBrowserWindowName($parentBrowserWindowName);
-        $configuredBrowserWindow = $this->normalizeBrowserWindowName(
+        return $this->normalizeBrowserWindowName(
             $task['embedded_workflow_browser_window']
             ?? $task['embeddedWorkflowBrowserWindow']
             ?? $task['browser_window_after_embedding']
@@ -1152,12 +1345,26 @@ class WorkflowTaskRunner
             ?? $task['browserWindow']
             ?? null,
         );
+    }
+
+    protected function embeddedWorkflowBrowserWindowName(array $task, ?string $parentBrowserWindowName, Workflow $workflow, array $physicalNames = []): string
+    {
+        $parentBrowserWindowName = $this->normalizeBrowserWindowName($parentBrowserWindowName);
+        $configuredBrowserWindow = $this->configuredEmbeddedBrowserWindowName($task);
+
+        if ($configuredBrowserWindow === null) {
+            $fallback = $this->fallbackEmbeddedWorkflowBrowserWindowName($task, $workflow);
+
+            return $parentBrowserWindowName === null
+                ? $fallback
+                : ($this->normalizeBrowserWindowName($parentBrowserWindowName.'-'.$fallback) ?? $fallback);
+        }
 
         if ($parentBrowserWindowName !== null) {
             return $this->mappedEmbeddedBrowserWindowName($parentBrowserWindowName, [
                 'browser_window_name' => $configuredBrowserWindow,
                 'browser_window' => $configuredBrowserWindow,
-            ]) ?? $parentBrowserWindowName;
+            ], $physicalNames) ?? $parentBrowserWindowName;
         }
 
         if ($configuredBrowserWindow !== null) {
@@ -1193,7 +1400,10 @@ class WorkflowTaskRunner
 
         $name = preg_replace('/\s+/', '-', $name) ?? '';
         $name = preg_replace('/[^A-Za-z0-9._-]+/', '', $name) ?? '';
-        $name = strtolower(substr($name, 0, 80));
+        $name = strtolower($name);
+        if (strlen($name) > 80) {
+            $name = substr($name, 0, 65).'-'.substr(hash('sha256', $name), 0, 14);
+        }
 
         return $name !== '' ? $name : null;
     }

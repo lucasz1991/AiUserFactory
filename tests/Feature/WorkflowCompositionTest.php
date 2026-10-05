@@ -14,6 +14,7 @@ use App\Services\Workflows\WorkflowStudioSessionService;
 use App\Services\Workflows\WorkflowTaskCatalog;
 use App\Services\Workflows\WorkflowTaskRunner;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Livewire\Livewire;
 use ReflectionClass;
 use Tests\TestCase;
@@ -55,8 +56,8 @@ class WorkflowCompositionTest extends TestCase
         Livewire::test(WorkflowManager::class, ['workflow' => $child])
             ->assertSee('Achtung: Dieser Workflow ist gesperrt.')
             ->assertSee('Als Admin kannst du ihn trotzdem bearbeiten.')
-            ->assertSee('Testen')
-            ->assertSee('Workflow bearbeiten')
+            ->assertSee('Bearbeiten &amp; testen', false)
+            ->assertSee('Eine Task nach der anderen')
             ->assertDontSee('Task-Bibliothek');
 
         $tasks = $this->runtimeTasks($parentStep);
@@ -525,6 +526,264 @@ class WorkflowCompositionTest extends TestCase
         $this->assertSame($childTask['embedded_workflow_inputs'], $boundary['embedded_workflow_inputs']);
     }
 
+    public function test_three_nested_workflows_keep_distinct_windows_and_exact_ancestor_references(): void
+    {
+        $root = $this->workflow('window-root');
+        $child = $this->workflow('window-child');
+        $grandchild = $this->workflow('window-grandchild');
+        $leaf = $this->workflow('window-leaf');
+        $leafStep = $this->step($leaf, 'Leaf browser', [
+            $this->browserTask('leaf-open', 'main'),
+            $this->browserTask('ancestor-read', 'webmail-popup', 'browser.click'),
+        ]);
+        $this->step($grandchild, 'Grandchild include', [$this->workflowTask($leaf, 'leaf-include')]);
+        $this->step($child, 'Child browser', [
+            $this->browserTask('child-open', 'main'),
+            $this->browserTask('child-popup', 'popup'),
+            $this->workflowTask($grandchild, 'grandchild-include'),
+            $this->browserTask('descendant-read', 'webmail-workflow-window-grandchild-workflow-window-leaf', 'browser.click'),
+        ]);
+        $include = $this->workflowTask($child, 'child-include');
+        $include['browser_window_name'] = 'webmail';
+        $rootStep = $this->step($root, 'Root browser', [$include]);
+
+        $tasks = $this->runtimeTasks($rootStep);
+        $leafTask = collect($tasks)->firstWhere('embedded_source_task_key', 'leaf-open');
+        $ancestorRead = collect($tasks)->firstWhere('embedded_source_task_key', 'ancestor-read');
+        $descendantRead = collect($tasks)->firstWhere('embedded_source_task_key', 'descendant-read');
+
+        $this->assertSame('webmail-workflow-window-grandchild-workflow-window-leaf', $leafTask['browser_window_name']);
+        $this->assertSame('webmail-popup', $ancestorRead['browser_window_name']);
+        $this->assertSame($leafTask['browser_window_name'], $descendantRead['browser_window_name']);
+        $this->assertCount(3, $leafTask['embedded_workflow_path']);
+        $this->assertSame([$child->id, $grandchild->id, $leaf->id], array_column($leafTask['embedded_workflow_path'], 'workflow_id'));
+        $this->assertSame($leafStep->id, $leafTask['embedded_source_step_id']);
+        $this->assertSame((string) $leafStep->action_key, $leafTask['embedded_source_action_key']);
+        $this->assertSame($rootStep->id, $leafTask['embedded_workflow_path'][0]['source_step_id']);
+        $this->assertSame($leafTask['embedded_workflow_path'][1]['frame_key'], $leafTask['embedded_workflow_path'][2]['parent_frame_key']);
+    }
+
+    public function test_repeated_implicit_includes_have_stable_distinct_windows_across_root_lists_and_resume(): void
+    {
+        $root = $this->workflow('repeat-root');
+        $child = $this->workflow('repeat-child');
+        $this->step($child, 'Repeat browser', [$this->browserTask('open', 'main')]);
+        $first = $this->step($root, 'First root', [$this->workflowTask($child, 'same-key')]);
+        $second = $this->step($root, 'Second root', [$this->workflowTask($child, 'same-key')]);
+
+        $firstTasks = $this->runtimeTasks($first);
+        $secondTasks = $this->runtimeTasks($second, 'same-key');
+        $all = app(WorkflowTaskRunner::class)->composedTasksForWorkflow($root);
+
+        $this->assertNotSame($firstTasks[0]['browser_window_name'], $secondTasks[0]['browser_window_name']);
+        $this->assertNotSame($firstTasks[0]['embedded_workflow_frame_key'], $secondTasks[0]['embedded_workflow_frame_key']);
+        $this->assertSame($firstTasks[0]['browser_window_name'], $all[0]['browser_window_name']);
+        $this->assertSame($secondTasks[0]['browser_window_name'], $all[2]['browser_window_name']);
+        $this->assertSame($firstTasks, $this->runtimeTasks($first, 'same-key'));
+    }
+
+    public function test_local_child_producer_does_not_accidentally_share_same_short_root_window_name(): void
+    {
+        $root = $this->workflow('short-root');
+        $child = $this->workflow('short-child');
+        $this->step($child, 'Child popup', [
+            $this->browserTask('child-popup', 'popup'),
+            $this->browserTask('child-consumer', 'popup', 'browser.click'),
+            $this->browserTask('ancestor-consumer', 'root-tab', 'browser.click'),
+        ]);
+        $include = $this->workflowTask($child, 'child');
+        $include['browser_window_name'] = 'webmail';
+        $tasks = $this->runtimeTasks($this->step($root, 'Root popup', [$this->browserTask('root-popup', 'popup'), $this->browserTask('root-other', 'root-tab'), $include]));
+
+        $this->assertSame('popup', $tasks[0]['browser_window_name']);
+        $this->assertSame('webmail-popup', collect($tasks)->firstWhere('embedded_source_task_key', 'child-popup')['browser_window_name']);
+        $this->assertSame('webmail-popup', collect($tasks)->firstWhere('embedded_source_task_key', 'child-consumer')['browser_window_name']);
+        $this->assertSame('root-tab', collect($tasks)->firstWhere('embedded_source_task_key', 'ancestor-consumer')['browser_window_name']);
+    }
+
+    public function test_runtime_preserves_supplied_unsaved_probe_cards_and_empty_root_wait(): void
+    {
+        $root = $this->workflow('probe-root');
+        $step = $this->step($root, 'Probe root', [$this->waitTask('saved')]);
+        $probe = clone $step;
+        $probe->config_json = ['tasks' => [$this->waitTask('generated-probe')]];
+        $this->assertSame('generated-probe', $this->runtimeTasks($probe)[0]['key']);
+        $this->assertSame('saved', $step->fresh()->task_cards[0]['key']);
+        $step->forceFill(['type' => WorkflowStep::TYPE_WAIT, 'config_json' => ['seconds' => 4]])->save();
+        $this->assertSame([], $this->runtimeTasks($step));
+        $transient = new WorkflowStep([
+            'workflow_id' => $root->id,
+            'name' => 'Transient probe',
+            'action_key' => 'transient-probe',
+            'is_enabled' => true,
+            'config_json' => ['tasks' => [$this->waitTask('transient-card')]],
+        ]);
+        $this->assertSame('transient-card', $this->runtimeTasks($transient)[0]['key']);
+    }
+
+    public function test_repeated_composition_reads_each_child_definition_only_once(): void
+    {
+        $root = $this->workflow('query-root');
+        $child = $this->workflow('query-child');
+        $this->step($child, 'Child browser', [$this->browserTask('open', 'main')]);
+        $this->step($root, 'Repeated child', [$this->workflowTask($child, 'one'), $this->workflowTask($child, 'two')]);
+        $queries = [];
+        DB::listen(function ($query) use (&$queries, $child): void {
+            if (str_contains($query->sql, 'from "workflows"') && $query->bindings === [$child->id]) {
+                $queries[] = $query->sql;
+            }
+        });
+
+        app(WorkflowTaskRunner::class)->composedTasksForWorkflow($root);
+
+        $this->assertCount(1, $queries);
+    }
+
+    public function test_repeated_explicit_alias_intentionally_shares_window_but_not_frame(): void
+    {
+        $root = $this->workflow('shared-root');
+        $child = $this->workflow('shared-child');
+        $this->step($child, 'Shared browser', [$this->browserTask('open', 'main')]);
+        $one = $this->workflowTask($child, 'one');
+        $two = $this->workflowTask($child, 'two');
+        $one['browser_window_name'] = $two['browser_window_name'] = 'webmail';
+        $tasks = $this->runtimeTasks($this->step($root, 'Shared root', [$one, $two]));
+
+        $this->assertSame('webmail', $tasks[0]['browser_window_name']);
+        $this->assertSame('webmail', $tasks[2]['browser_window_name']);
+        $this->assertNotSame($tasks[0]['embedded_workflow_frame_key'], $tasks[2]['embedded_workflow_frame_key']);
+    }
+
+    public function test_long_window_names_cannot_collapse_after_eighty_characters(): void
+    {
+        $root = $this->workflow('long-root');
+        $child = $this->workflow('long-child');
+        $this->step($child, 'Long browser', [
+            $this->browserTask('one', str_repeat('a', 90).'one'),
+            $this->browserTask('two', str_repeat('a', 90).'two'),
+        ]);
+        $include = $this->workflowTask($child, 'child');
+        $include['browser_window_name'] = str_repeat('b', 100);
+        $tasks = $this->runtimeTasks($this->step($root, 'Long root', [$include]));
+
+        $this->assertNotSame($tasks[0]['browser_window_name'], $tasks[1]['browser_window_name']);
+        $this->assertSame(80, strlen($tasks[0]['browser_window_name']));
+        $this->assertSame(80, strlen($tasks[1]['browser_window_name']));
+    }
+
+    public function test_implicit_child_default_does_not_reuse_an_explicit_root_window_by_coincidence(): void
+    {
+        $root = $this->workflow('coincidence-root');
+        $child = $this->workflow('coincidence-child');
+        $this->step($child, 'Child browser', [$this->browserTask('child-open', 'main')]);
+        $tasks = $this->runtimeTasks($this->step($root, 'Root browser', [
+            $this->browserTask('root-open', 'workflow-coincidence-child'),
+            $this->workflowTask($child, 'child'),
+        ]));
+
+        $this->assertNotSame($tasks[0]['browser_window_name'], $tasks[1]['browser_window_name']);
+    }
+
+    public function test_two_distinct_nested_local_names_cannot_silently_reuse_one_physical_window(): void
+    {
+        $root = $this->workflow('collision-root');
+        $child = $this->workflow('collision-child');
+        $leaf = $this->workflow('collision-leaf');
+        $this->step($leaf, 'Leaf window', [$this->browserTask('leaf-window', 'c')]);
+        $leafInclude = $this->workflowTask($leaf, 'leaf');
+        $leafInclude['browser_window_name'] = 'b';
+        $this->step($child, 'Child window', [$this->browserTask('child-window', 'b-c'), $leafInclude]);
+        $childInclude = $this->workflowTask($child, 'child');
+        $childInclude['browser_window_name'] = 'a';
+        $this->step($root, 'Root window', [$childInclude]);
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Mehrdeutige Browserfenster-Zuordnung');
+
+        app(WorkflowTaskRunner::class)->composedTasksForWorkflow($root);
+    }
+
+    public function test_manager_window_choices_include_nested_producers_and_remove_closed_child_window(): void
+    {
+        $root = $this->workflow('options-root');
+        $child = $this->workflow('options-child');
+        $grandchild = $this->workflow('options-grandchild');
+        $this->step($grandchild, 'Grandchild browser', [$this->browserTask('deep-open', 'main')]);
+        $this->step($child, 'Child browsers', [
+            $this->browserTask('main-open', 'main'),
+            $this->browserTask('popup-open', 'popup'),
+            $this->browserTask('popup-close', 'popup', 'browser.close'),
+            $this->workflowTask($grandchild, 'grandchild'),
+        ]);
+        $include = $this->workflowTask($child, 'child');
+        $include['browser_window_name'] = 'webmail';
+        $this->step($root, 'Root browser', [$include]);
+        $manager = app(WorkflowManager::class);
+        $manager->mount($root);
+        $reflection = new ReflectionClass($manager);
+        $configured = $reflection->getMethod('configuredBrowserWindowNames')->invoke($manager);
+        $active = $reflection->getMethod('activeBrowserWindowNames')->invoke($manager);
+
+        $this->assertContains('webmail-popup', $configured);
+        $this->assertContains('webmail-workflow-options-grandchild', $configured);
+        $this->assertContains('webmail-workflow-options-grandchild', $active);
+        $this->assertContains('webmail', $active);
+        $this->assertNotContains('webmail-popup', $active);
+    }
+
+    public function test_cyclic_and_missing_composition_do_not_invent_child_windows(): void
+    {
+        $root = $this->workflow('cycle-root');
+        $child = $this->workflow('cycle-child');
+        $this->step($root, 'Cycle root', [$this->workflowTask($child, 'child')]);
+        $this->step($child, 'Cycle child', [$this->workflowTask($root, 'root')]);
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Zyklische Workflow-Einbindung');
+
+        app(WorkflowTaskRunner::class)->composedTasksForWorkflow($root);
+    }
+
+    public function test_routes_to_nested_include_enter_the_real_first_leaf_and_keep_status_routes(): void
+    {
+        $root = $this->workflow('entry-root');
+        $child = $this->workflow('entry-child');
+        $grandchild = $this->workflow('entry-grandchild');
+        $leaf = $this->workflow('entry-leaf');
+        $this->step($leaf, 'Leaf first list', [$this->browserTask('actual-first', 'main')]);
+        $this->step($grandchild, 'Grandchild first list', [$this->workflowTask($leaf, 'leaf-include')]);
+        $route = ['type' => 'card', 'card_key' => 'grandchild-include'];
+        $before = $this->waitTask('before');
+        $before['next'] = $before['on_error'] = $before['on_partial'] = $route;
+        $before['status_routes'] = ['found' => $route];
+        $include = $this->workflowTask($grandchild, 'grandchild-include');
+        $include['on_partial'] = ['type' => 'card', 'card_key' => 'after'];
+        $include['status_routes'] = ['empty' => ['type' => 'card', 'card_key' => 'after']];
+        $this->step($child, 'Child list', [$before, $include, $this->waitTask('after')]);
+        $tasks = $this->runtimeTasks($this->step($root, 'Root list', [$this->workflowTask($child, 'child')]));
+        $first = collect($tasks)->firstWhere('embedded_source_task_key', 'actual-first');
+        $beforeRuntime = collect($tasks)->firstWhere('embedded_source_task_key', 'before');
+        $afterRuntime = collect($tasks)->firstWhere('embedded_source_task_key', 'after');
+        $grandchildBoundary = collect($tasks)->first(fn (array $task): bool => ($task['runner'] ?? '') === 'workflow-boundary' && $task['embedded_workflow_id'] === $grandchild->id);
+
+        foreach (['next', 'on_error', 'on_partial'] as $key) {
+            $this->assertSame($first['key'], $beforeRuntime[$key]['card_key']);
+        }
+        $this->assertSame($first['key'], $beforeRuntime['status_routes']['found']['card_key']);
+        $this->assertSame($afterRuntime['key'], $grandchildBoundary['on_partial']['card_key']);
+        $this->assertSame($afterRuntime['key'], $grandchildBoundary['status_routes']['empty']['card_key']);
+    }
+
+    public function test_missing_include_is_rejected_without_database_or_window_mutation(): void
+    {
+        $root = $this->workflow('missing-root');
+        $missing = $this->workflowTask($root, 'missing');
+        $missing['workflow_id'] = 999999;
+        $this->step($root, 'Missing list', [$missing]);
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('wurde nicht gefunden');
+
+        app(WorkflowTaskRunner::class)->composedTasksForWorkflow($root);
+    }
+
     public function test_embedded_workflow_internal_routes_are_remapped_to_runtime_tasks(): void
     {
         $parent = $this->workflow('parent-internal-routes');
@@ -919,6 +1178,16 @@ class WorkflowCompositionTest extends TestCase
             'node_script' => 'node/workflows/tasks/wait/seconds.cjs',
             'value' => 0,
         ];
+    }
+
+    protected function browserTask(string $key, string $window, string $taskKey = 'browser.open'): array
+    {
+        return app(WorkflowTaskCatalog::class)->cardFromDefinition($taskKey, [
+            'key' => $key,
+            'title' => $key,
+            'browser_window' => $window,
+            'browser_window_name' => $window,
+        ]);
     }
 
     protected function workflowTask(Workflow $workflow, string $key): array

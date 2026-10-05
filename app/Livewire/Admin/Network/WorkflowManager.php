@@ -32,6 +32,7 @@ use App\Services\Workflows\WorkflowStudioRevisionService;
 use App\Services\Workflows\WorkflowStudioSessionService;
 use App\Services\Workflows\WorkflowTaskCatalog;
 use App\Services\Workflows\WorkflowTaskOrderingService;
+use App\Services\Workflows\WorkflowTaskRunner;
 use App\Services\Workflows\WorkflowTransferService;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -4433,7 +4434,10 @@ class WorkflowManager extends Component
         $name = trim($value);
         $name = preg_replace('/\s+/', '-', $name) ?? '';
         $name = preg_replace('/[^A-Za-z0-9._-]+/', '', $name) ?? '';
-        $name = strtolower(substr($name, 0, 80));
+        $name = strtolower($name);
+        if (strlen($name) > 80) {
+            $name = substr($name, 0, 65).'-'.substr(hash('sha256', $name), 0, 14);
+        }
 
         return $name !== '' ? $name : 'main';
     }
@@ -4448,7 +4452,19 @@ class WorkflowManager extends Component
             $workflow = Workflow::query()->find((int) $matches[1]);
             $base = trim((string) ($workflow?->slug ?: $workflow?->name ?: 'workflow'));
 
-            return $this->normalizeBrowserWindowName('workflow-'.$base);
+            $name = $this->normalizeBrowserWindowName('workflow-'.$base);
+            $configured = $this->configuredBrowserWindowNames();
+            if (! in_array($name, $configured, true)) {
+                return $name;
+            }
+            for ($index = 2; $index < 1000; $index++) {
+                $candidate = $this->normalizeBrowserWindowName($name.'-'.$index);
+                if (! in_array($candidate, $configured, true)) {
+                    return $candidate;
+                }
+            }
+
+            return $this->normalizeBrowserWindowName($name.'-'.Str::uuid());
         }
 
         return $this->lastActiveBrowserWindowName() ?: 'main';
@@ -4503,8 +4519,8 @@ class WorkflowManager extends Component
         }
 
         return collect(['main'])
-            ->merge($workflow->steps()->ordered()->get()->flatMap(fn (WorkflowStep $step) => collect($step->task_cards)
-                ->map(fn (array $task): string => $this->normalizeBrowserWindowName((string) ($task['browser_window_name'] ?? $task['browser_window'] ?? '')))))
+            ->merge(collect($this->composedBrowserWindowTasks($workflow))
+                ->map(fn (array $task): string => trim((string) ($task['browser_window_name'] ?? $task['browser_window'] ?? $task['embedded_workflow_browser_window'] ?? ''))))
             ->filter()
             ->unique()
             ->values()
@@ -4520,33 +4536,41 @@ class WorkflowManager extends Component
             return [];
         }
 
-        foreach ($workflow->steps()->ordered()->get() as $step) {
-            foreach ($step->task_cards as $task) {
-                if ($excludingTaskKey !== null && (string) ($task['key'] ?? '') === $excludingTaskKey) {
-                    continue;
-                }
-
-                $taskKey = (string) ($task['task_key'] ?? '');
-
-                if (! in_array($taskKey, ['browser.open', 'browser.close'], true)) {
-                    continue;
-                }
-
-                $name = $this->normalizeBrowserWindowName((string) ($task['browser_window_name'] ?? $task['browser_window'] ?? 'main'));
-
-                if ($taskKey === 'browser.open') {
-                    if (! in_array($name, $active, true)) {
-                        $active[] = $name;
-                    }
-
-                    continue;
-                }
-
-                $active = array_values(array_filter($active, fn (string $activeName): bool => $activeName !== $name));
+        foreach ($this->composedBrowserWindowTasks($workflow) as $task) {
+            if ($excludingTaskKey !== null && (string) ($task['composition_root_task_key'] ?? $task['key'] ?? '') === $excludingTaskKey) {
+                continue;
             }
+
+            $taskKey = (string) ($task['task_key'] ?? '');
+
+            if (! in_array($taskKey, ['browser.open', 'browser.close'], true)) {
+                continue;
+            }
+
+            $name = $this->normalizeBrowserWindowName((string) ($task['browser_window_name'] ?? $task['browser_window'] ?? 'main'));
+
+            if ($taskKey === 'browser.open') {
+                if (! in_array($name, $active, true)) {
+                    $active[] = $name;
+                }
+
+                continue;
+            }
+
+            $active = array_values(array_filter($active, fn (string $activeName): bool => $activeName !== $name));
         }
 
         return $active;
+    }
+
+    protected function composedBrowserWindowTasks(Workflow $workflow): array
+    {
+        try {
+            return app(WorkflowTaskRunner::class)->composedTasksForWorkflow($workflow);
+        } catch (\RuntimeException $exception) {
+            // A broken include must remain editable; never invent its windows.
+            return $workflow->steps()->ordered()->get()->flatMap(fn (WorkflowStep $step) => $step->task_cards)->all();
+        }
     }
 
     protected function routeTargetFromValue(string $value): ?array

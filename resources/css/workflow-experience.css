@@ -2228,3 +2228,18 @@
 [data-workflow-studio-shell] .ff-studio-browser-mini-url {
   font-size: .625rem;
 }
+
+/* Child previews stay compact without changing the shared route geometry.
+   A single list only has side/gap routes; multi-list maps retain the 80px
+   top/back corridors and remain reachable through their bounded scroll area. */
+@media (min-width: 1024px) {
+  [data-workflow-embedded-frame] [data-workflow-minimap-zoom] > button {
+    min-height: 1.75rem !important;
+    padding-inline: .5rem !important;
+    font-size: .625rem !important;
+  }
+
+  .ff-workflow-embedded-map-body--single-list .ff-route-stage {
+    padding-block: .75rem !important;
+  }
+}

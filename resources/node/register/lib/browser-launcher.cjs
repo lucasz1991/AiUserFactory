@@ -162,7 +162,17 @@ function systemChromeCandidates(runtimeConfig = {}) {
     process.env.PUPPETEER_EXECUTABLE_PATH,
     process.env.CHROME_PATH,
   ];
+  const windowsRoots = process.platform === 'win32' ? [
+    process.env.ProgramFiles || 'C:\\Program Files',
+    process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)',
+    process.env.LOCALAPPDATA,
+  ].filter(Boolean) : [];
+  const windowsCandidates = windowsRoots.flatMap((directory) => [
+    path.join(directory, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+    path.join(directory, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+  ]);
   const systemCandidates = [
+    ...windowsCandidates,
     '/usr/bin/google-chrome-stable',
     '/usr/bin/google-chrome',
     '/usr/bin/chromium-browser',
