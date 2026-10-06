@@ -1,5 +1,35 @@
 @if(($embeddedWorkflowMaps ?? []) !== [])
-    <section class="mt-3 space-y-3" data-workflow-embedded-minimaps aria-label="Unter-Workflows im Testlauf">
+    <section
+        wire:key="studio-child-overlay-{{ $session->id }}-{{ $run->id }}"
+        x-data="{ expanded: true }"
+        class="ff-workflow-embedded-overlay mt-3"
+        data-workflow-embedded-minimaps
+        aria-label="Unter-Workflows im Testlauf"
+    >
+        <button
+            type="button"
+            data-workflow-embedded-toggle
+            x-on:click="expanded = ! expanded"
+            x-bind:aria-expanded="expanded.toString()"
+            aria-expanded="true"
+            aria-controls="studio-child-rail-{{ $session->id }}-{{ $run->id }}"
+            class="ff-workflow-embedded-toggle"
+        >
+            <span class="font-semibold">Unter-Workflows</span>
+            <span class="ff-workflow-embedded-count">{{ count($embeddedWorkflowMaps) }}</span>
+            <span class="sr-only" x-text="expanded ? 'einklappen' : 'ausklappen'"></span>
+            <svg class="ml-auto h-4 w-4 shrink-0" x-bind:class="expanded ? '' : 'rotate-180'" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m6 12 4-4 4 4" /></svg>
+        </button>
+        <div
+            id="studio-child-rail-{{ $session->id }}-{{ $run->id }}"
+            x-cloak
+            x-show="expanded"
+            data-workflow-embedded-rail
+            class="ff-workflow-embedded-rail space-y-3"
+            tabindex="0"
+            role="region"
+            aria-label="Eingebettete Workflows, bei Bedarf horizontal scrollen"
+        >
         @foreach($embeddedWorkflowMaps as $childMap)
             <article
                 wire:key="studio-child-map-{{ $session->id }}-{{ $run->id }}-{{ $childMap['frame_key'] }}"
@@ -51,5 +81,6 @@
                 </div>
             </article>
         @endforeach
+        </div>
     </section>
 @endif

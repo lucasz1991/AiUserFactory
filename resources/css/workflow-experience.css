@@ -2233,7 +2233,70 @@
    A single list only has side/gap routes; multi-list maps retain the 80px
    top/back corridors and remain reachable through their bounded scroll area. */
 @media (min-width: 1024px) {
+  [data-workflow-studio-diagram] > .ff-canvas-grid {
+    overflow: hidden !important;
+  }
+
+  [data-workflow-primary-diagram] [data-workflow-minimap-step-count="1"] .ff-route-stage {
+    padding-block: .75rem !important;
+  }
+
+  .ff-workflow-embedded-overlay {
+    position: absolute;
+    inset: auto .75rem .75rem;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    max-height: min(48%, 18rem);
+    margin-top: 0;
+    overflow: hidden;
+    border: 1px solid var(--ff-line);
+    border-radius: 1rem;
+    background: var(--ff-surface);
+    box-shadow: var(--ff-shadow-sm);
+  }
+
+  .ff-workflow-embedded-rail {
+    display: flex;
+    min-height: 0;
+    gap: .75rem;
+    padding: .5rem;
+    overflow: auto;
+    overscroll-behavior: contain;
+  }
+
+  .ff-workflow-embedded-rail > [data-workflow-embedded-frame] {
+    display: flex;
+    flex: 0 0 24rem;
+    flex-direction: column;
+    min-height: 0;
+    margin-top: 0 !important;
+  }
+
+  [data-workflow-embedded-minimaps] .ff-workflow-embedded-rail > [data-workflow-embedded-frame] {
+    margin-top: 0 !important;
+  }
+
+  .ff-workflow-embedded-rail [data-workflow-embedded-frame] > header {
+    flex-wrap: nowrap !important;
+    gap: .5rem;
+  }
+
+  .ff-workflow-embedded-rail [data-workflow-embedded-frame] > header > :first-child {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .ff-workflow-embedded-rail [data-workflow-embedded-frame] > header [title^="Browserfenster:"] {
+    max-width: 5rem !important;
+  }
+
+  .ff-workflow-embedded-rail [data-workflow-embedded-map-body] {
+    flex: 1;
+  }
+
   [data-workflow-embedded-frame] [data-workflow-minimap-zoom] > button {
+    height: 1.75rem !important;
     min-height: 1.75rem !important;
     padding-inline: .5rem !important;
     font-size: .625rem !important;
@@ -2242,4 +2305,35 @@
   .ff-workflow-embedded-map-body--single-list .ff-route-stage {
     padding-block: .75rem !important;
   }
+}
+
+.ff-workflow-embedded-toggle {
+  display: flex;
+  width: 100%;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: .5rem;
+  min-height: 2.25rem;
+  padding: .375rem .75rem;
+  border: 0;
+  border-radius: inherit;
+  background: var(--ff-surface);
+  color: var(--ff-ink-soft);
+  text-align: left;
+  font-size: .6875rem;
+}
+
+.ff-workflow-embedded-toggle:hover {
+  color: var(--ff-ink);
+  background: var(--ff-surface-soft);
+}
+
+.ff-workflow-embedded-toggle:focus-visible {
+  outline: 2px solid var(--ff-accent);
+  outline-offset: -2px;
+}
+
+.ff-workflow-embedded-count {
+  color: var(--ff-muted);
+  font-variant-numeric: tabular-nums;
 }

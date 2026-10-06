@@ -1,6 +1,6 @@
 <section class="ff-canvas-shell flex h-full min-h-0 min-w-0 flex-col" data-workflow-studio-diagram>
-    <div class="ff-canvas-grid min-h-0 flex-1 overflow-auto p-2.5 sm:p-3">
-        <div class="{{ ($embeddedWorkflowMaps ?? []) !== [] ? 'h-[25rem] lg:h-64 min-h-[16rem]' : 'h-full' }} min-h-0" data-workflow-primary-diagram>
+    <div class="ff-canvas-grid relative isolate min-h-0 flex-1 overflow-auto p-2.5 sm:p-3">
+        <div class="h-full min-h-0" data-workflow-primary-diagram>
         @if(! $historicalRunView)
             <livewire:admin.network.workflow-studio-task-editor
                 :workflow="$workflow"

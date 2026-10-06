@@ -10,6 +10,8 @@ use App\Models\WorkflowStepRun;
 use App\Models\WorkflowStudioSession;
 use App\Services\Workflows\WorkflowEmbeddedRunPresenter;
 use App\Services\Workflows\WorkflowRunTaskFeedback;
+use DOMDocument;
+use DOMXPath;
 use Illuminate\Support\Facades\DB;
 use ReflectionMethod;
 use Tests\TestCase;
@@ -275,12 +277,35 @@ class WorkflowEmbeddedRunPresenterTest extends TestCase
         $this->assertStringContainsString('$isActive && ! $historicalRunView', $modal);
     }
 
-    public function test_child_preview_is_desktop_compact_but_keeps_scroll_and_multilist_route_corridors(): void
+    public function test_main_diagram_keeps_full_height_with_or_without_embedded_maps(): void
     {
         $browser = file_get_contents(resource_path('views/livewire/admin/network/workflow-studio/browser.blade.php'));
+
+        $this->assertStringContainsString('ff-canvas-grid relative isolate min-h-0 flex-1', $browser);
+        $this->assertStringContainsString('<div class="h-full min-h-0" data-workflow-primary-diagram>', $browser);
+        $this->assertStringNotContainsString('$embeddedWorkflowMaps', $browser);
+        $this->assertStringNotContainsString('lg:h-64', $browser);
+        $this->assertStringNotContainsString('h-[25rem]', $browser);
+        $this->assertStringContainsString("@include('livewire.admin.network.workflow-studio.embedded-minimaps')", $browser);
+    }
+
+    public function test_child_overlay_is_desktop_bounded_and_keeps_scroll_and_multilist_route_corridors(): void
+    {
         $children = file_get_contents(resource_path('views/livewire/admin/network/workflow-studio/embedded-minimaps.blade.php'));
         $css = file_get_contents(resource_path('css/workflow-experience.css'));
-        $this->assertStringContainsString('lg:h-64', $browser);
+        preg_match_all('/@media \(min-width: 1024px\) \{((?:[^{}]+|\{[^{}]*\})+)\}/', $css, $media);
+        $overlayRules = array_values(array_filter($media[1], fn ($rules) => str_contains($rules, '.ff-workflow-embedded-overlay')));
+
+        $this->assertCount(1, $overlayRules);
+        $this->assertSame(1, substr_count($css, '.ff-workflow-embedded-overlay {'));
+        $this->assertMatchesRegularExpression('/\[data-workflow-studio-diagram\] > \.ff-canvas-grid \{[^}]*overflow:\s*hidden !important;/', $overlayRules[0]);
+        $this->assertSame(1, substr_count($css, '[data-workflow-minimap-step-count="1"]'));
+        $this->assertStringContainsString('[data-workflow-primary-diagram] [data-workflow-minimap-step-count="1"] .ff-route-stage {', $overlayRules[0]);
+        $this->assertMatchesRegularExpression('/\[data-workflow-primary-diagram\] \[data-workflow-minimap-step-count="1"\] \.ff-route-stage \{[^}]*padding-block:\s*\.75rem !important;/', $overlayRules[0]);
+        $this->assertMatchesRegularExpression('/\.ff-workflow-embedded-overlay \{[^}]*position:\s*absolute;[^}]*inset:\s*auto \.75rem \.75rem;[^}]*max-height:\s*min\(48%, 18rem\);/', $overlayRules[0]);
+        $this->assertMatchesRegularExpression('/\.ff-workflow-embedded-rail \{[^}]*display:\s*flex;[^}]*min-height:\s*0;[^}]*overflow:\s*auto;[^}]*overscroll-behavior:\s*contain;/', $overlayRules[0]);
+        $this->assertMatchesRegularExpression('/\.ff-workflow-embedded-rail > \[data-workflow-embedded-frame\] \{[^}]*flex:\s*0 0 24rem;[^}]*min-height:\s*0;/', $overlayRules[0]);
+        $this->assertStringContainsString('ff-workflow-embedded-overlay', $children);
         $this->assertStringContainsString('lg:max-h-48', $children);
         $this->assertStringContainsString('overflow-auto overscroll-contain', $children);
         $this->assertStringContainsString('tabindex="0"', $children);
@@ -288,6 +313,113 @@ class WorkflowEmbeddedRunPresenterTest extends TestCase
         $this->assertStringContainsString('.ff-workflow-embedded-map-body--single-list .ff-route-stage', $css);
         $this->assertStringContainsString('.ff-route-stage { padding-top: 80px !important; padding-bottom: 80px !important;', $css);
         $this->assertStringContainsString('[data-workflow-embedded-frame] [data-workflow-minimap-zoom] > button', $css);
+    }
+
+    public function test_overlay_toggle_controls_its_scroll_region_and_preserves_frame_identity_on_refresh(): void
+    {
+        [$workflow, $run] = $this->fixture();
+        $presenter = app(WorkflowEmbeddedRunPresenter::class);
+        $session = new WorkflowStudioSession;
+        $session->id = 88;
+        DB::enableQueryLog();
+
+        $render = fn () => view('livewire.admin.network.workflow-studio.embedded-minimaps', [
+            'embeddedWorkflowMaps' => $presenter->present($workflow, $run),
+            'session' => $session,
+            'run' => $run,
+        ])->render();
+        $html = $render();
+        $xpath = $this->xpath($html);
+        $overlay = $xpath->query('//*[@data-workflow-embedded-minimaps]')->item(0);
+        $toggle = $xpath->query('//*[@data-workflow-embedded-toggle]')->item(0);
+        $rail = $xpath->query('//*[@data-workflow-embedded-rail]')->item(0);
+
+        $this->assertNotNull($overlay);
+        $this->assertNotNull($toggle);
+        $this->assertNotNull($rail);
+        $this->assertSame('studio-child-overlay-88-70', $overlay->getAttribute('wire:key'));
+        $this->assertSame('{ expanded: true }', $overlay->getAttribute('x-data'));
+        $this->assertSame('button', $toggle->getAttribute('type'));
+        $this->assertSame('true', $toggle->getAttribute('aria-expanded'));
+        $this->assertSame('expanded.toString()', $toggle->getAttribute('x-bind:aria-expanded'));
+        $this->assertSame('expanded = ! expanded', $toggle->getAttribute('x-on:click'));
+        $this->assertSame($rail->getAttribute('id'), $toggle->getAttribute('aria-controls'));
+        $this->assertSame('studio-child-rail-88-70', $rail->getAttribute('id'));
+        $this->assertSame('expanded', $rail->getAttribute('x-show'));
+        $this->assertSame('0', $rail->getAttribute('tabindex'));
+        $this->assertSame('region', $rail->getAttribute('role'));
+        $this->assertStringNotContainsString('x-if=', $html);
+        $this->assertStringNotContainsString('wire:poll', $html);
+
+        $frames = $xpath->query('//*[@data-workflow-embedded-rail]/*[@data-workflow-embedded-frame]');
+        $this->assertCount(3, $frames);
+        $keys = [];
+        foreach ($frames as $frame) {
+            $keys[] = $frame->getAttribute('wire:key');
+            $body = $xpath->query('.//*[@data-workflow-embedded-map-body]', $frame)->item(0);
+            $this->assertNotNull($body);
+            $this->assertSame('0', $body->getAttribute('tabindex'));
+            $this->assertSame('region', $body->getAttribute('role'));
+            $this->assertStringContainsString('overflow-auto overscroll-contain', $body->getAttribute('class'));
+            $minimap = $xpath->query('.//*[@data-workflow-minimap-step-count]', $body)->item(0);
+            $this->assertNotNull($minimap);
+            $this->assertSame((string) $xpath->query('.//*[@data-workflow-step-column and @data-workflow-step-column != "terminal"]', $minimap)->count(), $minimap->getAttribute('data-workflow-minimap-step-count'));
+        }
+        $this->assertSame(['studio-child-map-88-70-outer', 'studio-child-map-88-70-inner', 'studio-child-map-88-70-deep'], $keys);
+
+        $run->status = 'paused';
+        $refreshed = $this->xpath($render());
+        $this->assertSame($overlay->getAttribute('wire:key'), $refreshed->query('//*[@data-workflow-embedded-minimaps]')->item(0)->getAttribute('wire:key'));
+        $this->assertSame($rail->getAttribute('id'), $refreshed->query('//*[@data-workflow-embedded-rail]')->item(0)->getAttribute('id'));
+        $refreshedKeys = [];
+        foreach ($refreshed->query('//*[@data-workflow-embedded-rail]/*[@data-workflow-embedded-frame]') as $frame) {
+            $refreshedKeys[] = $frame->getAttribute('wire:key');
+            $this->assertSame('paused', $frame->getAttribute('data-workflow-embedded-status'));
+        }
+        $this->assertSame($keys, $refreshedKeys);
+        $this->assertSame([], DB::getQueryLog());
+    }
+
+    public function test_minimap_step_count_matches_its_rendered_definition_instead_of_another_workflow(): void
+    {
+        [$workflow, $run] = $this->fixture();
+        $secondStep = new WorkflowStep([
+            'workflow_id' => 1,
+            'name' => 'Second list',
+            'action_key' => 'second',
+            'is_enabled' => true,
+            'config_json' => ['tasks' => [['key' => 'second-task', 'task_key' => 'wait.seconds', 'title' => 'Second task']]],
+        ]);
+        $secondStep->id = 11;
+        $runWorkflow = clone $workflow;
+        $runWorkflow->setRelation('steps', collect([$workflow->steps[0], $secondStep]));
+        $run->setRelation('workflow', $runWorkflow);
+        DB::enableQueryLog();
+
+        // An explicitly supplied frozen definition can differ from the run's
+        // workflow relation; the marker must describe the map being drawn.
+        foreach ([[$workflow, 1], [null, 2]] as [$displayedWorkflow, $expectedCount]) {
+            $html = view('components.workflows.minimap', ['workflow' => $displayedWorkflow, 'workflowRun' => $run])->render();
+            $xpath = $this->xpath($html);
+            $minimap = $xpath->query('//*[@data-workflow-minimap-step-count]')->item(0);
+
+            $this->assertNotNull($minimap);
+            $this->assertSame((string) $expectedCount, $minimap->getAttribute('data-workflow-minimap-step-count'));
+            $this->assertCount($expectedCount, $xpath->query('.//*[@data-workflow-step-column and @data-workflow-step-column != "terminal"]', $minimap));
+        }
+
+        $this->assertSame([], DB::getQueryLog());
+    }
+
+    public function test_no_overlay_or_toggle_is_rendered_without_embedded_maps(): void
+    {
+        $session = new WorkflowStudioSession;
+        $session->id = 88;
+        DB::enableQueryLog();
+        $html = view('livewire.admin.network.workflow-studio.embedded-minimaps', ['embeddedWorkflowMaps' => [], 'session' => $session, 'run' => null])->render();
+
+        $this->assertSame('', trim($html));
+        $this->assertSame([], DB::getQueryLog());
     }
 
     public function test_newer_finished_attempt_does_not_revive_an_old_active_frame(): void
@@ -380,6 +512,17 @@ class WorkflowEmbeddedRunPresenterTest extends TestCase
         $cards = (new ReflectionMethod(WorkflowStudio::class, 'browserWindowCards'))->invoke(new WorkflowStudio, $workflow, $run);
         $popup = collect($cards)->keyBy('name')['mail-leaf-popup'];
         $this->assertSame('Frozen outer › Frozen inner › Frozen deep', $popup['workflow_path']);
+    }
+
+    private function xpath(string $html): DOMXPath
+    {
+        $document = new DOMDocument;
+        $previous = libxml_use_internal_errors(true);
+        $document->loadHTML('<?xml encoding="utf-8" ?>'.$html);
+        libxml_clear_errors();
+        libxml_use_internal_errors($previous);
+
+        return new DOMXPath($document);
     }
 
     private function fixture(): array

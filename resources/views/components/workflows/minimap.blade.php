@@ -617,6 +617,7 @@
     {{ $attributes->merge(['class' => 'space-y-3']) }}
     data-workflow-minimap-instance="{{ $mapInstance }}"
     data-workflow-minimap-source="{{ $mapSource }}"
+    data-workflow-minimap-step-count="{{ $steps->count() }}"
     data-workflow-route-evidence-mode="{{ $routeEvidenceMode ? 'observed' : 'definition' }}"
 >
     @if(! $workflow)
