@@ -435,6 +435,158 @@ class WorkflowStepRunWatchdogTest extends TestCase
         $this->assertSame($snapshot['configuredTasks'], data_get($stepRun->fresh()->result_json, 'configuredTasks'));
         $this->assertSame('technical_error', data_get($stepRun->fresh()->result_json, 'logicalOutcome'));
         Queue::assertPushed(RunWorkflowJob::class, fn (RunWorkflowJob $job): bool => $job->workflowRunId === $run->id);
+
+        app(WorkflowExecutionService::class)->advance($run->id);
+
+        $this->assertSame('completed', $run->fresh()->status);
+        $this->assertSame('completed', $run->stepRuns()->where('workflow_step_id', $recovery->id)->firstOrFail()->status);
+        $this->assertSame('failed', $stepRun->fresh()->status);
+    }
+
+    public function test_timeout_recovery_can_execute_an_explicit_target_card_in_the_same_failed_list(): void
+    {
+        Queue::fake();
+        [$run, $stepRun, $step] = $this->deadlineRun();
+        $config = $step->config_json;
+        $config['routes']['failed'] = [
+            'type' => 'card', 'action_key' => $step->action_key, 'card_key' => 'second-task', 'max_attempts' => 1,
+        ];
+        $step->forceFill(['config_json' => $config])->save();
+        $snapshot = $this->nestedRunningSnapshot($run, $stepRun);
+        $stepRun->forceFill(['result_json' => $snapshot])->save();
+        $this->mockRecoveryTaskRunner($snapshot, $step, 'second-task');
+
+        $execution = app(WorkflowExecutionService::class);
+        $execution->monitorStepRun($stepRun->id);
+        $this->assertSame('failed', $stepRun->fresh()->status);
+        $this->assertSame('timeout', data_get($stepRun->fresh()->result_json, 'status'));
+
+        $execution->advance($run->id);
+
+        $this->assertSame('running', $run->fresh()->status);
+        $this->assertSame('waiting', $stepRun->fresh()->status);
+        $this->assertCount(1, $run->stepRuns()->get());
+        $this->assertSame(['success', 'timeout'], collect(data_get($run->fresh()->context_json, 'task_history'))->pluck('status')->all());
+        $this->assertNotSame($snapshot['runId'], $stepRun->fresh()->external_run_id);
+    }
+
+    public function test_recovery_success_can_return_to_an_earlier_timed_out_list_through_its_explicit_route(): void
+    {
+        Queue::fake();
+        [$run, $stepRun, $step] = $this->deadlineRun();
+        $recovery = $step->workflow->steps()->create([
+            'name' => 'Recovery', 'type' => WorkflowStep::TYPE_WAIT, 'action_key' => 'recovery',
+            'position' => 20, 'is_enabled' => true,
+            'config_json' => ['seconds' => 0, 'routes' => ['success' => [
+                'type' => 'card', 'action_key' => $step->action_key, 'card_key' => 'second-task',
+            ]]],
+        ]);
+        $config = $step->config_json;
+        $config['routes']['failed'] = ['type' => 'step', 'action_key' => $recovery->action_key];
+        $step->forceFill(['config_json' => $config])->save();
+        $snapshot = $this->nestedRunningSnapshot($run, $stepRun);
+        $stepRun->forceFill(['result_json' => $snapshot])->save();
+        $this->mockRecoveryTaskRunner($snapshot, $step, 'second-task');
+
+        $execution = app(WorkflowExecutionService::class);
+        $execution->monitorStepRun($stepRun->id);
+        $execution->advance($run->id);
+        $this->assertSame('completed', $run->stepRuns()->where('workflow_step_id', $recovery->id)->firstOrFail()->status);
+        $this->assertSame('failed', $stepRun->fresh()->status);
+        $this->assertSame($step->action_key, data_get($run->fresh()->context_json, 'next_step_action_key'));
+
+        $execution->advance($run->id);
+
+        $this->assertSame('running', $run->fresh()->status);
+        $this->assertSame('waiting', $stepRun->fresh()->status);
+        $this->assertSame(['success', 'timeout'], collect(data_get($run->fresh()->context_json, 'task_history'))->pluck('status')->all());
+    }
+
+    #[DataProvider('invalidTimeoutRecoveryCursors')]
+    public function test_timeout_recovery_cannot_resurrect_a_failed_list_without_its_current_explicit_route(string $corruption): void
+    {
+        Queue::fake();
+        [$run, $stepRun, $step] = $this->deadlineRun();
+        $config = $step->config_json;
+        $config['routes']['failed'] = [
+            'type' => 'card', 'action_key' => $step->action_key, 'card_key' => 'second-task', 'max_attempts' => 1,
+        ];
+        $step->forceFill(['config_json' => $config])->save();
+        $snapshot = $this->nestedRunningSnapshot($run, $stepRun);
+        $stepRun->forceFill(['result_json' => $snapshot])->save();
+        $this->mockTaskRunnerWithStatus($snapshot);
+        $execution = app(WorkflowExecutionService::class);
+        $execution->monitorStepRun($stepRun->id);
+        $context = $run->refresh()->context_json;
+
+        if ($corruption === 'missing_cursor') {
+            unset($context['next_step_action_key']);
+        } elseif ($corruption === 'missing_task') {
+            $context['next_task_key'] = 'unknown-task';
+        } elseif ($corruption === 'old_external_run') {
+            $context['route_history'][0]['external_run_id'] = 'old-invocation';
+        } elseif ($corruption === 'old_start') {
+            $context['route_history'][0]['started_at'] = now()->subHour()->toIso8601String();
+        } elseif ($corruption === 'foreign_source') {
+            [, $foreignStepRun] = $this->deadlineRun();
+            $context['route_history'][0]['workflow_step_run_id'] = $foreignStepRun->id;
+        } elseif ($corruption === 'changed_source_route') {
+            $result = $stepRun->fresh()->result_json;
+            $result['resolved_route'] = ['type' => 'fail'];
+            $stepRun->forceFill(['result_json' => $result])->save();
+        } elseif ($corruption === 'ordinary_failure') {
+            $result = $stepRun->fresh()->result_json;
+            $result['status'] = 'failed';
+            $stepRun->forceFill(['result_json' => $result])->save();
+        } elseif ($corruption === 'terminal_root') {
+            $run->forceFill(['status' => 'failed', 'finished_at' => now()])->save();
+        }
+        $run->forceFill(['context_json' => $context])->save();
+
+        $execution->advance($run->id);
+
+        $this->assertSame('failed', $run->fresh()->status);
+        $this->assertSame('failed', $stepRun->fresh()->status);
+        $this->assertSame($snapshot['runId'], $stepRun->fresh()->external_run_id);
+        $this->assertSame($snapshot['configuredTasks'], data_get($stepRun->fresh()->result_json, 'configuredTasks'));
+    }
+
+    public static function invalidTimeoutRecoveryCursors(): array
+    {
+        return collect([
+            'missing_cursor', 'missing_task', 'old_external_run', 'old_start',
+            'foreign_source', 'changed_source_route', 'ordinary_failure', 'terminal_root',
+        ])->mapWithKeys(fn (string $value): array => [$value => [$value]])->all();
+    }
+
+    public function test_explicit_timeout_retry_route_stops_after_its_configured_attempt_budget(): void
+    {
+        Queue::fake();
+        [$run, $stepRun, $step] = $this->deadlineRun();
+        $config = $step->config_json;
+        $config['routes']['timeout'] = [
+            'type' => 'card', 'action_key' => $step->action_key, 'card_key' => 'second-task', 'max_attempts' => 1,
+        ];
+        $step->forceFill(['config_json' => $config])->save();
+        $snapshot = $this->nestedRunningSnapshot($run, $stepRun);
+        $stepRun->forceFill(['result_json' => $snapshot])->save();
+        $this->mockRecoveryTaskRunner($snapshot, $step, 'second-task');
+        $execution = app(WorkflowExecutionService::class);
+
+        $execution->monitorStepRun($stepRun->id);
+        $this->assertSame([1], array_values(data_get($run->fresh()->context_json, 'route_attempts')));
+        $execution->advance($run->id);
+        $this->assertSame('waiting', $stepRun->fresh()->status);
+        Carbon::setTestNow(now()->addSeconds(121));
+
+        $execution->monitorStepRun($stepRun->id);
+        $execution->advance($run->id);
+
+        $this->assertSame('failed', $run->fresh()->status);
+        $this->assertSame('failed', $stepRun->fresh()->status);
+        $this->assertTrue(data_get($stepRun->fresh()->result_json, 'retry_blocked'));
+        $this->assertSame([1], array_values(data_get($run->fresh()->context_json, 'route_attempts')));
+        $this->assertCount(1, data_get($run->fresh()->context_json, 'route_history'));
     }
 
     public function test_explicit_failure_route_does_not_mark_a_genuine_timeout_completed(): void
@@ -537,6 +689,23 @@ class WorkflowStepRunWatchdogTest extends TestCase
         $runner->shouldReceive('readResult')->andReturn($result)->byDefault();
         $runner->shouldReceive('closeRun')->andReturn(['ok' => true])->byDefault();
         $runner->shouldReceive('cancelRun')->andReturn(['ok' => true])->byDefault();
+        $this->app->instance(WorkflowTaskRunner::class, $runner);
+    }
+
+    private function mockRecoveryTaskRunner(array $snapshot, WorkflowStep $target, string $targetTaskKey): void
+    {
+        $runner = Mockery::mock(WorkflowTaskRunner::class);
+        $runner->shouldReceive('readRun')->andReturn($snapshot)->byDefault();
+        $runner->shouldReceive('closeRun')->andReturn(['ok' => true])->byDefault();
+        $runner->shouldReceive('cancelRun')->andReturn(['ok' => true])->byDefault();
+        $runner->shouldReceive('start')->once()->andReturnUsing(function (
+            WorkflowRun $run, WorkflowStep $step, WorkflowStepRun $stepRun, array $context, string $externalRunId,
+        ) use ($target, $targetTaskKey): array {
+            $this->assertSame($target->id, $step->id);
+            $this->assertSame($targetTaskKey, $context['nextTaskKey']);
+
+            return ['runId' => $externalRunId, 'state' => 'running', 'isRunning' => true];
+        });
         $this->app->instance(WorkflowTaskRunner::class, $runner);
     }
 

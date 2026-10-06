@@ -4,7 +4,9 @@ namespace App\Services\Workflows;
 
 use App\Models\WorkflowRunArtifact;
 use App\Models\WorkflowStepRun;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -29,43 +31,58 @@ class WorkflowDebugArtifactService
                 continue;
             }
 
-            $phase = $this->cleanSegment($artifact['phase'] ?? '');
-            $type = $this->cleanSegment($artifact['artifact_type'] ?? $artifact['artifactType'] ?? '');
+            $phase = $this->cleanSegment($artifact['phase'] ?? '', 20);
+            $type = $this->cleanSegment($artifact['artifact_type'] ?? $artifact['artifactType'] ?? '', 40);
 
             if ($phase === '' || $type === '') {
                 continue;
             }
 
             $storagePath = trim((string) ($artifact['storage_path'] ?? $artifact['storagePath'] ?? ''));
-            $browserWindow = trim((string) ($artifact['browser_window'] ?? $artifact['browserWindow'] ?? 'main')) ?: 'main';
-            $status = $this->cleanSegment($artifact['status'] ?? 'success') ?: 'success';
-            $status = Str::limit($status, 40, '');
-            $disk = trim((string) ($artifact['storage_disk'] ?? $artifact['storageDisk'] ?? 'local')) ?: 'local';
+            $browserWindow = $this->stringOrNull($artifact['browser_window'] ?? $artifact['browserWindow'] ?? 'main') ?: 'main';
+            $status = $this->cleanSegment($artifact['status'] ?? 'success', 40) ?: 'success';
+            $disk = $this->stringOrNull($artifact['storage_disk'] ?? $artifact['storageDisk'] ?? 'local', 80) ?: 'local';
+            // These are identities, not display labels. Truncation would merge
+            // different nested invocations or make their files unresolvable.
+            $taskCardKey = $this->stringOrNull($artifact['task_card_key'] ?? $artifact['taskCardKey'] ?? null, null);
 
-            WorkflowRunArtifact::query()->updateOrCreate(
-                [
-                    'workflow_step_run_id' => $stepRun->id,
-                    'phase' => $phase,
-                    'artifact_type' => $type,
-                    'browser_window' => $browserWindow,
-                    'task_card_key' => $this->stringOrNull($artifact['task_card_key'] ?? $artifact['taskCardKey'] ?? null),
-                    'storage_path' => $storagePath !== '' ? $storagePath : null,
-                ],
-                [
-                    'workflow_id' => $run->workflow_id,
-                    'workflow_run_id' => $run->id,
-                    'workflow_step_id' => $stepRun->workflow_step_id,
-                    'step_position' => $this->intOrNull($artifact['step_position'] ?? $artifact['stepPosition'] ?? $stepRun->workflowStep?->position),
-                    'step_action_key' => $this->stringOrNull($artifact['step_action_key'] ?? $artifact['stepActionKey'] ?? $stepRun->workflowStep?->action_key),
-                    'task_card_key' => $this->stringOrNull($artifact['task_card_key'] ?? $artifact['taskCardKey'] ?? null),
-                    'current_url' => $this->stringOrNull($artifact['current_url'] ?? $artifact['currentUrl'] ?? $artifact['url'] ?? null, 4096),
-                    'title' => $this->stringOrNull($artifact['title'] ?? null),
-                    'storage_disk' => $disk,
-                    'status' => $status,
-                    'error_message' => $this->stringOrNull($artifact['error_message'] ?? $artifact['errorMessage'] ?? null, 8000),
-                    'metadata_json' => $this->metadata($artifact),
-                ],
-            );
+            try {
+                WorkflowRunArtifact::query()->updateOrCreate(
+                    [
+                        'workflow_step_run_id' => $stepRun->id,
+                        'phase' => $phase,
+                        'artifact_type' => $type,
+                        'browser_window' => $browserWindow,
+                        'task_card_key' => $taskCardKey,
+                        'storage_path' => $storagePath !== '' ? $storagePath : null,
+                    ],
+                    [
+                        'workflow_id' => $run->workflow_id,
+                        'workflow_run_id' => $run->id,
+                        'workflow_step_id' => $stepRun->workflow_step_id,
+                        'step_position' => $this->intOrNull($artifact['step_position'] ?? $artifact['stepPosition'] ?? $stepRun->workflowStep?->position),
+                        'step_action_key' => $this->stringOrNull($artifact['step_action_key'] ?? $artifact['stepActionKey'] ?? $stepRun->workflowStep?->action_key),
+                        'task_card_key' => $taskCardKey,
+                        'current_url' => $this->stringOrNull($artifact['current_url'] ?? $artifact['currentUrl'] ?? $artifact['url'] ?? null, 4096),
+                        'title' => $this->stringOrNull($artifact['title'] ?? null),
+                        'storage_disk' => $disk,
+                        'status' => $status,
+                        'error_message' => $this->stringOrNull($artifact['error_message'] ?? $artifact['errorMessage'] ?? null, 8000),
+                        'metadata_json' => $this->metadata($artifact),
+                    ],
+                );
+            } catch (QueryException $exception) {
+                // Diagnostic attachments must not block control or the next
+                // artifact. Never log SQL, bindings, paths or raw exceptions.
+                $sqlState = (string) ($exception->errorInfo[0] ?? $exception->getCode());
+                $driverCode = $exception->errorInfo[1] ?? null;
+                Log::warning('Workflow debug artifact persistence failed.', [
+                    'workflow_run_id' => (int) $run->id,
+                    'workflow_step_run_id' => (int) $stepRun->id,
+                    'sql_state' => preg_match('/\A[0-9A-Z]{5}\z/D', $sqlState) === 1 ? $sqlState : null,
+                    'driver_code' => is_int($driverCode) || (is_string($driverCode) && ctype_digit($driverCode)) ? (int) $driverCode : null,
+                ]);
+            }
         }
     }
 
@@ -164,17 +181,17 @@ class WorkflowDebugArtifactService
         return $metadata;
     }
 
-    protected function cleanSegment(mixed $value): string
+    protected function cleanSegment(mixed $value, int $limit = 80): string
     {
         return Str::of((string) $value)
             ->lower()
             ->replaceMatches('/[^a-z0-9_-]+/', '_')
             ->trim('_')
-            ->substr(0, 80)
+            ->substr(0, $limit)
             ->toString();
     }
 
-    protected function stringOrNull(mixed $value, int $limit = 255): ?string
+    protected function stringOrNull(mixed $value, ?int $limit = 191): ?string
     {
         $value = trim((string) $value);
 
@@ -182,7 +199,7 @@ class WorkflowDebugArtifactService
             return null;
         }
 
-        return Str::limit($value, max(1, $limit), '');
+        return $limit === null ? $value : Str::limit($value, max(1, $limit), '');
     }
 
     protected function intOrNull(mixed $value): ?int

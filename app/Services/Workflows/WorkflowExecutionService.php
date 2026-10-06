@@ -509,6 +509,8 @@ class WorkflowExecutionService
             return;
         }
 
+        $routeCursor = is_array($run->context_json) ? $run->context_json : [];
+
         try {
             $step = $this->nextStepForRun($run);
         } catch (\Throwable $exception) {
@@ -535,7 +537,8 @@ class WorkflowExecutionService
             ->where('workflow_step_id', $step->id)
             ->first();
 
-        if ($stepRun && $stepRun->status === 'failed') {
+        if ($stepRun && $stepRun->status === 'failed'
+            && ! $this->isExplicitTimeoutRecovery($run, $stepRun, $routeCursor)) {
             $this->failRun($run, $stepRun->error_message ?: 'Workflow-Schritt ist fehlgeschlagen.');
 
             return;
@@ -3498,6 +3501,43 @@ class WorkflowExecutionService
         return null;
     }
 
+    protected function isExplicitTimeoutRecovery(WorkflowRun $run, WorkflowStepRun $target, array $cursor): bool
+    {
+        // There is one row per list. Only an explicit, current route may reuse
+        // its timed-out slot; linear selection must still stop at a failure.
+        if (data_get($target->result_json, 'status') !== 'timeout'
+            || ! $target->finished_at
+            || trim((string) ($cursor['next_step_action_key'] ?? '')) !== $target->workflowStep->action_key) {
+            return false;
+        }
+
+        $history = is_array($cursor['route_history'] ?? null) ? $cursor['route_history'] : [];
+        $last = end($history);
+        $route = is_array($last) && is_array($last['route'] ?? null) ? $last['route'] : [];
+        if (WorkflowRouteDisposition::fromRoute($route) !== WorkflowRouteDisposition::CONTINUE
+            || trim((string) ($route['action_key'] ?? $route['step'] ?? '')) !== $target->workflowStep->action_key
+            || trim((string) ($route['card_key'] ?? $route['card'] ?? '')) !== trim((string) ($cursor['next_task_key'] ?? ''))) {
+            return false;
+        }
+
+        $taskKey = trim((string) ($cursor['next_task_key'] ?? ''));
+        if ($taskKey !== '' && ! collect($target->workflowStep->task_cards)->contains('key', $taskKey)) {
+            return false;
+        }
+
+        $source = $run->stepRuns()->whereKey((int) ($last['workflow_step_run_id'] ?? 0))->first();
+
+        return $source
+            && in_array($source->status, ['completed', 'failed'], true)
+            && $source->finished_at
+            && $source->started_at instanceof Carbon
+            && (int) ($last['workflow_step_id'] ?? 0) === (int) $source->workflow_step_id
+            && array_key_exists('external_run_id', $last)
+            && (string) $last['external_run_id'] === (string) $source->external_run_id
+            && ($last['started_at'] ?? null) === $source->started_at?->toIso8601String()
+            && data_get($source->result_json, 'resolved_route') === $route;
+    }
+
     protected function continueAfterStep(WorkflowRun $run, WorkflowStepRun $stepRun, array $result, string $outcome, int $delaySeconds = 0): void
     {
         if (! $this->runOperationIsCurrent($run)) {
@@ -3966,7 +4006,7 @@ class WorkflowExecutionService
 
     protected function failedBackRouteExceeded(WorkflowRun $run, WorkflowStepRun $stepRun, string $outcome, array $route, array $context, array $result = []): bool
     {
-        if ($outcome !== 'failed') {
+        if (! in_array($outcome, ['failed', 'timeout'], true)) {
             return false;
         }
 
@@ -4125,6 +4165,8 @@ class WorkflowExecutionService
             'at' => now()->toIso8601String(),
             'workflow_step_id' => $stepRun->workflow_step_id,
             'workflow_step_run_id' => $stepRun->id,
+            'external_run_id' => $stepRun->external_run_id,
+            'started_at' => $stepRun->started_at?->toIso8601String(),
             'outcome' => $outcome,
             'logical_outcome' => WorkflowLogicalOutcome::fromResult($result, $outcome)->value,
             'route_disposition' => WorkflowRouteDisposition::fromRoute($route)->value,
@@ -4136,7 +4178,7 @@ class WorkflowExecutionService
         // Rousspruengen heraus; 300 deckt auch lange Laeufe ab.
         $context['route_history'] = array_slice($history, -300);
 
-        if ($outcome === 'failed' && $this->isBackRoute($run, $stepRun->workflowStep, $route)) {
+        if (in_array($outcome, ['failed', 'timeout'], true) && $this->isBackRoute($run, $stepRun->workflowStep, $route)) {
             $attempts = is_array($context['route_attempts'] ?? null) ? $context['route_attempts'] : [];
             $attemptKey = $this->routeAttemptKey($stepRun->workflowStep, $outcome, $route);
             $attempts[$attemptKey] = max(0, (int) ($attempts[$attemptKey] ?? 0)) + 1;
