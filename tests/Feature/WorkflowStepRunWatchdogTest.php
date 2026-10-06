@@ -3,9 +3,11 @@
 namespace Tests\Feature;
 
 use App\Jobs\MonitorWorkflowStepRunJob;
+use App\Jobs\RunWorkflowJob;
 use App\Models\ManagedProcess;
 use App\Models\Workflow;
 use App\Models\WorkflowRun;
+use App\Models\WorkflowRunArtifact;
 use App\Models\WorkflowStep;
 use App\Models\WorkflowStepRun;
 use App\Models\WorkflowStudioEvent;
@@ -18,6 +20,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Facades\Queue;
 use Mockery;
+use PHPUnit\Framework\Attributes\DataProvider;
 use ReflectionMethod;
 use Tests\TestCase;
 
@@ -252,6 +255,319 @@ class WorkflowStepRunWatchdogTest extends TestCase
 
         $this->assertMonitorDelaySeconds($stepRun->id, 25);
         $this->assertMonitorDelaySeconds($stepRun->id, 60);
+    }
+
+    #[DataProvider('monitorEntryPoints')]
+    public function test_delayed_monitor_consumes_its_timely_terminal_result_before_expiring_the_step(string $entryPoint, bool $atDeadline): void
+    {
+        Queue::fake();
+        [$run, $stepRun, $step] = $this->deadlineRun();
+        [$status, $result] = $this->terminalExternalResult($run, $stepRun, $step);
+        if ($atDeadline) {
+            $result['finishedAt'] = $stepRun->started_at->copy()->addSeconds(120)->toIso8601String();
+        }
+        $this->mockTerminalTaskRunner($status, $result);
+
+        $execution = app(WorkflowExecutionService::class);
+        $entryPoint === 'scheduler'
+            ? $execution->expireTimedOutRuns()
+            : $execution->monitorStepRun($stepRun->id);
+
+        $this->assertSame('completed', $stepRun->fresh()->status);
+        $this->assertSame('completed', $run->fresh()->status);
+        $this->assertTrue((bool) data_get($stepRun->fresh()->result_json, 'ok'));
+        $this->assertNull(data_get($stepRun->fresh()->result_json, 'timedOutAt'));
+        $this->assertNull($stepRun->fresh()->error_message);
+        Queue::assertNotPushed(MonitorWorkflowStepRunJob::class);
+    }
+
+    public static function monitorEntryPoints(): array
+    {
+        return [
+            'queued monitor' => ['monitor', false], 'scheduler recovery' => ['scheduler', false],
+            'queued monitor at deadline' => ['monitor', true], 'scheduler at deadline' => ['scheduler', true],
+        ];
+    }
+
+    #[DataProvider('untrustedTerminalResults')]
+    public function test_untrusted_or_late_terminal_result_cannot_bypass_the_current_step_deadline(string $variant): void
+    {
+        Queue::fake();
+        [$run, $stepRun, $step] = $this->deadlineRun();
+        [$status, $result] = $this->terminalExternalResult($run, $stepRun, $step);
+        match ($variant) {
+            'late' => $result['finishedAt'] = now()->subSeconds(20)->toIso8601String(),
+            'missing finish' => $result['finishedAt'] = null,
+            'invalid finish' => $result['finishedAt'] = 'not a timestamp',
+            'future finish' => $result['finishedAt'] = now()->addMinute()->toIso8601String(),
+            'before current step' => $result['finishedAt'] = now()->subSeconds(180)->toIso8601String(),
+            'old resumed start' => $status['startedAt'] = now()->subSeconds(300)->toIso8601String(),
+            'missing start' => $status['startedAt'] = null,
+            'foreign status external id' => $status['runId'] = 'previous-owner',
+            'foreign status run id' => $status['workflowRunId'] = $run->id + 100,
+            'foreign status step run id' => $status['workflowStepRunId'] = $stepRun->id + 100,
+            'foreign status step id' => $status['workflowStepId'] = $step->id + 100,
+            'foreign result external id' => $result['browserIdentity']['runId'] = 'previous-owner',
+            'foreign result run id' => $result['browserIdentity']['workflowRunId'] = $run->id + 100,
+            'foreign result run uuid' => $result['browserIdentity']['workflowRunUuid'] = (string) str()->uuid(),
+            'conflicting result alias' => $result['workflow_run_id'] = $run->id + 100,
+        };
+        $this->mockTerminalTaskRunner($status, $result);
+
+        app(WorkflowExecutionService::class)->monitorStepRun($stepRun->id);
+
+        $this->assertSame('failed', $stepRun->fresh()->status);
+        $this->assertSame('failed', $run->fresh()->status);
+        $this->assertSame('timeout', data_get($stepRun->fresh()->result_json, 'status'));
+        $this->assertFalse((bool) data_get($stepRun->fresh()->result_json, 'ok'));
+        $this->assertStringContainsString('120 Sekunden', (string) $stepRun->fresh()->error_message);
+    }
+
+    public static function untrustedTerminalResults(): array
+    {
+        return collect([
+            'late', 'missing finish', 'invalid finish', 'future finish', 'before current step',
+            'old resumed start', 'missing start', 'foreign status external id', 'foreign status run id',
+            'foreign status step run id', 'foreign status step id', 'foreign result external id',
+            'foreign result run id', 'foreign result run uuid', 'conflicting result alias',
+        ])->mapWithKeys(fn (string $variant): array => [$variant => [$variant]])->all();
+    }
+
+    public function test_genuine_timeout_retains_nested_execution_evidence_and_only_times_out_the_running_task(): void
+    {
+        Queue::fake();
+        [$run, $stepRun] = $this->deadlineRun();
+        $snapshot = $this->nestedRunningSnapshot($run, $stepRun);
+        $olderSnapshot = $snapshot;
+        $olderSnapshot['tasks'] = [$snapshot['tasks'][0]];
+        $olderSnapshot['events'] = [];
+        $olderSnapshot['browserWindows'] = [];
+        $stepRun->forceFill(['result_json' => $olderSnapshot])->save();
+        $this->mockTaskRunnerWithStatus($snapshot);
+
+        app(WorkflowExecutionService::class)->monitorStepRun($stepRun->id);
+
+        $result = $stepRun->fresh()->result_json;
+        $tasks = collect($result['tasks'] ?? [])->keyBy('key');
+        $this->assertSame('failed', $stepRun->fresh()->status);
+        $this->assertSame('failed', $run->fresh()->status);
+        $this->assertSame('timeout', $result['status']);
+        $this->assertSame($snapshot['configuredTasks'], $result['configuredTasks']);
+        $this->assertSame($snapshot['events'], $result['events']);
+        $this->assertSame($snapshot['browserWindows'], $result['browserWindows']);
+        $this->assertSame('mail-leaf-main', $result['activeBrowserWindow']);
+        $this->assertSame('success', $tasks->get('leaf-open')['status']);
+        $this->assertSame($snapshot['tasks'][0]['finishedAt'], $tasks->get('leaf-open')['finishedAt']);
+        $this->assertSame('timeout', $tasks->get('leaf-wait')['status']);
+        $this->assertSame($snapshot['tasks'][1]['startedAt'], $tasks->get('leaf-wait')['startedAt']);
+        $this->assertSame($snapshot['tasks'][1]['embedded_workflow_path'], $tasks->get('leaf-wait')['embedded_workflow_path']);
+        $this->assertFalse($tasks->has('leaf-future'));
+        $this->assertArrayNotHasKey('browserWsEndpoint', $result);
+    }
+
+    public function test_missing_external_status_at_timeout_preserves_the_last_own_nested_snapshot(): void
+    {
+        Queue::fake();
+        [$run, $stepRun] = $this->deadlineRun();
+        $snapshot = $this->nestedRunningSnapshot($run, $stepRun);
+        $stepRun->forceFill(['result_json' => $snapshot])->save();
+        $runner = Mockery::mock(WorkflowTaskRunner::class);
+        $runner->shouldReceive('readRun')->andReturnNull();
+        $runner->shouldReceive('closeRun')->andReturn(['ok' => true])->byDefault();
+        $runner->shouldReceive('cancelRun')->andReturn(['ok' => true])->byDefault();
+        $this->app->instance(WorkflowTaskRunner::class, $runner);
+
+        app(WorkflowExecutionService::class)->monitorStepRun($stepRun->id);
+
+        $result = $stepRun->fresh()->result_json;
+        $this->assertSame('failed', $run->fresh()->status);
+        $this->assertSame('failed', $stepRun->fresh()->status);
+        $this->assertSame($snapshot['configuredTasks'], $result['configuredTasks']);
+        $this->assertSame($snapshot['events'], $result['events']);
+        $this->assertSame($snapshot['browserWindows'], $result['browserWindows']);
+        $this->assertSame('success', data_get($result, 'tasks.0.status'));
+        $this->assertSame('timeout', data_get($result, 'tasks.1.status'));
+    }
+
+    public function test_foreign_terminal_status_cannot_attach_debug_artifacts_or_replace_own_nested_evidence(): void
+    {
+        Queue::fake();
+        [$run, $stepRun, $step] = $this->deadlineRun();
+        $snapshot = $this->nestedRunningSnapshot($run, $stepRun);
+        $stepRun->forceFill(['result_json' => $snapshot])->save();
+        [$status, $result] = $this->terminalExternalResult($run, $stepRun, $step);
+        $status['workflowRunId'] = $run->id + 100;
+        $status['configuredTasks'] = [['key' => 'foreign-task', 'task_key' => 'wait.seconds']];
+        $status['debugArtifacts'] = ['artifacts' => [[
+            'phase' => 'after_task', 'artifact_type' => 'dom', 'task_card_key' => 'foreign-task',
+            'status' => 'error', 'error_message' => 'Synthetic descriptor only; no file.',
+        ]]];
+        $this->mockTerminalTaskRunner($status, $result);
+
+        app(WorkflowExecutionService::class)->monitorStepRun($stepRun->id);
+
+        $this->assertSame('failed', $run->fresh()->status);
+        $this->assertSame($snapshot['configuredTasks'], data_get($stepRun->fresh()->result_json, 'configuredTasks'));
+        $this->assertSame($snapshot['browserWindows'], data_get($stepRun->fresh()->result_json, 'browserWindows'));
+        $this->assertSame(0, WorkflowRunArtifact::query()->count());
+    }
+
+    public function test_timeout_can_follow_its_configured_recovery_route_without_marking_the_expired_step_completed(): void
+    {
+        Queue::fake();
+        [$run, $stepRun, $step] = $this->deadlineRun();
+        $recovery = $step->workflow->steps()->create([
+            'name' => 'Recovery', 'type' => WorkflowStep::TYPE_WAIT, 'action_key' => 'recovery',
+            'position' => 20, 'is_enabled' => true, 'config_json' => ['seconds' => 0],
+        ]);
+        $config = $step->config_json;
+        $config['routes']['failed'] = ['type' => 'step', 'action_key' => $recovery->action_key];
+        $step->forceFill(['config_json' => $config])->save();
+        $snapshot = $this->nestedRunningSnapshot($run, $stepRun);
+        $stepRun->forceFill(['result_json' => $snapshot])->save();
+        $this->mockTaskRunnerWithStatus($snapshot);
+
+        app(WorkflowExecutionService::class)->monitorStepRun($stepRun->id);
+
+        $this->assertSame('failed', $stepRun->fresh()->status);
+        $this->assertSame('running', $run->fresh()->status);
+        $this->assertSame('recovery', data_get($run->fresh()->context_json, 'next_step_action_key'));
+        $this->assertSame($snapshot['configuredTasks'], data_get($stepRun->fresh()->result_json, 'configuredTasks'));
+        $this->assertSame('technical_error', data_get($stepRun->fresh()->result_json, 'logicalOutcome'));
+        Queue::assertPushed(RunWorkflowJob::class, fn (RunWorkflowJob $job): bool => $job->workflowRunId === $run->id);
+    }
+
+    public function test_explicit_failure_route_does_not_mark_a_genuine_timeout_completed(): void
+    {
+        Queue::fake();
+        [$run, $stepRun, $step] = $this->deadlineRun();
+        $config = $step->config_json;
+        $config['routes']['failed'] = ['type' => 'fail'];
+        $step->forceFill(['config_json' => $config])->save();
+        $snapshot = $this->nestedRunningSnapshot($run, $stepRun);
+        $stepRun->forceFill(['result_json' => $snapshot])->save();
+        $this->mockTaskRunnerWithStatus($snapshot);
+
+        app(WorkflowExecutionService::class)->monitorStepRun($stepRun->id);
+
+        $this->assertSame('failed', $stepRun->fresh()->status);
+        $this->assertSame('failed', $run->fresh()->status);
+        $this->assertSame('timeout', data_get($stepRun->fresh()->result_json, 'status'));
+        $this->assertSame($snapshot['configuredTasks'], data_get($stepRun->fresh()->result_json, 'configuredTasks'));
+        Queue::assertNotPushed(RunWorkflowJob::class);
+    }
+
+    public function test_timely_native_error_route_is_consumed_and_continues_the_parent_workflow(): void
+    {
+        Queue::fake();
+        [$run, $stepRun, $step] = $this->deadlineRun();
+        $recovery = $step->workflow->steps()->create([
+            'name' => 'Recovery', 'type' => WorkflowStep::TYPE_BROWSER_TASK, 'action_key' => 'recovery',
+            'position' => 20, 'is_enabled' => true,
+            'config_json' => ['tasks' => [['key' => 'recover', 'task_key' => 'wait.seconds', 'value' => 0]]],
+        ]);
+        $config = $step->config_json;
+        $config['tasks'][0]['on_error'] = ['type' => 'card', 'action_key' => $recovery->action_key, 'card_key' => 'recover'];
+        $step->forceFill(['config_json' => $config])->save();
+        [$status, $result] = $this->terminalExternalResult($run, $stepRun, $step);
+        $result['tasks'] = [[...$result['tasks'][0], 'status' => 'failed', 'statusMessage' => 'Own test task failed.']];
+        $result['configuredTasks'] = $step->task_cards;
+        $result['routeRequested'] = true;
+        $result['routeOutcome'] = 'failed';
+        $result['completedTaskKey'] = 'first-task';
+        $result['logicalOutcome'] = 'technical_error';
+        $this->mockTerminalTaskRunner($status, $result);
+
+        app(WorkflowExecutionService::class)->monitorStepRun($stepRun->id);
+
+        $this->assertSame('running', $run->fresh()->status);
+        $this->assertSame('recovery', data_get($run->fresh()->context_json, 'next_step_action_key'));
+        $this->assertSame('recover', data_get($run->fresh()->context_json, 'next_task_key'));
+        $this->assertNull(data_get($stepRun->fresh()->result_json, 'timedOutAt'));
+        $this->assertSame('technical_error', data_get($stepRun->fresh()->result_json, 'logicalOutcome'));
+        $this->assertSame('failed', data_get($stepRun->fresh()->result_json, 'tasks.0.status'));
+        $this->assertNotContains(data_get($stepRun->fresh()->result_json, 'tasks.1.status'), ['success', 'completed']);
+        Queue::assertPushed(RunWorkflowJob::class, fn (RunWorkflowJob $job): bool => $job->workflowRunId === $run->id);
+    }
+
+    private function deadlineRun(): array
+    {
+        [$workflow, $step] = $this->workflow();
+        $config = $step->config_json;
+        $config['timeout_seconds'] = 120;
+        $step->forceFill(['config_json' => $config])->save();
+        [$run, $stepRun] = $this->waitingWorkflowTaskRun($workflow, $step, ['interactive_debug' => false]);
+
+        return [$run, $stepRun, $step];
+    }
+
+    /** Native Node final: owner IDs live in status and browserIdentity, not invented top-level result fields. */
+    private function terminalExternalResult(WorkflowRun $run, WorkflowStepRun $stepRun, WorkflowStep $step): array
+    {
+        $status = [
+            'runId' => $stepRun->external_run_id,
+            'workflowRunId' => $run->id,
+            'workflowRunUuid' => $run->run_uuid,
+            'workflowStepId' => $step->id,
+            'workflowStepRunId' => $stepRun->id,
+            'startedAt' => now()->subSeconds(145)->toIso8601String(),
+            'state' => 'completed', 'isRunning' => false,
+        ];
+        $result = [
+            'ok' => true, 'status' => 'success', 'finishedAt' => now()->subSeconds(60)->toIso8601String(),
+            'browserIdentity' => [
+                'runId' => $stepRun->external_run_id,
+                'workflowRunId' => $run->id,
+                'workflowRunUuid' => $run->run_uuid,
+            ],
+            'tasks' => collect($step->task_cards)->map(fn (array $task): array => [
+                ...$task, 'status' => 'success',
+                'startedAt' => now()->subSeconds(100)->toIso8601String(),
+                'finishedAt' => now()->subSeconds(60)->toIso8601String(),
+            ])->all(),
+        ];
+
+        return [$status, $result];
+    }
+
+    private function mockTerminalTaskRunner(array $status, array $result): void
+    {
+        $runner = Mockery::mock(WorkflowTaskRunner::class);
+        $runner->shouldReceive('readRun')->andReturn($status)->byDefault();
+        $runner->shouldReceive('readResult')->andReturn($result)->byDefault();
+        $runner->shouldReceive('closeRun')->andReturn(['ok' => true])->byDefault();
+        $runner->shouldReceive('cancelRun')->andReturn(['ok' => true])->byDefault();
+        $this->app->instance(WorkflowTaskRunner::class, $runner);
+    }
+
+    private function nestedRunningSnapshot(WorkflowRun $run, WorkflowStepRun $stepRun): array
+    {
+        $path = [
+            ['frame_key' => 'middle-12', 'workflow_id' => 12, 'include_task_key' => 'first-task'],
+            ['frame_key' => 'leaf-42', 'parent_frame_key' => 'middle-12', 'workflow_id' => 42, 'include_task_key' => 'leaf-include'],
+        ];
+        $configured = collect(['leaf-open', 'leaf-wait', 'leaf-future'])->map(fn (string $key): array => [
+            'key' => $key, 'task_key' => 'wait.seconds', 'runner' => 'node', 'value' => 0,
+            'status' => 'configured', 'parent_task_key' => 'first-task',
+            'source_workflow_id' => 42, 'source_workflow_step_id' => 171,
+            'embedded_workflow_path' => $path, 'browser_window' => 'mail-leaf-main',
+        ])->all();
+
+        return [
+            ...$this->externalStatus(now()->subSeconds(5)),
+            'runId' => $stepRun->external_run_id, 'workflowRunId' => $run->id,
+            'workflowStepId' => $stepRun->workflow_step_id, 'workflowStepRunId' => $stepRun->id,
+            'startedAt' => now()->subSeconds(145)->toIso8601String(),
+            'browserWsEndpoint' => 'ws://127.0.0.1/private-test-endpoint',
+            'activeBrowserWindow' => 'mail-leaf-main',
+            'configuredTasks' => $configured,
+            'tasks' => [
+                [...$configured[0], 'status' => 'success', 'startedAt' => now()->subSeconds(100)->toIso8601String(), 'finishedAt' => now()->subSeconds(90)->toIso8601String()],
+                [...$configured[1], 'status' => 'running', 'startedAt' => now()->subSeconds(80)->toIso8601String()],
+            ],
+            'events' => [['stage' => 'task.started', 'taskKey' => 'leaf-wait', 'at' => now()->subSeconds(80)->toIso8601String()]],
+            'browserWindows' => [['name' => 'mail-leaf-main', 'targetId' => 'own-leaf-target', 'isClosed' => false]],
+        ];
     }
 
     private function assertMonitorDelaySeconds(int $stepRunId, int $expectedSeconds): void

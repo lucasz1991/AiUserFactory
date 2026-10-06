@@ -1136,8 +1136,9 @@ class WorkflowExecutionService
         }
 
         $isClientControllerStep = in_array($stepRun->external_run_type, ['client-controller-workflow-task', 'client-controller-workflow-run'], true);
+        $isWorkflowTask = $stepRun->external_run_type === 'workflow-task';
 
-        if (! $isClientControllerStep && $this->stepRunTimedOut($stepRun)) {
+        if (! $isClientControllerStep && ! $isWorkflowTask && $this->stepRunTimedOut($stepRun)) {
             $this->expireStepRun($stepRun);
 
             return;
@@ -1150,6 +1151,12 @@ class WorkflowExecutionService
         }
 
         if (! is_array($status)) {
+            if ($isWorkflowTask && $this->stepRunTimedOut($stepRun)) {
+                $this->expireStepRun($stepRun);
+
+                return;
+            }
+
             $message = 'Der externe Node-Lauf konnte nicht gelesen werden.';
 
             if ($this->isCopilotSupervisedRun($stepRun->workflowRun)) {
@@ -1168,11 +1175,15 @@ class WorkflowExecutionService
             return;
         }
 
-        $this->ingestDebugArtifacts($stepRun, $status);
+        // Expired workflow-task payloads must pass ownership/deadline checks
+        // before their manifests may create artifacts for this invocation.
+        if (! $isWorkflowTask || ! $this->stepRunTimedOut($stepRun)) {
+            $this->ingestDebugArtifacts($stepRun, $status);
+        }
 
         if ($this->externalStillRunning($status)) {
             if (! $isClientControllerStep && $this->stepRunTimedOut($stepRun)) {
-                $this->expireStepRun($stepRun);
+                $this->expireStepRun($stepRun, $status);
 
                 return;
             }
@@ -1197,7 +1208,22 @@ class WorkflowExecutionService
             return;
         }
 
-        $result = $this->prepareExternalResult($stepRun, $this->readExternalResult($stepRun, $status));
+        $result = $this->readExternalResult($stepRun, $status);
+        if (! $this->stepOperationIsCurrent($stepRun)) {
+            return;
+        }
+
+        // A delayed control worker must not discard a result that its own
+        // current Node invocation finished within the configured deadline.
+        // Check the raw identity/timestamps before session-artifact I/O.
+        if ($isWorkflowTask && $this->stepRunTimedOut($stepRun)
+            && ! $this->workflowTaskResultFinishedInTime($stepRun, $status, $result)) {
+            $this->expireStepRun($stepRun, $status);
+
+            return;
+        }
+
+        $result = $this->prepareExternalResult($stepRun, $result);
         $result = $this->normalizeStepResult($stepRun, $result, $status);
         if (! $this->stepOperationIsCurrent($stepRun)) {
             return;
@@ -3067,7 +3093,7 @@ class WorkflowExecutionService
         }
     }
 
-    protected function expireStepRun(WorkflowStepRun $stepRun): void
+    protected function expireStepRun(WorkflowStepRun $stepRun, array $status = []): void
     {
         if (! in_array($stepRun->status, ['running', 'waiting'], true)) {
             return;
@@ -3079,14 +3105,19 @@ class WorkflowExecutionService
 
         $timeoutSeconds = $this->stepTimeoutSeconds($stepRun->workflowStep);
         $message = 'Workflow-Schritt hat das Timeout von '.$timeoutSeconds.' Sekunden ueberschritten.';
-        $result = [
+        $result = array_replace($this->stepRunTimeoutEvidence($stepRun, $status), [
             'ok' => false,
+            'state' => 'failed',
+            'isRunning' => false,
             'status' => 'timeout',
             'statusLevel' => 'timeout',
             'statusMessage' => $message,
+            'logicalOutcome' => 'technical_error',
+            'logical_outcome' => 'technical_error',
             'timedOutAt' => now()->toIso8601String(),
             'timeoutSeconds' => $timeoutSeconds,
-        ];
+        ]);
+        $result = $this->normalizeStepResult($stepRun, $result);
         $outcome = $this->hasRouteForOutcome($stepRun->workflowStep, 'timeout') ? 'timeout' : 'failed';
 
         if ($this->isCopilotSupervisedRun($stepRun->workflowRun)) {
@@ -3096,15 +3127,69 @@ class WorkflowExecutionService
             return;
         }
 
+        // Keep the frozen flat child results: the root-card mapper cannot
+        // represent all nested invocation paths, especially on an unhandled
+        // timeout. An expired invocation is failed even when recovery follows.
+        $finishedAt = now();
+        $observedTaskKeys = $this->observedTaskHistoryKeys($result);
+        if (! $this->persistStepOutcome($stepRun, [
+            'status' => 'failed',
+            'finished_at' => $finishedAt,
+            'duration_ms' => max(0, ($stepRun->started_at ?? $finishedAt)->diffInMilliseconds($finishedAt)),
+            'result_json' => $this->publicRunSnapshot($result),
+            'logs_json' => $this->logsFromExternalStatus($result),
+            'error_message' => $message,
+        ])) {
+            return;
+        }
+        $this->recordTaskHistory($stepRun, $result, $observedTaskKeys);
+
         if ($this->hasRouteForOutcome($stepRun->workflowStep, $outcome)) {
-            $this->completeStepRun($stepRun, $result, 'timeout');
             $this->continueAfterStep($stepRun->workflowRun, $stepRun, $result, $outcome);
 
             return;
         }
 
-        $this->failStepRun($stepRun, $message, $result);
         $this->failRun($stepRun->workflowRun, $message);
+    }
+
+    protected function stepRunTimeoutEvidence(WorkflowStepRun $stepRun, array $status): array
+    {
+        $evidence = [];
+        $keys = [
+            'runId', 'workflowRunId', 'workflowRunUuid', 'workflowStepId', 'workflowStepRunId',
+            'startedAt', 'tasks', 'configuredTasks', 'events', 'browserWindows', 'activeBrowserWindow',
+            'browserIdentity', 'livePreviewPath', 'livePreviewRelativePath', 'livePreviewUrl',
+            'screenshotPath', 'screenshotUrl', 'debugArtifacts', 'debug_artifacts',
+        ];
+
+        foreach ([is_array($stepRun->result_json) ? $stepRun->result_json : [], $status] as $payload) {
+            if (! $this->workflowTaskPayloadMatchesStep($stepRun, $payload)) {
+                continue;
+            }
+
+            foreach ($keys as $key) {
+                if (array_key_exists($key, $payload)) {
+                    $evidence[$key] = $payload[$key];
+                }
+            }
+        }
+
+        // Only observed, unfinished work becomes timed out. Frozen definitions
+        // and unvisited tasks retain their pending/configured state.
+        foreach (is_array($evidence['tasks'] ?? null) ? $evidence['tasks'] : [] as $index => $task) {
+            if (! is_array($task)
+                || ! in_array(strtolower((string) ($task['status'] ?? '')), ['running', 'waiting'], true)) {
+                continue;
+            }
+
+            $evidence['tasks'][$index] = array_replace($task, [
+                'status' => 'timeout',
+                'finishedAt' => now()->toIso8601String(),
+            ]);
+        }
+
+        return $this->publicRunSnapshot($evidence);
     }
 
     protected function isWaitingAtCopilotCheckpoint(WorkflowStepRun $stepRun): bool
@@ -3617,6 +3702,102 @@ class WorkflowExecutionService
         }
 
         return $stepRun->started_at->copy()->addSeconds($timeoutSeconds)->lte(now());
+    }
+
+    protected function workflowTaskResultFinishedInTime(WorkflowStepRun $stepRun, array $status, array $result): bool
+    {
+        if (! ($stepRun->started_at instanceof Carbon)
+            || ! $this->workflowTaskPayloadMatchesStep($stepRun, $status)
+            || ! $this->workflowTaskPayloadMatchesStep($stepRun, $result)) {
+            return false;
+        }
+
+        // The Node status supplies the exact step identity. Raw final results
+        // do not carry top-level IDs, but always identify their invocation in
+        // browserIdentity, even when no browser has been opened.
+        foreach ([
+            'runId' => (string) $stepRun->external_run_id,
+            'workflowRunId' => (string) $stepRun->workflow_run_id,
+            'workflowStepId' => (string) $stepRun->workflow_step_id,
+            'workflowStepRunId' => (string) $stepRun->id,
+        ] as $key => $expected) {
+            if (! is_scalar($status[$key] ?? null) || (string) $status[$key] !== $expected) {
+                return false;
+            }
+        }
+
+        $identity = is_array($result['browserIdentity'] ?? null) ? $result['browserIdentity'] : [];
+        foreach ([
+            'runId' => (string) $stepRun->external_run_id,
+            'workflowRunId' => (string) $stepRun->workflow_run_id,
+            'workflowRunUuid' => (string) $stepRun->workflowRun->run_uuid,
+        ] as $key => $expected) {
+            if ($expected === '' || ! is_scalar($identity[$key] ?? null) || (string) $identity[$key] !== $expected) {
+                return false;
+            }
+        }
+
+        $nodeStartedAt = $this->strictExternalTimestamp($status['startedAt'] ?? null);
+        $finishedAt = $this->strictExternalTimestamp($result['finishedAt'] ?? null);
+
+        return $nodeStartedAt && $finishedAt
+            && $nodeStartedAt->gte($stepRun->started_at)
+            && $finishedAt->gte($nodeStartedAt)
+            && $finishedAt->lte($stepRun->started_at->copy()->addSeconds($this->stepTimeoutSeconds($stepRun->workflowStep)))
+            && $finishedAt->lte(now());
+    }
+
+    protected function workflowTaskPayloadMatchesStep(WorkflowStepRun $stepRun, array $payload): bool
+    {
+        $expected = [
+            'runId' => (string) $stepRun->external_run_id,
+            'run_id' => (string) $stepRun->external_run_id,
+            'workflowRunId' => (string) $stepRun->workflow_run_id,
+            'workflow_run_id' => (string) $stepRun->workflow_run_id,
+            'workflowRunUuid' => (string) $stepRun->workflowRun->run_uuid,
+            'workflow_run_uuid' => (string) $stepRun->workflowRun->run_uuid,
+            'workflowStepId' => (string) $stepRun->workflow_step_id,
+            'workflow_step_id' => (string) $stepRun->workflow_step_id,
+            'workflowStepRunId' => (string) $stepRun->id,
+            'workflow_step_run_id' => (string) $stepRun->id,
+        ];
+
+        foreach ([$payload, is_array($payload['browserIdentity'] ?? null) ? $payload['browserIdentity'] : []] as $identity) {
+            foreach ($expected as $key => $value) {
+                if (array_key_exists($key, $identity)
+                    && (! is_scalar($identity[$key]) || (string) $identity[$key] !== $value)) {
+                    return false;
+                }
+            }
+        }
+
+        if ($stepRun->external_run_type === 'workflow-task' && array_key_exists('startedAt', $payload)) {
+            $startedAt = $this->strictExternalTimestamp($payload['startedAt']);
+            if (! $startedAt || ($stepRun->started_at instanceof Carbon && $startedAt->lt($stepRun->started_at))) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    protected function strictExternalTimestamp(mixed $value): ?Carbon
+    {
+        if (! is_string($value)
+            || preg_match('/\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})\z/D', $value) !== 1) {
+            return null;
+        }
+
+        $parsed = date_parse($value);
+        if ($parsed['error_count'] !== 0 || $parsed['warning_count'] !== 0) {
+            return null;
+        }
+
+        try {
+            return Carbon::parse($value);
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     protected function requestClientJobStop(NetworkJob $job, string $message, string $resultStatus = 'cancelled', bool $force = false): void
@@ -5502,7 +5683,8 @@ class WorkflowExecutionService
             $current = WorkflowStepRun::query()->lockForUpdate()->find($stepRun->id);
             if (! $current || ! in_array($current->status, ['pending', 'queued', 'running', 'waiting'], true)
                 || $current->external_run_type !== $stepRun->external_run_type
-                || $current->external_run_id !== $stepRun->external_run_id) {
+                || $current->external_run_id !== $stepRun->external_run_id
+                || $current->getRawOriginal('started_at') !== $stepRun->getRawOriginal('started_at')) {
                 return false;
             }
 
@@ -5541,7 +5723,8 @@ class WorkflowExecutionService
         return $current
             && in_array($current->status, ['running', 'waiting'], true)
             && $current->external_run_type === $stepRun->external_run_type
-            && $current->external_run_id === $stepRun->external_run_id;
+            && $current->external_run_id === $stepRun->external_run_id
+            && $current->getRawOriginal('started_at') === $stepRun->getRawOriginal('started_at');
     }
 
     protected function markRunStopRequested(WorkflowRun $run): WorkflowRun
