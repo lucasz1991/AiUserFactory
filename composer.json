@@ -22,7 +22,7 @@
         "paypal/paypal-server-sdk": "^0.6.1",
         "php-webdriver/webdriver": "^1.1",
         "picqer/php-barcode-generator": "^2.4",
-        "plesk/ext-laravel-integration": "^7.0",
+        "plesk/ext-laravel-integration": "^8.0",
         "spatie/laravel-activitylog": "^4.9",
         "symfony/panther": "^2.2"
     },
