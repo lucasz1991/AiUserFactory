@@ -462,11 +462,34 @@ export function workflowRouteSurface(config = {}) {
             }
             const lines = buildWorkflowRouteLines(edges, descriptors);
 
+            // Die Overlay-Groesse folgt der Buehne, nicht surface.scroll*: Das absolut
+            // positionierte SVG zaehlt selbst zur Scrollflaeche und liess die Flaeche
+            // sonst bei jedem Refresh wachsen (zusaetzliche vertikale Scrollleiste).
+            let stage = null;
+            try {
+                stage = surface.querySelector?.(':scope > .ff-route-stage') ?? null;
+            } catch {
+                stage = null;
+            }
+            const visibleLines = lines.filter((line) => line.path !== '');
+            if (stage) {
+                // Rueckspruenge laufen unter den Spalten durch. Ihren Platz reserviert
+                // ein Margin im normalen Fluss, damit die Flaeche waechst statt zu scrollen.
+                const stageBottom = stage.offsetTop + stage.offsetHeight;
+                const lowestRoute = visibleLines.reduce((lowest, line) => Math.max(
+                    lowest,
+                    ...(Array.isArray(line.points) ? line.points.map((point) => Number(point?.y) || 0) : [0]),
+                ), 0);
+                const reserve = Math.max(0, Math.ceil(lowestRoute + 16 - stageBottom));
+                stage.style.marginBottom = reserve > 0 ? `${reserve}px` : '';
+            }
             this.routeOverlay = {
-                width: Math.max(surface.scrollWidth, surface.clientWidth),
-                height: Math.max(surface.scrollHeight, surface.clientHeight),
+                width: Math.max(stage ? stage.offsetLeft + stage.scrollWidth : surface.scrollWidth, surface.clientWidth),
+                height: stage
+                    ? Math.max(stage.offsetTop + stage.offsetHeight + (parseFloat(stage.style.marginBottom) || 0), surface.clientHeight)
+                    : Math.max(surface.scrollHeight, surface.clientHeight),
             };
-            this.routeLines = lines.filter((line) => line.path !== '');
+            this.routeLines = visibleLines;
             this.renderRouteLines();
         },
     };

@@ -2924,6 +2924,49 @@
   text-transform: uppercase;
 }
 
+/* Scrollleisten: ein sichtbarer Scrollbereich statt vieler verschachtelter.
+   Unter-Workflow-Karten wachsen in der Hoehe mit; uebrige Leisten bleiben
+   schmal und erscheinen erst, wenn der Bereich beruehrt oder fokussiert wird. */
+[data-workflow-studio-shell] [data-workflow-embedded-map-body] {
+  max-height: none !important;
+  overflow-y: hidden !important;
+}
+
+[data-workflow-studio-shell] .ff-studio-browser-mini-list {
+  overflow-y: hidden;
+  padding-block: 3px;
+}
+
+[data-workflow-studio-shell] :is(.ff-canvas-grid, [data-workflow-live-preview], [data-workflow-minimap-scroll-container], [data-workflow-embedded-rail], [data-workflow-embedded-map-body], .ff-studio-browser-mini-list, .ff-studio-inspector .overflow-y-auto) {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  scrollbar-gutter: auto;
+}
+
+[data-workflow-studio-shell] :is(.ff-canvas-grid, [data-workflow-live-preview], [data-workflow-minimap-scroll-container], [data-workflow-embedded-rail], [data-workflow-embedded-map-body], .ff-studio-browser-mini-list, .ff-studio-inspector .overflow-y-auto):is(:hover, :focus-within) {
+  scrollbar-color: var(--ff-line-strong) transparent;
+}
+
+/* Unter 1024px scrollt die Arbeitsflaeche als Ganzes; das Hauptdiagramm waechst
+   mit, statt einen zweiten vertikalen Scrollbereich zu oeffnen. */
+@media (max-width: 1023px) {
+  [data-workflow-studio-diagram] :is([data-workflow-primary-diagram], [data-workflow-definition-editor], [data-studio-task-layout], [data-studio-editor-canvas-panel]) {
+    height: auto !important;
+    overflow-y: visible !important;
+  }
+
+  [data-workflow-studio-diagram] [data-workflow-live-preview] {
+    flex: 0 0 auto !important;
+    overflow: visible !important;
+  }
+}
+
+@media (hover: none), (pointer: coarse) {
+  [data-workflow-studio-shell] :is(.ff-canvas-grid, [data-workflow-live-preview], [data-workflow-minimap-scroll-container], [data-workflow-embedded-rail], [data-workflow-embedded-map-body], .ff-studio-browser-mini-list, .ff-studio-inspector .overflow-y-auto) {
+    scrollbar-color: var(--ff-line-strong) transparent;
+  }
+}
+
 /* Unter-Workflows: Status-Chips in der Kopfzeile */
 .ff-workflow-embedded-chips {
   display: flex;
