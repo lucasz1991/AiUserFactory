@@ -5096,6 +5096,10 @@ class WorkflowExecutionService
         $copilotSupervised = $this->isCopilotSupervisedRun($run);
         $studioSingleTask = (bool) ($context['studio_single_task'] ?? false);
         $segmentTasks = $copilotSupervised || $studioSingleTask;
+        // Die automatische Session wird einmal je Lauf geladen. Ohne Weitergabe
+        // hielte sich jeder Schritt fuer den ersten und oeffnete die gespeicherte
+        // URL erneut - geoeffnete Dialoge und Formulare gingen dabei verloren.
+        $browserSessionAutoLoaded = (bool) ($context['browser_session_auto_loaded'] ?? $context['browserSessionAutoLoaded'] ?? false);
 
         return [
             'workflowRunId' => $run->id,
@@ -5148,6 +5152,8 @@ class WorkflowExecutionService
             'veri-account' => $verificationMailbox,
             'browserSessions' => $browserSessions,
             'browser_sessions' => $browserSessions,
+            'browserSessionAutoLoaded' => $browserSessionAutoLoaded,
+            'browser_session_auto_loaded' => $browserSessionAutoLoaded,
             'browserSessionAutomation' => app(WorkflowBrowserSessionService::class)->runtimeConfig(
                 $run->workflow,
                 $person?->id,

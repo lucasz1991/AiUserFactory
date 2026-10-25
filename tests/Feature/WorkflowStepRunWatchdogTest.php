@@ -708,6 +708,20 @@ class WorkflowStepRunWatchdogTest extends TestCase
         $this->assertGreaterThan(0, $budget->invoke(app(WorkflowExecutionService::class), $selfInclude->fresh()));
     }
 
+    public function test_following_steps_know_that_the_automatic_browser_session_was_already_loaded(): void
+    {
+        [$workflow, $step] = $this->workflow();
+        [$fresh, $freshStep] = $this->waitingWorkflowTaskRun($workflow, $step);
+        [$loaded, $loadedStep] = $this->waitingWorkflowTaskRun($workflow, $step, ['browser_session_auto_loaded' => true]);
+        $context = new ReflectionMethod(WorkflowExecutionService::class, 'workflowRuntimeContext');
+        $service = app(WorkflowExecutionService::class);
+
+        $this->assertFalse($context->invoke($service, $fresh, $step, $freshStep)['browserSessionAutoLoaded']);
+        $runtime = $context->invoke($service, $loaded, $step, $loadedStep);
+        $this->assertTrue($runtime['browserSessionAutoLoaded']);
+        $this->assertTrue($runtime['browser_session_auto_loaded']);
+    }
+
     private function deadlineRun(): array
     {
         [$workflow, $step] = $this->workflow();
