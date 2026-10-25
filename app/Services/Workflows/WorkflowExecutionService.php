@@ -78,6 +78,9 @@ class WorkflowExecutionService
     /** @var array<int, string> */
     private array $runOperationTokens = [];
 
+    /** @var array<int, Workflow|null> Eingebettete Workflows fuer die Timeout-Budgetierung, je Instanz einmal geladen. */
+    private array $timeoutBudgetWorkflows = [];
+
     public function __construct(
         protected MailAccountRegistrationRunner $mailRegistration,
         protected WebmailSessionRunner $webmailSession,
@@ -3999,7 +4002,7 @@ class WorkflowExecutionService
         return null;
     }
 
-    protected function stepTimeoutSeconds(WorkflowStep $step): int
+    protected function stepTimeoutSeconds(WorkflowStep $step, array $workflowStack = []): int
     {
         $configured = (int) data_get($step->config_json, 'timeout_seconds', 0);
 
@@ -4008,7 +4011,7 @@ class WorkflowExecutionService
         }
 
         $taskTimeouts = collect($step->task_cards)
-            ->map(fn (array $task): int => (int) ($task['timeout_seconds'] ?? 0))
+            ->map(fn (array $task): int => $this->taskTimeoutBudgetSeconds($task, $workflowStack))
             ->filter(fn (int $seconds): bool => $seconds > 0);
 
         if ($taskTimeouts->isNotEmpty()) {
@@ -4024,6 +4027,44 @@ class WorkflowExecutionService
             WorkflowStep::TYPE_WEBMAIL_LOGIN => 900,
             default => 300,
         };
+    }
+
+    /**
+     * Zeitbudget einer Task-Karte. Ein eingebetteter Workflow laeuft zur Laufzeit
+     * mit allen seinen Listen im selben Schritt; sein Budget ist daher die Summe
+     * seiner Listen-Budgets und nicht das Timeout der einen Aufruf-Karte.
+     */
+    protected function taskTimeoutBudgetSeconds(array $task, array $workflowStack = []): int
+    {
+        $ownTimeout = (int) ($task['timeout_seconds'] ?? 0);
+        $workflowId = (int) ($task['workflow_id'] ?? 0);
+
+        $includeKey = preg_match('/^workflow(?:\.include)?\.(\d+)$/', trim((string) ($task['task_key'] ?? '')), $matches) === 1;
+
+        if ($workflowId <= 0 && $includeKey) {
+            $workflowId = (int) $matches[1];
+        }
+
+        $isInclude = $workflowId > 0
+            && ((string) ($task['runner'] ?? '') === 'workflow' || $includeKey);
+
+        if (! $isInclude || in_array($workflowId, $workflowStack, true) || count($workflowStack) >= 16) {
+            return $ownTimeout;
+        }
+
+        $embedded = $this->timeoutBudgetWorkflows[$workflowId] ??= Workflow::query()
+            ->with(['steps' => fn ($query) => $query->ordered()])
+            ->find($workflowId);
+
+        if (! $embedded) {
+            return $ownTimeout;
+        }
+
+        $embeddedBudget = $embedded->steps
+            ->where('is_enabled', true)
+            ->sum(fn (WorkflowStep $nested): int => $this->stepTimeoutSeconds($nested, [...$workflowStack, $workflowId]));
+
+        return max($ownTimeout, (int) $embeddedBudget);
     }
 
     protected function failedBackRouteExceeded(WorkflowRun $run, WorkflowStepRun $stepRun, string $outcome, array $route, array $context, array $result = []): bool

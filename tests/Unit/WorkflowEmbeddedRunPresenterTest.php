@@ -242,6 +242,24 @@ class WorkflowEmbeddedRunPresenterTest extends TestCase
         $this->assertNull($maps[0]['failure']);
     }
 
+    public function test_a_failure_followed_by_its_error_route_does_not_mark_the_frame_failed(): void
+    {
+        [$workflow, $run] = $this->fixture();
+        $snapshot = $run->stepRuns[0]->result_json;
+        // inner-a scheitert, danach laeuft die Ebene planmaessig ueber die Fehlerroute weiter (deep-task startet spaeter).
+        $snapshot['tasks'][1]['status'] = 'failed';
+        $snapshot['tasks'][1]['statusMessage'] = 'Kein klickbares Ziel uebergeben oder gefunden.';
+        $run->stepRuns[0]->result_json = $snapshot;
+        $maps = collect(app(WorkflowEmbeddedRunPresenter::class)->present($workflow, $run))->keyBy('frame_key');
+
+        $this->assertSame('running', $maps['inner']['status']);
+        $this->assertSame('running', $maps['outer']['status']);
+        $this->assertNull($maps['inner']['failure']);
+        // Die Karte selbst bleibt als fehlgeschlagen sichtbar.
+        $innerCard = collect($maps['inner']['workflow']->steps)->flatMap(fn ($step) => $step->task_cards)->firstWhere('key', 'inner-a');
+        $this->assertSame('failed', $innerCard['status']);
+    }
+
     public function test_foreign_root_source_and_legacy_identity_do_not_generate_guessed_child_maps(): void
     {
         [$workflow, $run] = $this->fixture();

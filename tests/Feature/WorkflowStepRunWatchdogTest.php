@@ -678,6 +678,36 @@ class WorkflowStepRunWatchdogTest extends TestCase
         $this->assertSame('waiting', $recentStep->fresh()->status);
     }
 
+    public function test_a_list_that_embeds_a_workflow_gets_the_embedded_lists_time_budget(): void
+    {
+        [$child, $childStep] = $this->workflow();
+        $config = $childStep->config_json;
+        $config['tasks'] = [
+            ['key' => 'login', 'task_key' => 'browser.click', 'title' => 'Login', 'timeout_seconds' => 60],
+            ['key' => 'scan', 'task_key' => 'mail.inbox_list_scan', 'title' => 'Scan', 'timeout_seconds' => 240],
+        ];
+        $childStep->forceFill(['config_json' => $config])->save();
+        $child->steps()->create([
+            'name' => 'Abschluss', 'type' => WorkflowStep::TYPE_BROWSER_TASK, 'action_key' => 'end', 'position' => 20, 'is_enabled' => true,
+            'config_json' => ['tasks' => [['key' => 'return', 'task_key' => 'data.workflow_return', 'title' => 'Return', 'timeout_seconds' => 15]]],
+        ]);
+        [$parent, $parentStep] = $this->workflow();
+        $parentStep->forceFill(['config_json' => ['tasks' => [[
+            'key' => 'include', 'task_key' => 'workflow.include.'.$child->id, 'runner' => 'workflow',
+            'workflow_id' => $child->id, 'title' => 'Unter-Workflow', 'timeout_seconds' => 60,
+        ]]]])->save();
+        $budget = new ReflectionMethod(WorkflowExecutionService::class, 'stepTimeoutSeconds');
+
+        // Kind: (60 + 240 + 60) + max(60, 15 + 60) = 435; Eltern-Liste: 435 + 60 statt bisher 60 + 60.
+        $this->assertSame(495, $budget->invoke(app(WorkflowExecutionService::class), $parentStep->fresh()));
+
+        $selfInclude = $child->steps()->create([
+            'name' => 'Zyklus', 'type' => WorkflowStep::TYPE_BROWSER_TASK, 'action_key' => 'cycle', 'position' => 30, 'is_enabled' => true,
+            'config_json' => ['tasks' => [['key' => 'again', 'task_key' => 'workflow.include.'.$child->id, 'runner' => 'workflow', 'workflow_id' => $child->id, 'timeout_seconds' => 60]]],
+        ]);
+        $this->assertGreaterThan(0, $budget->invoke(app(WorkflowExecutionService::class), $selfInclude->fresh()));
+    }
+
     private function deadlineRun(): array
     {
         [$workflow, $step] = $this->workflow();

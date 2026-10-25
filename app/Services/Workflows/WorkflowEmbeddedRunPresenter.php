@@ -149,6 +149,18 @@ final class WorkflowEmbeddedRunPresenter
         $failed = false;
         $failure = null;
         $activeNode = null;
+        // Ein fehlgeschlagener Task, nach dem in dieser Ebene noch ein echter Task
+        // gestartet ist, wurde ueber seine Fehlerroute abgefangen und ist kein
+        // Fehler der Ebene. Boundaries melden nur das Ende und zaehlen nicht.
+        $continuationStarts = [];
+        foreach ($rawTasks as $task) {
+            if (($task['runner'] ?? '') !== 'workflow-boundary'
+                && in_array($frameKey, array_column($task['embedded_workflow_path'] ?? [], 'frame_key'), true)
+                && ($start = $this->time($task['startedAt'] ?? null)) !== null) {
+                $continuationStarts[] = $start;
+            }
+        }
+        $latestContinuation = $continuationStarts === [] ? null : max($continuationStarts);
         foreach ($rawTasks as $key => $task) {
             $path = $task['embedded_workflow_path'] ?? [];
             $keys = array_column($path, 'frame_key');
@@ -161,7 +173,10 @@ final class WorkflowEmbeddedRunPresenter
                 $windows[$window] = true;
             }
             $observed = $observed || $this->executed($task);
-            $failed = $failed || in_array($task['status'] ?? '', ['failed', 'timeout', 'timed_out'], true);
+            $taskStart = $this->time($task['startedAt'] ?? null);
+            $taskFailed = in_array($task['status'] ?? '', ['failed', 'timeout', 'timed_out'], true)
+                && ! ($taskStart !== null && $latestContinuation !== null && $latestContinuation > $taskStart);
+            $failed = $failed || $taskFailed;
             if ($index + 1 < count($path)) {
                 $childKey = $keys[$index + 1];
                 $child = $children[$childKey] ?? null;
@@ -194,7 +209,7 @@ final class WorkflowEmbeddedRunPresenter
                     'order_id' => $task['embedded_source_task_order'] ?? $task['order_id'] ?? count($cards[$stepId] ?? []) * 10,
                     'status' => $this->safeStatus($task['status'] ?? 'configured', $rootRun, $key === $activeKey),
                 ] + array_intersect_key($task, array_flip(['next', 'on_partial', 'on_error', 'status_routes', 'startedAt', 'finishedAt', 'ok', 'logical_outcome', 'logicalOutcome', 'statusMessage', 'error_message']));
-                if ($failure === null && in_array($task['status'] ?? '', ['failed', 'timeout', 'timed_out'], true)) {
+                if ($failure === null && $taskFailed) {
                     $failure = [
                         'title' => (string) ($task['title'] ?? $key),
                         'message' => (string) ($task['error_message'] ?? $task['statusMessage'] ?? ''),
