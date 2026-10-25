@@ -318,6 +318,56 @@ test('explicitly closed child windows do not resurrect from the initial persiste
   assert.equal(log.closedBrowser, 0);
 });
 
+const closeScript = { task_key: 'browser.close', node_script: 'node/workflows/tasks/browser/close.cjs' };
+const childFrame = {
+  embedded_workflow_frame_key: 'frame-child',
+  embedded_workflow_path: [{ frame_key: 'frame-child', parent_frame_key: null, workflow_id: 12, browser_window: 'child' }],
+};
+
+test('an embedded close keeps a window that tasks outside its frame still use', () => {
+  const { result, log } = execute([
+    task('child-closes-shared', 'child', { ...closeScript, ...childFrame }),
+    task('parent-uses-child-later', 'child'),
+  ], { windows: existingWindows, pages: existingPages });
+  assert.equal(result.ok, true);
+  assert.deepEqual(log.closedPages, []);
+  assert.equal(result.tasks[0].status, 'skipped');
+  assert.equal(result.tasks[0].browserCloseWarning, true);
+  assert.match(result.tasks[0].statusMessage, /ausserhalb dieses Unter-Workflows/);
+  assert.equal(result.tasks[1].boundTarget, 'child-target');
+});
+
+test('an embedded close still closes a window that only its own frame uses', () => {
+  const { result, log } = execute([
+    task('child-uses-own', 'child', childFrame),
+    task('child-closes-own', 'child', { ...closeScript, ...childFrame }),
+    task('parent-continues', 'main'),
+  ], { windows: existingWindows, pages: existingPages });
+  assert.equal(result.ok, true);
+  assert.deepEqual(log.closedPages, ['child-target']);
+  assert.equal(result.tasks[1].status, 'success');
+});
+
+test('a technical close failure is a warning and the workflow continues', () => {
+  const { result, log } = execute([
+    task('close-stale-child', 'child', closeScript),
+    task('parent-continues', 'main'),
+  ], {
+    windows: [
+      { key: 'main', targetId: 'root-target', url: 'https://fixture.test/root' },
+      { key: 'child', targetId: 'stale-target', url: 'https://fixture.test/child' },
+    ],
+    pages: [{ id: 'root-target', url: 'https://fixture.test/root' }],
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.tasks[0].status, 'skipped');
+  assert.equal(result.tasks[0].browserCloseWarning, true);
+  assert.match(result.tasks[0].statusMessage, /konnte nicht geschlossen werden/);
+  assert.deepEqual(log.closedPages, []);
+  assert.equal(log.closedBrowser, 0);
+  assert.equal(result.tasks[1].boundTarget, 'root-target');
+});
+
 test('off observability retains all exact window identities without screenshots or capture metadata', () => {
   const { result, screenshots } = execute([task('quiet-parent', 'main')], {
     windows: existingWindows, pages: existingPages, observability: 'off',

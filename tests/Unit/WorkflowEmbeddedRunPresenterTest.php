@@ -227,6 +227,21 @@ class WorkflowEmbeddedRunPresenterTest extends TestCase
         $this->assertSame('configured', $maps[1]['workflow']->steps[0]->task_cards[2]['status']);
     }
 
+    public function test_failed_child_task_carries_its_error_message_to_card_and_map(): void
+    {
+        [$workflow, $run] = $this->fixture();
+        $run->status = 'failed';
+        $snapshot = $run->stepRuns[0]->result_json;
+        $snapshot['tasks'][2]['status'] = 'failed';
+        $snapshot['tasks'][2]['statusMessage'] = 'Workflow-Browserfenster "child" konnte zum Schliessen nicht eindeutig gefunden werden.';
+        $run->stepRuns[0]->result_json = $snapshot;
+        $maps = app(WorkflowEmbeddedRunPresenter::class)->present($workflow, $run);
+
+        $this->assertSame($snapshot['tasks'][2]['statusMessage'], $maps[2]['workflow']->steps[0]->task_cards[0]['statusMessage']);
+        $this->assertSame($snapshot['tasks'][2]['statusMessage'], $maps[2]['failure']['message']);
+        $this->assertNull($maps[0]['failure']);
+    }
+
     public function test_foreign_root_source_and_legacy_identity_do_not_generate_guessed_child_maps(): void
     {
         [$workflow, $run] = $this->fixture();

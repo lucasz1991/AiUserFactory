@@ -2492,6 +2492,51 @@ function selectExistingPage(context, windowName = 'main') {
   return null;
 }
 
+// Ein eingebetteter Workflow darf ein Fenster nur schliessen, wenn es ihm gehoert:
+// Es bleibt offen, wenn eine aeussere Ebene es ausdruecklich zugewiesen hat oder
+// Tasks ausserhalb dieses Unter-Workflows es im selben Lauf noch verwenden.
+function embeddedCloseKeepsWindowOpen(task, windowName, tasks = []) {
+  const frameKey = String(task?.embedded_workflow_frame_key || '').trim();
+  const path = Array.isArray(task?.embedded_workflow_path) ? task.embedded_workflow_path : [];
+
+  if (frameKey === '' || path.length === 0) {
+    return false;
+  }
+
+  const target = normalizeBrowserWindowName(windowName);
+  const boundaries = new Map((Array.isArray(tasks) ? tasks : [])
+    .filter((candidate) => candidate?.runner === 'workflow-boundary')
+    .map((candidate) => [String(candidate.embedded_workflow_frame_key || ''), candidate]));
+  const assignedByAncestor = path.some((frame) => {
+    if (normalizeBrowserWindowName(frame?.browser_window || '') !== target) {
+      return false;
+    }
+
+    const boundary = boundaries.get(String(frame?.frame_key || ''));
+
+    return boundary ? boundary.embedded_workflow_window_implicit === false : false;
+  });
+
+  if (assignedByAncestor) {
+    return true;
+  }
+
+  return (Array.isArray(tasks) ? tasks : []).some((candidate) => {
+    if (!candidate || candidate === task || candidate.runner === 'workflow-boundary') {
+      return false;
+    }
+
+    const candidatePath = Array.isArray(candidate.embedded_workflow_path) ? candidate.embedded_workflow_path : [];
+    const insideFrame = candidatePath.some((frame) => String(frame?.frame_key || '') === frameKey);
+    const candidateWindow = candidate.browser_window_name || candidate.browser_window || '';
+
+    return !insideFrame
+      && candidate.kind !== 'data'
+      && String(candidateWindow).trim() !== ''
+      && normalizeBrowserWindowName(candidateWindow) === target;
+  });
+}
+
 async function selectWorkflowPageForClose(context, windowName = 'main') {
   const normalizedName = normalizeBrowserWindowName(windowName);
   const selected = selectExistingPage(context, normalizedName);
@@ -3395,8 +3440,21 @@ async function run() {
         const input = taskInput(task, context);
         const targetBrowserWindow = browserWindowNameForTask(task, input);
 
+        // Schliessen ist Aufraeumen, kein fachlicher Schritt: Ein eingebetteter
+        // Workflow schliesst kein Fenster, das eine aeussere Ebene noch braucht,
+        // und ein technischer Fehler beim Schliessen bricht den Lauf nicht ab.
+        let closeSkipReason = '';
+
         if (task.task_key === 'browser.close') {
-          await selectWorkflowPageForClose(context, targetBrowserWindow);
+          if (embeddedCloseKeepsWindowOpen(task, targetBrowserWindow, runtimeTasks)) {
+            closeSkipReason = 'Browserfenster bleibt offen, weil es ausserhalb dieses Unter-Workflows weiter genutzt wird.';
+          } else {
+            try {
+              await selectWorkflowPageForClose(context, targetBrowserWindow);
+            } catch (error) {
+              closeSkipReason = `Browserfenster konnte nicht geschlossen werden: ${error.message}`;
+            }
+          }
         } else if (task.kind !== 'data' || ['data.persist_webmail_session', 'data.persist_browser_session', 'data.delete_browser_session'].includes(String(task.task_key || ''))) {
           await ensurePage(context, targetBrowserWindow, targetBrowserWindow === 'main' ? 'Main' : taskLabel);
           startPreviewLoop(context);
@@ -3416,7 +3474,18 @@ async function run() {
           return context.page;
         };
 
-        if (task.task_key === 'browser.close' && preserveBrowserForFailureRoute) {
+        if (task.task_key === 'browser.close' && closeSkipReason !== '') {
+          pushEvent('browser-close-skipped', closeSkipReason, { browserWindow: targetBrowserWindow, taskKey: task.key });
+
+          result = {
+            ok: true,
+            status: 'skipped',
+            statusMessage: closeSkipReason,
+            skippedBrowserClose: true,
+            browserCloseWarning: true,
+            browserWindow: targetBrowserWindow,
+          };
+        } else if (task.task_key === 'browser.close' && preserveBrowserForFailureRoute) {
           pushEvent('browser-close-skipped', 'Browserfenster bleibt offen, weil diese Task ueber eine Fehlerroute erreicht wurde.', {
             browserWindow: targetBrowserWindow,
             routeOutcome: runtime.workflow?.nextTaskRouteOutcome || runtime.workflow?.next_task_route_outcome || null,
@@ -3447,7 +3516,24 @@ async function run() {
             pushEvent('dev-debug-before-failed', error.message, { taskKey: task.key });
           });
 
-          result = await taskModule.run(context);
+          if (task.task_key === 'browser.close') {
+            try {
+              result = await taskModule.run(context);
+            } catch (error) {
+              const message = `Browserfenster konnte nicht geschlossen werden: ${error.message}`;
+              pushEvent('browser-close-skipped', message, { browserWindow: targetBrowserWindow, taskKey: task.key });
+              result = {
+                ok: true,
+                status: 'skipped',
+                statusMessage: message,
+                skippedBrowserClose: true,
+                browserCloseWarning: true,
+                browserWindow: targetBrowserWindow,
+              };
+            }
+          } else {
+            result = await taskModule.run(context);
+          }
         }
 
         if (task.task_key === 'browser.close' && !result?.skippedBrowserClose) {

@@ -147,6 +147,7 @@ final class WorkflowEmbeddedRunPresenter
         $windows = [];
         $observed = false;
         $failed = false;
+        $failure = null;
         $activeNode = null;
         foreach ($rawTasks as $key => $task) {
             $path = $task['embedded_workflow_path'] ?? [];
@@ -177,7 +178,7 @@ final class WorkflowEmbeddedRunPresenter
                     'title' => $child['include_task_title'] ?? $child['workflow_name'] ?? 'Unter-Workflow',
                     'order_id' => $child['include_task_order'] ?? count($cards[$stepId] ?? []) * 10,
                     'status' => $this->safeStatus($boundaries[$childKey]['status'] ?? 'configured', $rootRun),
-                ] + array_intersect_key($boundaries[$childKey] ?? [], array_flip(['next', 'on_partial', 'on_error', 'status_routes']));
+                ] + array_intersect_key($boundaries[$childKey] ?? [], array_flip(['next', 'on_partial', 'on_error', 'status_routes', 'statusMessage', 'error_message']));
             } elseif (($task['runner'] ?? '') === 'workflow-boundary') {
                 $mapping[$key] = ['terminal' => ($task['status'] ?? '') === 'failed' ? 'fail' : 'end'];
             } else {
@@ -192,7 +193,13 @@ final class WorkflowEmbeddedRunPresenter
                     'key' => $key, 'task_key' => $task['task_key'] ?? '', 'title' => $task['title'] ?? $key,
                     'order_id' => $task['embedded_source_task_order'] ?? $task['order_id'] ?? count($cards[$stepId] ?? []) * 10,
                     'status' => $this->safeStatus($task['status'] ?? 'configured', $rootRun, $key === $activeKey),
-                ] + array_intersect_key($task, array_flip(['next', 'on_partial', 'on_error', 'status_routes', 'startedAt', 'finishedAt', 'ok', 'logical_outcome', 'logicalOutcome']));
+                ] + array_intersect_key($task, array_flip(['next', 'on_partial', 'on_error', 'status_routes', 'startedAt', 'finishedAt', 'ok', 'logical_outcome', 'logicalOutcome', 'statusMessage', 'error_message']));
+                if ($failure === null && in_array($task['status'] ?? '', ['failed', 'timeout', 'timed_out'], true)) {
+                    $failure = [
+                        'title' => (string) ($task['title'] ?? $key),
+                        'message' => (string) ($task['error_message'] ?? $task['statusMessage'] ?? ''),
+                    ];
+                }
             }
             if ($key === $activeKey && isset($mapping[$key]['key'])) {
                 $activeNode = $mapping[$key] + ['status' => $task['status'], 'source' => 'runtime'];
@@ -256,6 +263,7 @@ final class WorkflowEmbeddedRunPresenter
             'workflow' => $workflow, 'run' => $run, 'status' => $status, 'active' => $activeNode !== null,
             'runtime_task' => $activeNode ? ['step_id' => $activeNode['step_id'], 'task_key' => $activeNode['key'], 'status' => $activeNode['status'], 'source' => 'runtime'] : [],
             'browser_windows' => array_keys($windows),
+            'failure' => $failure,
             'route_map' => app(WorkflowRouteMapPresenter::class)->present($workflow, $run, WorkflowRouteMapPresenter::MODE_COMBINED),
         ];
     }

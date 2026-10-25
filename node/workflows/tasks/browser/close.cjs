@@ -2,13 +2,18 @@
 
 const { captureTaskPreview, stopTaskPreview } = require('../lib/preview.cjs');
 
+// Die Vorschau ist optional: Ein fehlgeschlagener Screenshot darf das Schliessen nie verhindern.
+async function previewBeforeClose(context, result) {
+  return captureTaskPreview(context, result, true).catch(() => result);
+}
+
 async function run(context = {}) {
   const page = context.page || null;
   const contextHandle = context.context || null;
   const browser = context.browser || null;
 
   if (page && typeof page.close === 'function') {
-    const result = await captureTaskPreview(context, { ok: true, status: 'success', statusMessage: 'Browser-Seite wurde geschlossen.' }, true);
+    const result = await previewBeforeClose(context, { ok: true, status: 'success', statusMessage: 'Browser-Seite wurde geschlossen.' });
     await page.close({ runBeforeUnload: false }).catch(() => {});
     stopTaskPreview(context);
 
@@ -16,7 +21,7 @@ async function run(context = {}) {
   }
 
   if (contextHandle && typeof contextHandle.close === 'function') {
-    const result = await captureTaskPreview(context, { ok: true, status: 'success', statusMessage: 'Browser-Kontext wurde geschlossen.' }, true);
+    const result = await previewBeforeClose(context, { ok: true, status: 'success', statusMessage: 'Browser-Kontext wurde geschlossen.' });
     await contextHandle.close().catch(() => {});
     stopTaskPreview(context);
 
@@ -24,7 +29,7 @@ async function run(context = {}) {
   }
 
   if (browser && typeof browser.close === 'function') {
-    const result = await captureTaskPreview(context, { ok: true, status: 'success', statusMessage: 'Browser wurde geschlossen.' }, true);
+    const result = await previewBeforeClose(context, { ok: true, status: 'success', statusMessage: 'Browser wurde geschlossen.' });
     await browser.close().catch(() => {});
     stopTaskPreview(context);
 

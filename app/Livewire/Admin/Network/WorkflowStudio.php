@@ -1964,7 +1964,12 @@ class WorkflowStudio extends Component
         $stepIndex = $orderedStepIds->search($stepId);
 
         $failure = null;
-        $failedChild = collect($embeddedWorkflowMaps)->first(fn (array $map): bool => in_array($map['status'] ?? '', ['failed', 'timed_out'], true));
+        // Der Fehler einer tiefen Ebene markiert auch alle aeusseren als fehlgeschlagen;
+        // die Ursache traegt nur die Ebene, in der der Task tatsaechlich scheiterte.
+        $failedMaps = collect($embeddedWorkflowMaps)->filter(fn (array $map): bool => in_array($map['status'] ?? '', ['failed', 'timed_out'], true));
+        $failedChild = $failedMaps->first(fn (array $map): bool => filled($map['failure']['message'] ?? null))
+            ?? $failedMaps->first(fn (array $map): bool => is_array($map['failure'] ?? null))
+            ?? $failedMaps->first();
         $failedAttempt = $taskAttempts->first(fn ($attempt): bool => in_array((string) $attempt->status, ['failed', 'timed_out'], true));
 
         if ($run && in_array((string) $run->status, ['failed', 'timed_out', 'lost', 'unreachable'], true)) {
@@ -1975,9 +1980,13 @@ class WorkflowStudio extends Component
                 'task_key' => (string) ($failedAttempt?->failure_task_key ?: $failedAttempt?->task_key ?: ''),
             ];
         } elseif ($failedChild) {
+            $childFailure = is_array($failedChild['failure'] ?? null) ? $failedChild['failure'] : [];
             $failure = [
-                'title' => 'Unter-Workflow „'.($failedChild['name'] ?? 'Unter-Workflow').'“',
-                'message' => 'Der eingebettete Workflow meldet einen Fehler (Ebene '.($failedChild['depth'] ?? 1).').',
+                'title' => 'Unter-Workflow „'.($failedChild['name'] ?? 'Unter-Workflow').'“'
+                    .(filled($childFailure['title'] ?? null) ? ' › '.$childFailure['title'] : ''),
+                'message' => filled($childFailure['message'] ?? null)
+                    ? (string) $childFailure['message']
+                    : 'Der eingebettete Workflow meldet einen Fehler (Ebene '.($failedChild['depth'] ?? 1).'), aber keine Ursache.',
                 'step_id' => 0,
                 'task_key' => '',
             ];
