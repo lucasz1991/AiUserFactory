@@ -4101,10 +4101,14 @@ async function run() {
       const successRouteType = routeType(successRoute);
 
       if (successRouteType === 'fail') {
-        requestedFailureRouteTask = {
+        // Eine erfuellte Bedingung, die bewusst abbricht (z. B. Anbieter-Sperre),
+        // meldet den Erfolgsausgang: so waehlt der Server diese fail-Route samt
+        // Meldung und nicht die Fehlerroute der Task fuer "Bedingung nicht erfuellt".
+        requestedSuccessRouteTask = {
           ...task,
           key: task.route_source_task_key || task.parent_task_key || task.key,
         };
+        requestedRouteMessage = String(successRoute.message || '').trim() || requestedRouteMessage;
         break;
       }
 

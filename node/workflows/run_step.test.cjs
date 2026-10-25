@@ -470,6 +470,24 @@ test('failed task remains a workflow failure for fail and missing error routes',
   }
 });
 
+test('fail success route aborts with its message instead of following the error route', () => {
+  const result = executeTasks([
+    {
+      ...returnTask('provider-blocked', true),
+      next: { type: 'fail', step: 'fail', message: 'Anbieter hat die Verifizierung gesperrt.' },
+      on_error: { type: 'card', card_key: 'continue-normally' },
+    },
+    returnTask('continue-normally', true),
+  ]);
+
+  assert.equal(result.routeRequested, true);
+  assert.equal(result.routeOutcome, 'success');
+  assert.equal(result.completedTaskKey, 'provider-blocked');
+  assert.equal(result.routeDisposition, 'fail');
+  assert.equal(result.statusMessage, 'Anbieter hat die Verifizierung gesperrt.');
+  assert.ok(!result.tasks.some((task) => task.key === 'continue-normally'));
+});
+
 test('configured end route completes a false branch without marking it as an error', () => {
   const result = executeTasks([
     branchTask('condition-not-met', { type: 'end', step: 'end' }),
