@@ -52,6 +52,9 @@ class WorkflowExecutionService
     /** Sekunden ohne Status-Heartbeat, ab denen ein aktiver Workflow-Task als haengend gilt. */
     private const WATCHDOG_STALL_SECONDS = 120;
 
+    /** Wartezeit, bevor ein fertiger, aber nicht abgeholter Node-Lauf vom Scheduler abgeschlossen wird. */
+    private const ORPHANED_STEP_RUN_GRACE_SECONDS = 60;
+
     /** Adaptive Monitor-Taktung: enger Poll fuer junge aktive Step-Runs. */
     private const MONITOR_FAST_POLL_SECONDS = 1;
 
@@ -2200,10 +2203,29 @@ class WorkflowExecutionService
                     return;
                 }
 
-                if ($this->stepRunTimedOut($stepRun)) {
+                if ($this->stepRunTimedOut($stepRun) || $this->workflowTaskFinishedButUnprocessed($stepRun)) {
                     $this->monitorStepRun((int) $stepRun->id);
                 }
             });
+    }
+
+    /**
+     * Der Node-Lauf ist fertig, aber kein Monitor hat das Ergebnis abgeholt (z. B.
+     * nach einem verlorenen Queue-Job). Ohne diese Pruefung bliebe der Schritt
+     * bis zum Step-Timeout - bei Studio-Laeufen unbegrenzt - auf "waiting".
+     * Noch laufende Prozesse bleiben ausschliesslich in der Hand ihres Monitors.
+     */
+    protected function workflowTaskFinishedButUnprocessed(WorkflowStepRun $stepRun): bool
+    {
+        if ($stepRun->external_run_type !== 'workflow-task'
+            || ! $stepRun->updated_at instanceof Carbon
+            || $stepRun->updated_at->gt(now()->subSeconds(self::ORPHANED_STEP_RUN_GRACE_SECONDS))) {
+            return false;
+        }
+
+        $status = $this->readExternalStatus($stepRun);
+
+        return is_array($status) && ! $this->externalStillRunning($status);
     }
 
     protected function executeStep(WorkflowRun $run, WorkflowStep $step, WorkflowStepRun $stepRun): string

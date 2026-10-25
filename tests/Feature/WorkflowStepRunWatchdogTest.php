@@ -642,6 +642,42 @@ class WorkflowStepRunWatchdogTest extends TestCase
         Queue::assertPushed(RunWorkflowJob::class, fn (RunWorkflowJob $job): bool => $job->workflowRunId === $run->id);
     }
 
+    public function test_scheduler_finishes_a_completed_node_run_whose_monitor_chain_was_lost(): void
+    {
+        Queue::fake();
+        [$workflow, $step] = $this->workflow();
+        [$run, $stepRun] = $this->waitingWorkflowTaskRun($workflow, $step, ['interactive_debug' => false]);
+        WorkflowStepRun::query()->whereKey($stepRun->id)->update(['updated_at' => now()->subMinutes(5)]);
+        [$status, $result] = $this->terminalExternalResult($run, $stepRun->fresh(), $step);
+        $this->mockTerminalTaskRunner($status, $result);
+
+        app(WorkflowExecutionService::class)->expireTimedOutRuns();
+
+        $this->assertNotContains($stepRun->fresh()->status, ['running', 'waiting']);
+    }
+
+    public function test_scheduler_leaves_running_or_recently_monitored_node_runs_to_their_monitor(): void
+    {
+        Queue::fake();
+        [$workflow, $step] = $this->workflow();
+        [$running, $runningStep] = $this->waitingWorkflowTaskRun($workflow, $step, ['interactive_debug' => false]);
+        WorkflowStepRun::query()->whereKey($runningStep->id)->update(['updated_at' => now()->subMinutes(5)]);
+        $this->mockTaskRunnerWithStatus($this->externalStatus(now()->subSeconds(5)));
+
+        app(WorkflowExecutionService::class)->expireTimedOutRuns();
+
+        $this->assertSame('waiting', $runningStep->fresh()->status);
+        Queue::assertNotPushed(MonitorWorkflowStepRunJob::class);
+
+        [$recent, $recentStep] = $this->waitingWorkflowTaskRun($workflow, $step, ['interactive_debug' => false]);
+        [$status, $result] = $this->terminalExternalResult($recent, $recentStep, $step);
+        $this->mockTerminalTaskRunner($status, $result);
+
+        app(WorkflowExecutionService::class)->expireTimedOutRuns();
+
+        $this->assertSame('waiting', $recentStep->fresh()->status);
+    }
+
     private function deadlineRun(): array
     {
         [$workflow, $step] = $this->workflow();
