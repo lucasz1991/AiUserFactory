@@ -7,12 +7,35 @@
     <div class="flex min-w-0 flex-wrap items-center gap-2 px-3 py-2 sm:px-4">
         <h2 class="text-sm font-bold text-slate-950">Workflow-Übersicht</h2>
 
-        @if($run && $runFocus['task_title'] !== '')
-            <p class="ff-studio-focus-chip min-w-0" data-studio-focus-task data-failed="{{ $focusFailure ? 'true' : 'false' }}" data-tone="{{ $focusTone }}" role="status" aria-live="polite">
-                <span class="ff-studio-focus-dot" aria-hidden="true"></span>
-                <span class="shrink-0">{{ $runFocus['live'] ? 'Aktiv' : 'Ausgewählt' }}:</span>
-                <strong class="truncate" title="{{ $runFocus['step_name'] }} › {{ $runFocus['task_title'] }}">{{ $runFocus['task_title'] }}</strong>
-            </p>
+        @if($runFocus['task_title'] !== '' || $run)
+            @php
+                $focusBadge = $focusFailure
+                    ? 'Fehler'
+                    : match ($runFocus['live'] ? $runFocus['status'] : '') {
+                        'running' => 'Läuft',
+                        'waiting' => 'Wartet',
+                        'pending' => 'Als Nächstes',
+                        default => $run ? $statusLabel : 'Ausgewählt',
+                    };
+            @endphp
+            <button
+                type="button"
+                wire:click="$set('showRunInspectorModal', true)"
+                data-studio-run-inspector-trigger
+                data-studio-focus-task
+                data-failed="{{ $focusFailure ? 'true' : 'false' }}"
+                data-tone="{{ $focusTone }}"
+                class="ff-studio-focus-trigger min-w-0"
+                aria-haspopup="dialog"
+                title="{{ $runFocus['step_name'] ? $runFocus['step_name'].' › ' : '' }}{{ $runFocus['task_title'] }} – Details öffnen"
+            >
+                <span class="ff-studio-focus-chip shrink-0" data-tone="{{ $focusTone }}" data-failed="{{ $focusFailure ? 'true' : 'false' }}" role="status" aria-live="polite">
+                    <span class="ff-studio-focus-dot" aria-hidden="true"></span>{{ $focusBadge }}
+                </span>
+                <span class="shrink-0 text-slate-500">{{ $runFocus['live'] ? 'Aktiver Task' : 'Task' }}</span>
+                <strong class="truncate">{{ $runFocus['task_title'] ?: 'Noch keiner' }}</strong>
+                <svg class="h-4 w-4 shrink-0 text-slate-400" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M8 5l5 5-5 5" /></svg>
+            </button>
         @endif
 
         <div class="ml-auto flex shrink-0 items-center gap-3">

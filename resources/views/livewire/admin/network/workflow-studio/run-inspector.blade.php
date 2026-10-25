@@ -20,10 +20,10 @@
     };
 @endphp
 
-<aside
+<div
     wire:key="studio-run-inspector-{{ $session->id }}"
     x-data="{ tab: 'task' }"
-    class="ff-studio-inspector flex min-h-0 min-w-0 flex-col overflow-hidden"
+    class="ff-studio-inspector flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
     data-studio-run-inspector
     aria-label="Aktiver Task und Laufdaten"
 >
@@ -56,7 +56,7 @@
                         </dl>
                     @endif
                     @if(! $autonomousMode && ! $historicalRunView && $runFocus['step_id'] > 0)
-                        <button type="button" wire:click="editTask({{ $runFocus['step_id'] }}, @js($runFocus['task_key']))" class="ff-studio-control mt-3 w-full justify-center">Task bearbeiten</button>
+                        <button type="button" x-on:click="$dispatch('close')" wire:click="editTask({{ $runFocus['step_id'] }}, @js($runFocus['task_key']))" class="ff-studio-control mt-3 w-full justify-center">Task bearbeiten</button>
                     @endif
                 </section>
             @else
@@ -95,7 +95,7 @@
                 <h4 class="ff-studio-inspector-heading">Workflow-Variablen</h4>
                 <pre class="max-h-80 overflow-auto whitespace-pre-wrap rounded-lg bg-slate-900 p-3 font-mono text-[10.5px] leading-5 text-slate-100">{{ json_encode($variables ?: new stdClass, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) }}</pre>
             </section>
-            <button type="button" wire:click="openToolModal('data')" class="ff-studio-control w-full justify-center">Alle Laufdaten öffnen</button>
+            <button type="button" x-on:click="$dispatch('close')" wire:click="openToolModal('data')" class="ff-studio-control w-full justify-center">Alle Laufdaten öffnen</button>
         </div>
 
         <div x-cloak x-show="tab === 'log'" data-studio-inspector-log>
@@ -109,7 +109,7 @@
                     <li class="py-2 text-slate-500">Noch keine Ereignisse.</li>
                 @endforelse
             </ol>
-            <button type="button" wire:click="openToolModal('logs')" class="ff-studio-control mt-3 w-full justify-center">Vollständiges Log</button>
+            <button type="button" x-on:click="$dispatch('close')" wire:click="openToolModal('logs')" class="ff-studio-control mt-3 w-full justify-center">Vollständiges Log</button>
         </div>
     </div>
-</aside>
+</div>

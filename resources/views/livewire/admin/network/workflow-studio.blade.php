@@ -270,9 +270,6 @@
     <main wire:key="studio-canvas-{{ $session->id }}" class="ff-canvas-grid relative isolate min-h-0 flex-1 overflow-hidden p-3">
         <section class="ff-studio-focus-layout h-full min-h-0 min-w-0" data-studio-focus-layout aria-label="Workflow-Vorschau und Live-Ausführung">
             @include('livewire.admin.network.workflow-studio.browser')
-            @unless($resultOnly)
-                @include('livewire.admin.network.workflow-studio.run-inspector')
-            @endunless
         </section>
 
         <div wire:loading.delay.flex wire:target="startRun,runRealPlayback,pauseRun,resumeRun,runSingleTask,stopRun,restartRun,runProbe,commitProbeAsTask,saveSessionDefinition,startCopilot,setPermissionMode,chooseControlMode" class="pointer-events-none absolute inset-0 z-50 hidden items-center justify-center bg-white/55 backdrop-blur-[1px]">
@@ -332,6 +329,16 @@
                         Auf Standardroute setzen und Test starten
                     </button>
                 </x-slot>
+        </x-ui.modal>
+    @endif
+
+    @if($showRunInspectorModal)
+        <x-ui.modal id="studio-run-inspector-{{ $session->id }}" wire:key="workflow-studio-run-inspector" wire:model="showRunInspectorModal" return-focus="[data-studio-run-inspector-trigger]" max-width="2xl">
+            <x-slot name="title">
+                <h2 class="text-base font-bold">{{ $runFocus['live'] ? 'Aktiver Task' : 'Task' }}</h2>
+                <p class="mt-1 text-xs font-normal text-slate-500">Status, Konfiguration, Laufdaten und Ereignisse des Testlaufs.</p>
+            </x-slot>
+            @include('livewire.admin.network.workflow-studio.run-inspector')
         </x-ui.modal>
     @endif
 

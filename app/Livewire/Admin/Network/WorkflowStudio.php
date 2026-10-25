@@ -114,6 +114,8 @@ class WorkflowStudio extends Component
 
     public bool $showCopilotSettingsModal = false;
 
+    public bool $showRunInspectorModal = false;
+
     public bool $showSelectorProbeModal = false;
 
     /** Feature R1: Dialog fuer Verzweigungen, deren Ziel geloescht wurde. */
