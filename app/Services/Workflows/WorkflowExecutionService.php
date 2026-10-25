@@ -52,6 +52,9 @@ class WorkflowExecutionService
     /** Sekunden ohne Status-Heartbeat, ab denen ein aktiver Workflow-Task als haengend gilt. */
     private const WATCHDOG_STALL_SECONDS = 120;
 
+    /** Speicher, den Monitor und Scheduler zum Einlesen grosser Node-Status-/Ergebnisdateien mindestens erhalten. */
+    private const EXTERNAL_PAYLOAD_MEMORY_BYTES = 1024 * 1048576;
+
     /** Wartezeit, bevor ein fertiger, aber nicht abgeholter Node-Lauf vom Scheduler abgeschlossen wird. */
     private const ORPHANED_STEP_RUN_GRACE_SECONDS = 60;
 
@@ -1076,6 +1079,7 @@ class WorkflowExecutionService
 
     public function monitorStepRun(int $workflowStepRunId): void
     {
+        $this->ensureMemoryForExternalPayloads();
         $runId = (int) WorkflowStepRun::query()->whereKey($workflowStepRunId)->value('workflow_run_id');
         if ($runId <= 0) {
             return;
@@ -1117,6 +1121,40 @@ class WorkflowExecutionService
             $lock->release();
             $lease->release($runId, $token);
         }
+    }
+
+    /**
+     * Status- und Ergebnisdateien eingebetteter Workflows koennen zweistellige
+     * Megabyte gross werden; dekodiert und kopiert sprengen sie ein knappes
+     * memory_limit. Ein Speicherfehler beendet Monitor-Job und Scheduler-Lauf
+     * kommentarlos, der Schritt bliebe dann dauerhaft "waiting".
+     */
+    protected function ensureMemoryForExternalPayloads(): void
+    {
+        $required = self::EXTERNAL_PAYLOAD_MEMORY_BYTES;
+        $current = $this->memoryLimitBytes((string) ini_get('memory_limit'));
+
+        if ($current !== -1 && $current < $required) {
+            @ini_set('memory_limit', (string) (int) ($required / 1048576).'M');
+        }
+    }
+
+    protected function memoryLimitBytes(string $limit): int
+    {
+        $limit = trim($limit);
+
+        if ($limit === '' || $limit === '-1') {
+            return -1;
+        }
+
+        $value = (int) $limit;
+
+        return match (strtolower(substr($limit, -1))) {
+            'g' => $value * 1073741824,
+            'm' => $value * 1048576,
+            'k' => $value * 1024,
+            default => $value,
+        };
     }
 
     protected function monitorStepRunWithLock(int $workflowStepRunId): void
@@ -2192,6 +2230,7 @@ class WorkflowExecutionService
 
     public function expireTimedOutRuns(): void
     {
+        $this->ensureMemoryForExternalPayloads();
         $this->reconcileClientWorkflowJobs();
 
         WorkflowStepRun::query()

@@ -2492,6 +2492,33 @@ function selectExistingPage(context, windowName = 'main') {
   return null;
 }
 
+// Task-Eintraege im Ergebnis tragen keine vollstaendige Kopie aller Workflow-
+// Variablen: Mail-Tasks liefern sie mit, und jede weitere Task wiederholte so
+// u. a. den kompletten Mail-HTML-Text. Liste 3 des Proton-Workflows wuchs damit
+// auf ~30 MB Status-JSON, an dem die PHP-Verarbeitung scheiterte. Der aktuelle
+// Variablenstand steht weiterhin einmal auf oberster Ebene des Ergebnisses.
+function compactTaskHistoryResult(result) {
+  if (!isPlainObject(result)) {
+    return result;
+  }
+
+  const variables = {
+    ...(isPlainObject(result.workflowVariables) ? result.workflowVariables : {}),
+    ...(isPlainObject(result.workflow_variables) ? result.workflow_variables : {}),
+  };
+
+  if (!('workflowVariables' in result) && !('workflow_variables' in result)) {
+    return result;
+  }
+
+  const { workflowVariables, workflow_variables, ...compact } = result;
+
+  return {
+    ...compact,
+    workflowVariableNames: Object.keys(variables).slice(0, 200),
+  };
+}
+
 // Ein eingebetteter Workflow darf ein Fenster nur schliessen, wenn es ihm gehoert:
 // Es bleibt offen, wenn eine aeussere Ebene es ausdruecklich zugewiesen hat oder
 // Tasks ausserhalb dieses Unter-Workflows es im selben Lauf noch verwenden.
@@ -3707,12 +3734,12 @@ async function run() {
     const ok = result.ok !== false && !['failed', 'timeout'].includes(String(result.status || ''));
     const status = ok ? String(result.status || 'success') : String(result.status || 'failed');
     const current = taskResults.find((candidate) => candidate.key === task.key);
-    const historicalResult = Array.isArray(result.browserWindows)
+    const historicalResult = compactTaskHistoryResult(Array.isArray(result.browserWindows)
       ? {
         ...result,
         browserWindows: historicalBrowserWindows(result.browserWindows),
       }
-      : result;
+      : result);
     Object.assign(current, {
       ...cleanForJson(task),
       ...historicalResult,
