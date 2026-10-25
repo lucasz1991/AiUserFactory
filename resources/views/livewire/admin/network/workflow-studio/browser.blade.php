@@ -1,4 +1,5 @@
 <section class="ff-canvas-shell flex h-full min-h-0 min-w-0 flex-col" data-workflow-studio-diagram>
+    @include('livewire.admin.network.workflow-studio.run-focus-bar')
     <div class="ff-canvas-grid relative isolate min-h-0 flex-1 overflow-auto p-2.5 sm:p-3">
         <div class="h-full min-h-0" data-workflow-primary-diagram>
         @if(! $historicalRunView)

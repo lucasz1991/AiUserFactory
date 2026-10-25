@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>Workflow-Testlauf Entwurf</title>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#eef2f7; --card:#fff; --line:#e2e8f0; --line2:#eef2f6;
+    --ink:#0f172a; --ink2:#334155; --mute:#64748b; --mute2:#94a3b8;
+    --brand:#6d28d9; --brand-soft:#f3edff; --brand-line:#d9c8ff;
+    --ok:#059669; --ok-soft:#e8f8f1; --ok-line:#bfe9d6; --err:#e11d48; --err-soft:#fff0f3; --err-line:#fecdd6;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{width:1600px;height:1000px;background:var(--bg);font-family:Manrope,"Segoe UI",sans-serif;color:var(--ink);font-size:13px;overflow:hidden;position:relative}
+  .mono{font-family:"JetBrains Mono",Consolas,monospace}
+  button{font:inherit;border:0;background:none;color:inherit}
+
+  /* Kopfzeile */
+  .top{height:64px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:18px;padding:0 20px}
+  .back{display:flex;align-items:center;gap:6px;font-weight:700;color:var(--ink2);padding:8px 12px;border:1px solid var(--line);border-radius:10px}
+  .title h1{font-size:16px;font-weight:800;letter-spacing:-.01em}
+  .title p{color:var(--mute);font-size:12px;margin-top:2px;display:flex;gap:8px;align-items:center}
+  .pill{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:3px 10px;font-weight:700;font-size:11.5px;white-space:nowrap}
+  .pill.run{background:var(--brand-soft);color:var(--brand)}
+  .pill.ok{background:var(--ok-soft);color:var(--ok)}
+  .pill.err{background:var(--err-soft);color:var(--err)}
+  .dot{width:7px;height:7px;border-radius:50%;background:currentColor;flex:none}
+  .progress{flex:1;max-width:360px;margin-left:auto}
+  .progress .lbl{display:flex;justify-content:space-between;font-size:11.5px;color:var(--mute);margin-bottom:6px}
+  .progress .lbl b{color:var(--ink)}
+  .bar{height:6px;border-radius:6px;background:#e9edf3;overflow:hidden;display:flex;gap:2px}
+  .bar i{display:block;height:100%}
+  .controls{display:flex;align-items:center;gap:6px;background:#f6f8fb;border:1px solid var(--line);border-radius:12px;padding:4px}
+  .btn{display:inline-flex;align-items:center;gap:7px;padding:8px 12px;border-radius:9px;font-weight:700;color:var(--ink2)}
+  .btn.primary{background:var(--brand);color:#fff}
+  .btn.danger{color:var(--err)}
+  .sep{width:1px;height:22px;background:var(--line)}
+  .mode{display:flex;background:#f1f4f8;border-radius:10px;padding:3px}
+  .mode span{padding:6px 12px;border-radius:8px;font-weight:700;color:var(--mute)}
+  .mode span.on{background:#fff;color:var(--ink);box-shadow:0 1px 2px rgba(15,23,42,.08)}
+  .icon-btn{width:36px;height:36px;border-radius:10px;border:1px solid var(--line);display:grid;place-items:center;color:var(--ink2);font-size:16px;background:#fff}
+
+  /* Browser-Vorschauen: klein, oben, Klick öffnet Modal */
+  .previews{display:flex;align-items:center;gap:10px;padding:12px 20px 0}
+  .previews .cap{font-size:10.5px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--mute);margin-right:4px;line-height:1.3}
+  .pv{display:flex;align-items:center;gap:10px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:6px 12px 6px 6px;width:290px}
+  .pv.used{border-color:var(--brand-line);box-shadow:0 0 0 3px rgba(109,40,217,.08)}
+  .thumb{width:88px;height:52px;border-radius:7px;overflow:hidden;position:relative;flex:none;border:1px solid var(--line)}
+  .thumb .zoom{position:absolute;right:4px;bottom:4px;width:18px;height:18px;border-radius:5px;background:rgba(15,23,42,.7);color:#fff;font-size:10px;display:grid;place-items:center}
+  .pv .meta{min-width:0;flex:1}
+  .pv .meta b{display:flex;align-items:center;gap:6px;font-size:12.5px}
+  .pv .meta b .dot{background:var(--ok);width:6px;height:6px}
+  .pv .meta small{display:block;color:var(--mute);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .pv .use{font-size:10px;font-weight:800;color:var(--brand);background:var(--brand-soft);border-radius:5px;padding:1px 6px;margin-top:3px;display:inline-block}
+  .pv-add{border:1px dashed #cbd5e1;border-radius:12px;height:66px;padding:0 14px;display:flex;align-items:center;color:var(--mute);font-weight:700;gap:6px}
+  .previews .tools{margin-left:auto;display:flex;gap:6px}
+  .chip-btn{padding:7px 11px;border-radius:9px;border:1px solid var(--line);background:#fff;font-weight:700;color:var(--ink2);font-size:12px;white-space:nowrap}
+  .chip-btn.brand{background:var(--ink);color:#fff;border-color:var(--ink)}
+
+  /* Mini-Seiten in den Vorschaubildern */
+  .mini-proton{position:absolute;inset:0;background:linear-gradient(160deg,#1c1238,#4b37a0)}
+  .mini-proton::after{content:"";position:absolute;left:30%;top:16%;width:40%;height:68%;background:#fff;border-radius:3px;box-shadow:inset 0 9px 0 -6px #fff,inset 0 0 0 0 #fff}
+  .mini-proton i{position:absolute;left:35%;width:30%;height:3px;border-radius:2px;background:#d5d9e2;z-index:1}
+  .mini-mail{position:absolute;inset:0;background:#f6f8fb}
+  .mini-mail::before{content:"";position:absolute;left:0;top:0;bottom:0;width:22%;background:#1d3b8b}
+  .mini-mail i{position:absolute;left:27%;right:6%;height:3px;border-radius:2px;background:#d3dae5}
+
+  /* Hauptbereich */
+  .grid{display:grid;grid-template-columns:1fr 360px;gap:14px;padding:12px 20px 20px;height:calc(1000px - 64px - 78px)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;overflow:hidden;display:flex;flex-direction:column;min-height:0}
+  .card-h{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line2)}
+  .card-h h2{font-size:13.5px;font-weight:800}
+  .seg{display:flex;background:#f1f4f8;border-radius:9px;padding:3px}
+  .seg span{padding:4px 10px;border-radius:7px;font-weight:700;color:var(--mute);font-size:12px}
+  .seg span.on{background:#fff;color:var(--ink);box-shadow:0 1px 2px rgba(15,23,42,.08)}
+  .legend{display:flex;gap:12px;color:var(--mute);font-size:11px;margin-left:auto}
+  .legend span{display:flex;align-items:center;gap:5px}
+  .legend i{width:10px;height:10px;border-radius:3px;display:block}
+  .zoomer{display:flex;align-items:center;border:1px solid var(--line);border-radius:9px;color:var(--ink2);font-weight:700;font-size:12px}
+  .zoomer span{padding:5px 9px}
+  .zoomer span+span{border-left:1px solid var(--line)}
+
+  .alert{margin:10px 14px 0;border:1px solid var(--err-line);background:linear-gradient(90deg,#fff1f4,#fff);border-radius:12px;padding:8px 10px;display:flex;align-items:center;gap:12px}
+  .alert .ico{width:26px;height:26px;border-radius:8px;background:var(--err);color:#fff;display:grid;place-items:center;font-weight:800}
+  .alert .txt{flex:1;font-size:12.5px}
+  .alert .txt b{font-weight:800}
+  .alert .txt span{color:#9f1239}
+  .alert .acts{display:flex;gap:6px}
+
+  .canvas{flex:1;position:relative;background:radial-gradient(circle,#e3e8ef 1px,transparent 1.2px) 0 0/16px 16px,#fbfcfe;margin:10px 14px 0;border-radius:12px;border:1px solid var(--line2);overflow:hidden}
+  #wires{position:absolute;inset:0;pointer-events:none}
+  .col-h{position:absolute;font-size:11px;font-weight:800;color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .col-h small{display:block;font-weight:600;color:var(--mute);font-size:10.5px;margin-top:1px}
+  .col-h.cur{color:var(--brand)}
+  .node{position:absolute;height:34px;border-radius:8px;border:1px solid var(--line);background:#fff;display:flex;align-items:center;gap:7px;padding:0 9px;font-size:11.5px;font-weight:600;color:var(--ink2)}
+  .node .nm{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .node .t{font-size:10px;color:var(--mute2);font-weight:600}
+  .node .s{width:14px;height:14px;border-radius:50%;flex:none;display:grid;place-items:center;font-size:8.5px;font-weight:800;color:#fff}
+  .node.ok{border-color:var(--ok-line)} .node.ok .s{background:var(--ok)}
+  .node.todo{border-style:dashed;border-color:#cbd5e1;color:var(--mute);background:#fff}
+  .node.todo .s{border:1.5px dashed #b6c2d2}
+  .node.active{height:auto;border:2px solid var(--brand);box-shadow:0 0 0 6px rgba(109,40,217,.12),0 14px 30px -12px rgba(109,40,217,.45);flex-direction:column;align-items:stretch;padding:0;z-index:2}
+  .active .ah{display:flex;align-items:center;gap:7px;padding:8px 10px 6px;color:var(--brand);font-weight:800}
+  .active .ah .s{background:var(--brand);box-shadow:0 0 0 3px rgba(109,40,217,.2)}
+  .active .flag{position:absolute;top:-11px;left:10px;background:var(--brand);color:#fff;font-size:9.5px;font-weight:800;letter-spacing:.08em;padding:2px 7px;border-radius:5px}
+  .active .win{font-size:10px;color:var(--mute);font-weight:600;padding:0 10px 6px}
+  .active .sub{border-top:1px solid var(--line2);background:#faf8ff;border-radius:0 0 7px 7px;padding:5px 8px 7px}
+  .active .sub div{display:flex;align-items:center;gap:6px;font-size:11px;padding:3px 0;color:var(--ink2)}
+  .active .sub .s{width:12px;height:12px;font-size:7.5px}
+  .active .sub .e{color:var(--err);font-weight:800}
+  .active .sub .e .s{background:var(--err)}
+  .active .sub .o .s{background:var(--ok)}
+  .active .sub .w{color:var(--mute)} .active .sub .w .s{border:1.5px dashed #b6c2d2}
+  .active .sub small{margin-left:auto;font-size:9.5px;color:var(--mute2)}
+
+  .subs{display:flex;align-items:center;gap:8px;padding:10px 14px 12px}
+  .subs .cap{font-size:11px;font-weight:800;color:var(--mute)}
+  .subm{border:1px solid var(--line);background:#fff;border-radius:9px;padding:5px 9px;display:flex;align-items:center;gap:8px;font-size:11.5px}
+  .subm b{font-weight:700}
+  .subm small{color:var(--mute)}
+  .subm.err{border-color:var(--err-line)}
+
+  /* Inspector */
+  .tabs{display:flex;gap:2px;padding:0 10px;border-bottom:1px solid var(--line2)}
+  .tabs span{padding:12px 9px;font-weight:700;color:var(--mute);border-bottom:2px solid transparent}
+  .tabs span.on{color:var(--ink);border-color:var(--brand)}
+  .insp{padding:14px;display:flex;flex-direction:column;gap:12px;overflow:hidden}
+  .kv{display:grid;grid-template-columns:90px 1fr;gap:7px 10px;font-size:12px}
+  .kv dt{color:var(--mute)} .kv dd{font-weight:600}
+  .box{border:1px solid var(--line);border-radius:12px;padding:12px}
+  .box h4{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--mute);margin-bottom:9px;font-weight:800}
+  .box h3{font-size:14px;font-weight:800;margin-bottom:2px}
+  .box .crumb{font-size:11px;color:var(--mute);margin-bottom:10px}
+  .code{background:#0f172a;color:#e2e8f0;border-radius:9px;padding:10px 11px;font-size:11.2px;line-height:1.55}
+  .code .k{color:#c4b5fd}.code .s{color:#86efac}.code .n{color:#fcd34d}
+  .log div{display:grid;grid-template-columns:54px 1fr;gap:8px;padding:6px 0;border-top:1px solid var(--line2);font-size:11.8px;color:var(--ink2)}
+  .log div:first-child{border-top:0}
+  .log time{color:var(--mute2)}
+  .log .e{color:var(--err);font-weight:700}
+  .log .o{color:var(--ok);font-weight:700}
+  .ai{position:absolute;right:30px;bottom:28px;height:46px;padding:0 16px 0 12px;border-radius:14px;background:var(--ink);color:#fff;display:flex;align-items:center;gap:9px;font-weight:800;box-shadow:0 10px 30px rgba(15,23,42,.3)}
+  .ai i{width:24px;height:24px;border-radius:8px;background:linear-gradient(135deg,#8b5cf6,#22d3ee);display:grid;place-items:center;font-style:normal;font-size:11px}
+
+  /* Browser-Modal */
+  .backdrop{position:fixed;inset:0;background:rgba(15,23,42,.55);display:none;z-index:10;align-items:center;justify-content:center}
+  body.show-modal .backdrop{display:flex}
+  .modal{position:relative;width:1300px;height:860px;background:#fff;border-radius:18px;box-shadow:0 30px 80px rgba(15,23,42,.45);display:flex;flex-direction:column;overflow:hidden}
+  .m-h{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line)}
+  .m-h h3{font-size:14.5px;font-weight:800}
+  .m-tabs{display:flex;gap:4px;background:#f1f4f8;padding:3px;border-radius:10px;margin-left:8px}
+  .m-tabs > span{padding:5px 11px;border-radius:8px;font-weight:700;color:var(--mute);font-size:12px;display:flex;gap:6px;align-items:center}
+  .m-tabs .dot{background:var(--ok);width:6px;height:6px}
+  .m-tabs > span.on{background:#fff;color:var(--ink);box-shadow:0 1px 2px rgba(15,23,42,.08)}
+  .ctx{margin-left:auto;display:flex;align-items:center;gap:8px;border:1px solid var(--brand-line);background:var(--brand-soft);border-radius:10px;padding:6px 10px;font-size:12px;color:var(--brand);font-weight:700}
+  .ctx .e{color:var(--err)}
+  .urlbar{display:flex;align-items:center;gap:10px;padding:8px 14px;background:#f6f8fb;border-bottom:1px solid var(--line)}
+  .urlbar .u{flex:1;background:#fff;border:1px solid var(--line);border-radius:8px;padding:6px 10px;color:var(--ink2);font-size:12px}
+  .live{color:var(--err);font-weight:800;font-size:11px;display:flex;gap:5px;align-items:center}
+  .inbox{flex:1;display:grid;grid-template-columns:200px 1fr;min-height:0}
+  .inbox aside{background:#1d3b8b;color:#dbe4ff;padding:18px 14px;font-weight:700;display:flex;flex-direction:column;gap:4px;font-size:12.5px}
+  .inbox aside b{color:#fff;font-size:15px;margin-bottom:14px}
+  .inbox aside span{padding:8px 10px;border-radius:8px}
+  .inbox aside span.on{background:rgba(255,255,255,.15);color:#fff}
+  .mails{padding:0;overflow:hidden;background:#fff}
+  .mails .bar2{display:flex;align-items:center;gap:10px;padding:12px 18px;border-bottom:1px solid var(--line);font-weight:800}
+  .mails .bar2 small{font-weight:600;color:var(--mute)}
+  .mrow{display:grid;grid-template-columns:22px 210px 1fr 70px;gap:10px;align-items:center;padding:11px 18px;border-bottom:1px solid var(--line2);font-size:12.5px;color:var(--ink2);position:relative}
+  .mrow b{font-weight:700;color:var(--ink)}
+  .mrow time{color:var(--mute);font-size:11.5px;text-align:right}
+  .mrow .cb{width:14px;height:14px;border:1.5px solid #cbd5e1;border-radius:4px}
+  .mrow.scan{background:rgba(225,29,72,.04);box-shadow:inset 3px 0 0 var(--err)}
+  .scanline{position:absolute;left:200px;right:0;top:162px;height:0;border-top:2px dashed var(--err);opacity:.0}
+  .hl{position:absolute;right:16px;top:8px;background:var(--err);color:#fff;font-size:10.5px;font-weight:800;padding:3px 8px;border-radius:6px}
+  .m-f{display:flex;gap:6px;align-items:center;padding:10px 14px;border-top:1px solid var(--line)}
+  .m-f .sp{flex:1}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <button class="back">← Übersicht</button>
+  <div class="title">
+    <h1>Email Account Register „Proton“</h1>
+    <p><span class="pill run"><span class="dot"></span>Läuft</span> Lauf #622 · gestartet 14:32 · <span class="mono">03:41</span> · System · Person: Lena Weber</p>
+  </div>
+  <div class="progress">
+    <div class="lbl"><span>Fortschritt</span><span><b>Task 14</b> von 29 · Phase 3 / 7</span></div>
+    <div class="bar">
+      <i style="width:13%;background:var(--ok)"></i><i style="width:31%;background:var(--ok)"></i>
+      <i style="width:4%;background:var(--brand)"></i><i style="width:3%;background:var(--err)"></i>
+    </div>
+  </div>
+  <div class="controls">
+    <button class="btn">⏸ Pausieren</button>
+    <button class="btn">⏭ Nächster Task</button>
+    <button class="btn primary">▶ Bis Ende</button>
+    <span class="sep"></span>
+    <button class="btn danger">■ Stoppen</button>
+  </div>
+  <div class="mode"><span class="on">Testen</span><span>Bearbeiten</span></div>
+  <button class="icon-btn">⋯</button>
+  <button class="icon-btn">✕</button>
+</header>
+
+<!-- Browserfenster nur als kleine Vorschau; Klick öffnet das Modal -->
+<section class="previews">
+  <span class="cap">Browser-<br>fenster</span>
+  <div class="pv">
+    <div class="thumb"><div class="mini-proton"><i style="top:34%"></i><i style="top:50%"></i><i style="top:66%;background:#8b7bff"></i></div><span class="zoom">⤢</span></div>
+    <div class="meta"><b><span class="dot"></span>main</b><small>account.proton.me/start</small><small>Konto erstellen · Schritt 2</small></div>
+  </div>
+  <div class="pv used">
+    <div class="thumb"><div class="mini-mail"><i style="top:22%"></i><i style="top:38%"></i><i style="top:54%"></i><i style="top:70%"></i></div><span class="zoom">⤢</span></div>
+    <div class="meta"><b><span class="dot"></span>workflow-email-les…</b><small>navigator.gmx.net · GMX FreeMail</small><span class="use">vom aktiven Task genutzt</span></div>
+  </div>
+  <div class="pv-add">＋ Fenster öffnen</div>
+  <div class="tools">
+    <button class="chip-btn">⌖ Selektoren</button>
+    <button class="chip-btn">Laufdaten</button>
+    <button class="chip-btn">Diagnose</button>
+  </div>
+</section>
+
+<main class="grid">
+  <!-- Workflow-Übersicht im Fokus -->
+  <section class="card">
+    <div class="card-h">
+      <h2>Workflow-Übersicht</h2>
+      <div class="seg"><span class="on">Übersicht</span><span>Standard</span><span>Detail</span><span>Alle Verbindungen</span></div>
+      <div class="legend">
+        <span><i style="background:var(--ok)"></i>Erledigt</span>
+        <span><i style="background:var(--brand)"></i>Aktiv</span>
+        <span><i style="background:var(--err)"></i>Fehler</span>
+        <span><i style="border:1.5px dashed #b6c2d2"></i>Offen</span>
+      </div>
+      <button class="chip-btn">◎ Aktiven Task zeigen</button>
+      <div class="zoomer"><span>−</span><span>100 %</span><span>+</span></div>
+    </div>
+
+    <div class="alert">
+      <span class="ico">!</span>
+      <div class="txt"><b>Fehler in „Mail-Inbox-Liste scannen“</b> <span>· Keine Mail „Proton“ jünger als 30 min · Versuch 2/3 · Retry in 12 s</span></div>
+      <div class="acts">
+        <button class="chip-btn">Wiederholen</button>
+        <button class="chip-btn">Überspringen</button>
+        <button class="chip-btn brand">✦ Copilot analysieren</button>
+      </div>
+    </div>
+
+    <div class="canvas" id="canvas"><svg id="wires"></svg></div>
+
+    <div class="subs">
+      <span class="cap">Unter-Workflows</span>
+      <div class="subm err"><span class="pill err" style="padding:1px 7px;font-size:10px">Fehler</span><b>get gmx WebmailPortal</b><small>Ebene 1 · 3 Tasks</small></div>
+      <div class="subm"><span class="pill ok" style="padding:1px 7px;font-size:10px">Fertig</span><b>Webmail Portal öffnen</b><small>Ebene 2 · 3 Tasks</small></div>
+      <div class="subm" style="border-style:dashed;color:var(--mute)"><b style="font-weight:600">Email löschen</b><small>Ebene 1 · offen</small></div>
+    </div>
+  </section>
+
+  <!-- Kontext zum aktiven Task -->
+  <section class="card">
+    <div class="tabs"><span class="on">Aktiver Task</span><span>Laufdaten</span><span>Diagnose</span><span>Log</span></div>
+    <div class="insp">
+      <div class="box">
+        <div class="crumb">Phase 3 › get gmx WebmailPortal › Task 2/3</div>
+        <h3>Mail-Inbox-Liste scannen</h3>
+        <dl class="kv" style="margin-top:10px">
+          <dt>Status</dt><dd><span class="pill err"><span class="dot"></span>Fehler · Versuch 2/3</span></dd>
+          <dt>Typ</dt><dd>mail.inbox_scan</dd>
+          <dt>Fenster</dt><dd>workflow-email-les… <span style="color:var(--brand)">⤢</span></dd>
+          <dt>Timeout</dt><dd>30 s · überschritten</dd>
+        </dl>
+      </div>
+      <div class="box">
+        <h4>Eingaben</h4>
+        <div class="code mono">{<br>
+&nbsp;&nbsp;<span class="k">"subject_filter"</span>: [<span class="s">"Proton"</span>],<br>
+&nbsp;&nbsp;<span class="k">"max_age_minutes"</span>: <span class="n">30</span>,<br>
+&nbsp;&nbsp;<span class="k">"mail_ids"</span>: []<br>}</div>
+      </div>
+      <div class="box">
+        <h4>Ereignisse</h4>
+        <div class="log">
+          <div><time class="mono">14:36:12</time><span class="e">Scan ohne Treffer (17 Mails geprüft)</span></div>
+          <div><time class="mono">14:35:41</time><span>Retry 2 gestartet</span></div>
+          <div><time class="mono">14:35:40</time><span class="e">Timeout nach 30 s</span></div>
+          <div><time class="mono">14:35:08</time><span class="o">Webmail Portal öffnen ✓</span></div>
+          <div><time class="mono">14:34:26</time><span>Unter-Workflow gestartet</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="ai"><i>AI</i>Copilot</div>
+
+<!-- Modal: Klick auf eine Vorschau -->
+<div class="backdrop">
+  <div class="modal">
+    <div class="m-h">
+      <h3>Browserfenster</h3>
+      <div class="m-tabs"><span><span class="dot"></span>main</span><span class="on"><span class="dot"></span>workflow-email-les…</span></div>
+      <div class="ctx"><span class="dot"></span>Aktiver Task: Mail-Inbox-Liste scannen <span class="e">· Fehler 2/3</span></div>
+      <button class="icon-btn">✕</button>
+    </div>
+    <div class="urlbar">
+      <span style="color:var(--mute2)">◀ ▶ ↻</span>
+      <span class="u mono">https://navigator.gmx.net/mail?sid=…</span>
+      <span class="live"><span class="dot"></span>LIVE</span>
+    </div>
+    <div class="inbox">
+      <aside><b>FreeMail</b><span class="on">Posteingang · 17</span><span>Gesendet</span><span>Entwürfe</span><span>Spam · 2</span><span>Papierkorb</span></aside>
+      <div class="mails">
+        <div class="bar2">Posteingang <small>17 Nachrichten · gescannt mit Filter „Proton“, max. 30 min</small></div>
+        <div class="mrow scan"><span class="cb"></span><b>Newsletter Team</b><span>Ihre Wochenübersicht ist da</span><time>14:31</time><span class="hl">kein Treffer</span></div>
+        <div class="mrow"><span class="cb"></span><b>Paketdienst</b><span>Ihre Sendung ist unterwegs</span><time>13:58</time></div>
+        <div class="mrow"><span class="cb"></span><b>Shop Kundenservice</b><span>Bestellbestätigung #48211</span><time>12:20</time></div>
+        <div class="mrow"><span class="cb"></span><b>FreeMail Sicherheit</b><span>Neuer Login auf Ihrem Konto</span><time>11:02</time></div>
+        <div class="mrow"><span class="cb"></span><b>Kalender</b><span>Erinnerung: Termin morgen 10:00</span><time>Gestern</time></div>
+        <div class="mrow"><span class="cb"></span><b>Newsletter Team</b><span>Neue Funktionen im Postfach</span><time>Gestern</time></div>
+        <div class="mrow"><span class="cb"></span><b>Bank Service</b><span>Ihr Kontoauszug ist verfügbar</span><time>Mo</time></div>
+        <div class="mrow"><span class="cb"></span><b>Reiseportal</b><span>Ihre Buchung wurde bestätigt</span><time>Mo</time></div>
+        <div class="mrow"><span class="cb"></span><b>Community</b><span>3 neue Antworten in Ihrem Thema</span><time>So</time></div>
+        <div class="mrow"><span class="cb"></span><b>Streaming</b><span>Neu in dieser Woche</span><time>Sa</time></div>
+        <div class="mrow"><span class="cb"></span><b>Versicherung</b><span>Dokumente zu Ihrem Vertrag</span><time>Fr</time></div>
+      </div>
+    </div>
+    <div class="m-f">
+      <button class="chip-btn">⌖ Selektor wählen</button>
+      <button class="chip-btn">DOM-Inspektor</button>
+      <button class="chip-btn">Screenshot</button>
+      <span class="sp"></span>
+      <button class="chip-btn">Manuell übernehmen</button>
+      <button class="chip-btn brand">Zurück zur Übersicht</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  if (location.hash === '#modal') document.body.classList.add('show-modal');
+
+  // Workflow-Diagramm: eine Spalte pro Step, ein Knoten pro Task
+  const cols = [
+    {h:'Proton öffnen & Register-Form', m:'4/4 · 0:21', t:[['Browserfenster öffnen','ok','0:03'],['URL aufrufen','ok','0:06'],['Auf Element warten','ok','0:09'],['Warten','ok','0:03']]},
+    {h:'Register-Form ausfüllen', m:'9/9 · 1:48', t:[['Wunsch-Mailadresse gen.','ok','0:02'],['Button/Link klicken','ok','0:04'],['Mailadresse prüfen','ok','0:11'],['Auf Element warten','ok','0:08'],['Wunschpasswort gen.','ok','0:01'],['Input-Feld füllen','ok','0:05'],['Button/Link klicken','ok','0:03'],['Auf Element warten','ok','0:41'],['Button/Link klicken','ok','0:33']]},
+    {h:'Verifikations-Postfach', m:'läuft · 1:32', cur:true, t:[['active']]},
+    {h:'Verification-Code Eingabe', m:'3 Tasks', t:[['Auf Element warten','todo'],['Input-Feld füllen','todo'],['Button/Link klicken','todo']]},
+    {h:'Zugangsdaten speichern', m:'1 Task', t:[['Daten verarbeiten','todo']]},
+    {h:'check webmail portal', m:'2 Tasks', t:[['IF webmail portal open','todo'],['Status prüfen','todo']]},
+    {h:'Mail löschen', m:'Unter-Workflow', t:[['Workflow: Email löschen','todo']]},
+  ];
+  const cv = document.getElementById('canvas'), svg = document.getElementById('wires');
+  const W = 150, G = 13, L = 14, T = 62, RH = 44;
+  const anchors = [];
+  cols.forEach((c, ci) => {
+    const x = L + ci * (W + G);
+    const h = document.createElement('div');
+    h.className = 'col-h' + (c.cur ? ' cur' : '');
+    h.style.cssText = `left:${x}px;top:14px;width:${W}px`;
+    h.innerHTML = `${c.h}<small>${c.m}</small>`;
+    cv.appendChild(h);
+    const col = [];
+    let y = T;
+    c.t.forEach(([name, st, d]) => {
+      const n = document.createElement('div');
+      if (name === 'active') {
+        n.className = 'node active';
+        n.style.cssText = `left:${x - 6}px;top:${y + 4}px;width:${W + 12}px`;
+        n.innerHTML = `<span class="flag">AKTIV</span>
+          <div class="ah"><span class="s">●</span><span class="nm">Workflow: get gmx WebmailPortal</span></div>
+          <div class="win">Fenster: workflow-email-les… ⤢</div>
+          <div class="sub">
+            <div class="o"><span class="s">✓</span>Webmail Portal öffnen<small>0:42</small></div>
+            <div class="e"><span class="s">!</span>Inbox-Liste scannen<small>0:30</small></div>
+            <div class="w"><span class="s"></span>Code extrahieren</div>
+          </div>`;
+        cv.appendChild(n);
+        col.push({x: x - 6, y: y + 4, w: W + 12, h: n.offsetHeight, st: 'run'});
+        y += n.offsetHeight + 14;
+        return;
+      }
+      n.className = 'node ' + st;
+      n.style.cssText = `left:${x}px;top:${y}px;width:${W}px`;
+      n.innerHTML = `<span class="s">${st === 'ok' ? '✓' : ''}</span><span class="nm">${name}</span>${d ? `<span class="t">${d}</span>` : ''}`;
+      cv.appendChild(n);
+      col.push({x, y, w: W, h: 34, st});
+      y += RH;
+    });
+    anchors.push(col);
+  });
+
+  const NS = 'http://www.w3.org/2000/svg';
+  const line = (d, done, run) => { const p = document.createElementNS(NS, 'path'); p.setAttribute('d', d); p.setAttribute('fill', 'none');
+    p.setAttribute('stroke', run ? '#8b5cf6' : (done ? '#34d399' : '#c3ccd8')); p.setAttribute('stroke-width', run ? 2 : 1.4);
+    if (!done && !run) p.setAttribute('stroke-dasharray', '4 4'); svg.appendChild(p); };
+  anchors.forEach((col, ci) => {
+    // innerhalb der Spalte: Task → nächster Task
+    col.forEach((a, i) => { const b = col[i + 1]; if (!b) return;
+      line(`M${a.x + 12} ${a.y + a.h} L${b.x + 12} ${b.y}`, a.st === 'ok'); });
+    // Spalte → nächste Spalte
+    const nx = anchors[ci + 1]; if (!nx) return;
+    const a = col[col.length - 1], b = nx[0];
+    const ay = a.y + Math.min(a.h, 34) / 2, by = b.y + Math.min(b.h, 34) / 2;
+    const mid = (a.x + a.w + b.x) / 2;
+    line(`M${a.x + a.w} ${ay} C${mid} ${ay} ${mid} ${by} ${b.x} ${by}`, a.st === 'ok' && b.st !== 'todo', b.st === 'run');
+  });
+</script>
+</body>
+</html>

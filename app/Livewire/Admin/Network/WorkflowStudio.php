@@ -1275,6 +1275,9 @@ class WorkflowStudio extends Component
         $copilotActive = $copilotSession && in_array((string) $copilotSession->status, ['running', 'repairing', 'verifying'], true);
         $studioPollSeconds = ($liveRunActive || $copilotActive) ? 2 : 15;
 
+        $embeddedWorkflowMaps = app(WorkflowEmbeddedRunPresenter::class)->present($workflow, $run);
+        $taskAttempts = $run?->taskAttempts()->latest('id')->limit(30)->get() ?? collect();
+
         $view = view('livewire.admin.network.workflow-studio', [
             'workflow' => $workflow,
             'session' => $session,
@@ -1285,11 +1288,12 @@ class WorkflowStudio extends Component
                 ? app(WorkflowObservabilityPolicy::class)->resultOnly($run)
                 : false,
             'browserWindows' => $this->browserWindowCards($workflow, $run),
-            'embeddedWorkflowMaps' => app(WorkflowEmbeddedRunPresenter::class)->present($workflow, $run),
+            'embeddedWorkflowMaps' => $embeddedWorkflowMaps,
+            'runFocus' => $this->runFocus($workflow, $run, $taskNavigation, $embeddedWorkflowMaps, $taskAttempts),
             'steps' => $workflow->steps,
             'events' => $session->events()->latest('sequence')->limit(40)->get()->reverse()->values(),
             'checkpoints' => $run?->checkpoints()->latest('sequence')->limit(30)->get() ?? collect(),
-            'taskAttempts' => $run?->taskAttempts()->latest('id')->limit(30)->get() ?? collect(),
+            'taskAttempts' => $taskAttempts,
             'persons' => Person::query()
                 ->select(['id', 'sort_order', 'person_first_name', 'person_last_name', 'person_alias', 'profile_label'])
                 ->orderBy('sort_order')
@@ -1938,6 +1942,60 @@ class WorkflowStudio extends Component
     private function isFinalRunStatus(string $status): bool
     {
         return in_array($status, ['completed', 'failed', 'cancelled', 'timed_out', 'lost'], true);
+    }
+
+    /**
+     * Fokus der Test-Workbench: welcher Task gerade laeuft (oder ausgewaehlt ist),
+     * wo er im Gesamtablauf steht, welches Browserfenster er nutzt und ob ein
+     * Fehler sofort sichtbar gemacht werden muss. Rein lesend, keine Queries
+     * ausser den bereits geladenen Relationen.
+     */
+    private function runFocus(Workflow $workflow, ?WorkflowRun $run, Collection $taskNavigation, array $embeddedWorkflowMaps, Collection $taskAttempts): array
+    {
+        $liveTask = app(WorkflowLiveTaskPresenter::class)->present($workflow, $run);
+        $stepId = (int) ($liveTask['step_id'] ?? ($this->selectedStepId !== '' ? $this->selectedStepId : 0));
+        $taskKey = (string) ($liveTask['task_key'] ?? $this->selectedTaskKey);
+        $index = $taskNavigation->search(fn (array $task): bool => (int) $task['step_id'] === $stepId && $task['task_key'] === $taskKey);
+        $step = $workflow->steps->firstWhere('id', $stepId);
+        $card = collect($step?->task_cards ?? [])->first(fn (mixed $task): bool => is_array($task) && (string) ($task['key'] ?? '') === $taskKey);
+        $orderedStepIds = $workflow->steps->sortBy([['position', 'asc'], ['id', 'asc']])->pluck('id')->values();
+        $stepIndex = $orderedStepIds->search($stepId);
+
+        $failure = null;
+        $failedChild = collect($embeddedWorkflowMaps)->first(fn (array $map): bool => in_array($map['status'] ?? '', ['failed', 'timed_out'], true));
+        $failedAttempt = $taskAttempts->first(fn ($attempt): bool => in_array((string) $attempt->status, ['failed', 'timed_out'], true));
+
+        if ($run && in_array((string) $run->status, ['failed', 'timed_out', 'lost', 'unreachable'], true)) {
+            $failure = [
+                'title' => $failedAttempt?->task_title ?: ($failedAttempt?->failure_task_key ?: 'Workflow-Lauf'),
+                'message' => (string) ($run->error_message ?: $failedAttempt?->error_message ?: 'Der Lauf wurde mit einem Fehler beendet.'),
+                'step_id' => (int) ($failedAttempt?->workflow_step_id ?? 0),
+                'task_key' => (string) ($failedAttempt?->failure_task_key ?: $failedAttempt?->task_key ?: ''),
+            ];
+        } elseif ($failedChild) {
+            $failure = [
+                'title' => 'Unter-Workflow „'.($failedChild['name'] ?? 'Unter-Workflow').'“',
+                'message' => 'Der eingebettete Workflow meldet einen Fehler (Ebene '.($failedChild['depth'] ?? 1).').',
+                'step_id' => 0,
+                'task_key' => '',
+            ];
+        }
+
+        return [
+            'live' => $liveTask !== null,
+            'status' => (string) ($liveTask['status'] ?? ($run?->status ?? 'draft')),
+            'step_id' => $stepId,
+            'step_name' => (string) ($step?->name ?? ''),
+            'step_number' => $stepIndex === false ? null : $stepIndex + 1,
+            'step_count' => $orderedStepIds->count(),
+            'task_key' => $taskKey,
+            'task' => is_array($card) ? $card : null,
+            'task_title' => (string) ($card['title'] ?? $liveTask['title'] ?? $taskKey),
+            'task_number' => $index === false ? null : $index + 1,
+            'task_count' => $taskNavigation->count(),
+            'browser_window' => is_array($card) ? (string) ($card['browser_window'] ?? $card['browser_window_name'] ?? '') : '',
+            'failure' => $failure,
+        ];
     }
 
     private function taskNavigation(?Workflow $workflow = null): Collection

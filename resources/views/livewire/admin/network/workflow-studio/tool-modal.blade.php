@@ -34,12 +34,55 @@
     </x-slot>
         <div class="min-h-0 flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-5">
             @if($activeToolModal === 'browser')
-                <div class="space-y-5" data-workflow-browser-tool>
+                @php
+                    $browserTabNames = collect($browserWindows)->pluck('name')->values()->all();
+                    $browserDefaultTab = data_get(collect($browserWindows)->firstWhere('active', true), 'name')
+                        ?: ($browserTabNames[0] ?? 'main');
+                @endphp
+                <div
+                    class="space-y-4"
+                    data-workflow-browser-tool
+                    x-data="{
+                        tab: @js($browserDefaultTab),
+                        init() {
+                            const requested = window.ffStudioBrowserWindow;
+                            window.ffStudioBrowserWindow = null;
+                            if (@js($browserTabNames).includes(requested)) this.tab = requested;
+                        },
+                    }"
+                >
+                    <div class="flex flex-wrap items-center gap-3">
+                        @if(count($browserTabNames) > 1)
+                            <div class="ff-segmented-control" role="tablist" aria-label="Browserfenster wählen" data-workflow-browser-tabs>
+                                @foreach($browserWindows as $window)
+                                    <button
+                                        type="button"
+                                        role="tab"
+                                        x-on:click="tab = @js($window['name'])"
+                                        x-bind:aria-selected="(tab === @js($window['name'])).toString()"
+                                        class="inline-flex h-8 items-center gap-1.5 px-3 text-[11px] font-bold"
+                                    >
+                                        <span class="h-1.5 w-1.5 rounded-full {{ $isActive && ! $historicalRunView && $window['connected'] ? 'bg-emerald-500' : 'bg-slate-300' }}" aria-hidden="true"></span>
+                                        {{ $window['name'] }}
+                                    </button>
+                                @endforeach
+                            </div>
+                        @endif
+                        @if($runFocus['task_title'] !== '' && $run)
+                            <p class="ff-studio-focus-chip ml-auto" data-workflow-browser-focus data-failed="{{ $runFocus['failure'] ? 'true' : 'false' }}">
+                                <span class="ff-studio-focus-dot" aria-hidden="true"></span>
+                                {{ $runFocus['live'] ? 'Aktiver Task' : 'Ausgewählter Task' }}: <strong class="truncate">{{ $runFocus['task_title'] }}</strong>
+                                @if($runFocus['browser_window'] !== '')
+                                    <span class="font-normal opacity-75">· Fenster {{ $runFocus['browser_window'] }}</span>
+                                @endif
+                            </p>
+                        @endif
+                    </div>
                     @foreach($browserWindows as $window)
-                        <article wire:key="studio-browser-modal-window-{{ $session->id }}-{{ $window['name'] }}" class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                        <article wire:key="studio-browser-modal-window-{{ $session->id }}-{{ $window['name'] }}" x-show="tab === @js($window['name'])" class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
                             <div class="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 px-4 py-3">
                                 <div class="min-w-0">
-                                    <div class="flex items-center gap-2"><span class="h-2.5 w-2.5 rounded-full {{ $isActive && ! $historicalRunView && $window['connected'] ? 'bg-emerald-500' : 'bg-slate-300' }}"></span><h3 class="truncate text-sm font-bold text-slate-900">{{ $window['name'] }}</h3>@if($window['active'])<span class="rounded bg-cyan-100 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wide text-cyan-800">aktiv</span>@endif</div>
+                                    <div class="flex items-center gap-2"><span class="h-2.5 w-2.5 rounded-full {{ $isActive && ! $historicalRunView && $window['connected'] ? 'bg-emerald-500' : 'bg-slate-300' }}"></span><h3 class="truncate text-sm font-bold text-slate-900">{{ $window['name'] }}</h3>@if($window['active'])<span class="rounded bg-cyan-100 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wide text-cyan-800">aktiv</span>@endif @if($run && $isActive && ! $historicalRunView && $window['connected'])<span class="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wide text-rose-600"><span class="h-1.5 w-1.5 rounded-full bg-rose-500" aria-hidden="true"></span>Live</span>@endif</div>
                                     <p class="mt-1 truncate text-[10px] text-slate-500">{{ $window['url'] ?: 'Noch keine URL erfasst' }}</p>
                                 </div>
                                 @if(! $autonomousMode)

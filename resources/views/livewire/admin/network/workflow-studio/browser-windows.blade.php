@@ -29,16 +29,20 @@
                 $previewPlaceholder = $hasScreenshot
                     ? 'Vorschau wird geladen'
                     : ($isActive && ! $historicalRunView ? 'Vorschau folgt' : 'Noch keine Vorschau');
+                $usedByFocusTask = filled($runFocus['browser_window'] ?? '')
+                    && $runFocus['browser_window'] === $window['name'];
             @endphp
             <article
                 wire:key="studio-browser-window-{{ $session->id }}-{{ $window['name'] }}"
                 data-studio-browser-mini-window="{{ $window['name'] }}"
                 data-active="{{ ($window['active'] ?? false) ? 'true' : 'false' }}"
+                data-used-by-task="{{ $usedByFocusTask ? 'true' : 'false' }}"
                 class="ff-studio-browser-mini-window"
                 role="listitem"
             >
                 <button
                     type="button"
+                    x-on:click="window.ffStudioBrowserWindow = @js($window['name'])"
                     wire:click="openToolModal('browser')"
                     @if($isPrimaryWindow) data-studio-browser-preview-trigger @endif
                     data-studio-browser-mini-preview="{{ $window['name'] }}"
@@ -63,14 +67,15 @@
                             aria-hidden="true"
                             loading="lazy"
                             decoding="async"
-                            width="144"
-                            height="80"
+                            width="96"
+                            height="56"
                             class="ff-studio-browser-mini-image"
                             x-bind:class="imageFailed ? 'opacity-0' : ''"
                             x-on:load="imageFailed = false; imageLoaded = true"
                             x-on:error="imageFailed = true; imageLoaded = false"
                         >
                     @endif
+                    <span class="ff-studio-browser-mini-zoom" aria-hidden="true">⤢</span>
                 </button>
 
                 <div class="ff-studio-browser-mini-caption">
@@ -88,7 +93,9 @@
                         {{ $windowStateLabel }}
                     </span>
                     <p class="ff-studio-browser-location" title="{{ $window['url'] ?: ($window['title'] ?: 'Browserfenster erscheint beim Teststart') }}">{{ $window['title'] ?: ($window['url'] ?: 'Browserfenster erscheint beim Teststart') }}</p>
-                    @if($window['title'] && $window['url'])
+                    @if($usedByFocusTask)
+                        <span class="ff-studio-browser-mini-task" data-studio-browser-used-by-task>vom aktiven Task genutzt</span>
+                    @elseif($window['title'] && $window['url'])
                         <p class="ff-studio-browser-location ff-studio-browser-mini-url" title="{{ $window['url'] }}">{{ $window['url'] }}</p>
                     @endif
                 </div>

@@ -197,6 +197,8 @@
                     <button type="button" wire:click="selectNextTask" aria-label="Nächste Task auswählen" @disabled(! $hasNextTask) class="ff-studio-control ff-studio-control--icon">→</button>
                 </div>
 
+                @include('livewire.admin.network.workflow-studio.run-progress')
+
                 @if($selectedTask)
                     <button type="button" wire:click="editSelectedTask" class="ff-studio-control ff-studio-selected-task" title="{{ $selectedStep?->name }} / {{ $selectedTask['title'] ?? $selectedTaskKey }} bearbeiten">
                         <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m12.5 4 3.5 3.5M3.5 16.5l4-.7L16 7.3a2.5 2.5 0 0 0-3.5-3.5L4.2 12.5l-.7 4Z" /></svg>
@@ -257,14 +259,20 @@
     </header>
 
     @unless($resultOnly)
-        @include('livewire.admin.network.workflow-studio.browser-windows')
-        @include('livewire.admin.network.workflow-studio.tool-bar')
+        {{-- Browserfenster nur als kleine Vorschau in einer Zeile mit den Werkzeugen; der Platz gehoert dem Ablauf. --}}
+        <div class="ff-studio-topstrip relative z-20 flex shrink-0 min-w-0 items-center border-b" data-studio-topstrip>
+            @include('livewire.admin.network.workflow-studio.browser-windows')
+            @include('livewire.admin.network.workflow-studio.tool-bar')
+        </div>
     @endunless
 
     {{-- isolate kapselt die Diagramm-/Overlay-z-Werte (Minimap z-10/z-20, Lade-Overlay z-50) in einen eigenen Stacking-Kontext, damit sie nie mit den Shell-Modalen konkurrieren --}}
     <main wire:key="studio-canvas-{{ $session->id }}" class="ff-canvas-grid relative isolate min-h-0 flex-1 overflow-hidden p-3">
-        <section class="h-full min-h-0 min-w-0" aria-label="Workflow-Vorschau und Live-Ausführung">
+        <section class="ff-studio-focus-layout h-full min-h-0 min-w-0" data-studio-focus-layout aria-label="Workflow-Vorschau und Live-Ausführung">
             @include('livewire.admin.network.workflow-studio.browser')
+            @unless($resultOnly)
+                @include('livewire.admin.network.workflow-studio.run-inspector')
+            @endunless
         </section>
 
         <div wire:loading.delay.flex wire:target="startRun,runRealPlayback,pauseRun,resumeRun,runSingleTask,stopRun,restartRun,runProbe,commitProbeAsTask,saveSessionDefinition,startCopilot,setPermissionMode,chooseControlMode" class="pointer-events-none absolute inset-0 z-50 hidden items-center justify-center bg-white/55 backdrop-blur-[1px]">

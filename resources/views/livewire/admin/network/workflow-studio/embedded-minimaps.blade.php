@@ -17,6 +17,13 @@
         >
             <span class="font-semibold">Unter-Workflows</span>
             <span class="ff-workflow-embedded-count">{{ count($embeddedWorkflowMaps) }}</span>
+            <span class="ff-workflow-embedded-chips" aria-hidden="true">
+                @foreach($embeddedWorkflowMaps as $childMap)
+                    <span class="ff-workflow-embedded-chip" data-status="{{ $childMap['status'] }}" title="{{ $childMap['name'] }} · Ebene {{ $childMap['depth'] }}">
+                        <span class="ff-workflow-embedded-chip-dot"></span>{{ \Illuminate\Support\Str::limit($childMap['name'], 28) }}
+                    </span>
+                @endforeach
+            </span>
             <span class="sr-only" x-text="expanded ? 'einklappen' : 'ausklappen'"></span>
             <svg class="ml-auto h-4 w-4 shrink-0" x-bind:class="expanded ? '' : 'rotate-180'" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m6 12 4-4 4 4" /></svg>
         </button>
