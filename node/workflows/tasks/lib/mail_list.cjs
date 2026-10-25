@@ -535,6 +535,42 @@ function normalizeGmtOffsetHours(value, fallback = null) {
   return Number.isFinite(hours) && hours >= -14 && hours <= 14 ? hours : fallback;
 }
 
+// Offset einer IANA-Zeitzone (z. B. Europe/Berlin) zum Zeitpunkt `at`, damit
+// Sommer- und Winterzeit ohne Konfigurationsaenderung stimmen.
+function gmtOffsetHoursForTimezone(timezone, at = new Date()) {
+  const zone = normalizeText(timezone);
+
+  if (!zone) {
+    return null;
+  }
+
+  try {
+    const part = new Intl.DateTimeFormat('en-US', { timeZone: zone, timeZoneName: 'longOffset' })
+      .formatToParts(at)
+      .find((entry) => entry.type === 'timeZoneName');
+    const label = normalizeText(part?.value || '');
+
+    return label === 'GMT' ? 0 : normalizeGmtOffsetHours(label.replace(/^GMT/i, ''), null);
+  } catch {
+    return null;
+  }
+}
+
+function sourceGmtOffsetHoursFromOptions(options = {}, at = new Date()) {
+  const zoned = gmtOffsetHoursForTimezone(
+    options.mailTimeTimezone ?? options.mail_time_timezone ?? options.sourceTimezone ?? options.source_timezone,
+    at,
+  );
+
+  return zoned ?? normalizeGmtOffsetHours(
+    options.mailTimeGmtOffsetHours
+      ?? options.mail_time_gmt_offset_hours
+      ?? options.sourceGmtOffsetHours
+      ?? options.source_gmt_offset_hours,
+    null,
+  );
+}
+
 function dateFromPartsAtOffset(now, day, month, year, hour = 0, minute = 0, sourceOffsetHours = null) {
   const normalizedYear = Number(year) < 100
     ? (Number(year) >= 70 ? 1900 + Number(year) : 2000 + Number(year))
@@ -764,14 +800,8 @@ async function scanMailList(page, options = {}) {
     timezone: process.env.TZ || 'Europe/Berlin',
     offsetMinutes: -new Date().getTimezoneOffset(),
   };
-  const sourceGmtOffsetHours = normalizeGmtOffsetHours(
-    options.mailTimeGmtOffsetHours
-      ?? options.mail_time_gmt_offset_hours
-      ?? options.sourceGmtOffsetHours
-      ?? options.source_gmt_offset_hours,
-    null,
-  );
   const scanNow = new Date(Number(browserClock.nowMs) || Date.now());
+  const sourceGmtOffsetHours = sourceGmtOffsetHoursFromOptions(options, scanNow);
 
   for (const [frameIndex, frame] of framesForPage(page).entries()) {
     if (!frame || typeof frame.evaluate !== 'function') {
@@ -1437,6 +1467,7 @@ module.exports = {
   mailReceivedTimeFromText,
   clickMailCandidate,
   extractValueFromText,
+  gmtOffsetHoursForTimezone,
   mailMatches,
   maxAgeSeconds,
   normalizeText,

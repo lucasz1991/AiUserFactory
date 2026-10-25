@@ -80,6 +80,38 @@ test('mail list scan exposes UTC and browser-local received times', async () => 
   assert.equal(mail.ageSeconds, 600);
 });
 
+test('mail list scan follows daylight saving time when a mail timezone is configured', async () => {
+  // 25.10.2026: Europe/Berlin wechselt von UTC+2 auf UTC+1. GMX zeigt die Proton-Mail mit 09:52.
+  const scanAt = async (nowIso, dateText) => {
+    const frame = {
+      async evaluate(_callback, payload) {
+        if (!payload) {
+          return { nowMs: Date.parse(nowIso), timezone: 'Europe/Berlin', offsetMinutes: 60 };
+        }
+
+        return [{ token: 'mail-1', selector: 'li', selectorIndex: 0, subject: 'Proton Verification Code', title: 'Proton', sender: 'Proton', dateText, preview: '', text: `Proton ${dateText}` }];
+      },
+      url: () => 'https://mail.example.test',
+      name: () => 'inbox',
+    };
+    const [mail] = await scanMailList({ frames: () => [frame] }, {
+      mail_time_gmt_offset_hours: 2,
+      mail_time_timezone: 'Europe/Berlin',
+      max_items: 1,
+    });
+
+    return mail;
+  };
+
+  const winter = await scanAt('2026-10-25T08:55:00.000Z', '09:52');
+  assert.equal(winter.receivedAt, '2026-10-25T08:52:00.000Z');
+  assert.equal(winter.ageSeconds, 180);
+
+  const summer = await scanAt('2026-10-24T07:55:00.000Z', '09:52');
+  assert.equal(summer.receivedAt, '2026-10-24T07:52:00.000Z');
+  assert.equal(summer.ageSeconds, 180);
+});
+
 test('mail helper matches configured fields', () => {
   assert.equal(mailMatches({ subject: 'Instagram code', sender: 'noreply@example.test' }, 'instagram', ['subject']), true);
   assert.equal(mailMatches({ subject: 'Newsletter' }, 'instagram', ['subject']), false);

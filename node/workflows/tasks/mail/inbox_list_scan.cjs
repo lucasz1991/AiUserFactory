@@ -403,6 +403,8 @@ async function run(context = {}) {
     'source_gmt_offset_hours',
     'sourceGmtOffsetHours',
   ], 0)));
+  // Eine IANA-Zeitzone hat Vorrang vor dem festen Offset und folgt der Sommerzeit.
+  const mailTimeTimezone = optionString(options, input, ['mail_time_timezone', 'mailTimeTimezone', 'source_timezone', 'sourceTimezone'], '');
   const subjectFilters = stringListFrom(optionString(options, input, ['subject_filter', 'subjectFilter', 'subject_must_contain', 'subjectMustContain'], ''), []);
   const titleFilters = stringListFrom(optionString(options, input, ['title_filter', 'titleFilter', 'title_must_contain', 'titleMustContain'], ''), []);
   const mailIds = stringListFrom(optionString(options, input, ['mail_ids', 'mailIds', 'message_ids', 'messageIds'], ''), []);
@@ -491,6 +493,8 @@ async function run(context = {}) {
     wait_for_new_mail_seconds: waitForNewMailSeconds,
     mailTimeGmtOffsetHours,
     mail_time_gmt_offset_hours: mailTimeGmtOffsetHours,
+    mailTimeTimezone: mailTimeTimezone || null,
+    mail_time_timezone: mailTimeTimezone || null,
     webmailSearchEnabled: searchResult.enabled === true,
     webmail_search_enabled: searchResult.enabled === true,
     webmailSearch: webmailSearchDebug,
@@ -540,6 +544,7 @@ async function run(context = {}) {
       list_item_selector: listItemSelector,
       max_items: maxItems,
       mail_time_gmt_offset_hours: mailTimeGmtOffsetHours,
+      mail_time_timezone: mailTimeTimezone,
     });
     const evaluatedCandidates = candidates.map((candidate) => ({
       candidate,
@@ -649,6 +654,8 @@ async function run(context = {}) {
     wait_for_new_mail_seconds: waitForNewMailSeconds,
     mailTimeGmtOffsetHours,
     mail_time_gmt_offset_hours: mailTimeGmtOffsetHours,
+    mailTimeTimezone: mailTimeTimezone || null,
+    mail_time_timezone: mailTimeTimezone || null,
     webmailSearchEnabled: searchResult.enabled === true,
     webmail_search_enabled: searchResult.enabled === true,
     webmailSearch: webmailSearchDebug,

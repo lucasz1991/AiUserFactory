@@ -350,6 +350,14 @@ class WorkflowTaskCatalog
                             'tab' => 'Zeit',
                         ],
                         [
+                            'name' => 'mail_time_timezone',
+                            'label' => 'Zeitzone der Mailzeit',
+                            'type' => 'text',
+                            'placeholder' => 'Europe/Berlin',
+                            'help' => 'IANA-Zeitzone der angezeigten Mailzeit, z. B. Europe/Berlin. Hat Vorrang vor dem GMT-Offset und beruecksichtigt Sommer- und Winterzeit automatisch.',
+                            'tab' => 'Zeit',
+                        ],
+                        [
                             'name' => 'wait_for_new_mail_seconds',
                             'label' => 'Auf neue Mail warten (Sekunden)',
                             'type' => 'number',
