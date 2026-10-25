@@ -708,6 +708,28 @@ class WorkflowStepRunWatchdogTest extends TestCase
         $this->assertGreaterThan(0, $budget->invoke(app(WorkflowExecutionService::class), $selfInclude->fresh()));
     }
 
+    public function test_external_task_history_drops_per_task_workflow_variable_copies(): void
+    {
+        $compact = new ReflectionMethod(WorkflowExecutionService::class, 'compactExternalTaskHistory');
+        $variables = ['matched_mail' => ['body' => str_repeat('x', 1000)], 'workflow_return' => true];
+
+        $payload = $compact->invoke(app(WorkflowExecutionService::class), [
+            'workflowVariables' => $variables,
+            'tasks' => [
+                ['key' => 'mail-liste', 'status' => 'success', 'workflowVariables' => $variables, 'workflow_variables' => $variables],
+                ['key' => 'warten', 'status' => 'success'],
+            ],
+            'result' => ['tasks' => [['key' => 'mail-liste', 'workflow_variables' => $variables]]],
+        ]);
+
+        $this->assertSame($variables, $payload['workflowVariables']);
+        $this->assertArrayNotHasKey('workflowVariables', $payload['tasks'][0]);
+        $this->assertArrayNotHasKey('workflow_variables', $payload['tasks'][0]);
+        $this->assertSame(['matched_mail', 'workflow_return'], $payload['tasks'][0]['workflowVariableNames']);
+        $this->assertSame(['key' => 'warten', 'status' => 'success'], $payload['tasks'][1]);
+        $this->assertArrayNotHasKey('workflow_variables', $payload['result']['tasks'][0]);
+    }
+
     public function test_following_steps_know_that_the_automatic_browser_session_was_already_loaded(): void
     {
         [$workflow, $step] = $this->workflow();

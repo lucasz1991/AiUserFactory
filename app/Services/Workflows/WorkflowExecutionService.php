@@ -4328,10 +4328,46 @@ class WorkflowExecutionService
         return match ($stepRun->external_run_type) {
             'mail-registration' => $this->mailRegistration->readRun($externalRunId),
             'webmail-session' => $this->webmailSession->readRun($externalRunId),
-            'workflow-task' => $this->workflowTasks->readRun($externalRunId),
+            'workflow-task' => $this->compactExternalTaskHistory($this->workflowTasks->readRun($externalRunId)),
             'client-controller-workflow-task', 'client-controller-workflow-run' => $this->clientControllerJobStatus($externalRunId),
             default => null,
         };
+    }
+
+    /**
+     * Aeltere Runner legten in jedem Task-Eintrag eine volle Kopie der
+     * Workflow-Variablen ab. Solche Ergebnisse ueberschreiten das
+     * Datenbank-Paketlimit; die Task-Historie behaelt nur die Variablennamen.
+     */
+    protected function compactExternalTaskHistory(?array $payload): ?array
+    {
+        if ($payload === null) {
+            return null;
+        }
+
+        if (is_array($payload['result'] ?? null)) {
+            $payload['result'] = $this->compactExternalTaskHistory($payload['result']);
+        }
+
+        if (! is_array($payload['tasks'] ?? null)) {
+            return $payload;
+        }
+
+        foreach ($payload['tasks'] as $index => $task) {
+            if (! is_array($task) || (! array_key_exists('workflowVariables', $task) && ! array_key_exists('workflow_variables', $task))) {
+                continue;
+            }
+
+            $variables = array_replace(
+                is_array($task['workflowVariables'] ?? null) ? $task['workflowVariables'] : [],
+                is_array($task['workflow_variables'] ?? null) ? $task['workflow_variables'] : [],
+            );
+            unset($task['workflowVariables'], $task['workflow_variables']);
+            $task['workflowVariableNames'] = array_slice(array_map('strval', array_keys($variables)), 0, 200);
+            $payload['tasks'][$index] = $task;
+        }
+
+        return $payload;
     }
 
     protected function readExternalResult(WorkflowStepRun $stepRun, array $status): array
@@ -4343,7 +4379,7 @@ class WorkflowExecutionService
             'webmail-session' => is_array($status['result'] ?? null)
                 ? $status['result']
                 : $this->webmailSession->readResult($externalRunId),
-            'workflow-task' => $this->workflowTasks->readResult($externalRunId)
+            'workflow-task' => $this->compactExternalTaskHistory($this->workflowTasks->readResult($externalRunId) ?: null)
                 ?: (is_array($status['result'] ?? null) ? $status['result'] : null),
             'client-controller-workflow-task', 'client-controller-workflow-run' => is_array($status['result'] ?? null) ? $status['result'] : null,
             default => null,
