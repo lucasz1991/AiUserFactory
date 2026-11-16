@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const childProcess = require('child_process');
 
 const BROWSER_ENGINE_CHROME = 'chrome';
@@ -131,6 +132,50 @@ function buildCloakArgs(args = []) {
 
 function normalizeText(value) {
   return String(value || '').trim();
+}
+
+// Ohne eigenen Seed wuerfelt cloakbrowser bei jedem Start einen neuen
+// Fingerprint. Ein dauerhaftes Profil (gleiche Cookies) erschiene Anbietern dann
+// bei jedem Lauf als anderes Geraet - der Seed haengt deshalb am Profil.
+function fingerprintSeedForProfile(profileKey) {
+  const key = normalizeText(profileKey);
+
+  if (key === '') {
+    return null;
+  }
+
+  return 10000 + (crypto.createHash('sha256').update(key).digest().readUInt32BE(0) % 90000);
+}
+
+function cloakArgsForProfile(args = [], profileKey = '') {
+  const cloakArgs = buildCloakArgs(args);
+  const seed = fingerprintSeedForProfile(profileKey);
+
+  if (seed !== null && !cloakArgs.some((argument) => String(argument).startsWith('--fingerprint='))) {
+    cloakArgs.push(`--fingerprint=${seed}`);
+  }
+
+  return cloakArgs;
+}
+
+// Was der Start tatsaechlich bekam: auf einem Server ohne Display wird
+// "sichtbar" stillschweigend zu headless.
+function browserLaunchDetails(runtimeConfig = {}, launchOptions = {}, engine = BROWSER_ENGINE_CHROME) {
+  const effectiveOptions = browserLaunchOptions(runtimeConfig, launchOptions);
+  const details = {
+    headlessRequested: launchOptions.headless !== false,
+    headless: effectiveOptions.headless !== false,
+    displayAvailable: Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY),
+  };
+
+  if (engine === BROWSER_ENGINE_CLOAK) {
+    const seedArgument = cloakArgsForProfile(effectiveOptions.args || [], runtimeConfig.browserProfileKey)
+      .find((argument) => String(argument).startsWith('--fingerprint='));
+
+    details.fingerprintSeed = seedArgument ? Number(String(seedArgument).split('=')[1]) : null;
+  }
+
+  return details;
 }
 
 function fileExists(filePath) {
@@ -325,7 +370,7 @@ async function launchCloak(runtimeConfig, launchOptions) {
     ...puppeteerLaunchOptions
   } = launchOptions;
   const cloakOptions = {
-    args: buildCloakArgs(args),
+    args: cloakArgsForProfile(args, runtimeConfig.browserProfileKey),
     headless: headless !== false,
     humanize: runtimeConfig.cloakHumanizeEnabled === true,
     timezone: String(runtimeConfig.timeZone || runtimeConfig.timezone || process.env.APP_TIMEZONE || process.env.TZ || 'Europe/Berlin'),
@@ -352,6 +397,7 @@ async function launchConfiguredBrowser({
       requestedEngine,
       activeEngine: BROWSER_ENGINE_CHROME,
       fallbackReason: null,
+      launchDetails: browserLaunchDetails(runtimeConfig, launchOptions, BROWSER_ENGINE_CHROME),
     };
   }
 
@@ -361,6 +407,7 @@ async function launchConfiguredBrowser({
       requestedEngine,
       activeEngine: BROWSER_ENGINE_CLOAK,
       fallbackReason: null,
+      launchDetails: browserLaunchDetails(runtimeConfig, launchOptions, BROWSER_ENGINE_CLOAK),
     };
   } catch (error) {
     if (
@@ -375,6 +422,7 @@ async function launchConfiguredBrowser({
       requestedEngine,
       activeEngine: BROWSER_ENGINE_CHROME,
       fallbackReason: String(error?.message || error || 'CloakBrowser launch failed'),
+      launchDetails: browserLaunchDetails(runtimeConfig, launchOptions, BROWSER_ENGINE_CHROME),
     };
   }
 }
@@ -385,6 +433,8 @@ module.exports = {
   BROWSER_ENGINE_CLOAK_WITH_FALLBACK,
   BROWSER_LAUNCHER_SCRIPT_VERSION,
   chromiumSandboxArgs,
+  cloakArgsForProfile,
+  fingerprintSeedForProfile,
   isBrowserProfileLockError,
   launchConfiguredBrowser,
   launchConfiguredBrowserWithProfileRetry,

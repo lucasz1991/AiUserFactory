@@ -5,6 +5,7 @@ const path = require('path');
 const { writeJsonFile } = require('../../resources/node/register/lib/runtime-utils.cjs');
 const { captureTaskPreview, stopTaskPreview } = require('./tasks/lib/preview.cjs');
 const { parseExtendedSelector } = require('./lib/selector.cjs');
+const { startResponseCapture } = require('./lib/network_capture.cjs');
 const { createWorkflowInputResolver } = require('./lib/workflow-input-resolver.cjs');
 const {
   BROWSER_LAUNCHER_SCRIPT_VERSION,
@@ -2022,7 +2023,9 @@ async function loadBrowser() {
       activeBrowserEngine = 'connected';
       connectedToExistingBrowser = true;
       await configureBrowserTimezone(browser);
-      pushEvent('workflow-browser-active', 'Workflow-Browser ist aktiv und wird fuer diese Liste genutzt.');
+      pushEvent('workflow-browser-active', 'Workflow-Browser ist aktiv und wird fuer diese Liste genutzt.', {
+        ...rememberBrowserBuildIdentity(await browserBuildIdentity(browser)),
+      });
 
       return browser;
     } catch (error) {
@@ -2112,9 +2115,41 @@ async function loadBrowser() {
     browserFallbackReason,
     browserProcessId: browserProcessId(),
     browserWsEndpointAvailable: browserWsEndpoint() !== '',
+    // Tatsaechliche Startwerte: "browser-launch-options" zeigt nur den Wunsch,
+    // ein Server ohne Display startet trotzdem headless.
+    ...(isPlainObject(launchResult.launchDetails) ? launchResult.launchDetails : {}),
+    ...rememberBrowserBuildIdentity(await browserBuildIdentity(browser), launchResult.launchDetails),
   });
 
   return browser;
+}
+
+function rememberBrowserBuildIdentity(identity, launchDetails = null) {
+  browserIdentityDiagnostics.browserBuild = {
+    ...identity,
+    connectedToExistingBrowser,
+    ...(isPlainObject(launchDetails) ? { launch: launchDetails } : {}),
+  };
+
+  return identity;
+}
+
+async function browserBuildIdentity(currentBrowser) {
+  const read = async (method) => {
+    try {
+      return String(await Promise.race([
+        currentBrowser[method](),
+        new Promise((resolve) => setTimeout(() => resolve(''), 3000)),
+      ]) || '').slice(0, 300) || null;
+    } catch {
+      return null;
+    }
+  };
+
+  return {
+    browserVersion: await read('version'),
+    browserUserAgent: await read('userAgent'),
+  };
 }
 
 async function configureBrowserTimezone(currentBrowser) {
@@ -2497,6 +2532,90 @@ function selectExistingPage(context, windowName = 'main') {
 // u. a. den kompletten Mail-HTML-Text. Liste 3 des Proton-Workflows wuchs damit
 // auf ~30 MB Status-JSON, an dem die PHP-Verarbeitung scheiterte. Der aktuelle
 // Variablenstand steht weiterhin einmal auf oberster Ebene des Ergebnisses.
+const identityLoggedBrowserWindows = new Set();
+// Landet in runnerDiagnostics des Ergebnisses - das Ereignisprotokoll haelt nur
+// die letzten 100 Eintraege und verloere die Angaben in langen Listen.
+const browserIdentityDiagnostics = {};
+
+// Debug: was die Seite selbst vom Browser sieht. Fenster, die ein spaeterer
+// Prozess per connect oeffnet, koennen andere Werte zeigen als der gestartete
+// Browser (Sprache, Client-Hints, WebGL) - Anbieter werten solche Widersprueche.
+async function logBrowserWindowIdentity(windowName) {
+  if (!devDebugEnabled() || identityLoggedBrowserWindows.has(windowName)) {
+    return;
+  }
+
+  identityLoggedBrowserWindows.add(windowName);
+  const targetPage = browserWindowsByName.get(windowName)?.page;
+
+  if (typeof targetPage?.evaluate !== 'function') {
+    return;
+  }
+
+  try {
+    const identity = await Promise.race([
+      targetPage.evaluate(() => {
+        const webgl = (() => {
+          try {
+            const gl = document.createElement('canvas').getContext('webgl');
+            const info = gl && gl.getExtension('WEBGL_debug_renderer_info');
+
+            return info ? `${gl.getParameter(info.UNMASKED_VENDOR_WEBGL)} / ${gl.getParameter(info.UNMASKED_RENDERER_WEBGL)}` : null;
+          } catch {
+            return null;
+          }
+        })();
+
+        return {
+          userAgent: navigator.userAgent,
+          platform: navigator.platform,
+          languages: Array.from(navigator.languages || []),
+          webdriver: navigator.webdriver === true,
+          hardwareConcurrency: navigator.hardwareConcurrency || null,
+          clientHintBrands: (navigator.userAgentData?.brands || []).map((entry) => `${entry.brand} ${entry.version}`),
+          clientHintPlatform: navigator.userAgentData?.platform || null,
+          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          screen: `${screen.width}x${screen.height}`,
+          windowSize: `${window.outerWidth}x${window.outerHeight} / ${window.innerWidth}x${window.innerHeight}`,
+          webgl,
+        };
+      }),
+      new Promise((resolve) => setTimeout(() => resolve(null), 3000)),
+    ]);
+
+    if (isPlainObject(identity)) {
+      browserIdentityDiagnostics.browserWindowIdentities = {
+        ...(browserIdentityDiagnostics.browserWindowIdentities || {}),
+        [windowName]: { connectedToExistingBrowser, ...identity },
+      };
+    }
+  } catch {
+    // Reine Diagnose.
+  }
+}
+
+// Nur im Debug-Modus und nur fuer Klicks: die Antwort auf den Klick ist oft der
+// einzige Hinweis, warum eine Seite danach einen Fehler zeigt.
+function startClickResponseCapture(task, targetPage) {
+  if (!devDebugEnabled() || task.task_key !== 'browser.click' || typeof targetPage?.on !== 'function') {
+    return null;
+  }
+
+  try {
+    return startResponseCapture(targetPage);
+  } catch {
+    return null;
+  }
+}
+
+async function stopClickResponseCapture(capture) {
+  if (!capture) {
+    return [];
+  }
+
+  return capture.stop().catch(() => []);
+}
+
 function compactTaskHistoryResult(result) {
   if (!isPlainObject(result)) {
     return result;
@@ -3359,6 +3478,7 @@ async function run() {
   let requestedFailureRouteTask = null;
   let requestedDynamicRoute = null;
   let requestedRouteMessage = null;
+  let requestedSuccessFailRoute = null;
   let lastCompletedTaskKey = '';
   let manualIntervention = null;
   let routeTransitions = 0;
@@ -3484,6 +3604,7 @@ async function run() {
           }
         } else if (task.kind !== 'data' || ['data.persist_webmail_session', 'data.persist_browser_session', 'data.delete_browser_session'].includes(String(task.task_key || ''))) {
           await ensurePage(context, targetBrowserWindow, targetBrowserWindow === 'main' ? 'Main' : taskLabel);
+          await logBrowserWindowIdentity(targetBrowserWindow);
           startPreviewLoop(context);
         }
 
@@ -3559,7 +3680,17 @@ async function run() {
               };
             }
           } else {
-            result = await taskModule.run(context);
+            const responseCapture = startClickResponseCapture(task, context.page);
+
+            try {
+              result = await taskModule.run(context);
+            } finally {
+              const networkResponses = await stopClickResponseCapture(responseCapture);
+
+              if (networkResponses.length > 0 && isPlainObject(result)) {
+                result.networkResponses = networkResponses;
+              }
+            }
           }
         }
 
@@ -4078,6 +4209,7 @@ async function run() {
           workflowBundleStep: runtime.workflowBundleStep === true || runtime.workflow_bundle_step === true,
           chromiumNoSandboxFlag: process.platform === 'linux' && chromiumNoSandboxEnabled(),
           platform: process.platform,
+          ...browserIdentityDiagnostics,
         },
         events,
         finishedAt: now(),
@@ -4109,6 +4241,10 @@ async function run() {
           key: task.route_source_task_key || task.parent_task_key || task.key,
         };
         requestedRouteMessage = String(successRoute.message || '').trim() || requestedRouteMessage;
+        // Der Server sucht die Route sonst an der Karte mit diesem Key. Bei einer
+        // eingebetteten Task ist das die Include-Karte des Hauptworkflows - deren
+        // Erfolgsroute liefe weiter, als waere der Unter-Workflow gelungen.
+        requestedSuccessFailRoute = { message: String(successRoute.message || '').trim() };
         break;
       }
 
@@ -4247,6 +4383,7 @@ async function run() {
       workflowBundleStep: runtime.workflowBundleStep === true || runtime.workflow_bundle_step === true,
       chromiumNoSandboxFlag: process.platform === 'linux' && chromiumNoSandboxEnabled(),
       platform: process.platform,
+      ...browserIdentityDiagnostics,
     },
     events,
     finishedAt: now(),
@@ -4281,6 +4418,10 @@ async function run() {
       routeRequested: true,
       completedTaskKey: (requestedFailureRouteTask || requestedSuccessRouteTask).key,
       routeOutcome: requestedFailureRouteTask ? 'failed' : 'success',
+      ...(requestedSuccessFailRoute && !requestedFailureRouteTask ? {
+        routeFailRequested: true,
+        routeFailMessage: requestedSuccessFailRoute.message,
+      } : {}),
     } : {}),
   };
 
@@ -4309,6 +4450,7 @@ run()
         workflowBundleStep: runtime.workflowBundleStep === true || runtime.workflow_bundle_step === true,
         chromiumNoSandboxFlag: process.platform === 'linux' && chromiumNoSandboxEnabled(),
         platform: process.platform,
+        ...browserIdentityDiagnostics,
       },
       events,
       finishedAt: now(),

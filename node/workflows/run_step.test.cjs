@@ -485,7 +485,53 @@ test('fail success route aborts with its message instead of following the error 
   assert.equal(result.completedTaskKey, 'provider-blocked');
   assert.equal(result.routeDisposition, 'fail');
   assert.equal(result.statusMessage, 'Anbieter hat die Verifizierung gesperrt.');
+  assert.equal(result.routeFailRequested, true);
+  assert.equal(result.routeFailMessage, 'Anbieter hat die Verifizierung gesperrt.');
   assert.ok(!result.tasks.some((task) => task.key === 'continue-normally'));
+});
+
+test('fail success route inside an embedded workflow is reported as an explicit abort', () => {
+  const result = executeTasks([
+    captureInputTask('embedded-login-rejected', {
+      parent_task_key: 'embedded-workflow',
+      embedded_workflow_frame_key: 'embedded-frame',
+      next: { type: 'fail', step: 'fail', message: 'Anbieter hat den Login abgelehnt.' },
+    }),
+    {
+      key: 'embedded-boundary',
+      task_key: 'workflow.boundary',
+      title: 'Embedded workflow',
+      kind: 'workflow',
+      runner: 'workflow-boundary',
+      parent_task_key: 'embedded-workflow',
+      route_source_task_key: 'embedded-workflow',
+      embedded_workflow_name: 'Embedded workflow',
+      embedded_workflow_frame_key: 'embedded-frame',
+      next: { type: 'card', card_key: 'success-target' },
+    },
+    returnTask('success-target', true),
+  ]);
+
+  // Der Server kennt nur die Include-Karte; ohne das ausdrueckliche Signal
+  // folgte er deren Erfolgsroute.
+  assert.equal(result.completedTaskKey, 'embedded-workflow');
+  assert.equal(result.routeOutcome, 'success');
+  assert.equal(result.routeFailRequested, true);
+  assert.equal(result.routeFailMessage, 'Anbieter hat den Login abgelehnt.');
+  assert.ok(!result.tasks.some((task) => ['embedded-boundary', 'success-target'].includes(task.key)));
+});
+
+test('regular success routes carry no abort signal', () => {
+  const result = executeTasks([
+    {
+      ...returnTask('route-to-other-list', true),
+      next: { type: 'step', step: 'other-list' },
+    },
+  ]);
+
+  assert.equal(result.routeRequested, true);
+  assert.equal(result.routeOutcome, 'success');
+  assert.equal(result.routeFailRequested, undefined);
 });
 
 test('configured end route completes a false branch without marking it as an error', () => {

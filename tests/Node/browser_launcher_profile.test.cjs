@@ -96,6 +96,7 @@ function windowsLauncher(environment, existingFiles = []) {
     require(name) {
       if (name === 'fs') return { existsSync: (filename) => existingFiles.includes(filename) };
       if (name === 'path') return path.win32;
+      if (name === 'crypto') return require('node:crypto');
       if (name === 'child_process') return { execFileSync: () => { throw new Error('No Unix shell in the Windows fixture'); } };
       throw new Error('Unexpected dependency: ' + name);
     },
@@ -158,4 +159,25 @@ test('configured executable paths stay ahead of Windows candidates and portable 
   assert.equal(result.browser.portableConfigured, true);
   assert.equal(launches[1].executablePath, configured);
   assert.equal(launches[1].headless, 'new');
+});
+
+test('cloak fingerprint seed is stable per profile and never overrides an explicit seed', () => {
+  const { cloakArgsForProfile, fingerprintSeedForProfile } = require('../../resources/node/register/lib/browser-launcher.cjs');
+  const seed = fingerprintSeedForProfile('person-10-account-4');
+
+  assert.equal(fingerprintSeedForProfile('person-10-account-4'), seed);
+  assert.ok(seed >= 10000 && seed <= 99999);
+  assert.notEqual(fingerprintSeedForProfile('person-8-account-6'), seed);
+  // Ohne Profil bleibt es beim zufaelligen Seed des Browsers.
+  assert.equal(fingerprintSeedForProfile(''), null);
+  assert.deepEqual(cloakArgsForProfile(['--window-size=1366,900'], ''), ['--window-size=1366,900']);
+
+  assert.deepEqual(
+    cloakArgsForProfile(['--window-size=1366,900', '--disable-gpu'], 'person-10-account-4'),
+    ['--window-size=1366,900', `--fingerprint=${seed}`],
+  );
+  assert.deepEqual(
+    cloakArgsForProfile(['--fingerprint=12345', '--fingerprint-platform=windows'], 'person-10-account-4'),
+    ['--fingerprint=12345', '--fingerprint-platform=windows'],
+  );
 });
