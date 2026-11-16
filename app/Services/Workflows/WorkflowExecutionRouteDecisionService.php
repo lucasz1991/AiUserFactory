@@ -36,6 +36,22 @@ class WorkflowExecutionRouteDecisionService
                 ?? $result['failed_task_key']
                 ?? ''
             ));
+
+            // Eine bewusste Abbruch-Route meldet der Runner ausdruecklich. Bei einer
+            // eingebetteten Task nennt completedTaskKey die Include-Karte des
+            // Hauptworkflows; deren Erfolgsroute liefe sonst weiter, als waere der
+            // Unter-Workflow gelungen.
+            if ($outcome === 'success' && (bool) ($result['routeFailRequested'] ?? false)) {
+                return [
+                    'type' => 'fail',
+                    'step' => 'fail',
+                    'label' => 'Fehlerroute',
+                    'message' => trim((string) ($result['routeFailMessage'] ?? ''))
+                        ?: 'Workflow wurde ueber die ausdrueckliche Fehlerroute beendet.',
+                    '_source_card_key' => $completedTaskKey,
+                ];
+            }
+
             $sourceTask = collect($step->task_cards)
                 ->first(fn (array $task): bool => (string) ($task['key'] ?? '') === $completedTaskKey);
             $route = is_array($sourceTask)

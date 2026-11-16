@@ -195,6 +195,55 @@ class WorkflowExecutionRouteDecisionCharacterizationTest extends TestCase
         $this->assertSame('fallback-list', $fallback['action_key']);
     }
 
+    public function test_an_explicit_abort_inside_an_embedded_workflow_fails_the_run_instead_of_following_the_include_route(): void
+    {
+        $step = $this->step('mailbox-list', [
+            'tasks' => [[
+                'key' => 'workflow-include',
+                'next' => ['type' => 'card', 'card_key' => 'enter-code'],
+                'on_error' => ['type' => 'card', 'card_key' => 'workflow-include', 'max_attempts' => 1],
+            ]],
+        ]);
+        $routeForResult = $this->method('routeForResult');
+        $service = $this->executionService();
+
+        // Der Runner meldet eingebettete Tasks unter dem Key der Include-Karte.
+        $abort = $routeForResult->invoke($service, $step, 'success', [
+            'routeRequested' => true,
+            'completedTaskKey' => 'workflow-include',
+            'routeOutcome' => 'success',
+            'routeFailRequested' => true,
+            'routeFailMessage' => ' Anbieter hat den Login abgelehnt. ',
+        ]);
+        $this->assertSame('fail', $abort['type']);
+        $this->assertSame('Anbieter hat den Login abgelehnt.', $abort['message']);
+        $this->assertSame('workflow-include', $abort['_source_card_key']);
+
+        $withoutMessage = $routeForResult->invoke($service, $step, 'success', [
+            'routeRequested' => true,
+            'completedTaskKey' => 'workflow-include',
+            'routeFailRequested' => true,
+            'routeFailMessage' => '',
+        ]);
+        $this->assertSame('fail', $withoutMessage['type']);
+        $this->assertNotSame('', $withoutMessage['message']);
+
+        // Ohne Abbruch-Meldung des Runners gilt weiter die Erfolgsroute der Include-Karte.
+        $regular = $routeForResult->invoke($service, $step, 'success', [
+            'routeRequested' => true,
+            'completedTaskKey' => 'workflow-include',
+        ]);
+        $this->assertSame('enter-code', $regular['card_key']);
+
+        // Ein Fehler-Ausgang bleibt bei der Fehlerroute der Include-Karte.
+        $failed = $routeForResult->invoke($service, $step, 'failed', [
+            'routeRequested' => true,
+            'completedTaskKey' => 'workflow-include',
+            'routeFailRequested' => true,
+        ]);
+        $this->assertSame('workflow-include', $failed['card_key']);
+    }
+
     public function test_only_executable_routes_continue_and_linear_fallback_skips_disabled_steps(): void
     {
         $service = $this->executionService();

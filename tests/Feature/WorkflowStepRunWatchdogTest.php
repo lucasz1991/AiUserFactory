@@ -708,6 +708,93 @@ class WorkflowStepRunWatchdogTest extends TestCase
         $this->assertGreaterThan(0, $budget->invoke(app(WorkflowExecutionService::class), $selfInclude->fresh()));
     }
 
+    public function test_an_abort_route_reported_for_an_embedded_workflow_fails_the_run_with_its_message(): void
+    {
+        Queue::fake();
+        [$workflow, $step] = $this->workflow();
+        $config = $step->config_json;
+        // Die Include-Karte liefe auf ihrer Erfolgsroute zur naechsten Karte weiter.
+        $config['tasks'][0]['next'] = ['type' => 'card', 'card_key' => 'second-task'];
+        $step->forceFill(['config_json' => $config])->save();
+        [$run, $stepRun] = $this->waitingWorkflowTaskRun($workflow, $step, ['interactive_debug' => false]);
+        [$status, $result] = $this->terminalExternalResult($run, $stepRun, $step->fresh());
+        $message = 'GMX hat den Login abgelehnt, bevor das Passwort abgefragt wurde.';
+        $this->mockTerminalTaskRunner($status, [
+            ...$result,
+            'statusMessage' => $message,
+            'routeRequested' => true,
+            'completedTaskKey' => 'first-task',
+            'routeOutcome' => 'success',
+            'routeFailRequested' => true,
+            'routeFailMessage' => $message,
+        ]);
+
+        app(WorkflowExecutionService::class)->monitorStepRun($stepRun->id);
+
+        $run->refresh();
+        $this->assertSame('failed', $run->status);
+        $this->assertSame($message, $run->error_message);
+        $this->assertSame('fail', data_get($stepRun->fresh()->result_json, 'resolved_route.type'));
+        Queue::assertNotPushed(RunWorkflowJob::class);
+    }
+
+    public function test_running_a_single_task_of_another_list_does_not_time_out_the_paused_list(): void
+    {
+        Queue::fake();
+        [$workflow, $pausedStep] = $this->workflow();
+        $earlierStep = $workflow->steps()->create([
+            'name' => 'Frueheres Formular',
+            'type' => WorkflowStep::TYPE_BROWSER_TASK,
+            'action_key' => 'earlier-form',
+            'position' => 5,
+            'is_enabled' => true,
+            'config_json' => ['tasks' => [[
+                'key' => 'submit-form', 'task_key' => 'wait.seconds', 'title' => 'Absenden', 'value' => 0,
+            ]]],
+        ]);
+        // Der Lauf pausiert in der spaeteren Liste; deren Zeile bleibt "waiting".
+        [$run, $pausedStepRun] = $this->waitingWorkflowTaskRun(
+            $workflow,
+            $pausedStep,
+            ['interactive_debug' => true],
+            now()->subMinutes(15),
+        );
+        $run->forceFill(['status' => 'paused'])->save();
+        $earlierStepRun = WorkflowStepRun::query()->create([
+            'workflow_run_id' => $run->id,
+            'workflow_step_id' => $earlierStep->id,
+            'status' => 'completed',
+            'started_at' => now()->subMinutes(20),
+            'finished_at' => now()->subMinutes(19),
+            'result_json' => [],
+        ]);
+        $runner = Mockery::mock(WorkflowTaskRunner::class);
+        $runner->shouldReceive('readRun')->andReturn(null)->byDefault();
+        $runner->shouldReceive('start')->once()->andReturnUsing(function (
+            WorkflowRun $startedRun, WorkflowStep $step, WorkflowStepRun $stepRun, array $context, string $externalRunId,
+        ) use ($earlierStep): array {
+            $this->assertSame($earlierStep->id, $step->id);
+            $this->assertSame('submit-form', $context['nextTaskKey']);
+
+            return ['runId' => $externalRunId, 'state' => 'running', 'isRunning' => true];
+        });
+        $this->app->instance(WorkflowTaskRunner::class, $runner);
+        $execution = app(WorkflowExecutionService::class);
+
+        $execution->resumeManualPause($run->fresh(), $earlierStep->id, 'submit-form', true);
+
+        $this->assertSame('queued', $pausedStepRun->fresh()->status);
+        $this->assertNull($pausedStepRun->fresh()->external_run_id);
+
+        $execution->expireTimedOutRuns();
+        $execution->advance($run->id);
+
+        $this->assertSame('running', $run->fresh()->status);
+        $this->assertNull($run->fresh()->error_message);
+        $this->assertContains($earlierStepRun->fresh()->status, ['running', 'waiting']);
+        $this->assertSame('queued', $pausedStepRun->fresh()->status);
+    }
+
     public function test_external_task_history_drops_per_task_workflow_variable_copies(): void
     {
         $compact = new ReflectionMethod(WorkflowExecutionService::class, 'compactExternalTaskHistory');

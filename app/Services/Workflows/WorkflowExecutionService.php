@@ -677,6 +677,19 @@ class WorkflowExecutionService
                 unset($context['next_step_action_key']);
                 $run->current_workflow_step_id = $workflowStepId;
 
+                // Der pausierte Schritt haelt seine Zeile auf "waiting". Springt die
+                // Fortsetzung in eine andere Liste, ueberwachte advanceRun sonst weiter
+                // diese Zeile statt den gewaehlten Task zu starten, und der Watchdog
+                // beendete den Lauf mit dem Timeout des laengst pausierten Schritts.
+                $run->stepRuns()
+                    ->where('workflow_step_id', '!=', $workflowStepId)
+                    ->where('status', 'waiting')
+                    ->update([
+                        'status' => 'queued',
+                        'external_run_type' => null,
+                        'external_run_id' => null,
+                    ]);
+
                 $run->stepRuns()
                     ->where('workflow_step_id', $workflowStepId)
                     ->update([
