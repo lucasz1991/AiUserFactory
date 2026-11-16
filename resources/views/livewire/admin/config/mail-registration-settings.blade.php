@@ -126,6 +126,76 @@
             </div>
         </div>
 
+        <div class="mt-6 border-t border-gray-100 pt-5" data-verification-mailbox-reserve>
+            <h4 class="text-sm font-semibold text-gray-900">Weitere GMX-Adressen (Reserve)</h4>
+            <p class="mt-1 text-sm text-gray-500">
+                Proton bindet die Verifizierungsadresse an das neue Konto. Ist sie verbraucht (Registrierung erfolgreich oder von Proton abgelehnt),
+                wird am Ende des Laufs automatisch die erste Reserve-Adresse zum aktiven Verifizierungs-Postfach.
+            </p>
+
+            @if($reserveMailboxes === [])
+                <p class="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                    Keine Reserve-Adresse hinterlegt. Ist das aktive Postfach verbraucht, scheitern weitere Registrierungen, bis eine neue Adresse eingetragen ist.
+                </p>
+            @else
+                <ul class="mt-3 divide-y divide-gray-100 rounded-md border border-gray-200">
+                    @foreach($reserveMailboxes as $index => $mailbox)
+                        <li class="flex flex-wrap items-center justify-between gap-3 px-3 py-2 text-sm" wire:key="reserve-mailbox-{{ $mailbox['email'] }}">
+                            <div class="min-w-0">
+                                <span class="font-medium text-gray-900">{{ $index + 1 }}. {{ $mailbox['email'] }}</span>
+                                @if($mailbox['username'] !== '' && strcasecmp($mailbox['username'], $mailbox['email']) !== 0)
+                                    <span class="text-gray-500">· Login {{ $mailbox['username'] }}</span>
+                                @endif
+                                <span class="ml-2 text-xs {{ $mailbox['hasPassword'] ? 'text-emerald-700' : 'text-red-600' }}">
+                                    {{ $mailbox['hasPassword'] ? 'Passwort gespeichert' : 'Kein Passwort' }}
+                                </span>
+                            </div>
+                            <button type="button" wire:click="removeReserveMailbox(@js($mailbox['email']))" wire:confirm="Reserve-Adresse {{ $mailbox['email'] }} entfernen?" class="text-xs font-semibold text-red-600 hover:text-red-700">
+                                Entfernen
+                            </button>
+                        </li>
+                    @endforeach
+                </ul>
+            @endif
+
+            <div class="mt-4 grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto] md:items-end">
+                <div>
+                    <label for="reserve-mailbox-email" class="block text-sm font-medium text-gray-700">GMX-Adresse</label>
+                    <input id="reserve-mailbox-email" type="email" wire:model.defer="newReserveMailboxEmail" placeholder="name@gmx.de" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                    @error('newReserveMailboxEmail') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                </div>
+                <div>
+                    <label for="reserve-mailbox-username" class="block text-sm font-medium text-gray-700">Login (optional)</label>
+                    <input id="reserve-mailbox-username" type="text" wire:model.defer="newReserveMailboxUsername" placeholder="sonst die Adresse" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                    @error('newReserveMailboxUsername') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                </div>
+                <div>
+                    <label for="reserve-mailbox-password" class="block text-sm font-medium text-gray-700">Passwort</label>
+                    <input id="reserve-mailbox-password" type="password" wire:model.defer="newReserveMailboxPassword" autocomplete="new-password" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                    @error('newReserveMailboxPassword') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
+                </div>
+                <button type="button" wire:click="addReserveMailbox" wire:loading.attr="disabled" class="rounded-md bg-slate-900 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 disabled:opacity-60">
+                    Hinzufuegen
+                </button>
+            </div>
+
+            @if($consumedMailboxes !== [])
+                <details class="mt-4 text-sm">
+                    <summary class="cursor-pointer font-medium text-gray-700">Verbrauchte Adressen ({{ count($consumedMailboxes) }})</summary>
+                    <ul class="mt-2 space-y-1 text-gray-600">
+                        @foreach($consumedMailboxes as $mailbox)
+                            <li wire:key="consumed-mailbox-{{ $loop->index }}">
+                                {{ $mailbox['email'] }}
+                                · {{ $mailbox['reason'] === 'registered' ? 'Konto registriert' : ($mailbox['reason'] === 'rejected' ? 'von Proton abgelehnt' : ($mailbox['reason'] ?: 'verbraucht')) }}
+                                @if($mailbox['workflowRunId']) · Lauf #{{ $mailbox['workflowRunId'] }} @endif
+                                @if($mailbox['consumedAt']) · {{ \Illuminate\Support\Carbon::parse($mailbox['consumedAt'])->timezone(config('app.timezone'))->format('d.m.Y H:i') }} @endif
+                            </li>
+                        @endforeach
+                    </ul>
+                </details>
+            @endif
+        </div>
+
         @if($verificationMailboxSessionResult !== [])
             <div class="mt-5 rounded-lg border p-4 text-sm {{ data_get($verificationMailboxSessionResult, 'ok') ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-amber-200 bg-amber-50 text-amber-950' }}">
                 <p class="font-semibold">{{ data_get($verificationMailboxSessionResult, 'statusMessage', 'Webmail-Sessionlauf abgeschlossen.') }}</p>

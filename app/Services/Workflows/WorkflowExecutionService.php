@@ -3369,6 +3369,7 @@ class WorkflowExecutionService
 
         $this->releaseClientReservation($run);
         $this->closeWorkflowTaskProcesses($run, 'Workflow-Lauf wurde abgeschlossen; zugehoerige Browser-Prozesse wurden geschlossen.');
+        $this->rotateConsumedVerificationMailbox($run);
         $this->cleanupSuccessfulWorkflowRunLogs($run);
         $this->notifyCopilotRunFinished($run);
     }
@@ -3431,6 +3432,7 @@ class WorkflowExecutionService
         $this->releaseClientReservation($run);
 
         $this->closeWorkflowTaskProcesses($run, 'Workflow-Lauf wurde beendet; zugehoerige Browser-Prozesse wurden geschlossen.');
+        $this->rotateConsumedVerificationMailbox($run);
         $this->notifyCopilotRunFinished($run);
     }
 
@@ -3669,6 +3671,10 @@ class WorkflowExecutionService
         $run->refresh();
 
         if ($disposition === WorkflowRouteDisposition::FAIL) {
+            if (filter_var($route['consume_verification_mailbox'] ?? false, FILTER_VALIDATE_BOOL)) {
+                $this->markVerificationMailboxConsumed($run, 'rejected');
+            }
+
             $this->failRun($run, (string) (
                 $route['message']
                 ?? data_get($result, 'statusMessage')
@@ -4714,6 +4720,61 @@ class WorkflowExecutionService
 
         foreach ($this->mailAccountsToPersistFromWorkflowTaskResult($result) as $account) {
             app(PersistMailAccountTask::class)->handle($person, $account);
+
+            $recoveryEmail = trim((string) ($account['recoveryEmail'] ?? $account['recovery_email'] ?? ''));
+            if ($recoveryEmail !== '') {
+                $this->markVerificationMailboxConsumed($run, 'registered', $recoveryEmail);
+            }
+        }
+    }
+
+    /**
+     * Merkt fuer das Laufende vor, dass der Anbieter das aktive Verifizierungs-
+     * Postfach verbraucht hat (an ein Konto gebunden). Gewechselt wird erst am
+     * Ende, damit spaetere Listen desselben Laufs (z. B. Mails loeschen) noch
+     * dasselbe Postfach oeffnen.
+     */
+    protected function markVerificationMailboxConsumed(WorkflowRun $run, string $reason, ?string $email = null): void
+    {
+        $mailbox = $this->mailRegistration->settings()['verification_mailbox'] ?? [];
+        $activeEmail = strtolower(trim((string) ($mailbox['email'] ?? '')));
+
+        if ($activeEmail === '' || ($email !== null && strtolower(trim($email)) !== $activeEmail)) {
+            return;
+        }
+
+        $run->refresh();
+        $context = is_array($run->context_json) ? $run->context_json : [];
+        $context['verification_mailbox_consumed'] = [
+            'email' => $activeEmail,
+            'reason' => $reason,
+            'at' => now()->toIso8601String(),
+        ];
+        $run->forceFill(['context_json' => $context])->save();
+    }
+
+    protected function rotateConsumedVerificationMailbox(WorkflowRun $run): void
+    {
+        try {
+            $consumed = data_get(WorkflowRun::query()->find($run->id)?->context_json, 'verification_mailbox_consumed');
+            $email = trim((string) data_get($consumed, 'email', ''));
+
+            if ($email === '') {
+                return;
+            }
+
+            $rotation = $this->mailRegistration->consumeVerificationMailbox(
+                $email,
+                (string) data_get($consumed, 'reason', ''),
+                (int) $run->id,
+            );
+
+            if ($rotation !== null && $rotation['rotated']) {
+                $this->workflowTasks->forgetVerificationMailboxBrowserProfile();
+            }
+        } catch (\Throwable $exception) {
+            // Der Postfachwechsel darf den Abschluss des Laufs nie verhindern.
+            report($exception);
         }
     }
 

@@ -6,6 +6,7 @@ use App\Jobs\CheckMailRegistrationWebmailJob;
 use App\Jobs\SuperviseManagedProcessesJob;
 use App\Models\Setting;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Process;
@@ -127,8 +128,105 @@ class MailAccountRegistrationRunner
             'navigation_timeout_seconds' => max(30, min(300, (int) ($settings['navigation_timeout_seconds'] ?? 120))),
             'observation_timeout_seconds' => max(30, min(1800, (int) ($settings['observation_timeout_seconds'] ?? 300))),
             'verification_mailbox' => $verificationMailbox,
+            'verification_mailbox_reserve' => $this->normalizeReserveMailboxes($settings['verification_mailbox_reserve'] ?? []),
+            'verification_mailbox_consumed' => $this->normalizeConsumedMailboxes($settings['verification_mailbox_consumed'] ?? []),
             'providers' => $providers,
         ];
+    }
+
+    /**
+     * Ein Anbieter wie Proton bindet die Verifizierungsadresse an das neue Konto;
+     * fuer die naechste Registrierung braucht es eine andere Adresse. Das aktive
+     * Postfach wandert in die Verbraucht-Liste, die erste Reserve-Adresse rueckt
+     * mit leeren Sitzungen nach. Ist das aktive Postfach schon gewechselt worden
+     * (z. B. von einem parallelen Lauf), bleibt alles unveraendert.
+     *
+     * @return array{rotated: bool, consumed: string, active: string, reserve_left: int}|null
+     */
+    public function consumeVerificationMailbox(string $email, string $reason, ?int $workflowRunId = null): ?array
+    {
+        $email = strtolower(trim($email));
+
+        if ($email === '') {
+            return null;
+        }
+
+        return Cache::lock('mail-registration-settings:verification-mailbox', 10)->block(5, function () use ($email, $reason, $workflowRunId): ?array {
+            $settings = $this->settings();
+            $active = $settings['verification_mailbox'];
+
+            if (strtolower($active['email']) !== $email) {
+                return null;
+            }
+
+            $settings['verification_mailbox_consumed'][] = [
+                'email' => $active['email'],
+                'reason' => trim($reason),
+                'workflow_run_id' => $workflowRunId,
+                'consumed_at' => now()->toIso8601String(),
+            ];
+            $reserve = $settings['verification_mailbox_reserve'];
+            $next = array_shift($reserve);
+
+            if ($next !== null) {
+                $settings['verification_mailbox'] = [
+                    'enabled' => $active['enabled'],
+                    'email' => $next['email'],
+                    'provider' => $next['provider'],
+                    'username' => $next['username'],
+                    'password_encrypted' => $next['password_encrypted'],
+                    'webmail_url' => $next['webmail_url'],
+                    'webmail_session' => null,
+                    'browser_sessions' => [],
+                ];
+                $settings['verification_mailbox_reserve'] = $reserve;
+            }
+
+            $this->saveSettings($settings);
+
+            return [
+                'rotated' => $next !== null,
+                'consumed' => $active['email'],
+                'active' => $next['email'] ?? $active['email'],
+                'reserve_left' => count($reserve),
+            ];
+        });
+    }
+
+    protected function normalizeReserveMailboxes(mixed $mailboxes): array
+    {
+        return collect(is_array($mailboxes) ? $mailboxes : [])
+            ->filter(fn (mixed $mailbox): bool => is_array($mailbox) && trim((string) ($mailbox['email'] ?? '')) !== '')
+            ->map(function (array $mailbox): array {
+                $provider = $this->normalizeWebmailProvider($mailbox['provider'] ?? 'gmx');
+
+                return [
+                    'email' => trim((string) $mailbox['email']),
+                    'provider' => $provider,
+                    'username' => trim((string) ($mailbox['username'] ?? '')),
+                    'password_encrypted' => $this->nullableString($mailbox['password_encrypted'] ?? null),
+                    'webmail_url' => trim((string) ($mailbox['webmail_url'] ?? '')) ?: $this->defaultWebmailUrl($provider),
+                    'added_at' => $this->nullableString($mailbox['added_at'] ?? null),
+                ];
+            })
+            ->unique(fn (array $mailbox): string => strtolower($mailbox['email']))
+            ->values()
+            ->all();
+    }
+
+    protected function normalizeConsumedMailboxes(mixed $mailboxes): array
+    {
+        return collect(is_array($mailboxes) ? $mailboxes : [])
+            ->filter(fn (mixed $mailbox): bool => is_array($mailbox) && trim((string) ($mailbox['email'] ?? '')) !== '')
+            ->map(fn (array $mailbox): array => [
+                'email' => trim((string) $mailbox['email']),
+                'reason' => trim((string) ($mailbox['reason'] ?? '')),
+                'workflow_run_id' => is_numeric($mailbox['workflow_run_id'] ?? null) ? (int) $mailbox['workflow_run_id'] : null,
+                'consumed_at' => $this->nullableString($mailbox['consumed_at'] ?? null),
+            ])
+            ->take(-50)
+            ->values()
+            ->all();
     }
 
     public function start(array $subject = [], ?string $providerKey = null, array $workflowContext = []): array

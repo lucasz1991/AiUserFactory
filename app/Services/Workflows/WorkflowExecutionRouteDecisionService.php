@@ -42,6 +42,21 @@ class WorkflowExecutionRouteDecisionService
             // Hauptworkflows; deren Erfolgsroute liefe sonst weiter, als waere der
             // Unter-Workflow gelungen.
             if ($outcome === 'success' && (bool) ($result['routeFailRequested'] ?? false)) {
+                // Auf der Hauptebene liegt die Abbruch-Route an der Karte selbst und
+                // traegt weitere Angaben (z. B. consume_verification_mailbox).
+                $ownRoute = data_get(
+                    collect($step->task_cards)->first(fn (array $task): bool => (string) ($task['key'] ?? '') === $completedTaskKey),
+                    'next',
+                );
+
+                if (is_array($ownRoute) && WorkflowRouteDisposition::fromRoute($ownRoute) === WorkflowRouteDisposition::FAIL) {
+                    $ownRoute['_source_card_key'] = $completedTaskKey;
+                    $ownRoute['message'] = trim((string) ($ownRoute['message'] ?? ''))
+                        ?: (trim((string) ($result['routeFailMessage'] ?? '')) ?: 'Workflow wurde ueber die ausdrueckliche Fehlerroute beendet.');
+
+                    return $this->normalizeRoute($step, $ownRoute);
+                }
+
                 return [
                     'type' => 'fail',
                     'step' => 'fail',

@@ -31,6 +31,16 @@ class MailRegistrationSettings extends Component
     public bool $hasStoredVerificationMailboxPassword = false;
     public string $verificationMailboxWebmailUrl = '';
 
+    /** @var array<int, array{email: string, username: string, hasPassword: bool, addedAt: ?string}> */
+    public array $reserveMailboxes = [];
+
+    /** @var array<int, array{email: string, reason: string, workflowRunId: ?int, consumedAt: ?string}> */
+    public array $consumedMailboxes = [];
+
+    public string $newReserveMailboxEmail = '';
+    public string $newReserveMailboxUsername = '';
+    public string $newReserveMailboxPassword = '';
+
     public bool $providerOneEnabled = true;
     public string $providerOneMode = 'proton_username_check';
     public string $providerOneLabel = '';
@@ -131,6 +141,56 @@ class MailRegistrationSettings extends Component
 
         session()->flash('success', 'Passwort des Verifikations-Postfachs wurde geloescht.');
         $this->dispatch('showAlert', 'Verifikations-Passwort geloescht.', 'success');
+    }
+
+    public function addReserveMailbox(): void
+    {
+        $validated = $this->validate([
+            'newReserveMailboxEmail' => ['required', 'email', 'max:255'],
+            'newReserveMailboxUsername' => ['nullable', 'string', 'max:255'],
+            'newReserveMailboxPassword' => ['required', 'string', 'max:512'],
+        ], [], [
+            'newReserveMailboxEmail' => 'E-Mail-Adresse',
+            'newReserveMailboxPassword' => 'Passwort',
+        ]);
+        $runner = app(MailAccountRegistrationRunner::class);
+        $settings = $runner->settings();
+        $email = trim($validated['newReserveMailboxEmail']);
+        $known = collect([
+            $settings['verification_mailbox']['email'] ?? '',
+            ...array_column($settings['verification_mailbox_reserve'], 'email'),
+            ...array_column($settings['verification_mailbox_consumed'], 'email'),
+        ])->map(fn (string $known): string => strtolower(trim($known)));
+
+        if ($known->contains(strtolower($email))) {
+            throw ValidationException::withMessages([
+                'newReserveMailboxEmail' => 'Diese Adresse ist schon als Verifizierungs-Postfach eingetragen oder wurde bereits verbraucht.',
+            ]);
+        }
+
+        $settings['verification_mailbox_reserve'][] = [
+            'email' => $email,
+            'provider' => 'gmx',
+            'username' => trim((string) ($validated['newReserveMailboxUsername'] ?? '')),
+            'password_encrypted' => Crypt::encryptString($validated['newReserveMailboxPassword']),
+            'webmail_url' => $this->defaultWebmailUrl('gmx'),
+            'added_at' => now()->toIso8601String(),
+        ];
+        $this->fillMailboxLists($runner->saveSettings($settings));
+        $this->reset('newReserveMailboxEmail', 'newReserveMailboxUsername', 'newReserveMailboxPassword');
+        $this->dispatch('showAlert', 'Reserve-Adresse wurde hinzugefuegt.', 'success');
+    }
+
+    public function removeReserveMailbox(string $email): void
+    {
+        $runner = app(MailAccountRegistrationRunner::class);
+        $settings = $runner->settings();
+        $settings['verification_mailbox_reserve'] = array_values(array_filter(
+            $settings['verification_mailbox_reserve'],
+            fn (array $mailbox): bool => strtolower($mailbox['email']) !== strtolower(trim($email)),
+        ));
+        $this->fillMailboxLists($runner->saveSettings($settings));
+        $this->dispatch('showAlert', 'Reserve-Adresse wurde entfernt.', 'success');
     }
 
     public function updatedVerificationMailboxProvider(mixed $value = null): void
@@ -356,6 +416,9 @@ class MailRegistrationSettings extends Component
                 'webmail_session' => is_array($existingMailbox['webmail_session'] ?? null) ? $existingMailbox['webmail_session'] : null,
                 'browser_sessions' => is_array($existingMailbox['browser_sessions'] ?? null) ? $existingMailbox['browser_sessions'] : [],
             ],
+            // Werden ueber eigene Aktionen gepflegt; das Formular gibt sie unveraendert weiter.
+            'verification_mailbox_reserve' => $existingSettings['verification_mailbox_reserve'] ?? [],
+            'verification_mailbox_consumed' => $existingSettings['verification_mailbox_consumed'] ?? [],
             'providers' => [
                 [
                     'key' => $validated['providerOneMode'] === 'proton_username_check' ? 'proton' : 'observed_manual',
@@ -394,8 +457,26 @@ class MailRegistrationSettings extends Component
         ];
     }
 
+    protected function fillMailboxLists(array $settings): void
+    {
+        $this->reserveMailboxes = array_map(fn (array $mailbox): array => [
+            'email' => (string) $mailbox['email'],
+            'username' => (string) ($mailbox['username'] ?? ''),
+            'hasPassword' => trim((string) ($mailbox['password_encrypted'] ?? '')) !== '',
+            'addedAt' => $mailbox['added_at'] ?? null,
+        ], $settings['verification_mailbox_reserve'] ?? []);
+        $this->consumedMailboxes = array_reverse(array_map(fn (array $mailbox): array => [
+            'email' => (string) $mailbox['email'],
+            'reason' => (string) ($mailbox['reason'] ?? ''),
+            'workflowRunId' => $mailbox['workflow_run_id'] ?? null,
+            'consumedAt' => $mailbox['consumed_at'] ?? null,
+        ], $settings['verification_mailbox_consumed'] ?? []));
+    }
+
     protected function fillFromSettings(array $settings): void
     {
+        $this->fillMailboxLists($settings);
+
         $providers = array_values($settings['providers'] ?? []);
         $providerOne = $providers[0] ?? [];
         $providerTwo = $providers[1] ?? [];
