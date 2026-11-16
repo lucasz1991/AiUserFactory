@@ -1550,21 +1550,50 @@ class WorkflowTaskRunner
 
     /**
      * Das Chromium-Profil des Verifizierungs-Postfachs haelt dessen Cookies auf der
-     * Platte. Nach einem Postfachwechsel oeffnete der Browser sonst weiter das alte
-     * Postfach, auch wenn die gespeicherten Sitzungen geleert wurden. Profile auf
-     * ClientController-Geraeten bleiben davon unberuehrt.
+     * Platte. Der Profil-Key haengt deshalb an der Postfach-Identitaet: Nach einem
+     * Wechsel bekommt das neue Postfach auf dem Server und auf jedem Geraet ein
+     * frisches Profil, auch wenn ein altes Profil gerade geoeffnet ist und sich
+     * nicht loeschen laesst.
+     */
+    public function verificationMailboxBrowserProfileKey(): string
+    {
+        $mailbox = $this->mailSettings->settings()['verification_mailbox'] ?? [];
+        $email = strtolower(trim((string) ($mailbox['email'] ?? '')));
+        $username = strtolower(trim((string) ($mailbox['username'] ?? ''))) ?: $email;
+        $provider = strtolower(trim((string) ($mailbox['provider'] ?? '')));
+
+        if ($email === '' && $username === '') {
+            return self::VERIFICATION_MAILBOX_PROFILE_KEY;
+        }
+
+        return self::VERIFICATION_MAILBOX_PROFILE_KEY.'-'.substr(sha1($email.'|'.$username.'|'.$provider), 0, 12);
+    }
+
+    /**
+     * Raeumt die Profile frueherer Verifizierungs-Postfaecher ab. Nur Aufraeumen:
+     * Ein noch geoeffnetes Profil bleibt liegen, wird aber nie wieder verwendet.
      */
     public function forgetVerificationMailboxBrowserProfile(): void
     {
-        $path = storage_path('app/browser-profiles/workflows/'.self::VERIFICATION_MAILBOX_PROFILE_KEY);
+        $root = storage_path('app/browser-profiles/workflows');
+        $currentKey = $this->verificationMailboxBrowserProfileKey();
 
         try {
-            if (File::isDirectory($path)) {
-                File::deleteDirectory($path);
+            if (! File::isDirectory($root)) {
+                return;
+            }
+
+            foreach (File::directories($root) as $directory) {
+                $key = basename($directory);
+                $isMailboxProfile = $key === self::VERIFICATION_MAILBOX_PROFILE_KEY
+                    || str_starts_with($key, self::VERIFICATION_MAILBOX_PROFILE_KEY.'-');
+
+                if ($isMailboxProfile && $key !== $currentKey) {
+                    File::deleteDirectory($directory);
+                }
             }
         } catch (\Throwable) {
-            // Ein gerade geoeffnetes Profil laesst sich nicht entfernen; der naechste
-            // Wechsel oder die taegliche Bereinigung raeumt es ab.
+            // Aufraeumen ist optional; der naechste Wechsel versucht es erneut.
         }
     }
 
@@ -1593,7 +1622,7 @@ class WorkflowTaskRunner
         if (in_array($mailboxSource, ['verification', 'verification_mailbox', 'veri-account', 'veri_account', 'main', 'master'], true)
             || data_get($runtimeContext, 'browserSessionAutomation.scope') === 'verification'
             || data_get($runtimeContext, 'browser_session_automation.scope') === 'verification') {
-            return self::VERIFICATION_MAILBOX_PROFILE_KEY;
+            return $this->verificationMailboxBrowserProfileKey();
         }
 
         $personId = (int) (data_get($runtimeContext, 'personId') ?: data_get($run->context_json, 'person_id'));

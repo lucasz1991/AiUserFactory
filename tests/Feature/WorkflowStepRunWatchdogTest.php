@@ -738,6 +738,88 @@ class WorkflowStepRunWatchdogTest extends TestCase
         Queue::assertNotPushed(RunWorkflowJob::class);
     }
 
+    public function test_an_abort_route_reached_through_a_failed_check_still_fails_the_run_instead_of_retrying(): void
+    {
+        Queue::fake();
+        [$workflow, $step] = $this->workflow();
+        $config = $step->config_json;
+        $config['tasks'][0]['next'] = ['type' => 'card', 'card_key' => 'second-task'];
+        // Die Include-Karte wuerde bei einem Fehler sich selbst wiederholen.
+        $config['tasks'][0]['on_error'] = ['type' => 'card', 'card_key' => 'first-task', 'max_attempts' => 2];
+        $step->forceFill(['config_json' => $config])->save();
+        [$run, $stepRun] = $this->waitingWorkflowTaskRun($workflow, $step, ['interactive_debug' => false]);
+        [$status, $result] = $this->terminalExternalResult($run, $stepRun, $step->fresh());
+        $message = 'GMX lehnt den Login endgueltig ab.';
+        $this->mockTerminalTaskRunner($status, [
+            ...$result,
+            'statusMessage' => $message,
+            'routeRequested' => true,
+            'completedTaskKey' => 'first-task',
+            'routeOutcome' => 'success',
+            'routeFailRequested' => true,
+            'routeFailMessage' => $message,
+            // Die Pruefung "Passwortfeld sichtbar" schlug fehl und fuehrte ueber
+            // ihre Fehlerroute zur Abbruch-Karte.
+            'tasks' => [
+                ['key' => 'if-password-visible', 'parent_task_key' => 'first-task', 'ok' => false, 'status' => 'failed', 'statusMessage' => 'Element wurde nicht gefunden.'],
+                ['key' => 'gmx-rejects-login', 'parent_task_key' => 'first-task', 'ok' => true, 'status' => 'success'],
+            ],
+        ]);
+
+        app(WorkflowExecutionService::class)->monitorStepRun($stepRun->id);
+
+        $run->refresh();
+        $this->assertSame('failed', $run->status);
+        $this->assertSame($message, $run->error_message);
+        Queue::assertNotPushed(RunWorkflowJob::class);
+    }
+
+    public function test_a_run_started_before_a_mailbox_change_cannot_store_its_session_into_the_new_mailbox(): void
+    {
+        $mailRegistration = app(\App\Services\Mail\MailAccountRegistrationRunner::class);
+        $settings = $mailRegistration->settings();
+        $settings['verification_mailbox'] = ['enabled' => true, 'email' => 'old@gmx.de', 'provider' => 'gmx'];
+        $mailRegistration->saveSettings($settings);
+        // Das Postfach war schon vor dem Laufstart eingerichtet.
+        $settings = $mailRegistration->settings();
+        $settings['verification_mailbox']['identity_changed_at'] = now()->subMinutes(10)->toIso8601String();
+        $mailRegistration->saveSettings($settings);
+        [$workflow, $step] = $this->workflow();
+        [$run] = $this->waitingWorkflowTaskRun($workflow, $step, [], now()->subMinutes(5));
+        $run->forceFill(['started_at' => now()->subMinutes(5)])->save();
+        $apply = new ReflectionMethod(WorkflowExecutionService::class, 'applyBrowserSessionResult');
+        $sessionResult = ['encryptedBrowserSessionPayload' => 'enc', 'sessionKey' => 'gmx.net', 'domain' => 'gmx.net'];
+
+        $apply->invoke(app(WorkflowExecutionService::class), $run->fresh(), $sessionResult);
+        $this->assertArrayHasKey('gmx.net', $mailRegistration->settings()['verification_mailbox']['browser_sessions']);
+
+        $settings = $mailRegistration->settings();
+        $settings['verification_mailbox'] = ['enabled' => true, 'email' => 'new@gmx.de', 'provider' => 'gmx'];
+        $mailRegistration->saveSettings($settings);
+        $this->assertNotNull($mailRegistration->settings()['verification_mailbox']['identity_changed_at']);
+
+        $apply->invoke(app(WorkflowExecutionService::class), $run->fresh(), $sessionResult);
+
+        $this->assertSame([], $mailRegistration->settings()['verification_mailbox']['browser_sessions']);
+    }
+
+    public function test_the_verification_mailbox_browser_profile_follows_the_mailbox_identity(): void
+    {
+        $mailRegistration = app(\App\Services\Mail\MailAccountRegistrationRunner::class);
+        $runner = app(WorkflowTaskRunner::class);
+        $settings = $mailRegistration->settings();
+        $settings['verification_mailbox'] = ['enabled' => true, 'email' => 'old@gmx.de', 'provider' => 'gmx'];
+        $mailRegistration->saveSettings($settings);
+        $oldKey = $runner->verificationMailboxBrowserProfileKey();
+
+        $settings['verification_mailbox']['email'] = 'New@gmx.de';
+        $mailRegistration->saveSettings($settings);
+        $newKey = $runner->verificationMailboxBrowserProfileKey();
+
+        $this->assertNotSame($oldKey, $newKey);
+        $this->assertMatchesRegularExpression('/^verification-mailbox-[0-9a-f]{12}$/', $newKey);
+    }
+
     public function test_an_abort_route_that_consumes_the_verification_mailbox_switches_to_the_next_reserve_address(): void
     {
         Queue::fake();
@@ -834,6 +916,8 @@ class WorkflowStepRunWatchdogTest extends TestCase
             now()->subMinutes(15),
         );
         $run->forceFill(['status' => 'paused'])->save();
+        // So haelt continueInteractiveDebugTask eine pausierte Zeile: ohne Prozess-ID.
+        $pausedStepRun->forceFill(['external_run_type' => null, 'external_run_id' => null])->save();
         $earlierStepRun = WorkflowStepRun::query()->create([
             'workflow_run_id' => $run->id,
             'workflow_step_id' => $earlierStep->id,

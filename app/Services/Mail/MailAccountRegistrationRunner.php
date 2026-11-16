@@ -35,6 +35,13 @@ class MailAccountRegistrationRunner
     public function saveSettings(array $settings): array
     {
         $normalized = $this->normalizeSettings($settings);
+        $previous = $this->settings()['verification_mailbox'] ?? [];
+
+        // Laeufe, die vor einem Postfachwechsel gestartet wurden, duerfen ihre
+        // Sitzung danach nicht mehr in das neue Postfach schreiben.
+        if ($this->verificationMailboxIdentity($previous) !== $this->verificationMailboxIdentity($normalized['verification_mailbox'])) {
+            $normalized['verification_mailbox']['identity_changed_at'] = now()->toIso8601String();
+        }
 
         Setting::setValue(self::SETTINGS_TYPE, self::SETTINGS_KEY, $normalized);
 
@@ -143,6 +150,24 @@ class MailAccountRegistrationRunner
      *
      * @return array{rotated: bool, consumed: string, active: string, reserve_left: int}|null
      */
+    public function verificationMailboxIdentity(array $mailbox): string
+    {
+        $email = strtolower(trim((string) ($mailbox['email'] ?? '')));
+        $username = strtolower(trim((string) ($mailbox['username'] ?? ''))) ?: $email;
+
+        return $email.'|'.$username.'|'.strtolower(trim((string) ($mailbox['provider'] ?? '')));
+    }
+
+    /**
+     * Alle Lese-Aendern-Schreiben-Zugriffe auf das Verifizierungs-Postfach laufen
+     * unter derselben Sperre; sonst ueberschriebe eine gleichzeitig gespeicherte
+     * Browser-Sitzung einen gerade erfolgten Postfachwechsel.
+     */
+    public function withVerificationMailboxLock(callable $callback): mixed
+    {
+        return Cache::lock('mail-registration-settings:verification-mailbox', 10)->block(5, $callback);
+    }
+
     public function consumeVerificationMailbox(string $email, string $reason, ?int $workflowRunId = null): ?array
     {
         $email = strtolower(trim($email));
@@ -151,7 +176,7 @@ class MailAccountRegistrationRunner
             return null;
         }
 
-        return Cache::lock('mail-registration-settings:verification-mailbox', 10)->block(5, function () use ($email, $reason, $workflowRunId): ?array {
+        return $this->withVerificationMailboxLock(function () use ($email, $reason, $workflowRunId): ?array {
             $settings = $this->settings();
             $active = $settings['verification_mailbox'];
 
@@ -806,6 +831,7 @@ class MailAccountRegistrationRunner
             'webmail_url' => trim((string) ($mailbox['webmail_url'] ?? '')) ?: $this->defaultWebmailUrl($this->normalizeWebmailProvider($mailbox['provider'] ?? 'proton')),
             'webmail_session' => is_array($mailbox['webmail_session'] ?? null) ? $mailbox['webmail_session'] : null,
             'browser_sessions' => is_array($mailbox['browser_sessions'] ?? null) ? $mailbox['browser_sessions'] : [],
+            'identity_changed_at' => $this->nullableString($mailbox['identity_changed_at'] ?? null),
         ];
     }
 

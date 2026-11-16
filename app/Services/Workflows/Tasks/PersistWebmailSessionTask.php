@@ -111,11 +111,9 @@ class PersistWebmailSessionTask
         }
 
         $runner = app(MailAccountRegistrationRunner::class);
-        $settings = $runner->settings();
-        $mailbox = is_array($settings['verification_mailbox'] ?? null) ? $settings['verification_mailbox'] : [];
         $summary = is_array($result['sessionSummary'] ?? null) ? $result['sessionSummary'] : [];
 
-        $mailbox['webmail_session'] = [
+        $webmailSession = [
             'payload_encrypted' => $encryptedPayload,
             'payload_hash' => (string) ($result['sessionPayloadHash'] ?? ''),
             'captured_at' => (string) ($summary['capturedAt'] ?? now()->toIso8601String()),
@@ -129,14 +127,19 @@ class PersistWebmailSessionTask
             'script_version' => (int) ($result['scriptVersion'] ?? 1),
             'updated_at' => now()->toIso8601String(),
         ];
-        $settings['verification_mailbox'] = $mailbox;
-        $runner->saveSettings($settings);
+        $runner->withVerificationMailboxLock(function () use ($runner, $webmailSession): void {
+            $settings = $runner->settings();
+            $mailbox = is_array($settings['verification_mailbox'] ?? null) ? $settings['verification_mailbox'] : [];
+            $mailbox['webmail_session'] = $webmailSession;
+            $settings['verification_mailbox'] = $mailbox;
+            $runner->saveSettings($settings);
+        });
 
         return [
             'ok' => true,
             'status' => 'success',
             'statusMessage' => 'Webmail-Session des Haupt-Verifikationskontos wurde gespeichert.',
-            'session' => collect($mailbox['webmail_session'])->except(['payload_encrypted'])->all(),
+            'session' => collect($webmailSession)->except(['payload_encrypted'])->all(),
         ];
     }
 }

@@ -298,9 +298,9 @@ class MailRegistrationSettings extends Component
      */
     protected function verificationMailboxChange(array $existingMailbox, array $validated): array
     {
-        $hasStoredSecrets = trim((string) ($existingMailbox['password_encrypted'] ?? '')) !== ''
-            || is_array($existingMailbox['webmail_session'] ?? null)
-            || (is_array($existingMailbox['browser_sessions'] ?? null) && $existingMailbox['browser_sessions'] !== []);
+        $hadPassword = trim((string) ($existingMailbox['password_encrypted'] ?? '')) !== '';
+        $hadMailbox = trim((string) ($existingMailbox['email'] ?? '')) !== ''
+            || trim((string) ($existingMailbox['username'] ?? '')) !== '';
         $identity = static function (mixed $email, mixed $username): string {
             $email = strtolower(trim((string) $email));
 
@@ -308,14 +308,15 @@ class MailRegistrationSettings extends Component
         };
         $previousAccount = $identity($existingMailbox['email'] ?? '', $existingMailbox['username'] ?? '');
         $newAccount = $identity($validated['verificationMailboxEmail'] ?? '', $validated['verificationMailboxUsername'] ?? '');
-        // Ohne gespeicherte Geheimnisse ist es die Ersteinrichtung, kein Wechsel.
-        $accountChanged = $hasStoredSecrets && $previousAccount !== $newAccount;
-        $providerChanged = $hasStoredSecrets
+        // Ohne bisheriges Postfach ist es die Ersteinrichtung, kein Wechsel.
+        $accountChanged = $hadMailbox && $previousAccount !== $newAccount;
+        $providerChanged = $hadMailbox
             && $this->normalizeWebmailProvider($existingMailbox['provider'] ?? 'proton')
                 !== $this->normalizeWebmailProvider($validated['verificationMailboxProvider'] ?? 'proton');
 
         return [
-            'account' => $accountChanged,
+            // Ein neues Passwort ist nur noetig, wenn das alte Konto eines hatte.
+            'account' => $accountChanged && $hadPassword,
             'sessions' => $accountChanged || $providerChanged,
         ];
     }

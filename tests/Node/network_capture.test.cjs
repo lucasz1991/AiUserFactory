@@ -85,7 +85,7 @@ test('capture records xhr and document responses without query strings and detac
   assert.ok(!JSON.stringify(entries).includes('secret-state'));
 });
 
-test('capture keeps failed responses when the limit is exceeded', async () => {
+test('capture keeps failed and the latest responses when the limit is exceeded', async () => {
   const page = new EventEmitter();
   const capture = startResponseCapture(page, { limit: 3 });
 
@@ -99,10 +99,37 @@ test('capture keeps failed responses when the limit is exceeded', async () => {
 
   assert.equal(entries.length, 3);
   assert.deepEqual(entries.map((entry) => entry.url), [
-    'https://api.example.test/ok/0',
-    'https://api.example.test/ok/1',
+    'https://api.example.test/ok/3',
+    'https://api.example.test/ok/4',
     'https://api.example.test/denied',
   ]);
+});
+
+test('urls are capped and data/blob urls drop their payload', async () => {
+  const page = new EventEmitter();
+  const capture = startResponseCapture(page);
+
+  page.emit('response', response({ url: `data:application/json;base64,${'A'.repeat(500)}` }));
+  page.emit('response', response({ url: `https://api.example.test/${'p'.repeat(800)}` }));
+
+  const entries = await capture.stop({ quietMs: 0, idleMs: 0, maxWaitMs: 0 });
+
+  assert.equal(entries[0].url, 'data:…');
+  assert.ok(entries[1].url.length <= 300);
+});
+
+test('oversized body summaries are reduced to their top-level keys', () => {
+  const nested = {};
+  for (let a = 0; a < 24; a += 1) {
+    nested[`k${a}`] = {};
+    for (let b = 0; b < 24; b += 1) nested[`k${a}`][`m${b}`] = { x: 1, y: 2 };
+  }
+
+  const summary = summarizeResponseBody(JSON.stringify(nested), 'application/json');
+
+  assert.equal(summary.truncated, true);
+  assert.equal(summary.keys.length, 12);
+  assert.ok(JSON.stringify(summary).length < 2000);
 });
 
 test('a broken response object never breaks the capture', async () => {

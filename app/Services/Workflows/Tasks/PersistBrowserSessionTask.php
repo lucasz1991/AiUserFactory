@@ -53,14 +53,16 @@ class PersistBrowserSessionTask
         }
 
         $runner = app(MailAccountRegistrationRunner::class);
-        $settings = $runner->settings();
-        $mailbox = is_array($settings['verification_mailbox'] ?? null) ? $settings['verification_mailbox'] : [];
-        $sessions = is_array($mailbox['browser_sessions'] ?? null) ? $mailbox['browser_sessions'] : [];
         [$sessionKey, $session] = $this->sessionRecord($result, $encryptedPayload);
-        $sessions[$sessionKey] = $session;
-        $mailbox['browser_sessions'] = $sessions;
-        $settings['verification_mailbox'] = $mailbox;
-        $runner->saveSettings($settings);
+        $runner->withVerificationMailboxLock(function () use ($runner, $sessionKey, $session): void {
+            $settings = $runner->settings();
+            $mailbox = is_array($settings['verification_mailbox'] ?? null) ? $settings['verification_mailbox'] : [];
+            $sessions = is_array($mailbox['browser_sessions'] ?? null) ? $mailbox['browser_sessions'] : [];
+            $sessions[$sessionKey] = $session;
+            $mailbox['browser_sessions'] = $sessions;
+            $settings['verification_mailbox'] = $mailbox;
+            $runner->saveSettings($settings);
+        });
 
         return [
             'ok' => true,

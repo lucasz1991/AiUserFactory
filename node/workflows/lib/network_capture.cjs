@@ -10,6 +10,8 @@ const CAPTURED_RESOURCE_TYPES = new Set(['xhr', 'fetch', 'document']);
 const DIAGNOSTIC_VALUE_KEYS = /^(flow_?state|next_?step|status|error|errors|error_?code|error_?description|error_?message|message|reason|type|result|outcome|challenge|captcha|blocked|locked|retry_?after)$/i;
 const MAX_COLLECTED = 60;
 const MAX_BODY_BYTES = 32768;
+const MAX_SUMMARY_CHARS = 2000;
+const MAX_URL_CHARS = 300;
 
 function describeValue(value) {
   if (value === null) return 'null';
@@ -64,7 +66,21 @@ function summarizeResponseBody(text, contentType = '') {
   }
 
   try {
-    return summarizeJson(JSON.parse(body));
+    const parsed = JSON.parse(body);
+    const summary = summarizeJson(parsed);
+
+    // Die Zusammenfassung kann groesser werden als die Quelle (tief verschachtelte
+    // Objekte); sie landet in jedem Status-Update und bleibt deshalb klein.
+    if (JSON.stringify(summary).length > MAX_SUMMARY_CHARS) {
+      return {
+        truncated: true,
+        keys: parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+          ? Object.keys(parsed).slice(0, 12)
+          : [],
+      };
+    }
+
+    return summary;
   } catch {
     return { unparsable: true, length: body.length };
   }
@@ -74,9 +90,14 @@ function urlWithoutQuery(value) {
   try {
     const url = new URL(String(value || ''));
 
-    return `${url.origin}${url.pathname}`;
+    // data:/blob: tragen ihren Inhalt im Pfad.
+    if (!/^https?:$/.test(url.protocol)) {
+      return `${url.protocol}…`;
+    }
+
+    return `${url.origin}${url.pathname}`.slice(0, MAX_URL_CHARS);
   } catch {
-    return String(value || '').split(/[?#]/)[0].slice(0, 300);
+    return String(value || '').split(/[?#]/)[0].slice(0, MAX_URL_CHARS);
   }
 }
 
@@ -84,8 +105,11 @@ function selectResponses(entries, limit) {
   const failed = entries.filter((entry) => Number(entry.status) >= 400);
   const others = entries.filter((entry) => Number(entry.status) < 400);
 
-  return [...failed, ...others]
-    .slice(0, limit)
+  // Fehler zuerst, sonst die juengsten Antworten: die Antwort auf den Klick kommt
+  // nach dem, was die Seite waehrend des Wartens auf das Element geladen hat.
+  const remaining = Math.max(0, limit - failed.length);
+
+  return [...failed.slice(0, limit), ...(remaining > 0 ? others.slice(-remaining) : [])]
     .sort((left, right) => left.sequence - right.sequence)
     .map(({ sequence, ...entry }) => entry);
 }
@@ -102,8 +126,18 @@ function startResponseCapture(page, options = {}) {
       const request = response.request();
       const resourceType = String(request.resourceType() || '');
 
-      if (!CAPTURED_RESOURCE_TYPES.has(resourceType) || entries.length >= MAX_COLLECTED) {
+      if (!CAPTURED_RESOURCE_TYPES.has(resourceType)) {
         return;
+      }
+
+      if (entries.length >= MAX_COLLECTED) {
+        const oldestRegular = entries.findIndex((entry) => Number(entry.status) < 400);
+
+        if (oldestRegular === -1) {
+          return;
+        }
+
+        entries.splice(oldestRegular, 1);
       }
 
       const headers = response.headers() || {};

@@ -681,14 +681,7 @@ class WorkflowExecutionService
                 // Fortsetzung in eine andere Liste, ueberwachte advanceRun sonst weiter
                 // diese Zeile statt den gewaehlten Task zu starten, und der Watchdog
                 // beendete den Lauf mit dem Timeout des laengst pausierten Schritts.
-                $run->stepRuns()
-                    ->where('workflow_step_id', '!=', $workflowStepId)
-                    ->where('status', 'waiting')
-                    ->update([
-                        'status' => 'queued',
-                        'external_run_type' => null,
-                        'external_run_id' => null,
-                    ]);
+                $this->parkWaitingStepRuns($run, exceptStepId: $workflowStepId);
 
                 $run->stepRuns()
                     ->where('workflow_step_id', $workflowStepId)
@@ -712,6 +705,11 @@ class WorkflowExecutionService
                         'duration_ms' => null,
                         'error_message' => null,
                     ]);
+                $this->parkWaitingStepRuns($run, exceptStepId: (int) $run->current_workflow_step_id);
+            } elseif ((int) $run->current_workflow_step_id <= 0) {
+                // Ohne Cursor-Task (z. B. nach einer Probeaktion am Listenende) blieb
+                // eine gehaltene Zeile auf "waiting" und der Lauf lief in den Timeout.
+                $this->parkWaitingStepRuns($run);
             }
 
             $run->forceFill([
@@ -730,6 +728,24 @@ class WorkflowExecutionService
                     : ($taskKey !== '' ? 'Workflow-Lauf wird ab dem ausgewaehlten Task kontinuierlich fortgesetzt.' : 'Workflow-Lauf wird kontinuierlich fortgesetzt.'),
             ];
         });
+    }
+
+    /**
+     * Ein pausierter Schritt haelt seine Zeile auf "waiting". Startet die
+     * Fortsetzung oder eine Probe in einer anderen Liste, ueberwachte advanceRun
+     * sonst weiter diese Zeile, und der Watchdog beendete den Lauf mit dem Timeout
+     * des laengst pausierten Schritts.
+     */
+    protected function parkWaitingStepRuns(WorkflowRun $run, ?int $exceptStepId = null): void
+    {
+        $run->stepRuns()
+            ->when($exceptStepId, fn ($query) => $query->where('workflow_step_id', '!=', $exceptStepId))
+            ->where('status', 'waiting')
+            ->update([
+                'status' => 'queued',
+                'external_run_type' => null,
+                'external_run_id' => null,
+            ]);
     }
 
     public function runManualProbe(
@@ -768,6 +784,8 @@ class WorkflowExecutionService
             'started_at' => now()->toIso8601String(),
         ];
         unset($context['manual_pause_requested'], $context['manual_pause_checkpoint']);
+
+        $this->parkWaitingStepRuns($run, exceptStepId: (int) $step->getKey());
 
         $stepRun = $run->stepRuns()->firstOrCreate(
             ['workflow_step_id' => $step->getKey()],
@@ -4458,6 +4476,13 @@ class WorkflowExecutionService
 
     protected function externalSucceeded(WorkflowStep $step, array $status, array $result): bool
     {
+        // Eine bewusste Abbruch-Route ist ein regulaer beendeter Schritt, auch wenn
+        // vorher eine Pruef-Task fehlschlug und ueber ihre Fehlerroute zur Abbruch-
+        // Karte fuehrte. Sonst folgte der Lauf der Fehlerroute der Include-Karte.
+        if ($this->explicitAbortRequested($result)) {
+            return true;
+        }
+
         $normalized = is_array($result['normalized_result'] ?? null) ? $result['normalized_result'] : [];
 
         if ($normalized !== []) {
@@ -4734,6 +4759,34 @@ class WorkflowExecutionService
      * Ende, damit spaetere Listen desselben Laufs (z. B. Mails loeschen) noch
      * dasselbe Postfach oeffnen.
      */
+    protected function explicitAbortRequested(array $result): bool
+    {
+        return (bool) ($result['ok'] ?? false)
+            && (bool) ($result['routeRequested'] ?? false)
+            && (bool) ($result['routeFailRequested'] ?? false)
+            && strtolower(trim((string) ($result['routeOutcome'] ?? ''))) === 'success';
+    }
+
+    /**
+     * Ein Lauf, der vor einem Postfachwechsel gestartet wurde, speichert sonst
+     * die Sitzung des alten Postfachs in das neue.
+     */
+    protected function verificationMailboxChangedSinceRunStart(WorkflowRun $run): bool
+    {
+        $changedAt = trim((string) data_get($this->mailRegistration->settings(), 'verification_mailbox.identity_changed_at', ''));
+        $startedAt = $run->started_at ?? $run->created_at;
+
+        if ($changedAt === '' || $startedAt === null) {
+            return false;
+        }
+
+        try {
+            return \Illuminate\Support\Carbon::parse($changedAt)->greaterThan($startedAt);
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
     protected function markVerificationMailboxConsumed(WorkflowRun $run, string $reason, ?string $email = null): void
     {
         $mailbox = $this->mailRegistration->settings()['verification_mailbox'] ?? [];
@@ -4870,6 +4923,10 @@ class WorkflowExecutionService
             return;
         }
 
+        if ($this->verificationMailboxChangedSinceRunStart($run)) {
+            return;
+        }
+
         app(PersistWebmailSessionTask::class)->handleVerificationMailbox($result);
     }
 
@@ -4885,6 +4942,10 @@ class WorkflowExecutionService
         if ($person) {
             app(PersistBrowserSessionTask::class)->handle($person, $result);
 
+            return;
+        }
+
+        if ($this->verificationMailboxChangedSinceRunStart($run)) {
             return;
         }
 
