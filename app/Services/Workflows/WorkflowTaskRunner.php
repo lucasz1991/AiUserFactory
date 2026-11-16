@@ -19,6 +19,8 @@ class WorkflowTaskRunner
 {
     private const MINIMUM_NODE_VERSION = '22.12.0';
 
+    private const VERIFICATION_MAILBOX_PROFILE_KEY = 'verification-mailbox';
+
     /** @var array<string, true> */
     private array $validatedNodeBinaries = [];
 
@@ -1546,6 +1548,26 @@ class WorkflowTaskRunner
         return max(60, min(3600, $seconds)) * 1000;
     }
 
+    /**
+     * Das Chromium-Profil des Verifizierungs-Postfachs haelt dessen Cookies auf der
+     * Platte. Nach einem Postfachwechsel oeffnete der Browser sonst weiter das alte
+     * Postfach, auch wenn die gespeicherten Sitzungen geleert wurden. Profile auf
+     * ClientController-Geraeten bleiben davon unberuehrt.
+     */
+    public function forgetVerificationMailboxBrowserProfile(): void
+    {
+        $path = storage_path('app/browser-profiles/workflows/'.self::VERIFICATION_MAILBOX_PROFILE_KEY);
+
+        try {
+            if (File::isDirectory($path)) {
+                File::deleteDirectory($path);
+            }
+        } catch (\Throwable) {
+            // Ein gerade geoeffnetes Profil laesst sich nicht entfernen; der naechste
+            // Wechsel oder die taegliche Bereinigung raeumt es ab.
+        }
+    }
+
     protected function workflowBrowserProfilePath(WorkflowRun $run, WorkflowStep $step, array $runtimeContext = []): string
     {
         return storage_path('app/browser-profiles/workflows/'.$this->workflowBrowserProfileKey($run, $step, $runtimeContext));
@@ -1571,7 +1593,7 @@ class WorkflowTaskRunner
         if (in_array($mailboxSource, ['verification', 'verification_mailbox', 'veri-account', 'veri_account', 'main', 'master'], true)
             || data_get($runtimeContext, 'browserSessionAutomation.scope') === 'verification'
             || data_get($runtimeContext, 'browser_session_automation.scope') === 'verification') {
-            return 'verification-mailbox';
+            return self::VERIFICATION_MAILBOX_PROFILE_KEY;
         }
 
         $personId = (int) (data_get($runtimeContext, 'personId') ?: data_get($run->context_json, 'person_id'));

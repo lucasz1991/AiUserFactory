@@ -4,7 +4,9 @@ namespace App\Livewire\Admin\Config;
 
 use App\Services\Mail\MailAccountRegistrationRunner;
 use App\Services\Mail\WebmailSessionRunner;
+use App\Services\Workflows\WorkflowTaskRunner;
 use Illuminate\Support\Facades\Crypt;
+use Illuminate\Validation\ValidationException;
 use Livewire\Component;
 
 class MailRegistrationSettings extends Component
@@ -84,6 +86,9 @@ class MailRegistrationSettings extends Component
             $this->registrationRunStatus = $run;
             $this->showRegistrationRunModal = (bool) ($run['previewModalEnabled'] ?? $this->previewModalEnabled);
             $this->dispatch('showAlert', 'Mail-Registrierung wurde gestartet.', 'success');
+        } catch (ValidationException $exception) {
+            // Feldfehler (z. B. fehlendes Passwort nach Postfachwechsel) gehoeren ans Formular.
+            throw $exception;
         } catch (\Throwable $exception) {
             $this->registrationRunStatus = [
                 'state' => 'failed',
@@ -164,6 +169,8 @@ class MailRegistrationSettings extends Component
             $this->showVerificationMailboxSessionModal = (bool) ($settings['preview_modal_enabled'] ?? true);
 
             $this->dispatch('showAlert', 'Master-Webmail-Sessionlauf wurde gestartet.', 'success');
+        } catch (ValidationException $exception) {
+            throw $exception;
         } catch (\Throwable $exception) {
             $this->verificationMailboxSessionResult = [
                 'ok' => false,
@@ -222,6 +229,37 @@ class MailRegistrationSettings extends Component
         return view('livewire.admin.config.mail-registration-settings');
     }
 
+    /**
+     * Welche gespeicherten Daten zum bisherigen Postfach gehoeren und beim Speichern
+     * verfallen: "account" (anderes Konto - auch das Passwort), "sessions" (auch bei
+     * geaendertem Anbieter - Cookies und Login-Sitzungen).
+     *
+     * @return array{account: bool, sessions: bool}
+     */
+    protected function verificationMailboxChange(array $existingMailbox, array $validated): array
+    {
+        $hasStoredSecrets = trim((string) ($existingMailbox['password_encrypted'] ?? '')) !== ''
+            || is_array($existingMailbox['webmail_session'] ?? null)
+            || (is_array($existingMailbox['browser_sessions'] ?? null) && $existingMailbox['browser_sessions'] !== []);
+        $identity = static function (mixed $email, mixed $username): string {
+            $email = strtolower(trim((string) $email));
+
+            return $email.'|'.(strtolower(trim((string) $username)) ?: $email);
+        };
+        $previousAccount = $identity($existingMailbox['email'] ?? '', $existingMailbox['username'] ?? '');
+        $newAccount = $identity($validated['verificationMailboxEmail'] ?? '', $validated['verificationMailboxUsername'] ?? '');
+        // Ohne gespeicherte Geheimnisse ist es die Ersteinrichtung, kein Wechsel.
+        $accountChanged = $hasStoredSecrets && $previousAccount !== $newAccount;
+        $providerChanged = $hasStoredSecrets
+            && $this->normalizeWebmailProvider($existingMailbox['provider'] ?? 'proton')
+                !== $this->normalizeWebmailProvider($validated['verificationMailboxProvider'] ?? 'proton');
+
+        return [
+            'account' => $accountChanged,
+            'sessions' => $accountChanged || $providerChanged,
+        ];
+    }
+
     protected function settingsPayload(): array
     {
         $validated = $this->validate([
@@ -262,6 +300,31 @@ class MailRegistrationSettings extends Component
         $existingSettings = app(MailAccountRegistrationRunner::class)->settings();
         $existingMailbox = is_array($existingSettings['verification_mailbox'] ?? null) ? $existingSettings['verification_mailbox'] : [];
         $encryptedVerificationPassword = $existingMailbox['password_encrypted'] ?? null;
+        $newMailboxPassword = trim((string) ($validated['verificationMailboxPassword'] ?? ''));
+        $mailboxChange = $this->verificationMailboxChange($existingMailbox, $validated);
+
+        // Passwort und Sitzungen gehoeren zum bisherigen Postfach. Blieben sie
+        // stehen, oeffnete der Webmail-Workflow per Cookie weiter das alte Postfach.
+        if ($mailboxChange['sessions']) {
+            $existingMailbox['webmail_session'] = null;
+            $existingMailbox['browser_sessions'] = [];
+        }
+
+        if ($mailboxChange['account']) {
+            if ($newMailboxPassword === '' && trim((string) ($validated['verificationMailboxEmail'] ?? '')) !== '') {
+                throw ValidationException::withMessages([
+                    'verificationMailboxPassword' => 'Fuer das neue Verifizierungs-Postfach bitte auch das Passwort eintragen.',
+                ]);
+            }
+
+            $encryptedVerificationPassword = null;
+        }
+
+        if ($mailboxChange['sessions']) {
+            // Ein noch laufender Sitzungsaufbau gehoert zum alten Postfach.
+            $this->verificationMailboxSessionRunId = null;
+            app(WorkflowTaskRunner::class)->forgetVerificationMailboxBrowserProfile();
+        }
 
         if (trim((string) ($validated['verificationMailboxPassword'] ?? '')) !== '') {
             $encryptedVerificationPassword = Crypt::encryptString((string) $validated['verificationMailboxPassword']);
