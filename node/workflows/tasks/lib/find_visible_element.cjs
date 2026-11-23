@@ -619,35 +619,32 @@ async function extendedSelectorHandle(frame, selector, cssOverride = '', options
       const textElements = descendantCss
         ? deepQueryAll(element, descendantCss)
         : [element];
-      const ownText = normalize([
-        element.innerText,
-        element.value,
-        element.textContent,
-        element.getAttribute('aria-label'),
-        element.getAttribute('title'),
-        element.getAttribute('placeholder'),
-        element.getAttribute('name'),
-        labelText(element),
-      ].filter(Boolean).join(' '));
+      // Exakt heisst: eine einzelne Textquelle (sichtbarer Text, aria-label, ...)
+      // stimmt ueberein. Verbunden ergaeben innerText und textContent desselben
+      // Buttons "login login", und ein exakter Treffer waere nie moeglich.
+      const textSources = (candidate) => [
+        candidate.innerText,
+        candidate.value,
+        candidate.textContent,
+        candidate.getAttribute('aria-label'),
+        candidate.getAttribute('title'),
+        candidate.getAttribute('placeholder'),
+        candidate.getAttribute('name'),
+        labelText(candidate),
+      ].filter(Boolean).map(normalize).filter(Boolean);
+      const matches = (candidate) => {
+        const sources = textSources(candidate);
 
-      if (ownText && (exact ? ownText === expected : ownText.includes(expected))) {
+        return exact
+          ? sources.includes(expected)
+          : sources.join(' ').includes(expected);
+      };
+
+      if (matches(element)) {
         return true;
       }
 
-      return textElements.some((textElement) => {
-        const actual = normalize([
-          textElement.innerText,
-          textElement.value,
-          textElement.textContent,
-          textElement.getAttribute('aria-label'),
-          textElement.getAttribute('title'),
-          textElement.getAttribute('placeholder'),
-          textElement.getAttribute('name'),
-          labelText(textElement),
-        ].filter(Boolean).join(' '));
-
-        return exact ? actual === expected : actual.includes(expected);
-      });
+      return textElements.some(matches);
     }) || null;
   }, cssOverride || extendedSelector.css, extendedSelector.descendantCss || null, extendedSelector.text, extendedSelector.exact, options.editableOnly === true).catch(() => null);
 
@@ -735,7 +732,7 @@ async function textElementHandle(frame, text, options = {}) {
     const labelText = (element) => element.labels?.length
       ? Array.from(element.labels).map((label) => label.textContent || '').join(' ')
       : (element.closest?.('label')?.textContent || '');
-    const textFor = (element) => normalize([
+    const textSourcesFor = (element) => [
       element.innerText,
       element.value,
       element.textContent,
@@ -744,7 +741,9 @@ async function textElementHandle(frame, text, options = {}) {
       element.getAttribute('placeholder'),
       element.getAttribute('name'),
       labelText(element),
-    ].filter(Boolean).join(' '));
+    ].filter(Boolean).map(normalize).filter(Boolean);
+    const textFor = (element) => textSourcesFor(element).join(' ');
+    const textEquals = (element, expectedText) => textSourcesFor(element).includes(expectedText);
     const editable = (element) => {
       const tag = String(element.tagName || '').toLowerCase();
       const type = String(element.getAttribute('type') || '').toLowerCase();
@@ -763,9 +762,7 @@ async function textElementHandle(frame, text, options = {}) {
           return false;
         }
 
-        const actual = textFor(element);
-
-        return mustMatchExactly ? actual === needle : actual.includes(needle);
+        return mustMatchExactly ? textEquals(element, needle) : textFor(element).includes(needle);
       }) || null;
   }, selector, expected, exact, options.editableOnly === true).catch(() => null);
   const element = handle && typeof handle.asElement === 'function' ? handle.asElement() : null;
@@ -1294,7 +1291,7 @@ async function collectVisibleElements(page, values, options = {}) {
 
         return element.closest?.('label')?.textContent || '';
       };
-      const textFor = (element) => normalize([
+      const textSourcesFor = (element) => [
         element.innerText,
         element.value,
         element.textContent,
@@ -1303,7 +1300,9 @@ async function collectVisibleElements(page, values, options = {}) {
         element.getAttribute('placeholder'),
         element.getAttribute('name'),
         labelText(element),
-      ].filter(Boolean).join(' '));
+      ].filter(Boolean).map(normalize).filter(Boolean);
+      const textFor = (element) => textSourcesFor(element).join(' ');
+      const textEquals = (element, expectedText) => textSourcesFor(element).includes(expectedText);
       const allowed = (element) => !payload.elementSelector
         || (typeof element.matches === 'function' && element.matches(payload.elementSelector));
       const seen = new Set();
@@ -1333,17 +1332,16 @@ async function collectVisibleElements(page, values, options = {}) {
 
           if (candidate.kind === 'text') {
             const expected = normalize(candidate.value);
-            matchesCandidate = candidate.exact ? actual === expected : actual.includes(expected);
+            matchesCandidate = candidate.exact ? textEquals(element, expected) : actual.includes(expected);
           } else if (extended) {
             const expected = normalize(extended.text);
             const descendants = extended.descendantCss
               ? deepQueryAll(element, extended.descendantCss)
               : [];
-            matchesCandidate = (extended.exact ? actual === expected : actual.includes(expected))
-              || descendants.some((descendant) => {
-                const descendantText = textFor(descendant);
-                return extended.exact ? descendantText === expected : descendantText.includes(expected);
-              });
+            matchesCandidate = (extended.exact ? textEquals(element, expected) : actual.includes(expected))
+              || descendants.some((descendant) => (extended.exact
+                ? textEquals(descendant, expected)
+                : textFor(descendant).includes(expected)));
           }
 
           if (!matchesCandidate) continue;
