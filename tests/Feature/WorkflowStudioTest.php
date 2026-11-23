@@ -919,6 +919,46 @@ class WorkflowStudioTest extends TestCase
         $this->assertSame(2, $workflow->studioRevisions()->count());
     }
 
+    public function test_studio_task_editor_keeps_route_extras_when_the_target_is_unchanged(): void
+    {
+        [$workflow, $step] = $this->workflow();
+        $config = $step->config_json;
+        $config['tasks'][0]['next'] = [
+            'type' => 'fail', 'step' => 'fail', 'label' => 'Proton lehnt ab',
+            'message' => 'Proton hat die Adresse abgelehnt.', 'consume_verification_mailbox' => true,
+        ];
+        $step->forceFill(['config_json' => $config])->save();
+        $admin = User::factory()->create(['role' => 'admin', 'status' => true]);
+        $session = app(WorkflowStudioSessionService::class)->open($workflow, $admin, 'manual', 'ask_critical');
+        app(WorkflowStudioRevisionService::class)->ensureBaseline($session);
+        $this->actingAs($admin);
+
+        $editor = Livewire::test(WorkflowStudioTaskEditor::class, [
+            'workflow' => $workflow,
+            'studioSessionId' => $session->id,
+        ])
+            ->call('openFromStudio', $step->id, 'first-task')
+            ->set('editingTaskTitle', 'Nur der Titel aendert sich')
+            ->call('saveEditTaskCard')
+            ->assertHasNoErrors();
+
+        $next = data_get($step->fresh()->task_cards, '0.next');
+        $this->assertSame('fail', $next['type']);
+        $this->assertSame('Proton hat die Adresse abgelehnt.', $next['message']);
+        $this->assertTrue($next['consume_verification_mailbox']);
+
+        // Ein anderes Ziel ist eine neue Route: die alten Angaben gelten nicht mehr.
+        $editor->call('openFromStudio', $step->id, 'first-task')
+            ->set('editingTaskSuccessTarget', 'end')
+            ->call('saveEditTaskCard')
+            ->assertHasNoErrors();
+
+        $next = data_get($step->fresh()->task_cards, '0.next');
+        $this->assertSame('end', $next['type']);
+        $this->assertArrayNotHasKey('message', $next);
+        $this->assertArrayNotHasKey('consume_verification_mailbox', $next);
+    }
+
     public function test_studio_task_edit_request_targets_the_mounted_modal_without_opening_the_builder(): void
     {
         [$workflow, $step] = $this->workflow();

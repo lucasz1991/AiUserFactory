@@ -3,6 +3,8 @@
 namespace App\Livewire\Admin\Config;
 
 use App\Services\Mail\MailAccountRegistrationRunner;
+use Illuminate\Contracts\Cache\LockTimeoutException;
+use Illuminate\Validation\ValidationException;
 use Livewire\Component;
 
 class ProcessSettings extends Component
@@ -29,14 +31,27 @@ class ProcessSettings extends Component
         ]);
 
         $runner = app(MailAccountRegistrationRunner::class);
-        $settings = $runner->settings();
-        $settings['preview_modal_enabled'] = (bool) $validated['previewModalEnabled'];
-        $settings['live_preview_enabled'] = (bool) $validated['livePreviewEnabled'];
-        $settings['live_preview_interval_seconds'] = (int) $validated['livePreviewIntervalSeconds'];
-        $settings['browser_activity_check_enabled'] = (bool) $validated['browserActivityCheckEnabled'];
-        $settings['dom_debug_enabled'] = (bool) $validated['domDebugEnabled'];
 
-        $this->fillFromSettings($runner->saveSettings($settings));
+        try {
+            // Dieselbe Einstellungszeile haelt das Verifizierungs-Postfach; ohne Sperre
+            // ueberschriebe ein alter Stand einen gleichzeitigen Postfachwechsel.
+            $saved = $runner->withVerificationMailboxLock(function () use ($runner, $validated): array {
+                $settings = $runner->settings();
+                $settings['preview_modal_enabled'] = (bool) $validated['previewModalEnabled'];
+                $settings['live_preview_enabled'] = (bool) $validated['livePreviewEnabled'];
+                $settings['live_preview_interval_seconds'] = (int) $validated['livePreviewIntervalSeconds'];
+                $settings['browser_activity_check_enabled'] = (bool) $validated['browserActivityCheckEnabled'];
+                $settings['dom_debug_enabled'] = (bool) $validated['domDebugEnabled'];
+
+                return $runner->saveSettings($settings);
+            });
+        } catch (LockTimeoutException) {
+            throw ValidationException::withMessages([
+                'livePreviewIntervalSeconds' => 'Die Einstellungen werden gerade aktualisiert. Bitte in einigen Sekunden erneut speichern.',
+            ]);
+        }
+
+        $this->fillFromSettings($saved);
 
         session()->flash('success', 'Prozesseinstellungen wurden gespeichert.');
         $this->dispatch('showAlert', 'Prozesseinstellungen gespeichert.', 'success');

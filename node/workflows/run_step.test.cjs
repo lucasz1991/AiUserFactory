@@ -521,6 +521,30 @@ test('fail success route inside an embedded workflow is reported as an explicit 
   assert.ok(!result.tasks.some((task) => ['embedded-boundary', 'success-target'].includes(task.key)));
 });
 
+test('an embedded abort forwards the verification mailbox consumption flag', () => {
+  const embeddedAbort = (next) => executeTasks([
+    captureInputTask('embedded-registration-rejected', {
+      parent_task_key: 'embedded-registration',
+      embedded_workflow_frame_key: 'embedded-frame',
+      next,
+    }),
+    returnTask('after-registration', true),
+  ]);
+
+  const consuming = embeddedAbort({
+    type: 'fail', step: 'fail', message: 'Proton hat die Adresse abgelehnt.', consume_verification_mailbox: true,
+  });
+  assert.equal(consuming.routeFailRequested, true);
+  assert.equal(consuming.routeFailConsumesVerificationMailbox, true);
+
+  const stringFlag = embeddedAbort({ type: 'fail', step: 'fail', consume_verification_mailbox: 'true' });
+  assert.equal(stringFlag.routeFailConsumesVerificationMailbox, true);
+
+  const plainAbort = embeddedAbort({ type: 'fail', step: 'fail', message: 'Abbruch ohne Postfach.' });
+  assert.equal(plainAbort.routeFailRequested, true);
+  assert.equal(plainAbort.routeFailConsumesVerificationMailbox, undefined);
+});
+
 test('regular success routes carry no abort signal', () => {
   const result = executeTasks([
     {

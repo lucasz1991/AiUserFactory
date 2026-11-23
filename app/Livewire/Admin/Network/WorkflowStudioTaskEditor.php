@@ -502,6 +502,7 @@ class WorkflowStudioTaskEditor extends WorkflowManager
                         $value = trim((string) ($validated['editingTaskInputValue'] ?? ''));
                         $mailboxSource = $this->normalizeMailboxSource((string) ($mailboxSourceOverride ?: ($validated['editingTaskMailboxSource'] ?? 'person')));
                         $browserWindow = $this->normalizeBrowserWindowName((string) ($validated['editingTaskBrowserWindow'] ?? ''));
+                        $originalRoutes = ['next' => $task['next'] ?? null, 'on_error' => $task['on_error'] ?? null];
                         $task = array_replace(
                             $task,
                             $this->taskCardFromDefinition($validated['editingTaskCatalogKey'], ['key' => $editingTaskKey]),
@@ -545,6 +546,8 @@ class WorkflowStudioTaskEditor extends WorkflowManager
                             $route = $this->taskRouteTargetFromValue($targetValue, $step, $editingTaskKey);
 
                             if ($route) {
+                                $route = $this->routeWithPreservedExtras($originalRoutes[$key] ?? null, $route, $key);
+
                                 if ($key === 'on_error' && (int) $validated['editingTaskFailedRetryLimit'] > 0) {
                                     $route['max_attempts'] = (int) $validated['editingTaskFailedRetryLimit'];
                                 }

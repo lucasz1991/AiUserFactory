@@ -102,13 +102,23 @@ class PersistBrowserSessionTask
     public function deleteVerificationMailbox(array $result): array
     {
         $runner = app(MailAccountRegistrationRunner::class);
-        $settings = $runner->settings();
-        $mailbox = is_array($settings['verification_mailbox'] ?? null) ? $settings['verification_mailbox'] : [];
-        $sessions = is_array($mailbox['browser_sessions'] ?? null) ? $mailbox['browser_sessions'] : [];
-        [$sessions, $deletedKeys, $domain, $sessionKey] = $this->deleteFromSessions($sessions, $result);
-        $mailbox['browser_sessions'] = $sessions;
-        $settings['verification_mailbox'] = $mailbox;
-        $runner->saveSettings($settings);
+        // Unter der Postfach-Sperre und mit frisch gelesenen Einstellungen: Ein alter
+        // Stand ueberschriebe sonst einen gleichzeitigen Postfachwechsel samt
+        // Verbrauchs-Eintrag.
+        [$deletedKeys, $domain, $sessionKey] = $runner->withVerificationMailboxLock(function () use ($runner, $result): array {
+            $settings = $runner->settings();
+            $mailbox = is_array($settings['verification_mailbox'] ?? null) ? $settings['verification_mailbox'] : [];
+            $sessions = is_array($mailbox['browser_sessions'] ?? null) ? $mailbox['browser_sessions'] : [];
+            [$sessions, $deletedKeys, $domain, $sessionKey] = $this->deleteFromSessions($sessions, $result);
+
+            if ($deletedKeys !== []) {
+                $mailbox['browser_sessions'] = $sessions;
+                $settings['verification_mailbox'] = $mailbox;
+                $runner->saveSettings($settings);
+            }
+
+            return [$deletedKeys, $domain, $sessionKey];
+        });
 
         return [
             'ok' => true,

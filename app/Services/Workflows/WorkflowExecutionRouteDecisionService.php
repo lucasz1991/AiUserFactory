@@ -57,7 +57,7 @@ class WorkflowExecutionRouteDecisionService
                     return $this->normalizeRoute($step, $ownRoute);
                 }
 
-                return [
+                $failRoute = [
                     'type' => 'fail',
                     'step' => 'fail',
                     'label' => 'Fehlerroute',
@@ -65,6 +65,14 @@ class WorkflowExecutionRouteDecisionService
                         ?: 'Workflow wurde ueber die ausdrueckliche Fehlerroute beendet.',
                     '_source_card_key' => $completedTaskKey,
                 ];
+
+                // Die Abbruch-Route lag in einem eingebetteten Workflow; ihr
+                // Verbrauchs-Flag kommt nur ueber das Signal des Runners an.
+                if ((bool) ($result['routeFailConsumesVerificationMailbox'] ?? false)) {
+                    $failRoute['consume_verification_mailbox'] = true;
+                }
+
+                return $failRoute;
             }
 
             $sourceTask = collect($step->task_cards)

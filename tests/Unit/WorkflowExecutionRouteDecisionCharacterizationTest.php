@@ -228,6 +228,21 @@ class WorkflowExecutionRouteDecisionCharacterizationTest extends TestCase
         $this->assertSame('fail', $withoutMessage['type']);
         $this->assertNotSame('', $withoutMessage['message']);
 
+        $this->assertArrayNotHasKey('consume_verification_mailbox', $abort);
+
+        // Kommt der Abbruch aus einem eingebetteten Workflow, traegt nur das Signal
+        // des Runners den Verbrauch des Verifizierungs-Postfachs.
+        $consuming = $routeForResult->invoke($service, $step, 'success', [
+            'routeRequested' => true,
+            'completedTaskKey' => 'workflow-include',
+            'routeOutcome' => 'success',
+            'routeFailRequested' => true,
+            'routeFailMessage' => 'Proton hat die Adresse abgelehnt.',
+            'routeFailConsumesVerificationMailbox' => true,
+        ]);
+        $this->assertSame('fail', $consuming['type']);
+        $this->assertTrue($consuming['consume_verification_mailbox']);
+
         // Ohne Abbruch-Meldung des Runners gilt weiter die Erfolgsroute der Include-Karte.
         $regular = $routeForResult->invoke($service, $step, 'success', [
             'routeRequested' => true,

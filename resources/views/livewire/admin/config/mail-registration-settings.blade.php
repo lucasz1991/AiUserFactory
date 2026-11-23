@@ -77,9 +77,44 @@
             </button>
         </div>
 
+        @if($activeMailboxConsumption !== [])
+            <div role="alert" data-verification-mailbox-consumed-warning data-consumed-email="{{ strtolower($activeMailboxConsumption['email']) }}" class="mt-5 rounded-lg border border-red-300 bg-red-50 p-4 text-sm text-red-900">
+                <p class="font-semibold">Aktives Verifizierungs-Postfach ist bereits verbraucht</p>
+                <p class="mt-1">
+                    {{ $activeMailboxConsumption['email'] }} ist bei Proton schon vergeben ("Email address already used").
+                    Registrierungen mit dieser Adresse werden nicht mehr gestartet.
+                </p>
+                <ul class="mt-2 list-disc pl-5">
+                    @foreach($activeMailboxConsumption['events'] as $event)
+                        <li data-consumed-run="{{ $event['workflowRunId'] }}">
+                            {{ $event['workflowRunId'] ? 'Lauf #'.$event['workflowRunId'] : 'ohne Laufnummer' }}
+                            · {{ $event['reasonLabel'] }}
+                            @if($event['consumedAtLabel']) · {{ $event['consumedAtLabel'] }} @endif
+                        </li>
+                    @endforeach
+                </ul>
+                @if($nextReserveMailboxEmail)
+                    <button type="button" wire:click="activateNextReserveMailbox" wire:loading.attr="disabled" data-activate-next-reserve class="mt-3 rounded-md bg-red-700 px-3 py-2 text-xs font-semibold text-white hover:bg-red-800 disabled:opacity-60">
+                        Naechste Reserve-Adresse jetzt aktivieren ({{ $nextReserveMailboxEmail }})
+                    </button>
+                @else
+                    <p data-verification-mailbox-consumed-no-reserve class="mt-3 font-semibold">
+                        Keine Reserve-Adresse hinterlegt: Bitte oben eine neue GMX-Adresse mit Passwort eintragen und speichern
+                        oder unten eine Reserve-Adresse hinzufuegen (sie wird sofort aktiv, sobald kein Lauf das Postfach mehr nutzt).
+                    </p>
+                @endif
+                <p class="mt-2 text-xs">Nimmt Proton die Adresse nachweislich wieder an, kann sie unten unter "Verbrauchte Adressen" freigegeben werden.</p>
+            </div>
+        @endif
+
         <div class="mt-5 grid gap-6 md:grid-cols-2 xl:grid-cols-3">
             <div>
-                <label for="verification-mailbox-email" class="block text-sm font-medium text-gray-700">E-Mail-Adresse</label>
+                <label for="verification-mailbox-email" class="block text-sm font-medium text-gray-700">
+                    E-Mail-Adresse
+                    @if($activeMailboxConsumption !== [])
+                        <span data-verification-mailbox-email-consumed class="ml-2 rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700">verbraucht</span>
+                    @endif
+                </label>
                 <input id="verification-mailbox-email" type="email" wire:model.defer="verificationMailboxEmail" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
                 @error('verificationMailboxEmail') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
             </div>
@@ -126,17 +161,30 @@
             </div>
         </div>
 
+        @if($mailboxNotice !== '')
+            <p data-mailbox-notice="{{ $mailboxNoticeType }}" role="status" class="mt-5 rounded-md border px-3 py-2 text-sm {{ $mailboxNoticeType === 'success' ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : ($mailboxNoticeType === 'error' ? 'border-red-300 bg-red-50 text-red-900' : 'border-amber-200 bg-amber-50 text-amber-900') }}">
+                {{ $mailboxNotice }}
+            </p>
+        @endif
+
         <div class="mt-6 border-t border-gray-100 pt-5" data-verification-mailbox-reserve>
             <h4 class="text-sm font-semibold text-gray-900">Weitere GMX-Adressen (Reserve)</h4>
             <p class="mt-1 text-sm text-gray-500">
                 Proton bindet die Verifizierungsadresse an das neue Konto. Ist sie verbraucht (Registrierung erfolgreich oder von Proton abgelehnt),
-                wird am Ende des Laufs automatisch die erste Reserve-Adresse zum aktiven Verifizierungs-Postfach.
+                wird am Ende des Laufs automatisch die erste Reserve-Adresse zum aktiven Verifizierungs-Postfach. Ist das aktive Postfach schon verbraucht,
+                wird eine neu hinzugefuegte Reserve-Adresse sofort aktiv.
             </p>
 
             @if($reserveMailboxes === [])
-                <p class="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                    Keine Reserve-Adresse hinterlegt. Ist das aktive Postfach verbraucht, scheitern weitere Registrierungen, bis eine neue Adresse eingetragen ist.
-                </p>
+                @if($activeMailboxConsumption !== [])
+                    <p data-verification-mailbox-reserve-empty="blocking" class="mt-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm font-semibold text-red-900">
+                        Keine Reserve-Adresse hinterlegt und das aktive Postfach ist verbraucht: Ohne neue Adresse startet keine Registrierung.
+                    </p>
+                @else
+                    <p data-verification-mailbox-reserve-empty="hint" class="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                        Keine Reserve-Adresse hinterlegt. Ist das aktive Postfach verbraucht, startet keine Registrierung mehr, bis eine neue Adresse eingetragen ist.
+                    </p>
+                @endif
             @else
                 <ul class="mt-3 divide-y divide-gray-100 rounded-md border border-gray-200">
                     @foreach($reserveMailboxes as $index => $mailbox)
@@ -149,6 +197,9 @@
                                 <span class="ml-2 text-xs {{ $mailbox['hasPassword'] ? 'text-emerald-700' : 'text-red-600' }}">
                                     {{ $mailbox['hasPassword'] ? 'Passwort gespeichert' : 'Kein Passwort' }}
                                 </span>
+                                @if($mailbox['consumed'] ?? false)
+                                    <span data-reserve-mailbox-consumed class="ml-2 text-xs font-semibold text-red-600">verbraucht - wird uebersprungen</span>
+                                @endif
                             </div>
                             <button type="button" wire:click="removeReserveMailbox(@js($mailbox['email']))" wire:confirm="Reserve-Adresse {{ $mailbox['email'] }} entfernen?" class="text-xs font-semibold text-red-600 hover:text-red-700">
                                 Entfernen
@@ -180,15 +231,37 @@
             </div>
 
             @if($consumedMailboxes !== [])
-                <details class="mt-4 text-sm">
+                <details data-verification-mailbox-consumed-list="{{ $activeMailboxConsumption !== [] ? 'open' : 'closed' }}" class="mt-4 text-sm"
+                    x-data="{ open: @js($activeMailboxConsumption !== []) }" x-bind:open="open" x-on:toggle="open = $el.open"
+                    @if($activeMailboxConsumption !== []) open @endif>
                     <summary class="cursor-pointer font-medium text-gray-700">Verbrauchte Adressen ({{ count($consumedMailboxes) }})</summary>
-                    <ul class="mt-2 space-y-1 text-gray-600">
-                        @foreach($consumedMailboxes as $mailbox)
-                            <li wire:key="consumed-mailbox-{{ $loop->index }}">
-                                {{ $mailbox['email'] }}
-                                · {{ $mailbox['reason'] === 'registered' ? 'Konto registriert' : ($mailbox['reason'] === 'rejected' ? 'von Proton abgelehnt' : ($mailbox['reason'] ?: 'verbraucht')) }}
-                                @if($mailbox['workflowRunId']) · Lauf #{{ $mailbox['workflowRunId'] }} @endif
-                                @if($mailbox['consumedAt']) · {{ \Illuminate\Support\Carbon::parse($mailbox['consumedAt'])->timezone(config('app.timezone'))->format('d.m.Y H:i') }} @endif
+                    <ul class="mt-2 space-y-2 text-gray-600">
+                        @foreach($consumedMailboxes as $group)
+                            <li wire:key="consumed-mailbox-{{ strtolower($group['email']) }}" data-consumed-mailbox="{{ strtolower($group['email']) }}" @if($group['isActive']) data-consumed-mailbox-active @endif class="flex flex-wrap items-start justify-between gap-3">
+                                <div class="min-w-0">
+                                    <span class="font-medium text-gray-800">{{ $group['email'] }}</span>
+                                    @if($group['isActive'])
+                                        <span class="ml-2 rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700">aktives Postfach</span>
+                                    @endif
+                                    <ul class="mt-1 text-xs text-gray-500">
+                                        @foreach($group['events'] as $event)
+                                            <li>
+                                                {{ $event['reasonLabel'] }}
+                                                @if($event['workflowRunId']) · Lauf #{{ $event['workflowRunId'] }} @endif
+                                                @if($event['consumedAtLabel']) · {{ $event['consumedAtLabel'] }} @endif
+                                            </li>
+                                        @endforeach
+                                    </ul>
+                                </div>
+                                <button type="button"
+                                    data-release-consumed-mailbox
+                                    wire:click="releaseConsumedMailbox(@js($group['email']))"
+                                    wire:confirm="{{ collect($group['events'])->contains('reason', 'registered')
+                                        ? 'Mit '.$group['email'].' wurde bereits ein Proton-Konto registriert; Proton nimmt die Adresse in der Regel nicht erneut an. Trotzdem freigeben?'
+                                        : $group['email'].' wieder freigeben? Nur freigeben, wenn sicher ist, dass Proton die Adresse wieder annimmt.' }}"
+                                    class="text-xs font-semibold text-slate-700 hover:text-slate-900">
+                                    Freigeben
+                                </button>
                             </li>
                         @endforeach
                     </ul>

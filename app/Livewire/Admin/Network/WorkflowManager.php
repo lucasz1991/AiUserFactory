@@ -34,6 +34,7 @@ use App\Services\Workflows\WorkflowTaskCatalog;
 use App\Services\Workflows\WorkflowTaskOrderingService;
 use App\Services\Workflows\WorkflowTaskRunner;
 use App\Services\Workflows\WorkflowTransferService;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -1835,6 +1836,7 @@ class WorkflowManager extends Component
                 $value = trim((string) ($validated['editingTaskInputValue'] ?? ''));
                 $mailboxSource = $this->normalizeMailboxSource((string) ($mailboxSourceOverride ?: ($validated['editingTaskMailboxSource'] ?? 'person')));
                 $browserWindow = $this->normalizeBrowserWindowName((string) ($validated['editingTaskBrowserWindow'] ?? ''));
+                $originalRoutes = ['next' => $task['next'] ?? null, 'on_error' => $task['on_error'] ?? null];
                 $task = array_replace(
                     $task,
                     $this->taskCardFromDefinition($validated['editingTaskCatalogKey'], [
@@ -1880,6 +1882,8 @@ class WorkflowManager extends Component
                     $route = $this->taskRouteTargetFromValue($value, $step, $this->editingTaskKey);
 
                     if ($route) {
+                        $route = $this->routeWithPreservedExtras($originalRoutes[$key] ?? null, $route, $key);
+
                         if ($key === 'on_error' && (int) $validated['editingTaskFailedRetryLimit'] > 0) {
                             $route['max_attempts'] = (int) $validated['editingTaskFailedRetryLimit'];
                         }
@@ -2137,7 +2141,7 @@ class WorkflowManager extends Component
             session()->flash('success', 'Workflow-Lauf wurde eingeplant: '.$run->run_uuid);
             $this->openTestWorkbench('interactive', (int) $run->id);
         } catch (\Throwable $exception) {
-            session()->flash('success', 'Workflow konnte nicht gestartet werden: '.$exception->getMessage());
+            session()->flash('error', 'Workflow konnte nicht gestartet werden: '.$exception->getMessage());
         }
     }
 
@@ -4586,6 +4590,48 @@ class WorkflowManager extends Component
             },
             fn (int $stepId): ?WorkflowStep => $this->stepForSelectedWorkflow($stepId),
         );
+    }
+
+    /**
+     * Die Karten-Formulare kennen nur Ziel, Label und Wiederholungen einer Route.
+     * Bleibt das Ziel gleich, behaelt die Route ihre uebrigen Angaben, etwa die
+     * Meldung einer Fehlerroute oder consume_verification_mailbox. Sonst gingen
+     * sie bei jeder Formular-Bearbeitung still verloren.
+     */
+    protected function routeWithPreservedExtras(mixed $existing, array $rebuilt, string $field): array
+    {
+        if (! is_array($existing) || $this->routeTargetIdentity($existing) !== $this->routeTargetIdentity($rebuilt)) {
+            return $rebuilt;
+        }
+
+        $controlled = ['type', 'action_key', 'step', 'card_key', 'card', 'label'];
+
+        if ($field === 'on_error') {
+            $controlled[] = 'max_attempts';
+        }
+
+        return array_replace(Arr::except($existing, $controlled), $rebuilt);
+    }
+
+    protected function routeTargetIdentity(array $route): string
+    {
+        $type = trim((string) ($route['type'] ?? ''));
+        $step = trim((string) ($route['action_key'] ?? $route['step'] ?? ''));
+        $card = trim((string) ($route['card_key'] ?? $route['card'] ?? ''));
+
+        if (in_array($step, ['end', 'fail'], true)) {
+            $type = $step;
+        }
+
+        if ($type === '') {
+            $type = $card !== '' ? 'card' : 'step';
+        }
+
+        return match ($type) {
+            'end', 'fail' => $type,
+            'card' => 'card:'.$step.':'.$card,
+            default => $type.':'.$step,
+        };
     }
 
     protected function taskRouteTargetFromValue(

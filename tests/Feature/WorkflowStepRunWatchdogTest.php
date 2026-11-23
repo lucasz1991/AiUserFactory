@@ -855,7 +855,11 @@ class WorkflowStepRunWatchdogTest extends TestCase
         app(WorkflowExecutionService::class)->monitorStepRun($stepRun->id);
 
         $this->assertSame('failed', $run->fresh()->status);
-        $this->assertSame($message, $run->fresh()->error_message);
+        // Zuerst die konkrete Adresse und was ab dem naechsten Lauf gilt, dann der Routentext.
+        $this->assertSame(
+            'Proton hat die Verifizierungs-Adresse used@gmx.de abgelehnt (bereits verwendet). Ab dem naechsten Lauf ist next@gmx.de aktiv. '.$message,
+            $run->fresh()->error_message,
+        );
         $settings = $mailRegistration->settings();
         $this->assertSame('next@gmx.de', $settings['verification_mailbox']['email']);
         $this->assertSame([], $settings['verification_mailbox']['browser_sessions']);
@@ -888,10 +892,185 @@ class WorkflowStepRunWatchdogTest extends TestCase
             'account' => ['email' => 'neu@proton.me', 'recoveryEmail' => 'used@GMX.de'],
         ]]]);
 
-        $this->assertSame('used@gmx.de', data_get($run->fresh()->context_json, 'verification_mailbox_consumed.email'));
+        $this->assertSame('Used@gmx.de', data_get($run->fresh()->context_json, 'verification_mailbox_consumed.email'));
         $this->assertSame('registered', data_get($run->fresh()->context_json, 'verification_mailbox_consumed.reason'));
-        // Gewechselt wird erst am Laufende.
+        // Vermerkt wird sofort, gewechselt erst am Laufende.
         $this->assertSame('Used@gmx.de', $mailRegistration->settings()['verification_mailbox']['email']);
+        $this->assertSame([['email' => 'Used@gmx.de', 'reason' => 'registered', 'workflow_run_id' => $run->id]], array_map(
+            fn (array $entry): array => array_diff_key($entry, ['consumed_at' => true]),
+            $mailRegistration->settings()['verification_mailbox_consumed'],
+        ));
+
+        // Ein zweiter Vermerk desselben Laufs legt keinen weiteren Eintrag an.
+        $persist->invoke(app(WorkflowExecutionService::class), $run->fresh(), ['tasks' => [[
+            'key' => 'save-account-again', 'task_key' => 'data.persist_mail_account',
+            'account' => ['email' => 'neu@proton.me', 'recoveryEmail' => 'used@gmx.de'],
+        ]]]);
+        $this->assertCount(1, $mailRegistration->settings()['verification_mailbox_consumed']);
+    }
+
+    public function test_a_rejection_after_a_parallel_switch_burns_the_started_address_and_keeps_the_new_one(): void
+    {
+        Queue::fake();
+        $mailRegistration = app(\App\Services\Mail\MailAccountRegistrationRunner::class);
+        $settings = $mailRegistration->settings();
+        // Ein paralleler Lauf hat schon von a@gmx.de auf b@gmx.de gewechselt.
+        $settings['verification_mailbox'] = ['enabled' => true, 'email' => 'b@gmx.de', 'provider' => 'gmx'];
+        $settings['verification_mailbox_reserve'] = [['email' => 'c@gmx.de', 'provider' => 'gmx']];
+        $mailRegistration->saveSettings($settings);
+
+        [$workflow, $step] = $this->workflow();
+        $config = $step->config_json;
+        $message = 'Proton hat die Registrierung abgelehnt.';
+        $config['tasks'][0]['next'] = ['type' => 'fail', 'step' => 'fail', 'message' => $message, 'consume_verification_mailbox' => true];
+        $step->forceFill(['config_json' => $config])->save();
+        [$run, $stepRun] = $this->waitingWorkflowTaskRun($workflow, $step, [
+            'interactive_debug' => false,
+            'verification_mailbox_guard' => ['email' => 'a@gmx.de', 'promoted_from' => null],
+        ]);
+        [$status, $result] = $this->terminalExternalResult($run, $stepRun, $step->fresh());
+        $this->mockTerminalTaskRunner($status, [
+            ...$result,
+            'routeRequested' => true,
+            'completedTaskKey' => 'first-task',
+            'routeOutcome' => 'success',
+            'routeFailRequested' => true,
+            'routeFailMessage' => $message,
+        ]);
+        app(WorkflowTaskRunner::class)->shouldNotReceive('forgetVerificationMailboxBrowserProfile');
+
+        app(WorkflowExecutionService::class)->monitorStepRun($stepRun->id);
+
+        $settings = $mailRegistration->settings();
+        $this->assertSame('b@gmx.de', $settings['verification_mailbox']['email']);
+        $this->assertSame(['c@gmx.de'], array_column($settings['verification_mailbox_reserve'], 'email'));
+        $this->assertSame(['a@gmx.de'], array_column($settings['verification_mailbox_consumed'], 'email'));
+        $this->assertSame($run->id, $settings['verification_mailbox_consumed'][0]['workflow_run_id']);
+        $this->assertStringStartsWith(
+            'Proton hat die Verifizierungs-Adresse a@gmx.de abgelehnt (bereits verwendet). Aktiv ist bereits b@gmx.de.',
+            (string) $run->fresh()->error_message,
+        );
+    }
+
+    public function test_an_embedded_abort_with_the_consumption_flag_burns_the_verification_address(): void
+    {
+        Queue::fake();
+        $mailRegistration = app(\App\Services\Mail\MailAccountRegistrationRunner::class);
+        $settings = $mailRegistration->settings();
+        $settings['verification_mailbox'] = ['enabled' => true, 'email' => 'used@gmx.de', 'provider' => 'gmx'];
+        $mailRegistration->saveSettings($settings);
+
+        [$workflow, $step] = $this->workflow();
+        $config = $step->config_json;
+        $config['tasks'][0]['next'] = ['type' => 'card', 'card_key' => 'second-task'];
+        $step->forceFill(['config_json' => $config])->save();
+        [$run, $stepRun] = $this->waitingWorkflowTaskRun($workflow, $step, ['interactive_debug' => false]);
+        [$status, $result] = $this->terminalExternalResult($run, $stepRun, $step->fresh());
+        $this->mockTerminalTaskRunner($status, [
+            ...$result,
+            'routeRequested' => true,
+            'completedTaskKey' => 'first-task',
+            'routeOutcome' => 'success',
+            'routeFailRequested' => true,
+            'routeFailMessage' => 'Proton hat die Registrierung abgelehnt.',
+            'routeFailConsumesVerificationMailbox' => true,
+        ]);
+
+        app(WorkflowExecutionService::class)->monitorStepRun($stepRun->id);
+
+        $this->assertSame('failed', $run->fresh()->status);
+        $this->assertSame(['used@gmx.de'], array_column($mailRegistration->settings()['verification_mailbox_consumed'], 'email'));
+        $this->assertStringContainsString('Keine unverbrauchte Reserve-Adresse hinterlegt', (string) $run->fresh()->error_message);
+    }
+
+    public function test_a_rejection_while_another_run_still_uses_the_address_defers_the_switch(): void
+    {
+        Queue::fake();
+        [$workflow, $step] = $this->workflow();
+        $consumer = WorkflowRun::query()->create([
+            'run_uuid' => (string) str()->uuid(), 'workflow_id' => $workflow->id, 'status' => 'running',
+            'started_at' => now(), 'context_json' => ['execution_target' => 'system'], 'result_json' => [],
+        ]);
+        $mailRegistration = app(\App\Services\Mail\MailAccountRegistrationRunner::class);
+        $settings = $mailRegistration->settings();
+        $settings['verification_mailbox'] = ['enabled' => true, 'email' => 'a@gmx.de', 'provider' => 'gmx'];
+        $settings['verification_mailbox_reserve'] = [['email' => 'b@gmx.de', 'provider' => 'gmx']];
+        $settings['verification_mailbox_consumed'] = [['email' => 'a@gmx.de', 'reason' => 'registered', 'workflow_run_id' => $consumer->id]];
+        $mailRegistration->saveSettings($settings);
+
+        $config = $step->config_json;
+        $config['tasks'][0]['next'] = ['type' => 'fail', 'step' => 'fail', 'message' => 'Abgelehnt.', 'consume_verification_mailbox' => true];
+        $step->forceFill(['config_json' => $config])->save();
+        [$run, $stepRun] = $this->waitingWorkflowTaskRun($workflow, $step, [
+            'interactive_debug' => false,
+            'verification_mailbox_guard' => ['email' => 'a@gmx.de'],
+        ]);
+        [$status, $result] = $this->terminalExternalResult($run, $stepRun, $step->fresh());
+        $this->mockTerminalTaskRunner($status, [
+            ...$result,
+            'routeRequested' => true, 'completedTaskKey' => 'first-task', 'routeOutcome' => 'success',
+            'routeFailRequested' => true, 'routeFailMessage' => 'Abgelehnt.',
+        ]);
+        app(WorkflowTaskRunner::class)->shouldNotReceive('forgetVerificationMailboxBrowserProfile');
+
+        app(WorkflowExecutionService::class)->monitorStepRun($stepRun->id);
+
+        $settings = $mailRegistration->settings();
+        // Der laufende Lauf braucht das Postfach noch; gewechselt wird an seinem Ende.
+        $this->assertSame('a@gmx.de', $settings['verification_mailbox']['email']);
+        $this->assertSame(['b@gmx.de'], array_column($settings['verification_mailbox_reserve'], 'email'));
+        $this->assertEqualsCanonicalizing([$consumer->id, $run->id], array_column($settings['verification_mailbox_consumed'], 'workflow_run_id'));
+        $this->assertStringContainsString('Gewechselt wird nach Ende von Lauf #'.$consumer->id.'.', (string) $run->fresh()->error_message);
+    }
+
+    public function test_a_run_that_registered_and_then_failed_keeps_its_own_cause_first(): void
+    {
+        $mailRegistration = app(\App\Services\Mail\MailAccountRegistrationRunner::class);
+        $settings = $mailRegistration->settings();
+        $settings['verification_mailbox'] = ['enabled' => true, 'email' => 'used@gmx.de', 'provider' => 'gmx'];
+        $mailRegistration->saveSettings($settings);
+        [$workflow, $step] = $this->workflow();
+        [$run] = $this->waitingWorkflowTaskRun($workflow, $step, [
+            'verification_mailbox_guard' => ['email' => 'used@gmx.de'],
+            'verification_mailbox_consumed' => ['email' => 'used@gmx.de', 'reason' => 'registered'],
+        ]);
+        $this->mockTaskRunnerWithStatus(['state' => 'running']);
+        $failRun = new ReflectionMethod(WorkflowExecutionService::class, 'failRun');
+
+        $failRun->invoke(app(WorkflowExecutionService::class), $run->fresh(), 'Task Mails loeschen fehlgeschlagen.');
+
+        $message = (string) $run->fresh()->error_message;
+        $this->assertStringStartsWith('Task Mails loeschen fehlgeschlagen.', $message);
+        $this->assertStringContainsString('used@gmx.de ist jetzt an das neue Konto gebunden', $message);
+    }
+
+    public function test_resuming_a_run_that_started_with_another_verification_address_is_refused(): void
+    {
+        Queue::fake();
+        $mailRegistration = app(\App\Services\Mail\MailAccountRegistrationRunner::class);
+        $settings = $mailRegistration->settings();
+        $settings['verification_mailbox'] = ['enabled' => true, 'email' => 'b@gmx.de', 'provider' => 'gmx'];
+        $mailRegistration->saveSettings($settings);
+        [$workflow, $step] = $this->workflow();
+        [$run] = $this->waitingWorkflowTaskRun($workflow, $step, [
+            'verification_mailbox_guard' => ['email' => 'a@gmx.de', 'promoted_from' => null],
+        ]);
+        $run->forceFill(['status' => 'paused'])->save();
+
+        $refused = app(WorkflowExecutionService::class)->resumeManualPause($run->fresh());
+
+        $this->assertFalse($refused['ok']);
+        $this->assertStringContainsString('a@gmx.de', $refused['message']);
+        $this->assertStringContainsString('b@gmx.de', $refused['message']);
+        $this->assertSame('paused', $run->fresh()->status);
+        Queue::assertNotPushed(RunWorkflowJob::class);
+
+        // Hat der Lauf seine Adresse schon verbraucht (Konto angelegt), darf er weiter.
+        $context = $run->fresh()->context_json;
+        $context['verification_mailbox_consumed'] = ['email' => 'a@gmx.de', 'reason' => 'registered'];
+        $run->forceFill(['context_json' => $context])->save();
+
+        $this->assertTrue(app(WorkflowExecutionService::class)->resumeManualPause($run->fresh())['ok']);
     }
 
     public function test_running_a_single_task_of_another_list_does_not_time_out_the_paused_list(): void

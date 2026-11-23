@@ -3095,6 +3095,15 @@ function enclosingEmbeddedBoundaryKeyForTask(task = {}) {
   return String(task?.enclosing_embedded_workflow_boundary_key || '').trim();
 }
 
+// Entspricht PHP filter_var(..., FILTER_VALIDATE_BOOL) fuer Routen-Flags.
+function routeFlagEnabled(value) {
+  if (value === true) {
+    return true;
+  }
+
+  return ['1', 'true', 'yes', 'on'].includes(String(value ?? '').trim().toLowerCase());
+}
+
 function routeTargetCardKey(route = {}) {
   return String(route?.card_key || route?.card || '').trim();
 }
@@ -4244,7 +4253,12 @@ async function run() {
         // Der Server sucht die Route sonst an der Karte mit diesem Key. Bei einer
         // eingebetteten Task ist das die Include-Karte des Hauptworkflows - deren
         // Erfolgsroute liefe weiter, als waere der Unter-Workflow gelungen.
-        requestedSuccessFailRoute = { message: String(successRoute.message || '').trim() };
+        requestedSuccessFailRoute = {
+          message: String(successRoute.message || '').trim(),
+          // Ohne dieses Signal ginge ein Verbrauch des Verifizierungs-Postfachs
+          // verloren, wenn der Abbruch aus einem eingebetteten Workflow kommt.
+          consumesVerificationMailbox: routeFlagEnabled(successRoute.consume_verification_mailbox),
+        };
         break;
       }
 
@@ -4421,6 +4435,7 @@ async function run() {
       ...(requestedSuccessFailRoute && !requestedFailureRouteTask ? {
         routeFailRequested: true,
         routeFailMessage: requestedSuccessFailRoute.message,
+        ...(requestedSuccessFailRoute.consumesVerificationMailbox ? { routeFailConsumesVerificationMailbox: true } : {}),
       } : {}),
     } : {}),
   };

@@ -123,22 +123,25 @@ class WorkflowTemplateService
     public function ensureMailSettings(): array
     {
         $runner = app(MailAccountRegistrationRunner::class);
-        $existing = Setting::getValue(MailAccountRegistrationRunner::SETTINGS_TYPE, MailAccountRegistrationRunner::SETTINGS_KEY);
-        $settings = is_array($existing)
-            ? array_replace_recursive($runner->defaultSettings(), $existing)
-            : $runner->defaultSettings();
+        // Unter der Postfach-Sperre: Die Zeile haelt auch das Verifizierungs-Postfach.
+        $settings = $runner->withVerificationMailboxLock(function () use ($runner): array {
+            $existing = Setting::getValue(MailAccountRegistrationRunner::SETTINGS_TYPE, MailAccountRegistrationRunner::SETTINGS_KEY);
+            $settings = is_array($existing)
+                ? array_replace_recursive($runner->defaultSettings(), $existing)
+                : $runner->defaultSettings();
 
-        $settings['providers'][0] = array_replace($settings['providers'][0] ?? [], [
-            'key' => 'proton',
-            'label' => 'Proton',
-            'mode' => MailAccountRegistrationRunner::PROVIDER_MODE_PROTON_USERNAME_CHECK,
-            'enabled' => true,
-            'phone_required' => false,
-            'registration_url' => 'https://account.proton.me/mail/signup',
-            'webmail_url' => 'https://mail.proton.me',
-        ]);
+            $settings['providers'][0] = array_replace($settings['providers'][0] ?? [], [
+                'key' => 'proton',
+                'label' => 'Proton',
+                'mode' => MailAccountRegistrationRunner::PROVIDER_MODE_PROTON_USERNAME_CHECK,
+                'enabled' => true,
+                'phone_required' => false,
+                'registration_url' => 'https://account.proton.me/mail/signup',
+                'webmail_url' => 'https://mail.proton.me',
+            ]);
 
-        $settings = $runner->saveSettings($settings);
+            return $runner->saveSettings($settings);
+        });
 
         Setting::setValue('webmail', 'portal_login', [
             'default_provider' => 'proton',

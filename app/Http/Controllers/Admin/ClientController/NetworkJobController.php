@@ -55,13 +55,20 @@ class NetworkJobController extends Controller
 
         if ($validated['job_mode'] === 'workflow') {
             $workflow = Workflow::query()->findOrFail((int) $validated['workflow_id']);
-            $run = $workflows->start($workflow, [
-                'person_id' => ! empty($validated['person_id']) ? (int) $validated['person_id'] : null,
-                'started_from' => 'client-controller-jobs',
-                'execution_target' => 'client_controller',
-                'network_node_id' => $node->id,
-                'device_id' => $device?->id,
-            ], optional(auth()->user())->email ?: 'admin-ui');
+
+            try {
+                $run = $workflows->start($workflow, [
+                    'person_id' => ! empty($validated['person_id']) ? (int) $validated['person_id'] : null,
+                    'started_from' => 'client-controller-jobs',
+                    'execution_target' => 'client_controller',
+                    'network_node_id' => $node->id,
+                    'device_id' => $device?->id,
+                ], optional(auth()->user())->email ?: 'admin-ui');
+            } catch (\RuntimeException $exception) {
+                // Startsperren (z. B. verbrauchtes Verifizierungs-Postfach, deaktivierter
+                // Workflow) gehoeren als Meldung ans Formular, nicht auf eine Fehlerseite.
+                return back()->withErrors(['workflow_id' => $exception->getMessage()])->withInput();
+            }
 
             return back()->with('success', 'Workflow wurde fuer den ClientController eingeplant: '.$run->run_uuid);
         }
