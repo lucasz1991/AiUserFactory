@@ -344,14 +344,19 @@ class WorkflowAssistanceServiceTest extends TestCase
 
     private function verificationHandoffResult(): array
     {
+        // Form, in der run_step.cjs den Marker weiterreicht: nur feste Felder
+        // auf oberster Ebene, Handoff-Task und Selector stecken in evidence.
         $result = $this->captchaResult();
         $result['humanIntervention'] = [
             ...$result['humanIntervention'],
             'id' => 'verification-intervention-123',
             'provider' => 'proton',
-            'handoffTaskKey' => WorkflowAssistanceService::VERIFICATION_TASK_KEY,
-            'detectionSelector' => '[data-testid="verification"], .human-verification-modal',
-            'evidence' => ['provider' => 'proton', 'selectorSignals' => 1],
+            'evidence' => [
+                'provider' => 'proton',
+                'selectorSignals' => 1,
+                'handoffTaskKey' => WorkflowAssistanceService::VERIFICATION_TASK_KEY,
+                'detectionSelector' => '[data-testid="verification"], .human-verification-modal',
+            ],
         ];
 
         return $result;

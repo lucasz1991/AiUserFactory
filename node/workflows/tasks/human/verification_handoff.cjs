@@ -69,10 +69,15 @@ async function run(context = {}) {
 
   const inspection = await inspectVerification(page, selector);
   const verificationOnly = normalizeBoolean(input.verification_only ?? input.verificationOnly);
+  // run_step.cjs reicht vom Interventions-Marker nur feste Felder weiter;
+  // evidence wird dagegen unveraendert uebernommen. Deshalb stehen Handoff-
+  // Task und Erkennungs-Selector zusaetzlich hier.
   const evidence = {
     provider,
     selectorSignals: inspection.detected ? 1 : 0,
     matchedSelector: inspection.matchedSelector,
+    handoffTaskKey: 'human.verification_handoff',
+    detectionSelector: selector,
   };
   const common = {
     ok: true,

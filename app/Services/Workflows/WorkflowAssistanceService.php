@@ -67,9 +67,8 @@ class WorkflowAssistanceService
         }
 
         $provider = $this->normalizedProvider($marker['provider'] ?? 'recaptcha');
-        $handoffTaskKey = trim((string) ($marker['handoffTaskKey'] ?? $marker['handoff_task_key'] ?? self::CAPTCHA_TASK_KEY));
-        $handoffTaskKey = in_array($handoffTaskKey, self::HANDOFF_TASK_KEYS, true) ? $handoffTaskKey : self::CAPTCHA_TASK_KEY;
-        $detectionSelector = Str::limit(trim((string) ($marker['detectionSelector'] ?? $marker['detection_selector'] ?? '')), 4000, '');
+        $handoffTaskKey = $this->markerHandoffTaskKey($marker);
+        $detectionSelector = Str::limit($this->markerValue($marker, 'detectionSelector', 'detection_selector'), 4000, '');
         $label = $this->verificationLabel($provider);
 
         $taskKey = trim((string) (
@@ -206,13 +205,31 @@ class WorkflowAssistanceService
             return false;
         }
 
-        $handoffTaskKey = trim((string) ($marker['handoffTaskKey'] ?? $marker['handoff_task_key'] ?? self::CAPTCHA_TASK_KEY));
+        $handoffTaskKey = $this->markerHandoffTaskKey($marker);
 
         // reCAPTCHA-Handoffs bleiben auf ihren Provider beschraenkt; der
         // generische Verifizierungs-Handoff darf jeden Provider-Namen tragen.
         return $handoffTaskKey === self::VERIFICATION_TASK_KEY
             ? $this->normalizedProvider($marker['provider'] ?? '') !== ''
             : strtolower(trim((string) ($marker['provider'] ?? 'recaptcha'))) === 'recaptcha';
+    }
+
+    /**
+     * Liest einen Marker-Wert direkt oder aus evidence. run_step.cjs reicht
+     * vom Interventions-Marker nur feste Felder weiter, evidence aber komplett.
+     */
+    protected function markerValue(array $marker, string $camel, string $snake): string
+    {
+        $evidence = is_array($marker['evidence'] ?? null) ? $marker['evidence'] : [];
+
+        return trim((string) ($marker[$camel] ?? $marker[$snake] ?? $evidence[$camel] ?? $evidence[$snake] ?? ''));
+    }
+
+    protected function markerHandoffTaskKey(array $marker): string
+    {
+        $taskKey = $this->markerValue($marker, 'handoffTaskKey', 'handoff_task_key');
+
+        return in_array($taskKey, self::HANDOFF_TASK_KEYS, true) ? $taskKey : self::CAPTCHA_TASK_KEY;
     }
 
     protected function normalizedProvider(mixed $provider): string

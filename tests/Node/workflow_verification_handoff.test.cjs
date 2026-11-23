@@ -82,6 +82,67 @@ test('verification handoff refuses to run without a detection selector', async (
   assert.equal(result.status, 'failed');
 });
 
+test('run_step keeps handoff task and detection selector in the marker it reports to PHP', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const { spawnSync } = require('node:child_process');
+  const basePath = path.resolve(__dirname, '..', '..');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workflow-verification-handoff-'));
+  const fixturesPath = path.join(directory, 'fixtures');
+  const gateScriptPath = path.join(fixturesPath, 'verification-gate.cjs');
+  const runtimePath = path.join(directory, 'runtime.json');
+  const resultPath = path.join(directory, 'result.json');
+  const libPath = JSON.stringify(finderPath);
+  const taskPath = JSON.stringify(path.join(basePath, 'node', 'workflows', 'tasks', 'human', 'verification_handoff.cjs'));
+
+  fs.mkdirSync(fixturesPath, { recursive: true });
+  // Echte Handoff-Task, nur Element-Finder und Seite sind gestubbt.
+  fs.writeFileSync(gateScriptPath, `'use strict';
+const finder = require(${libPath});
+finder.findFirstVisibleElement = async () => ({ selector: '[data-testid="verification"]' });
+const handoff = require(${taskPath});
+module.exports = { run: (context) => handoff.run({ ...context, page: { frames: () => [] } }) };
+`);
+  fs.writeFileSync(runtimePath, JSON.stringify({
+    resultPath,
+    statusPath: path.join(directory, 'status.json'),
+    runDirectory: directory,
+    livePreviewEnabled: false,
+    keepWorkflowBrowserAlive: false,
+    additionalTaskScriptRoots: [fixturesPath],
+    workflow: {},
+    tasks: [{
+      key: 'verifizierung-an-admin',
+      task_key: 'test.verification_gate',
+      title: 'Verifizierung',
+      kind: 'data',
+      runner: 'node',
+      node_script: gateScriptPath,
+      selector: SELECTOR,
+      provider: 'proton',
+    }],
+  }));
+
+  const processResult = spawnSync(process.execPath, [path.join(basePath, 'node', 'workflows', 'run_step.cjs'), runtimePath], {
+    cwd: basePath,
+    encoding: 'utf8',
+    timeout: 20000,
+  });
+
+  try {
+    assert.equal(processResult.status, 0, processResult.stderr || processResult.stdout);
+    const result = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
+
+    assert.equal(result.status, 'waiting_for_human');
+    assert.equal(result.humanIntervention.type, 'captcha');
+    assert.equal(result.humanIntervention.provider, 'proton');
+    assert.equal(result.humanIntervention.evidence.handoffTaskKey, 'human.verification_handoff');
+    assert.equal(result.humanIntervention.evidence.detectionSelector, SELECTOR);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 function recordingPage() {
   const calls = [];
 
