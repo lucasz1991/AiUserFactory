@@ -49,7 +49,7 @@ class ClientWorkflowBundleCompiler
                 $nodeScript = trim((string) ($task['node_script'] ?? ''));
 
                 if ((bool) ($task['requires_server_orchestration'] ?? false)
-                    || (string) ($task['task_key'] ?? '') === 'human.recaptcha_handoff') {
+                    || in_array((string) ($task['task_key'] ?? ''), WorkflowAssistanceService::HANDOFF_TASK_KEYS, true)) {
                     $reasons[] = 'Server-Handoff erforderlich: '.$step->name.' / '.($task['title'] ?? $task['key'] ?? 'Task');
                 }
 

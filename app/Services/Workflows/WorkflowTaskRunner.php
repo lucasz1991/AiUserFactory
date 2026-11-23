@@ -770,9 +770,9 @@ class WorkflowTaskRunner
             }
 
             if ($embeddedWorkflowFrameKey !== null
-                && (string) ($task['task_key'] ?? '') === 'human.recaptcha_handoff') {
+                && in_array((string) ($task['task_key'] ?? ''), WorkflowAssistanceService::HANDOFF_TASK_KEYS, true)) {
                 throw new \RuntimeException(
-                    'Der reCAPTCHA-Admin-Task muss direkt im Haupt-Workflow stehen. '
+                    'Der Verifizierungs-Admin-Task muss direkt im Haupt-Workflow stehen. '
                     .'In eingebetteten Unter-Workflows ist der sichere Fortsetzungscursor noch nicht eindeutig.',
                 );
             }
@@ -1533,7 +1533,7 @@ class WorkflowTaskRunner
 
         if ($this->requiresAssistancePreviewContext($tasks, $runtimeContext)) {
             $assistanceSeconds = collect($tasks)
-                ->where('task_key', 'human.recaptcha_handoff')
+                ->whereIn('task_key', WorkflowAssistanceService::HANDOFF_TASK_KEYS)
                 ->map(fn (array $task): int => max(5, min(60, (int) ($task['expires_after_minutes'] ?? 15))) * 60)
                 ->max() ?: 900;
             $seconds = max($seconds, $assistanceSeconds);
@@ -1765,7 +1765,9 @@ class WorkflowTaskRunner
             (string) ($task['task_key'] ?? ''),
             [
                 'human.recaptcha_handoff',
+                'human.verification_handoff',
                 'browser.assistance_click_coordinates',
+                'browser.assistance_drag_coordinates',
                 'browser.assistance_type_text',
             ],
             true,

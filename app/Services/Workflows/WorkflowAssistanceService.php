@@ -18,7 +18,41 @@ class WorkflowAssistanceService
 {
     public const CAPTCHA_TASK_KEY = 'human.recaptcha_handoff';
 
+    public const VERIFICATION_TASK_KEY = 'human.verification_handoff';
+
+    /**
+     * Tasks, die einen Lauf fuer eine Admin-Aufgabe pausieren duerfen. Beide
+     * liefern captchaDetected, damit die Freigabepruefung identisch bleibt.
+     */
+    public const HANDOFF_TASK_KEYS = [self::CAPTCHA_TASK_KEY, self::VERIFICATION_TASK_KEY];
+
     public function __construct(protected PushDelivery $push) {}
+
+    /**
+     * Task-Key, mit dem diese Admin-Aufgabe erneut geprueft wird.
+     */
+    public function handoffTaskKey(WorkflowAssistanceRequest $request): string
+    {
+        $taskKey = trim((string) data_get($request->metadata_json, 'handoff_task_key', ''));
+
+        return in_array($taskKey, self::HANDOFF_TASK_KEYS, true) ? $taskKey : self::CAPTCHA_TASK_KEY;
+    }
+
+    /**
+     * Anzeigename der Verifizierung fuer Titel, Hinweise und Ereignisse.
+     */
+    public function verificationLabel(WorkflowAssistanceRequest|string|null $requestOrProvider): string
+    {
+        $provider = $requestOrProvider instanceof WorkflowAssistanceRequest
+            ? (string) data_get($requestOrProvider->metadata_json, 'provider', 'recaptcha')
+            : (string) ($requestOrProvider ?? 'recaptcha');
+
+        return match (strtolower(trim($provider))) {
+            '', 'recaptcha' => 'reCAPTCHA',
+            'proton' => 'Proton-Verifizierung',
+            default => 'Verifizierung',
+        };
+    }
 
     public function requestCaptcha(WorkflowStepRun $stepRun, array $result): WorkflowAssistanceRequest
     {
@@ -29,8 +63,14 @@ class WorkflowAssistanceService
             : (is_array($result['human_intervention'] ?? null) ? $result['human_intervention'] : []);
 
         if (! $this->requiresCaptchaAssistance($result)) {
-            throw new DomainException('Das Runner-Ergebnis enthaelt keinen gueltigen reCAPTCHA-Handoff.');
+            throw new DomainException('Das Runner-Ergebnis enthaelt keinen gueltigen Verifizierungs-Handoff.');
         }
+
+        $provider = $this->normalizedProvider($marker['provider'] ?? 'recaptcha');
+        $handoffTaskKey = trim((string) ($marker['handoffTaskKey'] ?? $marker['handoff_task_key'] ?? self::CAPTCHA_TASK_KEY));
+        $handoffTaskKey = in_array($handoffTaskKey, self::HANDOFF_TASK_KEYS, true) ? $handoffTaskKey : self::CAPTCHA_TASK_KEY;
+        $detectionSelector = Str::limit(trim((string) ($marker['detectionSelector'] ?? $marker['detection_selector'] ?? '')), 4000, '');
+        $label = $this->verificationLabel($provider);
 
         $taskKey = trim((string) (
             $marker['taskKey']
@@ -66,6 +106,10 @@ class WorkflowAssistanceService
             $expiresAfterMinutes,
             $instructions,
             $requestedByUserId,
+            $provider,
+            $handoffTaskKey,
+            $detectionSelector,
+            $label,
             &$created,
         ): WorkflowAssistanceRequest {
             $lockedRun = WorkflowRun::query()->lockForUpdate()->findOrFail($run->getKey());
@@ -95,10 +139,10 @@ class WorkflowAssistanceService
                     'resume_task_key' => trim((string) ($context['next_task_key'] ?? '')) ?: null,
                     'browser_window' => $browserWindow,
                     'current_url' => $browserState['current_url'] ?? null,
-                    'title' => 'reCAPTCHA in „'.Str::limit((string) $lockedRun->workflow?->name, 120, '').'“',
+                    'title' => $label.' in „'.Str::limit((string) $lockedRun->workflow?->name, 120, '').'“',
                     'instructions' => $instructions !== ''
                         ? $instructions
-                        : 'Bitte das reCAPTCHA im Browserbild manuell loesen und anschliessend erneut pruefen.',
+                        : 'Bitte die '.$label.' im Browserbild manuell loesen und anschliessend erneut pruefen.',
                     'cursor_json' => [
                         'workflow_step_id' => $lockedRun->current_workflow_step_id,
                         'next_step_action_key' => $context['next_step_action_key'] ?? null,
@@ -108,7 +152,9 @@ class WorkflowAssistanceService
                     'metadata_json' => [
                         'intervention_id' => $marker['id'] ?? null,
                         'runtime_task_key' => $marker['runtimeTaskKey'] ?? $marker['runtime_task_key'] ?? null,
-                        'provider' => 'recaptcha',
+                        'provider' => $provider,
+                        'handoff_task_key' => $handoffTaskKey,
+                        'detection_selector' => $detectionSelector !== '' ? $detectionSelector : null,
                         'original_interactive_debug' => (bool) ($context['interactive_debug'] ?? false),
                         'evidence' => $this->safeEvidence($marker['evidence'] ?? data_get($result, 'captcha')),
                     ],
@@ -119,7 +165,7 @@ class WorkflowAssistanceService
                     $request,
                     'requested',
                     null,
-                    'reCAPTCHA erkannt. Die Admin-Aufgabe wurde erstellt.',
+                    $label.' erkannt. Die Admin-Aufgabe wurde erstellt.',
                     ['browser_window' => $browserWindow],
                 );
                 $created = true;
@@ -155,9 +201,23 @@ class WorkflowAssistanceService
 
         $marker = $result['humanIntervention'] ?? $result['human_intervention'] ?? null;
 
-        return is_array($marker)
-            && strtolower(trim((string) ($marker['type'] ?? ''))) === WorkflowAssistanceRequest::TYPE_CAPTCHA
-            && strtolower(trim((string) ($marker['provider'] ?? 'recaptcha'))) === 'recaptcha';
+        if (! is_array($marker)
+            || strtolower(trim((string) ($marker['type'] ?? ''))) !== WorkflowAssistanceRequest::TYPE_CAPTCHA) {
+            return false;
+        }
+
+        $handoffTaskKey = trim((string) ($marker['handoffTaskKey'] ?? $marker['handoff_task_key'] ?? self::CAPTCHA_TASK_KEY));
+
+        // reCAPTCHA-Handoffs bleiben auf ihren Provider beschraenkt; der
+        // generische Verifizierungs-Handoff darf jeden Provider-Namen tragen.
+        return $handoffTaskKey === self::VERIFICATION_TASK_KEY
+            ? $this->normalizedProvider($marker['provider'] ?? '') !== ''
+            : strtolower(trim((string) ($marker['provider'] ?? 'recaptcha'))) === 'recaptcha';
+    }
+
+    protected function normalizedProvider(mixed $provider): string
+    {
+        return Str::limit((string) preg_replace('/[^a-z0-9_-]+/', '', strtolower(trim((string) $provider))), 40, '');
     }
 
     public function claim(WorkflowAssistanceRequest $request, User $operator): WorkflowAssistanceRequest
@@ -261,8 +321,9 @@ class WorkflowAssistanceService
             $action === 'verify' ? 'verification_started' : 'browser_interaction_started',
             $operator,
             match ($action) {
-                'verify' => 'Die erneute reCAPTCHA-Pruefung wurde gestartet.',
+                'verify' => 'Die erneute Pruefung ('.$this->verificationLabel($request).') wurde gestartet.',
                 'click' => 'Ein manueller Klick im Browserbild wurde gestartet.',
+                'drag' => 'Eine manuelle Ziehbewegung im Browserbild wurde gestartet.',
                 'type' => 'Eine manuelle Texteingabe wurde gestartet.',
                 'key' => 'Eine manuelle Tasteneingabe wurde gestartet.',
                 default => 'Das Browserbild wird aktualisiert.',
@@ -280,33 +341,40 @@ class WorkflowAssistanceService
             ? data_get($run->context_json, 'studio_probe_result')
             : [];
         $task = is_array($probe['task'] ?? null) ? $probe['task'] : [];
+        $handoffTaskKey = $this->handoffTaskKey($request);
+        $recaptcha = $handoffTaskKey === self::CAPTCHA_TASK_KEY;
+        $label = $this->verificationLabel($request);
 
         if ((string) ($task['assistance_request_uuid'] ?? '') !== (string) $request->request_uuid
-            || (string) ($task['task_key'] ?? '') !== self::CAPTCHA_TASK_KEY
+            || (string) ($task['task_key'] ?? '') !== $handoffTaskKey
             || ! filter_var($task['verification_only'] ?? false, FILTER_VALIDATE_BOOL)) {
-            return ['status' => 'none', 'message' => 'Noch keine abschliessende reCAPTCHA-Pruefung vorhanden.'];
+            return ['status' => 'none', 'message' => 'Noch keine abschliessende '.$label.'-Pruefung vorhanden.'];
         }
 
         $result = is_array($probe['result'] ?? null) ? $probe['result'] : [];
         $taskResult = collect(is_array($result['tasks'] ?? null) ? $result['tasks'] : [])
             ->first(fn (mixed $candidate): bool => is_array($candidate)
-                && (string) ($candidate['task_key'] ?? '') === self::CAPTCHA_TASK_KEY);
+                && (string) ($candidate['task_key'] ?? '') === $handoffTaskKey);
 
         if (! is_array($taskResult)) {
-            return ['status' => 'failed', 'message' => 'Die reCAPTCHA-Pruefung lieferte kein auswertbares Ergebnis.'];
+            return ['status' => 'failed', 'message' => 'Die '.$label.'-Pruefung lieferte kein auswertbares Ergebnis.'];
         }
 
         if (($taskResult['captchaDetected'] ?? $taskResult['captcha_detected'] ?? null) === false) {
             return [
                 'status' => 'passed',
-                'message' => 'Kein ungelöstes reCAPTCHA mehr erkannt. Der Workflow darf fortgesetzt werden.',
+                'message' => $recaptcha
+                    ? 'Kein ungelöstes reCAPTCHA mehr erkannt. Der Workflow darf fortgesetzt werden.'
+                    : 'Keine offene '.$label.' mehr erkannt. Der Workflow darf fortgesetzt werden.',
                 'completed_at' => $probe['completed_at'] ?? null,
             ];
         }
 
         return [
             'status' => 'blocked',
-            'message' => 'Das reCAPTCHA ist weiterhin sichtbar. Bitte weiter manuell bearbeiten und erneut pruefen.',
+            'message' => $recaptcha
+                ? 'Das reCAPTCHA ist weiterhin sichtbar. Bitte weiter manuell bearbeiten und erneut pruefen.'
+                : 'Die '.$label.' ist weiterhin sichtbar. Bitte weiter manuell bearbeiten und erneut pruefen.',
             'completed_at' => $probe['completed_at'] ?? null,
         ];
     }
@@ -366,7 +434,7 @@ class WorkflowAssistanceService
                 'resolved_at' => now(),
                 'resolution_note' => Str::limit(strip_tags(trim((string) $resolutionNote)), 2000, '') ?: null,
             ])->save();
-            $this->appendEventLocked($locked, 'resolved', $operator, 'reCAPTCHA wurde geprueft und als geloest bestaetigt.');
+            $this->appendEventLocked($locked, 'resolved', $operator, $this->verificationLabel($locked).' wurde geprueft und als geloest bestaetigt.');
 
             // Keep verification, state transition, queue dispatch and audit entry in
             // one transaction. A failed resume therefore restores the open request
@@ -478,9 +546,36 @@ class WorkflowAssistanceService
                     ? (string) $payload['key']
                     : 'Tab',
             ]),
-            'verify' => $catalog->cardFromDefinition(self::CAPTCHA_TASK_KEY, $common),
+            'drag' => $catalog->cardFromDefinition('browser.assistance_drag_coordinates', $common),
+            'verify' => $catalog->cardFromDefinition($this->handoffTaskKey($request), $common),
             default => throw new DomainException('Diese Admin-Browseraktion ist nicht erlaubt.'),
         };
+
+        if ($action === 'drag') {
+            $coordinates = [];
+            foreach (['from_x_ratio', 'from_y_ratio', 'to_x_ratio', 'to_y_ratio'] as $field) {
+                $value = filter_var($payload[$field] ?? null, FILTER_VALIDATE_FLOAT);
+                if ($value === false || $value < 0 || $value > 1) {
+                    throw new DomainException('Start oder Ziel der Ziehbewegung liegt ausserhalb des Browserbildes.');
+                }
+                $coordinates[$field] = $value;
+            }
+
+            $this->assertCurrentSnapshot($request, $payload);
+            $task = [...$task, ...$coordinates];
+        }
+
+        if ($action === 'verify' && $this->handoffTaskKey($request) === self::VERIFICATION_TASK_KEY) {
+            // Die erneute Pruefung muss exakt dieselbe Erkennung verwenden wie
+            // der pausierende Task, sonst koennte ein anderer Selector "frei" melden.
+            $selector = trim((string) data_get($request->metadata_json, 'detection_selector', ''));
+            if ($selector === '') {
+                throw new DomainException('Fuer diese Admin-Aufgabe ist kein Erkennungs-Selector gespeichert.');
+            }
+            $task['selector'] = $selector;
+            $task['element_selector'] = $selector;
+            $task['provider'] = (string) data_get($request->metadata_json, 'provider', 'generic');
+        }
 
         if ($action === 'click') {
             $x = filter_var($payload['x_ratio'] ?? null, FILTER_VALIDATE_FLOAT);
@@ -489,11 +584,7 @@ class WorkflowAssistanceService
                 throw new DomainException('Die Klickposition liegt ausserhalb des Browserbildes.');
             }
 
-            $snapshot = $this->latestBrowserSnapshot($request);
-            $expectedCapture = trim((string) ($payload['captured_at'] ?? ''));
-            if ($expectedCapture === '' || $expectedCapture !== trim((string) ($snapshot['captured_at'] ?? ''))) {
-                throw new DomainException('Das Browserbild wurde inzwischen aktualisiert. Bitte auf das neue Bild klicken.');
-            }
+            $this->assertCurrentSnapshot($request, $payload);
             $task['x_ratio'] = $x;
             $task['y_ratio'] = $y;
         }
@@ -511,28 +602,48 @@ class WorkflowAssistanceService
         return $task;
     }
 
+    /**
+     * Koordinaten beziehen sich auf ein bestimmtes Browserbild. Ist inzwischen
+     * ein neueres Bild vorhanden, wuerde die Aktion an der falschen Stelle landen.
+     */
+    protected function assertCurrentSnapshot(WorkflowAssistanceRequest $request, array $payload): void
+    {
+        $snapshot = $this->latestBrowserSnapshot($request);
+        $expectedCapture = trim((string) ($payload['captured_at'] ?? ''));
+        if ($expectedCapture === '' || $expectedCapture !== trim((string) ($snapshot['captured_at'] ?? ''))) {
+            throw new DomainException('Das Browserbild wurde inzwischen aktualisiert. Bitte auf das neue Bild klicken.');
+        }
+    }
+
     protected function verificationStateForRun(WorkflowAssistanceRequest $request, WorkflowRun $run): array
     {
         $probe = is_array(data_get($run->context_json, 'studio_probe_result'))
             ? data_get($run->context_json, 'studio_probe_result')
             : [];
         $task = is_array($probe['task'] ?? null) ? $probe['task'] : [];
+        $handoffTaskKey = $this->handoffTaskKey($request);
+        $recaptcha = $handoffTaskKey === self::CAPTCHA_TASK_KEY;
+        $label = $this->verificationLabel($request);
 
         if ((string) ($task['assistance_request_uuid'] ?? '') !== (string) $request->request_uuid
-            || (string) ($task['task_key'] ?? '') !== self::CAPTCHA_TASK_KEY
+            || (string) ($task['task_key'] ?? '') !== $handoffTaskKey
             || ! filter_var($task['verification_only'] ?? false, FILTER_VALIDATE_BOOL)) {
-            return ['status' => 'none', 'message' => 'Bitte das reCAPTCHA zuerst erneut pruefen.'];
+            return ['status' => 'none', 'message' => $recaptcha
+                ? 'Bitte das reCAPTCHA zuerst erneut pruefen.'
+                : 'Bitte die '.$label.' zuerst erneut pruefen.'];
         }
 
         $result = is_array($probe['result'] ?? null) ? $probe['result'] : [];
         $taskResult = collect(is_array($result['tasks'] ?? null) ? $result['tasks'] : [])
             ->first(fn (mixed $candidate): bool => is_array($candidate)
-                && (string) ($candidate['task_key'] ?? '') === self::CAPTCHA_TASK_KEY);
+                && (string) ($candidate['task_key'] ?? '') === $handoffTaskKey);
 
         return is_array($taskResult)
             && ($taskResult['captchaDetected'] ?? $taskResult['captcha_detected'] ?? null) === false
-                ? ['status' => 'passed', 'message' => 'reCAPTCHA-Pruefung erfolgreich.']
-                : ['status' => 'blocked', 'message' => 'Das reCAPTCHA ist weiterhin sichtbar oder die Pruefung ist fehlgeschlagen.'];
+                ? ['status' => 'passed', 'message' => $label.'-Pruefung erfolgreich.']
+                : ['status' => 'blocked', 'message' => $recaptcha
+                    ? 'Das reCAPTCHA ist weiterhin sichtbar oder die Pruefung ist fehlgeschlagen.'
+                    : 'Die '.$label.' ist weiterhin sichtbar oder die Pruefung ist fehlgeschlagen.'];
     }
 
     protected function appendEventLocked(

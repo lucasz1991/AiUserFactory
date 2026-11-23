@@ -13,9 +13,9 @@ class WorkflowTaskLibraryPresentationTest extends TestCase
         $groups = $catalog->libraryGroups();
         $options = collect($catalog->arrangeLibraryOptions($catalog->options()));
 
-        $this->assertCount(51, $catalog->all());
-        $this->assertCount(44, $options);
-        $this->assertCount(44, $options->pluck('key')->unique());
+        $this->assertCount(53, $catalog->all());
+        $this->assertCount(45, $options);
+        $this->assertCount(45, $options->pluck('key')->unique());
         $this->assertSame(
             [],
             $options
@@ -39,7 +39,7 @@ class WorkflowTaskLibraryPresentationTest extends TestCase
             'navigation' => 6,
             'discovery' => 6,
             'interaction' => 7,
-            'decisions' => 8,
+            'decisions' => 9,
             'loops' => 4,
             'accounts' => 8,
             'data' => 5,
@@ -65,6 +65,7 @@ class WorkflowTaskLibraryPresentationTest extends TestCase
             'loop.end',
             'browser.highlight',
             'browser.assistance_click_coordinates',
+            'browser.assistance_drag_coordinates',
             'browser.assistance_type_text',
             'data.save_workflow_data',
             'data.persist_browser_session',

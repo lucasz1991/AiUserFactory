@@ -109,7 +109,7 @@
                 @empty
                     <div class="rounded-2xl border border-dashed border-slate-300 px-4 py-10 text-center">
                         <p class="text-sm font-bold text-slate-700">Keine passenden Aufgaben</p>
-                        <p class="mt-1 text-xs leading-5 text-slate-500">Sobald ein Workflow am reCAPTCHA pausiert, erscheint er hier.</p>
+                        <p class="mt-1 text-xs leading-5 text-slate-500">Sobald ein Workflow an einem CAPTCHA oder einer Verifizierung pausiert, erscheint er hier.</p>
                     </div>
                 @endforelse
             </div>
@@ -191,14 +191,47 @@
                                 <button
                                     type="button"
                                     @disabled(! $canInteract)
-                                    x-data="{ busy: false, clickImage(event) { if (this.busy || @js(! $canInteract)) return; const box = event.currentTarget.getBoundingClientRect(); const x = (event.clientX - box.left) / box.width; const y = (event.clientY - box.top) / box.height; this.busy = true; $wire.clickBrowser(x, y, @js((string) ($snapshot['captured_at'] ?? ''))).finally(() => this.busy = false); } }"
-                                    x-on:click="clickImage($event)"
+                                    x-data="{
+                                        busy: false,
+                                        start: null,
+                                        capturedAt: @js((string) ($snapshot['captured_at'] ?? '')),
+                                        ratio(event) {
+                                            const box = event.currentTarget.getBoundingClientRect();
+                                            return {
+                                                x: Math.min(1, Math.max(0, (event.clientX - box.left) / box.width)),
+                                                y: Math.min(1, Math.max(0, (event.clientY - box.top) / box.height)),
+                                                px: event.clientX,
+                                                py: event.clientY,
+                                            };
+                                        },
+                                        pointerDown(event) {
+                                            if (this.busy || @js(! $canInteract)) return;
+                                            this.start = this.ratio(event);
+                                            event.currentTarget.setPointerCapture?.(event.pointerId);
+                                        },
+                                        pointerUp(event) {
+                                            if (! this.start || this.busy || @js(! $canInteract)) { this.start = null; return; }
+                                            const end = this.ratio(event);
+                                            const from = this.start;
+                                            this.start = null;
+                                            this.busy = true;
+                                            // Ab 8 Bildschirmpixeln gilt die Geste als Ziehen (z. B. Puzzleteil), sonst als Klick.
+                                            const call = Math.hypot(end.px - from.px, end.py - from.py) >= 8
+                                                ? $wire.dragBrowser(from.x, from.y, end.x, end.y, this.capturedAt)
+                                                : $wire.clickBrowser(end.x, end.y, this.capturedAt);
+                                            call.finally(() => this.busy = false);
+                                        },
+                                    }"
+                                    x-on:pointerdown.prevent="pointerDown($event)"
+                                    x-on:pointerup.prevent="pointerUp($event)"
+                                    x-on:pointercancel="start = null"
+                                    style="touch-action: none;"
                                     class="group relative mx-auto block max-w-full overflow-hidden rounded-xl border border-white/10 bg-black text-left shadow-2xl disabled:cursor-not-allowed"
-                                    aria-label="Im Browserbild an dieser Position klicken"
+                                    aria-label="Im Browserbild klicken oder mit gedrückter Maustaste ziehen"
                                 >
                                     <img src="{{ route('network.workflow-assistance.preview', ['assistance' => $selected, 'v' => $snapshot['captured_at'] ?? now()->timestamp]) }}" alt="Aktuelles Browserbild des pausierten Workflow-Laufs" class="block h-auto max-h-[68vh] w-auto max-w-full select-none" draggable="false">
                                     @if($canInteract)
-                                        <span class="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-slate-950/85 px-3 py-1.5 text-[10px] font-bold text-white opacity-0 backdrop-blur transition group-hover:opacity-100">Zum manuellen Klicken Bild berühren</span>
+                                        <span class="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-slate-950/85 px-3 py-1.5 text-[10px] font-bold text-white opacity-0 backdrop-blur transition group-hover:opacity-100">Tippen = Klick · Gedrückt ziehen = Ziehen (z. B. Puzzleteil)</span>
                                     @endif
                                 </button>
                             @else
@@ -249,7 +282,7 @@
 
                             @if($selectedIsOpen)
                                 <div class="mt-4 grid gap-3 sm:grid-cols-2">
-                                    <button type="button" wire:click="verifyCaptcha" @disabled(! $canInteract) class="inline-flex min-h-12 items-center justify-center rounded-xl border border-slate-300 bg-white px-4 text-sm font-extrabold text-slate-800 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40">reCAPTCHA erneut prüfen</button>
+                                    <button type="button" wire:click="verifyCaptcha" @disabled(! $canInteract) class="inline-flex min-h-12 items-center justify-center rounded-xl border border-slate-300 bg-white px-4 text-sm font-extrabold text-slate-800 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40">{{ $verificationLabel }} erneut prüfen</button>
                                     <button type="button" wire:click="resolveAndResume" @disabled(! $canInteract || ($verification['status'] ?? '') !== 'passed') class="inline-flex min-h-12 items-center justify-center rounded-xl bg-emerald-600 px-4 text-sm font-extrabold text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-40">Geprüft & Workflow fortsetzen</button>
                                 </div>
                                 <label for="workflow-assistance-resolution-note" class="mt-4 block text-xs font-bold text-slate-600">Abschlussnotiz (optional)</label>

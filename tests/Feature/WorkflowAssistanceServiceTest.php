@@ -170,6 +170,90 @@ class WorkflowAssistanceServiceTest extends TestCase
         Queue::assertPushed(RunWorkflowJob::class, 1);
     }
 
+    public function test_verification_handoff_keeps_provider_and_selector_and_only_accepts_its_own_probe(): void
+    {
+        User::query()->update(['status' => false]);
+        $operator = User::factory()->create(['role' => 'admin', 'status' => true]);
+        [, , $run, $stepRun] = $this->pausedWorkflowRun();
+        $service = app(WorkflowAssistanceService::class);
+        $result = $this->verificationHandoffResult();
+
+        $this->assertTrue($service->requiresCaptchaAssistance($result));
+        $request = $service->claim($service->requestCaptcha($stepRun, $result), $operator);
+
+        $this->assertStringStartsWith('Proton-Verifizierung in', $request->title);
+        $this->assertSame(WorkflowAssistanceService::VERIFICATION_TASK_KEY, $service->handoffTaskKey($request));
+        $this->assertSame('proton', data_get($request->metadata_json, 'provider'));
+        $this->assertSame(
+            '[data-testid="verification"], .human-verification-modal',
+            data_get($request->metadata_json, 'detection_selector'),
+        );
+
+        // Eine reCAPTCHA-Pruefung darf eine Proton-Aufgabe nicht freigeben.
+        $this->storeVerificationProbe($run, $request, false);
+        $this->assertDomainException(
+            fn () => $service->resolveAndResume($request, $operator),
+            'zuerst erneut pruefen',
+        );
+
+        $this->storeVerificationProbe($run, $request, true, WorkflowAssistanceService::VERIFICATION_TASK_KEY);
+        $this->assertDomainException(
+            fn () => $service->resolveAndResume($request, $operator),
+            'weiterhin sichtbar',
+        );
+
+        $this->storeVerificationProbe($run, $request, false, WorkflowAssistanceService::VERIFICATION_TASK_KEY);
+        $response = $service->resolveAndResume($request, $operator);
+
+        $this->assertTrue($response['ok']);
+        $this->assertSame(WorkflowAssistanceRequest::STATUS_RESOLVED, $request->fresh()->status);
+        Queue::assertPushed(RunWorkflowJob::class, 1);
+    }
+
+    public function test_foreign_provider_without_generic_handoff_is_not_treated_as_captcha_assistance(): void
+    {
+        $result = $this->captchaResult();
+        $result['humanIntervention']['provider'] = 'proton';
+
+        $this->assertFalse(app(WorkflowAssistanceService::class)->requiresCaptchaAssistance($result));
+    }
+
+    public function test_probe_tasks_reuse_the_detection_selector_and_validate_drag_coordinates(): void
+    {
+        [, , , $stepRun] = $this->pausedWorkflowRun();
+        $service = app(WorkflowAssistanceService::class);
+        $request = $service->requestCaptcha($stepRun, $this->verificationHandoffResult());
+        $probeTask = new \ReflectionMethod($service, 'probeTask');
+
+        $verify = $probeTask->invoke($service, $request, 'verify', []);
+        $this->assertSame(WorkflowAssistanceService::VERIFICATION_TASK_KEY, $verify['task_key']);
+        $this->assertSame('[data-testid="verification"], .human-verification-modal', $verify['selector']);
+        $this->assertSame('proton', $verify['provider']);
+        $this->assertTrue($verify['verification_only']);
+
+        $capturedAt = (string) ($service->latestBrowserSnapshot($request)['captured_at'] ?? '');
+        $drag = $probeTask->invoke($service, $request, 'drag', [
+            'from_x_ratio' => 0.2,
+            'from_y_ratio' => 0.3,
+            'to_x_ratio' => 0.6,
+            'to_y_ratio' => 0.35,
+            'captured_at' => $capturedAt,
+        ]);
+        $this->assertSame('browser.assistance_drag_coordinates', $drag['task_key']);
+        $this->assertSame(0.6, $drag['to_x_ratio']);
+
+        $this->assertDomainException(
+            fn () => $probeTask->invoke($service, $request, 'drag', [
+                'from_x_ratio' => 0.2,
+                'from_y_ratio' => 0.3,
+                'to_x_ratio' => 1.4,
+                'to_y_ratio' => 0.35,
+                'captured_at' => $capturedAt,
+            ]),
+            'ausserhalb des Browserbildes',
+        );
+    }
+
     private function pausedWorkflowRun(): array
     {
         $workflow = Workflow::query()->create([
@@ -258,22 +342,38 @@ class WorkflowAssistanceServiceTest extends TestCase
         ];
     }
 
+    private function verificationHandoffResult(): array
+    {
+        $result = $this->captchaResult();
+        $result['humanIntervention'] = [
+            ...$result['humanIntervention'],
+            'id' => 'verification-intervention-123',
+            'provider' => 'proton',
+            'handoffTaskKey' => WorkflowAssistanceService::VERIFICATION_TASK_KEY,
+            'detectionSelector' => '[data-testid="verification"], .human-verification-modal',
+            'evidence' => ['provider' => 'proton', 'selectorSignals' => 1],
+        ];
+
+        return $result;
+    }
+
     private function storeVerificationProbe(
         WorkflowRun $run,
         WorkflowAssistanceRequest $request,
         bool $captchaDetected,
+        string $taskKey = WorkflowAssistanceService::CAPTCHA_TASK_KEY,
     ): void {
         $run->refresh();
         $context = is_array($run->context_json) ? $run->context_json : [];
         $context['studio_probe_result'] = [
             'task' => [
-                'task_key' => WorkflowAssistanceService::CAPTCHA_TASK_KEY,
+                'task_key' => $taskKey,
                 'verification_only' => true,
                 'assistance_request_uuid' => $request->request_uuid,
             ],
             'result' => [
                 'tasks' => [[
-                    'task_key' => WorkflowAssistanceService::CAPTCHA_TASK_KEY,
+                    'task_key' => $taskKey,
                     'captchaDetected' => $captchaDetected,
                 ]],
             ],

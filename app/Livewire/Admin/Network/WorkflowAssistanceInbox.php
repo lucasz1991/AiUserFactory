@@ -99,6 +99,17 @@ class WorkflowAssistanceInbox extends Component
         ]);
     }
 
+    public function dragBrowser(float $fromXRatio, float $fromYRatio, float $toXRatio, float $toYRatio, string $capturedAt): void
+    {
+        $this->runProbe('drag', [
+            'from_x_ratio' => $fromXRatio,
+            'from_y_ratio' => $fromYRatio,
+            'to_x_ratio' => $toXRatio,
+            'to_y_ratio' => $toYRatio,
+            'captured_at' => $capturedAt,
+        ]);
+    }
+
     public function typeBrowserText(): void
     {
         $this->validate(['browserText' => ['required', 'string', 'max:500']]);
@@ -152,6 +163,7 @@ class WorkflowAssistanceInbox extends Component
             'selected' => $selected,
             'snapshot' => $snapshot,
             'verification' => $verification,
+            'verificationLabel' => $selected ? $service->verificationLabel($selected) : 'reCAPTCHA',
             'openCount' => WorkflowAssistanceRequest::query()->open()->count(),
             'mineCount' => WorkflowAssistanceRequest::query()
                 ->open()
