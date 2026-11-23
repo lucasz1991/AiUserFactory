@@ -152,9 +152,17 @@ class WorkflowBrowserSessionSettingsTest extends TestCase
         $this->assertTrue($optionKeys->contains(WorkflowBrowserSessionService::DELETE_TASK_KEY));
     }
 
-    public function test_verification_mailbox_browser_sessions_can_be_saved_and_deleted_by_shared_key(): void
+    public function test_verification_mailbox_browser_sessions_are_saved_and_deleted_on_the_account(): void
     {
         $task = app(PersistBrowserSessionTask::class);
+        $person = Person::query()->create([
+            'platform' => 'instagram',
+            'profile_key' => 'mailbox-owner-'.str()->random(8),
+            'profile_label' => 'Mailbox owner',
+        ]);
+        $account = \App\Models\PersonEmailAccount::query()->create([
+            'person_id' => $person->id, 'email' => 'shared@gmx.de', 'provider' => 'gmx', 'is_primary' => true,
+        ]);
         $result = [
             'encryptedBrowserSessionPayload' => 'encrypted-payload',
             'sessionKey' => 'shared-mail',
@@ -168,23 +176,18 @@ class WorkflowBrowserSessionSettingsTest extends TestCase
             ],
         ];
 
-        $saved = $task->handleVerificationMailbox($result);
+        $saved = $task->handleVerificationAccount($account, $result);
 
         $this->assertTrue($saved['ok']);
-        $settings = app(\App\Services\Mail\MailAccountRegistrationRunner::class)->settings();
-        $this->assertSame(
-            'encrypted-payload',
-            data_get($settings, 'verification_mailbox.browser_sessions.shared-mail.payload_encrypted'),
-        );
+        $this->assertSame('encrypted-payload', data_get($account->fresh()->verification_browser_sessions, 'shared-mail.payload_encrypted'));
 
-        $deleted = $task->deleteVerificationMailbox([
+        $deleted = $task->deleteVerificationAccount($account, [
             'sessionKey' => 'shared-mail',
             'domain' => 'mail.example.test',
         ]);
 
         $this->assertSame(['shared-mail'], $deleted['deletedSessionKeys']);
-        $settings = app(\App\Services\Mail\MailAccountRegistrationRunner::class)->settings();
-        $this->assertSame([], data_get($settings, 'verification_mailbox.browser_sessions'));
+        $this->assertSame([], $account->fresh()->verification_browser_sessions);
     }
 
     public function test_browser_session_delete_requires_both_an_explicit_key_and_domain_to_match(): void

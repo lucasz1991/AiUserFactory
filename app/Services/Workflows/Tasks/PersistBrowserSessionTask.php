@@ -3,7 +3,7 @@
 namespace App\Services\Workflows\Tasks;
 
 use App\Models\Person;
-use App\Services\Mail\MailAccountRegistrationRunner;
+use App\Models\PersonEmailAccount;
 use Illuminate\Support\Facades\DB;
 
 class PersistBrowserSessionTask
@@ -40,7 +40,11 @@ class PersistBrowserSessionTask
         ];
     }
 
-    public function handleVerificationMailbox(array $result): array
+    /**
+     * Speichert die Browser-Sitzung in das E-Mail-Konto, das dem Lauf als
+     * Verifizierungs-Postfach zugeordnet ist (Laeufe ohne Person).
+     */
+    public function handleVerificationAccount(PersonEmailAccount $account, array $result): array
     {
         $encryptedPayload = trim((string) ($result['encryptedBrowserSessionPayload'] ?? $result['encryptedSessionPayload'] ?? ''));
 
@@ -52,22 +56,18 @@ class PersistBrowserSessionTask
             ];
         }
 
-        $runner = app(MailAccountRegistrationRunner::class);
         [$sessionKey, $session] = $this->sessionRecord($result, $encryptedPayload);
-        $runner->withVerificationMailboxLock(function () use ($runner, $sessionKey, $session): void {
-            $settings = $runner->settings();
-            $mailbox = is_array($settings['verification_mailbox'] ?? null) ? $settings['verification_mailbox'] : [];
-            $sessions = is_array($mailbox['browser_sessions'] ?? null) ? $mailbox['browser_sessions'] : [];
+        DB::transaction(function () use ($account, $sessionKey, $session): void {
+            $locked = PersonEmailAccount::query()->lockForUpdate()->findOrFail($account->getKey());
+            $sessions = is_array($locked->verification_browser_sessions) ? $locked->verification_browser_sessions : [];
             $sessions[$sessionKey] = $session;
-            $mailbox['browser_sessions'] = $sessions;
-            $settings['verification_mailbox'] = $mailbox;
-            $runner->saveSettings($settings);
+            $locked->forceFill(['verification_browser_sessions' => $sessions])->save();
         });
 
         return [
             'ok' => true,
             'status' => 'success',
-            'statusMessage' => 'Browser-Session des Haupt-Verifikationskontos wurde gespeichert.',
+            'statusMessage' => 'Browser-Session des Verifizierungs-Postfachs wurde gespeichert.',
             'sessionKey' => $sessionKey,
             'domain' => $session['domain'],
             'session' => collect($session)->except(['payload_encrypted'])->all(),
@@ -99,22 +99,15 @@ class PersistBrowserSessionTask
         ];
     }
 
-    public function deleteVerificationMailbox(array $result): array
+    public function deleteVerificationAccount(PersonEmailAccount $account, array $result): array
     {
-        $runner = app(MailAccountRegistrationRunner::class);
-        // Unter der Postfach-Sperre und mit frisch gelesenen Einstellungen: Ein alter
-        // Stand ueberschriebe sonst einen gleichzeitigen Postfachwechsel samt
-        // Verbrauchs-Eintrag.
-        [$deletedKeys, $domain, $sessionKey] = $runner->withVerificationMailboxLock(function () use ($runner, $result): array {
-            $settings = $runner->settings();
-            $mailbox = is_array($settings['verification_mailbox'] ?? null) ? $settings['verification_mailbox'] : [];
-            $sessions = is_array($mailbox['browser_sessions'] ?? null) ? $mailbox['browser_sessions'] : [];
+        [$deletedKeys, $domain, $sessionKey] = DB::transaction(function () use ($account, $result): array {
+            $locked = PersonEmailAccount::query()->lockForUpdate()->findOrFail($account->getKey());
+            $sessions = is_array($locked->verification_browser_sessions) ? $locked->verification_browser_sessions : [];
             [$sessions, $deletedKeys, $domain, $sessionKey] = $this->deleteFromSessions($sessions, $result);
 
             if ($deletedKeys !== []) {
-                $mailbox['browser_sessions'] = $sessions;
-                $settings['verification_mailbox'] = $mailbox;
-                $runner->saveSettings($settings);
+                $locked->forceFill(['verification_browser_sessions' => $sessions])->save();
             }
 
             return [$deletedKeys, $domain, $sessionKey];
@@ -124,8 +117,8 @@ class PersistBrowserSessionTask
             'ok' => true,
             'status' => 'success',
             'statusMessage' => count($deletedKeys) > 0
-                ? 'Gespeicherte Browser-Session des Haupt-Verifikationskontos wurde geloescht.'
-                : 'Keine gespeicherte Browser-Session fuer das Haupt-Verifikationskonto gefunden.',
+                ? 'Gespeicherte Browser-Session des Verifizierungs-Postfachs wurde geloescht.'
+                : 'Keine gespeicherte Browser-Session fuer das Verifizierungs-Postfach gefunden.',
             'deletedSessionKeys' => $deletedKeys,
             'domain' => $domain,
             'sessionKey' => $sessionKey,

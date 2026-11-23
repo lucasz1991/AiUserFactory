@@ -3,26 +3,25 @@
 namespace App\Services\Workflows;
 
 use App\Exceptions\VerificationMailboxUnavailableException;
+use App\Models\PersonEmailAccount;
 use App\Models\Workflow;
 use App\Models\WorkflowRun;
 use App\Models\WorkflowStep;
-use App\Services\Mail\MailAccountRegistrationRunner;
-use Illuminate\Contracts\Cache\LockTimeoutException;
+use App\Services\Mail\VerificationAccountPool;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
 
 /**
  * Proton bindet die Verifizierungs-Adresse an das neue Konto; eine verbrauchte
  * Adresse fuehrt nach der Code-Eingabe zu "Email address already used". Ein
- * Workflow, der das Postfach verbrauchen kann, darf deshalb nur mit einer noch
- * unbenutzten Adresse starten und weiterlaufen. Workflows, die das Postfach nur
- * lesen (Webmail oeffnen, Mails suchen), sind davon nicht betroffen.
+ * Workflow, der das Postfach verbrauchen kann, bekommt deshalb beim Start ein
+ * freies E-Mail-Konto einer anderen Person fest zugeordnet und laeuft nur damit
+ * weiter. Workflows, die ein Postfach nur lesen, sind davon nicht betroffen.
  */
 class VerificationMailboxStartGuard
 {
-    public const FINAL_RUN_STATUSES = ['completed', 'failed', 'cancelled', 'timed_out', 'lost'];
+    public const FINAL_RUN_STATUSES = VerificationAccountPool::FINAL_RUN_STATUSES;
 
-    public function __construct(protected MailAccountRegistrationRunner $mail) {}
+    public function __construct(protected VerificationAccountPool $pool) {}
 
     /**
      * Offene Transaktionen der Anwendung. Die Test-Hilfe RefreshDatabase legt eine
@@ -44,7 +43,7 @@ class VerificationMailboxStartGuard
     }
 
     /**
-     * Ein Workflow braucht eine unbenutzte Adresse, wenn er selbst oder ein darin
+     * Ein Workflow braucht ein unverbrauchtes Postfach, wenn er selbst oder ein darin
      * eingebetteter Workflow eine Route mit consume_verification_mailbox besitzt
      * oder in seinen Einstellungen requires_unused_verification_mailbox setzt. Nur
      * aktive Listen zaehlen; Zyklen werden ueber die besuchten IDs abgefangen.
@@ -91,9 +90,9 @@ class VerificationMailboxStartGuard
     }
 
     /**
-     * Prueft vor dem Start und laesst bei Bedarf eine Reserve-Adresse nachruecken.
+     * Ordnet dem neuen Lauf ein freies Verifizierungs-Postfach zu.
      *
-     * @return array{email: string, promoted_from: ?string}|null null, wenn der Lauf keinen Postfach-Stempel bekommt
+     * @return array{account_id: int, email: string, person_id: int}|null null, wenn der Lauf keine feste Zuordnung bekommt
      *
      * @throws VerificationMailboxUnavailableException
      */
@@ -103,136 +102,68 @@ class VerificationMailboxStartGuard
             return null;
         }
 
-        $state = $this->mail->verificationMailboxAvailability();
+        $personId = (int) ($context['person_id'] ?? $context['personId'] ?? 0) ?: null;
+        $account = $this->pool->available($personId);
 
-        if ($state['status'] === 'ok') {
-            return ['email' => $state['active'], 'promoted_from' => null];
+        if ($account) {
+            return ['account_id' => (int) $account->id, 'email' => (string) $account->email, 'person_id' => (int) $account->person_id];
         }
 
-        // Eine einzelne Studio-Task registriert in aller Regel nicht; sie darf mit
-        // dem aktuellen Postfach laufen, ohne Stempel und ohne Wechsel.
+        // Eine einzelne Studio-Task registriert in aller Regel nicht; sie darf auch
+        // ohne freies Postfach laufen und liest dann mit irgendeinem passenden Konto.
         if (filter_var($context['studio_single_task'] ?? false, FILTER_VALIDATE_BOOL)) {
             return null;
         }
 
-        if ($state['status'] === 'promotable') {
-            // Ein Lauf, der die Adresse gerade verbraucht hat, nutzt das Postfach noch
-            // fuer seine weiteren Listen (z. B. Zugangsdaten, Mails loeschen); ein
-            // Wechsel jetzt tauschte es unter ihm aus.
-            $consumers = $this->pendingConsumerRunIds($state['active']);
-
-            if ($consumers !== []) {
-                throw VerificationMailboxUnavailableException::stillInUse($state['active'], $consumers);
-            }
-
-            // Die Postfach-Sperre ist ein Cache-Lock und endet vor dem Commit einer
-            // umgebenden Transaktion; ein Wechsel darin koennte ueberschrieben oder
-            // zurueckgerollt werden.
-            if (self::insideApplicationTransaction()) {
-                throw VerificationMailboxUnavailableException::promotionInsideTransaction($state['active'], (string) $state['next']);
-            }
-
-            try {
-                $state = $this->mail->ensureUsableVerificationMailbox();
-            } catch (LockTimeoutException) {
-                throw VerificationMailboxUnavailableException::lockBusy();
-            }
-        }
-
-        if ($state['status'] === 'unavailable') {
-            throw VerificationMailboxUnavailableException::forStart($state['active'], $this->mail->describeConsumedEntries($state['consumed']));
-        }
-
-        if ($state['status'] === 'promoted') {
-            Log::info('Verbrauchte Verifizierungs-Adresse vor dem Start durch eine Reserve-Adresse ersetzt.', [
-                'workflow_id' => $workflow->getKey(),
-                'previous' => $state['previous'],
-                'active' => $state['active'],
-            ]);
-
-            try {
-                app(WorkflowTaskRunner::class)->forgetVerificationMailboxBrowserProfile();
-            } catch (\Throwable $exception) {
-                report($exception);
-            }
-        }
-
-        return ['email' => $state['active'], 'promoted_from' => $state['previous'] ?? null];
+        throw VerificationMailboxUnavailableException::noFreeAccount(
+            $this->pool->candidatesQuery($personId)->count(),
+            VerificationAccountPool::SUPPORTED_PROVIDERS,
+        );
     }
 
     /**
-     * Darf ein gestempelter Lauf weitermachen (Fortsetzen oder naechste Liste)?
-     * Nein, wenn seine Adresse nicht mehr aktiv ist oder ein anderer Lauf sie
-     * inzwischen verbraucht hat: Der Code laege im falschen Postfach oder Proton
-     * antwortete "Email address already used". Hat der Lauf seine Adresse selbst
-     * verbraucht (Konto angelegt), laeuft er mit seinen restlichen Listen weiter.
+     * Darf ein Lauf mit fest zugeordnetem Postfach weitermachen (Fortsetzen oder
+     * naechste Liste)? Nein, wenn das Konto geloescht oder inzwischen von einem
+     * anderen Lauf verbraucht wurde. Hat der Lauf es selbst verbraucht (Konto
+     * angelegt oder abgelehnt), laufen seine restlichen Listen weiter.
      */
     public function continuationBlockReason(WorkflowRun $run, string $situation = 'resume'): ?string
     {
         $context = is_array($run->context_json) ? $run->context_json : [];
-        $startedWith = trim((string) data_get($context, 'verification_mailbox_guard.email', ''));
+        $accountId = (int) data_get($context, 'verification_mailbox_guard.account_id', 0);
 
-        if ($startedWith === '' || trim((string) data_get($context, 'verification_mailbox_consumed.email', '')) !== '') {
+        if ($accountId <= 0 || trim((string) data_get($context, 'verification_mailbox_consumed.email', '')) !== '') {
             return null;
         }
 
-        $settings = $this->mail->settings();
-        $consumed = $this->mail->consumedEntriesFor($startedWith, $settings);
+        $email = trim((string) data_get($context, 'verification_mailbox_guard.email', ''));
+        $account = PersonEmailAccount::query()->find($accountId);
+
+        if (! $account) {
+            return VerificationMailboxUnavailableException::forDeletedAccount($email, $situation)->getMessage();
+        }
+
+        if (! $account->isVerificationConsumed()) {
+            return null;
+        }
+
         $runId = (int) $run->getKey();
+        $entries = $account->verificationConsumptionEntries();
 
-        if (collect($consumed)->contains(fn (array $entry): bool => (int) ($entry['workflow_run_id'] ?? 0) === $runId)) {
+        if (collect($entries)->contains(fn (array $entry): bool => (int) ($entry['workflow_run_id'] ?? 0) === $runId)) {
             return null;
         }
 
-        $active = trim((string) ($settings['verification_mailbox']['email'] ?? ''));
-
-        if (strtolower($startedWith) !== strtolower($active)) {
-            return VerificationMailboxUnavailableException::forContinuation($startedWith, $active, $situation)->getMessage();
-        }
-
-        if ($consumed !== []) {
-            return VerificationMailboxUnavailableException::forConsumedContinuation(
-                $startedWith,
-                $this->mail->describeConsumedEntries($consumed),
-                $situation,
-            )->getMessage();
-        }
-
-        return null;
+        return VerificationMailboxUnavailableException::forConsumedContinuation(
+            (string) $account->email,
+            $this->pool->describeConsumption($entries),
+            $situation,
+        )->getMessage();
     }
 
     public function resumeBlockReason(WorkflowRun $run): ?string
     {
         return $this->continuationBlockReason($run, 'resume');
-    }
-
-    /**
-     * Noch nicht beendete Laeufe, die diese Adresse verbraucht haben.
-     *
-     * @return list<int>
-     */
-    public function pendingConsumerRunIds(string $email, ?int $exceptRunId = null): array
-    {
-        $runIds = collect($this->mail->consumedEntriesFor($email))
-            ->pluck('workflow_run_id')
-            ->filter()
-            ->map(fn (mixed $id): int => (int) $id)
-            ->reject(fn (int $id): bool => $exceptRunId !== null && $id === $exceptRunId)
-            ->unique()
-            ->values()
-            ->all();
-
-        if ($runIds === []) {
-            return [];
-        }
-
-        return WorkflowRun::query()
-            ->whereIn('id', $runIds)
-            ->whereNotIn('status', self::FINAL_RUN_STATUSES)
-            ->orderBy('id')
-            ->pluck('id')
-            ->map(fn (mixed $id): int => (int) $id)
-            ->all();
     }
 
     protected function stepConsumesMailbox(WorkflowStep $step): bool

@@ -5,12 +5,12 @@ namespace App\Services\Mail;
 use App\Exceptions\VerificationMailboxUnavailableException;
 use App\Jobs\CheckMailRegistrationWebmailJob;
 use App\Jobs\SuperviseManagedProcessesJob;
+use App\Models\PersonEmailAccount;
 use App\Models\Setting;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\File;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -37,17 +37,6 @@ class MailAccountRegistrationRunner
     public function saveSettings(array $settings): array
     {
         $normalized = $this->normalizeSettings($settings);
-        $previous = $this->settings()['verification_mailbox'] ?? [];
-
-        // Laeufe, die vor einem Postfachwechsel gestartet wurden, duerfen ihre
-        // Sitzung danach nicht mehr in das neue Postfach schreiben.
-        if ($this->verificationMailboxIdentity($previous) !== $this->verificationMailboxIdentity($normalized['verification_mailbox'])) {
-            $normalized['verification_mailbox']['identity_changed_at'] = now()->toIso8601String();
-        } elseif (($normalized['verification_mailbox']['identity_changed_at'] ?? null) === null) {
-            // Formulare kennen das Feld nicht; ohne Uebernahme loeschte jedes Speichern
-            // den Zeitpunkt des letzten Wechsels und damit den Sitzungs-Schutz.
-            $normalized['verification_mailbox']['identity_changed_at'] = $previous['identity_changed_at'] ?? null;
-        }
 
         Setting::setValue(self::SETTINGS_TYPE, self::SETTINGS_KEY, $normalized);
 
@@ -147,20 +136,9 @@ class MailAccountRegistrationRunner
         ];
     }
 
-    public function verificationMailboxIdentity(array $mailbox): string
-    {
-        $email = strtolower(trim((string) ($mailbox['email'] ?? '')));
-        $username = strtolower(trim((string) ($mailbox['username'] ?? ''))) ?: $email;
-
-        return $email.'|'.$username.'|'.strtolower(trim((string) ($mailbox['provider'] ?? '')));
-    }
-
     /**
-     * Alle Lese-Aendern-Schreiben-Zugriffe auf das Verifizierungs-Postfach laufen
-     * unter derselben Sperre; sonst ueberschriebe eine gleichzeitig gespeicherte
-     * Browser-Sitzung einen gerade erfolgten Postfachwechsel. Die Sperre ist nicht
-     * wiedereintrittsfaehig: innerhalb des Callbacks nur die ungesperrten Helfer
-     * (promoteNextReserve, appendConsumedEntry) verwenden.
+     * Sperre fuer Lese-Aendern-Schreiben-Zugriffe auf diese Einstellungszeile; ohne
+     * sie ueberschriebe ein alter Stand eine gleichzeitige Aenderung.
      */
     public function withVerificationMailboxLock(callable $callback): mixed
     {
@@ -168,300 +146,31 @@ class MailAccountRegistrationRunner
     }
 
     /**
-     * Verbrauchs-Eintraege einer Adresse, aelteste zuerst. Verglichen wird ohne
-     * Gross-/Kleinschreibung; Domain-Aliase (gmx.de/gmx.net) bleiben getrennt,
-     * weil Proton die woertliche Adresse vergleicht.
+     * Frueheres Einstellungs-Postfach (vor dem Umzug in die E-Mail-Konten der
+     * Personen) samt Verbrauchs-Eintraegen; nur noch fuer den einmaligen Umzug.
      *
-     * @return list<array{email: string, reason: string, workflow_run_id: ?int, consumed_at: ?string}>
+     * @return array{mailbox: array, consumed: list<array>, reserve: list<array>}
      */
-    public function consumedEntriesFor(string $email, ?array $settings = null): array
+    public function legacyVerificationMailbox(): array
     {
-        $email = strtolower(trim($email));
-
-        if ($email === '') {
-            return [];
-        }
-
-        $settings ??= $this->settings();
-
-        return array_values(array_filter(
-            is_array($settings['verification_mailbox_consumed'] ?? null) ? $settings['verification_mailbox_consumed'] : [],
-            fn (mixed $entry): bool => is_array($entry) && strtolower(trim((string) ($entry['email'] ?? ''))) === $email,
-        ));
-    }
-
-    public function isVerificationMailboxConsumed(string $email, ?array $settings = null): bool
-    {
-        return $this->consumedEntriesFor($email, $settings) !== [];
-    }
-
-    /**
-     * Holt die erste verwendbare Reserve-Adresse in das aktive Postfach. Reiner
-     * Helfer ohne Sperre und ohne Speichern. Verbrauchte Reserve-Eintraege und die
-     * aktive Adresse selbst werden uebersprungen und bleiben in der Liste.
-     *
-     * @return array{0: array, 1: array|null} [neue Einstellungen, nachgerueckter Eintrag]
-     */
-    public function promoteNextReserve(array $settings): array
-    {
-        $active = is_array($settings['verification_mailbox'] ?? null) ? $settings['verification_mailbox'] : [];
-        $activeEmail = strtolower(trim((string) ($active['email'] ?? '')));
-        $reserve = array_values(is_array($settings['verification_mailbox_reserve'] ?? null) ? $settings['verification_mailbox_reserve'] : []);
-
-        foreach ($reserve as $index => $candidate) {
-            $candidateEmail = strtolower(trim((string) ($candidate['email'] ?? '')));
-
-            if ($candidateEmail === '' || $candidateEmail === $activeEmail || $this->isVerificationMailboxConsumed($candidateEmail, $settings)) {
-                continue;
-            }
-
-            array_splice($reserve, $index, 1);
-            $settings['verification_mailbox'] = [
-                // Ein bisher leeres Postfach wird mit der Reserve-Adresse auch aktiviert.
-                'enabled' => $activeEmail === '' ? true : (bool) ($active['enabled'] ?? false),
-                'email' => (string) $candidate['email'],
-                'provider' => (string) ($candidate['provider'] ?? 'gmx'),
-                'username' => (string) ($candidate['username'] ?? ''),
-                'password_encrypted' => $candidate['password_encrypted'] ?? null,
-                'webmail_url' => (string) ($candidate['webmail_url'] ?? ''),
-                'webmail_session' => null,
-                'browser_sessions' => [],
-            ];
-            $settings['verification_mailbox_reserve'] = $reserve;
-
-            return [$settings, $candidate];
-        }
-
-        return [$settings, null];
-    }
-
-    /**
-     * Vermerkt eine Adresse als verbraucht, ohne das aktive Postfach zu wechseln.
-     * Pro Adresse und Lauf entsteht hoechstens ein Eintrag; steht die Adresse noch
-     * in der Reserve, wird sie dort entfernt. Reiner Helfer ohne Sperre.
-     *
-     * @return array{0: array, 1: bool} [neue Einstellungen, ob ein Eintrag hinzukam]
-     */
-    public function appendConsumedEntry(array $settings, string $email, string $reason, ?int $workflowRunId): array
-    {
-        $email = trim($email);
-        $key = strtolower($email);
-
-        if ($key === '') {
-            return [$settings, false];
-        }
-
-        $settings['verification_mailbox_reserve'] = array_values(array_filter(
-            is_array($settings['verification_mailbox_reserve'] ?? null) ? $settings['verification_mailbox_reserve'] : [],
-            fn (mixed $entry): bool => ! is_array($entry) || strtolower(trim((string) ($entry['email'] ?? ''))) !== $key,
-        ));
-
-        $alreadyRecorded = collect($this->consumedEntriesFor($email, $settings))->contains(
-            fn (array $entry): bool => $workflowRunId !== null
-                ? (int) ($entry['workflow_run_id'] ?? 0) === $workflowRunId
-                : ($entry['workflow_run_id'] ?? null) === null && trim((string) ($entry['reason'] ?? '')) === trim($reason),
-        );
-
-        if ($alreadyRecorded) {
-            return [$settings, false];
-        }
-
-        $settings['verification_mailbox_consumed'][] = [
-            'email' => $email,
-            'reason' => trim($reason),
-            'workflow_run_id' => $workflowRunId,
-            'consumed_at' => now()->toIso8601String(),
-        ];
-
-        return [$settings, true];
-    }
-
-    /**
-     * Vermerkt den Verbrauch sofort (idempotent pro Adresse und Lauf), ohne zu
-     * rotieren. So kennt die Startsperre die Adresse auch dann, wenn der Lauf
-     * danach abgebrochen oder beendet wird, ohne dass failRun/completeRun laeuft.
-     */
-    public function recordConsumedVerificationMailbox(string $email, string $reason, ?int $workflowRunId = null): bool
-    {
-        if (trim($email) === '') {
-            return false;
-        }
-
-        return (bool) $this->withVerificationMailboxLock(function () use ($email, $reason, $workflowRunId): bool {
-            [$settings, $added] = $this->appendConsumedEntry($this->settings(), $email, $reason, $workflowRunId);
-
-            if ($added) {
-                $this->saveSettings($settings);
-            }
-
-            return $added;
-        });
-    }
-
-    /**
-     * Ein Anbieter wie Proton bindet die Verifizierungsadresse an das neue Konto;
-     * fuer die naechste Registrierung braucht es eine andere Adresse. Die Adresse
-     * wird als verbraucht vermerkt (idempotent pro Lauf). Ist sie noch das aktive
-     * Postfach, rueckt die erste unverbrauchte Reserve-Adresse mit leeren
-     * Sitzungen nach. Hat ein paralleler Lauf schon gewechselt, bleibt das aktive
-     * Postfach unveraendert.
-     *
-     * @return array{rotated: bool, consumed: string, active: string, reserve_left: int, was_active: bool}|null
-     */
-    public function consumeVerificationMailbox(string $email, string $reason, ?int $workflowRunId = null): ?array
-    {
-        $email = trim($email);
-
-        if ($email === '') {
-            return null;
-        }
-
-        return $this->withVerificationMailboxLock(function () use ($email, $reason, $workflowRunId): array {
-            $settings = $this->settings();
-            $activeEmail = trim((string) $settings['verification_mailbox']['email']);
-            $wasActive = strtolower($activeEmail) === strtolower($email);
-            // Die Verbraucht-Liste behaelt die Schreibweise des gespeicherten Postfachs.
-            $email = $wasActive ? $activeEmail : $email;
-            [$settings] = $this->appendConsumedEntry($settings, $email, $reason, $workflowRunId);
-            $next = null;
-
-            if ($wasActive) {
-                [$settings, $next] = $this->promoteNextReserve($settings);
-            }
-
-            $this->saveSettings($settings);
-
-            return [
-                'rotated' => $next !== null,
-                'consumed' => $email,
-                'active' => (string) $settings['verification_mailbox']['email'],
-                'reserve_left' => count($settings['verification_mailbox_reserve']),
-                'was_active' => $wasActive,
-            ];
-        });
-    }
-
-    /**
-     * Sorgt vor einer Registrierung fuer ein verwendbares aktives Postfach: Ist es
-     * leer oder verbraucht, rueckt die erste unverbrauchte Reserve-Adresse nach.
-     * Fuegt nie einen Verbrauchs-Eintrag hinzu.
-     *
-     * @return array{status: 'ok'|'promoted'|'unavailable', active: string, previous: ?string, consumed: list<array>}
-     */
-    public function ensureUsableVerificationMailbox(): array
-    {
-        return $this->withVerificationMailboxLock(function (): array {
-            $settings = $this->settings();
-
-            return $this->usableVerificationMailboxState($settings, promote: true);
-        });
-    }
-
-    /**
-     * Wie ensureUsableVerificationMailbox, aber nur lesend (z. B. innerhalb einer
-     * offenen Datenbank-Transaktion, in der nicht gewechselt werden darf).
-     *
-     * @return array{status: 'ok'|'promotable'|'unavailable', active: string, previous: ?string, consumed: list<array>, next: ?string}
-     */
-    public function verificationMailboxAvailability(?array $settings = null): array
-    {
-        return $this->usableVerificationMailboxState($settings ?? $this->settings(), promote: false);
-    }
-
-    protected function usableVerificationMailboxState(array $settings, bool $promote): array
-    {
-        $activeEmail = trim((string) ($settings['verification_mailbox']['email'] ?? ''));
-        $consumed = $this->consumedEntriesFor($activeEmail, $settings);
-
-        if ($activeEmail !== '' && $consumed === []) {
-            return ['status' => 'ok', 'active' => $activeEmail, 'previous' => null, 'consumed' => [], 'next' => null];
-        }
-
-        [$promotedSettings, $next] = $this->promoteNextReserve($settings);
-
-        if ($next === null) {
-            return ['status' => 'unavailable', 'active' => $activeEmail, 'previous' => null, 'consumed' => $consumed, 'next' => null];
-        }
-
-        if (! $promote) {
-            return ['status' => 'promotable', 'active' => $activeEmail, 'previous' => null, 'consumed' => $consumed, 'next' => (string) $next['email']];
-        }
-
-        $this->saveSettings($promotedSettings);
+        $settings = $this->settings();
 
         return [
-            'status' => 'promoted',
-            'active' => (string) $promotedSettings['verification_mailbox']['email'],
-            'previous' => $activeEmail !== '' ? $activeEmail : null,
-            'consumed' => $consumed,
-            'next' => null,
+            'mailbox' => $settings['verification_mailbox'],
+            'consumed' => $settings['verification_mailbox_consumed'],
+            'reserve' => $settings['verification_mailbox_reserve'],
         ];
     }
 
-    /**
-     * Entfernt alle Verbrauchs-Eintraege einer Adresse (manuelle Freigabe, wenn
-     * Proton die Adresse nachweislich wieder annimmt). Aendert nie das aktive
-     * Postfach, sein Passwort oder seine Sitzungen.
-     *
-     * @return list<array> die entfernten Eintraege
-     */
-    public function releaseConsumedVerificationMailbox(string $email): array
+    public function clearLegacyVerificationMailbox(): void
     {
-        $key = strtolower(trim($email));
-
-        if ($key === '') {
-            return [];
-        }
-
-        return $this->withVerificationMailboxLock(function () use ($key): array {
+        $this->withVerificationMailboxLock(function (): void {
             $settings = $this->settings();
-            [$removed, $kept] = collect($settings['verification_mailbox_consumed'])
-                ->partition(fn (array $entry): bool => strtolower(trim((string) $entry['email'])) === $key);
-
-            if ($removed->isEmpty()) {
-                return [];
-            }
-
-            $settings['verification_mailbox_consumed'] = $kept->values()->all();
+            $settings['verification_mailbox'] = [];
+            $settings['verification_mailbox_reserve'] = [];
+            $settings['verification_mailbox_consumed'] = [];
             $this->saveSettings($settings);
-            Log::info('Verifizierungs-Postfach wurde manuell freigegeben.', [
-                'email' => $key,
-                'workflow_run_ids' => $removed->pluck('workflow_run_id')->filter()->values()->all(),
-            ]);
-
-            return $removed->values()->all();
         });
-    }
-
-    /**
-     * Kurzbeschreibung der Verbrauchs-Eintraege fuer Meldungen, neueste zuerst,
-     * hoechstens drei Laeufe: "Lauf #641 am 23.11.2026, Lauf #639 am 16.11.2026".
-     */
-    public function describeConsumedEntries(array $entries, int $limit = 3): string
-    {
-        $parts = collect(array_reverse($entries))
-            ->unique(fn (array $entry): string => ($entry['workflow_run_id'] ?? null) !== null
-                ? 'run:'.$entry['workflow_run_id']
-                : 'at:'.($entry['consumed_at'] ?? ''))
-            ->map(function (array $entry): string {
-                $label = ($entry['workflow_run_id'] ?? null) ? 'Lauf #'.$entry['workflow_run_id'] : 'ohne Laufnummer';
-
-                try {
-                    if (trim((string) ($entry['consumed_at'] ?? '')) !== '') {
-                        $label .= ' am '.Carbon::parse((string) $entry['consumed_at'])->timezone(config('app.timezone'))->format('d.m.Y');
-                    }
-                } catch (\Throwable) {
-                    // Ein unlesbares Datum bleibt einfach weg.
-                }
-
-                return $label;
-            })
-            ->values();
-
-        $shown = $parts->take($limit)->implode(', ');
-        $more = $parts->count() - $limit;
-
-        return $more > 0 ? $shown.' und '.$more.' weitere' : $shown;
     }
 
     protected function normalizeReserveMailboxes(mixed $mailboxes): array
@@ -501,28 +210,30 @@ class MailAccountRegistrationRunner
     }
 
     /**
-     * Der direkte Registrierungs-Lauf setzt das aktive Verifizierungs-Postfach als
-     * Wiederherstellungsadresse ein. Ist es schon verbraucht, wird der Start
-     * abgelehnt, bevor ein Browser geoeffnet wird.
+     * Der direkte Registrierungs-Lauf braucht ein freies Verifizierungs-Postfach als
+     * Wiederherstellungsadresse, sofern keine angegeben ist. Es kommt aus den
+     * E-Mail-Konten der anderen Personen; ohne freies Konto wird der Start
+     * abgelehnt, bevor ein Browser geoeffnet wird. Dieser Pfad vermerkt keinen
+     * Verbrauch.
      */
-    protected function settingsWithUsableRecoveryMailbox(array $settings, array $normalizedSubject): array
+    protected function recoveryMailboxAccount(array $normalizedSubject): ?PersonEmailAccount
     {
-        $mailbox = is_array($settings['verification_mailbox'] ?? null) ? $settings['verification_mailbox'] : [];
-
-        if (! ($mailbox['enabled'] ?? false) || trim((string) ($normalizedSubject['recoveryEmail'] ?? '')) !== '') {
-            return $settings;
+        if (trim((string) ($normalizedSubject['recoveryEmail'] ?? '')) !== '') {
+            return null;
         }
 
-        // Nur pruefen, nie wechseln: Dieser Pfad vermerkt keinen Verbrauch. Eine hier
-        // still aktivierte Reserve-Adresse waere danach bei Proton gebunden, ohne dass
-        // die Startsperre davon wuesste.
-        $state = $this->verificationMailboxAvailability($settings);
+        $pool = app(VerificationAccountPool::class);
+        $personId = (int) ($normalizedSubject['personId'] ?? 0) ?: null;
+        $account = $pool->available($personId);
 
-        return match ($state['status']) {
-            'ok' => $settings,
-            'promotable' => throw VerificationMailboxUnavailableException::forDirectRegistration($state['active'], (string) $state['next']),
-            default => throw VerificationMailboxUnavailableException::forStart($state['active'], $this->describeConsumedEntries($state['consumed'])),
-        };
+        if (! $account) {
+            throw VerificationMailboxUnavailableException::noFreeAccount(
+                $pool->candidatesQuery($personId)->count(),
+                VerificationAccountPool::SUPPORTED_PROVIDERS,
+            );
+        }
+
+        return $account;
     }
 
     public function start(array $subject = [], ?string $providerKey = null, array $workflowContext = []): array
@@ -539,7 +250,7 @@ class MailAccountRegistrationRunner
         }
 
         $normalizedSubject = $this->normalizeSubject($subject);
-        $settings = $this->settingsWithUsableRecoveryMailbox($settings, $normalizedSubject);
+        $recoveryAccount = $this->recoveryMailboxAccount($normalizedSubject);
 
         $runId = (string) Str::uuid();
         $runDirectory = $this->runDirectory($runId);
@@ -556,15 +267,11 @@ class MailAccountRegistrationRunner
         $livePreviewPath = $publicRunDirectory.DIRECTORY_SEPARATOR.'live.png';
         $webmailLivePreviewPath = $publicRunDirectory.DIRECTORY_SEPARATOR.'live-webmail.png';
         $timezone = $this->runtimeTimezone($normalizedSubject['timezone'] ?? null);
-        $verificationMailbox = is_array($settings['verification_mailbox'] ?? null) ? $settings['verification_mailbox'] : [];
+        $verificationMailbox = app(VerificationAccountPool::class)->mailboxData($recoveryAccount);
         $workflowContext = $this->normalizeWorkflowContext($workflowContext);
 
-        if (
-            ($verificationMailbox['enabled'] ?? false)
-            && trim((string) ($normalizedSubject['recoveryEmail'] ?? '')) === ''
-            && trim((string) ($verificationMailbox['email'] ?? '')) !== ''
-        ) {
-            $normalizedSubject['recoveryEmail'] = trim((string) $verificationMailbox['email']);
+        if ($recoveryAccount) {
+            $normalizedSubject['recoveryEmail'] = trim((string) $recoveryAccount->email);
         }
 
         $runtimeConfig = [
@@ -593,7 +300,7 @@ class MailAccountRegistrationRunner
             'livePreviewPollIntervalSeconds' => (int) $settings['live_preview_interval_seconds'],
             'browserActivityCheckEnabled' => (bool) $settings['browser_activity_check_enabled'],
             'domDebugEnabled' => (bool) $settings['dom_debug_enabled'],
-            'verificationMailbox' => $this->runtimeVerificationMailbox($settings['verification_mailbox'] ?? []),
+            'verificationMailbox' => $this->runtimeVerificationMailbox($verificationMailbox),
             'livePreviewPath' => $livePreviewPath,
             'livePreviewRelativePath' => $this->publicScreenshotRelativePath($runId),
             'webmailLivePreviewPath' => $webmailLivePreviewPath,

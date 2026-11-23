@@ -26,6 +26,9 @@ class PersonEmailAccount extends Model
         'is_primary',
         'webmail_session',
         'sort_order',
+        'verification_consumed_at',
+        'verification_consumption',
+        'verification_browser_sessions',
     ];
 
     protected $casts = [
@@ -34,6 +37,9 @@ class PersonEmailAccount extends Model
         'smtp_port' => 'integer',
         'sort_order' => 'integer',
         'webmail_session' => 'array',
+        'verification_consumed_at' => 'datetime',
+        'verification_consumption' => 'array',
+        'verification_browser_sessions' => 'array',
     ];
 
     public function person(): BelongsTo
@@ -44,6 +50,27 @@ class PersonEmailAccount extends Model
     public function hasStoredPassword(): bool
     {
         return is_string($this->password_encrypted) && trim($this->password_encrypted) !== '';
+    }
+
+    /**
+     * Ein Anbieter (z. B. Proton) hat die Adresse bei einer Registrierung als
+     * Verifizierungs-Adresse gebunden oder abgelehnt; fuer weitere Registrierungen
+     * ist sie verbraucht.
+     */
+    public function isVerificationConsumed(): bool
+    {
+        return $this->verification_consumed_at !== null;
+    }
+
+    /**
+     * @return list<array{reason: string, workflow_run_id: ?int, consumed_at: ?string}>
+     */
+    public function verificationConsumptionEntries(): array
+    {
+        return array_values(array_filter(
+            is_array($this->verification_consumption) ? $this->verification_consumption : [],
+            fn (mixed $entry): bool => is_array($entry),
+        ));
     }
 
     public function hasWebmailSession(): bool

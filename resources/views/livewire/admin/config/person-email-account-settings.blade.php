@@ -68,7 +68,27 @@
                                             <span class="inline-flex items-center gap-1 text-secondary-base"><span class="mdi mdi-cookie-outline"></span> Webmail-Session ({{ $acc['webmail_cookie_count'] }})</span>
                                         @endif
                                         <span>Aktualisiert: {{ $acc['updated_at_label'] }}</span>
+                                        @if ($acc['verification_consumed'] ?? false)
+                                            <span data-verification-consumed class="inline-flex items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 font-semibold text-red-700">
+                                                <span class="mdi mdi-email-lock-outline"></span> Als Verifizierungs-Postfach verbraucht
+                                            </span>
+                                        @elseif ($acc['verification_supported'] ?? false)
+                                            <span data-verification-free class="inline-flex items-center gap-1 text-emerald-700">
+                                                <span class="mdi mdi-email-check-outline"></span> Als Verifizierungs-Postfach verfuegbar
+                                            </span>
+                                        @endif
                                     </div>
+                                    @if (($acc['verification_events'] ?? []) !== [])
+                                        <ul data-verification-events class="mt-1 text-xs text-slate-500">
+                                            @foreach ($acc['verification_events'] as $event)
+                                                <li>
+                                                    {{ ['registered' => 'Konto registriert', 'rejected' => 'von Proton abgelehnt'][$event['reason']] ?? ($event['reason'] ?: 'verbraucht') }}
+                                                    @if ($event['workflow_run_id']) · Lauf #{{ $event['workflow_run_id'] }} @endif
+                                                    @if ($event['consumed_at_label']) · {{ $event['consumed_at_label'] }} @endif
+                                                </li>
+                                            @endforeach
+                                        </ul>
+                                    @endif
                                 </div>
                             </div>
                             <div class="flex shrink-0 items-center gap-1">
@@ -76,6 +96,13 @@
                                     <button type="button" wire:click="setPrimaryAccount({{ $acc['id'] }})"
                                             class="rounded-md px-2.5 py-1.5 text-xs font-semibold text-slate-500 transition hover:bg-slate-100 hover:text-secondary-base" title="Als primaer setzen">
                                         <span class="mdi mdi-star-outline"></span> Primaer
+                                    </button>
+                                @endif
+                                @if ($acc['verification_consumed'] ?? false)
+                                    <button type="button" wire:click="releaseVerificationAccount({{ $acc['id'] }})"
+                                            wire:confirm="Postfach wieder als Verifizierungs-Adresse freigeben? Nur freigeben, wenn sicher ist, dass Proton die Adresse wieder annimmt."
+                                            class="rounded-md px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-100">
+                                        Freigeben
                                     </button>
                                 @endif
                                 <button type="button" wire:click="editAccount({{ $acc['id'] }})"

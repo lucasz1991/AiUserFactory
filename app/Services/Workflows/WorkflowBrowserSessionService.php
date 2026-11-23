@@ -6,7 +6,7 @@ use App\Models\Person;
 use App\Models\PersonEmailAccount;
 use App\Models\Workflow;
 use App\Models\WorkflowStep;
-use App\Services\Mail\MailAccountRegistrationRunner;
+use App\Services\Mail\VerificationAccountPool;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -81,9 +81,10 @@ class WorkflowBrowserSessionService
             $metadata = is_array($person->metadata) ? $person->metadata : [];
             $sessions = $this->decryptSessions($metadata['browser_sessions'] ?? []);
         } else {
-            $settings = app(MailAccountRegistrationRunner::class)->settings();
-            $mailbox = is_array($settings['verification_mailbox'] ?? null) ? $settings['verification_mailbox'] : [];
-            $sessions = $this->decryptSessions($mailbox['browser_sessions'] ?? []);
+            // Laeufe ohne Person lesen mit einem Verifizierungs-Postfach aus den
+            // E-Mail-Konten der Personen.
+            $account = app(VerificationAccountPool::class)->forReading();
+            $sessions = $this->decryptSessions($account?->verification_browser_sessions ?? []);
         }
 
         $automation = $this->runtimeConfig($workflow, $person?->id);

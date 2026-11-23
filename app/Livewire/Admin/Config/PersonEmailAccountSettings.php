@@ -4,6 +4,7 @@ namespace App\Livewire\Admin\Config;
 
 use App\Models\Person;
 use App\Models\PersonEmailAccount;
+use App\Services\Mail\VerificationAccountPool;
 use App\Services\Mail\MailAccountRegistrationRunner;
 use App\Services\Mail\WebmailSessionRunner;
 use Illuminate\Support\Facades\Crypt;
@@ -222,6 +223,27 @@ class PersonEmailAccountSettings extends Component
         $this->dispatch('showAlert', 'Primaerer Account gesetzt.', 'success');
     }
 
+    /**
+     * Gibt ein als verbraucht vermerktes Verifizierungs-Postfach wieder frei, wenn
+     * der Anbieter die Adresse nachweislich wieder annimmt.
+     */
+    public function releaseVerificationAccount(int $accountId): void
+    {
+        $account = $this->findAccount($accountId);
+
+        if (! $account) {
+            return;
+        }
+
+        $released = app(VerificationAccountPool::class)->release((int) $account->id);
+        $this->loadPerson();
+        $this->dispatch(
+            'showAlert',
+            $released ? 'Verifizierungs-Postfach wurde freigegeben.' : 'Das Postfach war nicht als verbraucht vermerkt.',
+            $released ? 'success' : 'warning',
+        );
+    }
+
     public function clearStoredPassword(): void
     {
         if (! $this->editingAccountId) {
@@ -430,6 +452,13 @@ class PersonEmailAccountSettings extends Component
                 'has_webmail_session' => $account->hasWebmailSession(),
                 'webmail_cookie_count' => (int) data_get($account->webmail_session, 'cookie_count', 0),
                 'updated_at_label' => optional($account->updated_at)->format('d.m.Y H:i') ?? '-',
+                'verification_supported' => in_array((string) $account->provider, VerificationAccountPool::SUPPORTED_PROVIDERS, true),
+                'verification_consumed' => $account->isVerificationConsumed(),
+                'verification_events' => array_map(fn (array $entry): array => [
+                    'reason' => (string) ($entry['reason'] ?? ''),
+                    'workflow_run_id' => is_numeric($entry['workflow_run_id'] ?? null) ? (int) $entry['workflow_run_id'] : null,
+                    'consumed_at_label' => $this->formatTimestamp($entry['consumed_at'] ?? null),
+                ], array_reverse($account->verificationConsumptionEntries())),
             ];
         })->all();
     }
@@ -617,6 +646,17 @@ class PersonEmailAccountSettings extends Component
         $this->notes = '';
         $this->editingWebmailSession = [];
         $this->resetErrorBag();
+    }
+
+    protected function formatTimestamp(mixed $value): ?string
+    {
+        try {
+            return trim((string) $value) !== ''
+                ? \Illuminate\Support\Carbon::parse((string) $value)->timezone(config('app.timezone'))->format('d.m.Y H:i')
+                : null;
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     protected function nullableString(mixed $value): ?string

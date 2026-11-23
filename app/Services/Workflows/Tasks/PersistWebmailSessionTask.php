@@ -4,7 +4,6 @@ namespace App\Services\Workflows\Tasks;
 
 use App\Models\Person;
 use App\Models\PersonEmailAccount;
-use App\Services\Mail\MailAccountRegistrationRunner;
 use Illuminate\Support\Facades\DB;
 
 class PersistWebmailSessionTask
@@ -98,7 +97,11 @@ class PersistWebmailSessionTask
         ];
     }
 
-    public function handleVerificationMailbox(array $result): array
+    /**
+     * Speichert die Webmail-Sitzung in das E-Mail-Konto, das dem Lauf als
+     * Verifizierungs-Postfach zugeordnet ist.
+     */
+    public function handleVerificationAccount(PersonEmailAccount $account, array $result): array
     {
         $encryptedPayload = trim((string) ($result['encryptedSessionPayload'] ?? ''));
 
@@ -110,7 +113,6 @@ class PersistWebmailSessionTask
             ];
         }
 
-        $runner = app(MailAccountRegistrationRunner::class);
         $summary = is_array($result['sessionSummary'] ?? null) ? $result['sessionSummary'] : [];
 
         $webmailSession = [
@@ -127,18 +129,12 @@ class PersistWebmailSessionTask
             'script_version' => (int) ($result['scriptVersion'] ?? 1),
             'updated_at' => now()->toIso8601String(),
         ];
-        $runner->withVerificationMailboxLock(function () use ($runner, $webmailSession): void {
-            $settings = $runner->settings();
-            $mailbox = is_array($settings['verification_mailbox'] ?? null) ? $settings['verification_mailbox'] : [];
-            $mailbox['webmail_session'] = $webmailSession;
-            $settings['verification_mailbox'] = $mailbox;
-            $runner->saveSettings($settings);
-        });
+        $account->forceFill(['webmail_session' => $webmailSession])->save();
 
         return [
             'ok' => true,
             'status' => 'success',
-            'statusMessage' => 'Webmail-Session des Haupt-Verifikationskontos wurde gespeichert.',
+            'statusMessage' => 'Webmail-Session des Verifizierungs-Postfachs wurde gespeichert.',
             'session' => collect($webmailSession)->except(['payload_encrypted'])->all(),
         ];
     }

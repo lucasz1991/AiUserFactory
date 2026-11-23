@@ -23,6 +23,7 @@ use App\Models\WorkflowStudioSession;
 use App\Services\ClientController\NetworkJobDispatcher;
 use App\Services\ClientController\NetworkJobDoorbellService;
 use App\Services\Mail\MailAccountRegistrationRunner;
+use App\Services\Mail\VerificationAccountPool;
 use App\Services\Mail\WebmailSessionRunner;
 use App\Services\Persons\PersonAccountRegistry;
 use App\Services\Workflows\Tasks\PersistBrowserSessionTask;
@@ -108,16 +109,17 @@ class WorkflowExecutionService
         $workflow->refresh();
 
         // Ein Workflow, der das Verifizierungs-Postfach verbrauchen kann (Proton-
-        // Registrierung), startet nie mit einer schon verbrauchten Adresse: Eine
-        // Reserve-Adresse rueckt vorher nach, sonst wird der Start abgelehnt.
+        // Registrierung), bekommt ein freies E-Mail-Konto einer anderen Person fest
+        // zugeordnet; ohne freies Konto wird der Start abgelehnt.
         // Marker eines Ursprungslaufs (Checkpoint-Branch, Copilot-Ruecksprung) gelten
         // nicht fuer den neuen Lauf; er bekommt seinen eigenen Stempel.
         unset($context['verification_mailbox_guard'], $context['verification_mailbox_consumed']);
         $verificationMailbox = app(VerificationMailboxStartGuard::class)->ensureAvailableFor($workflow, $context);
         if ($verificationMailbox !== null) {
             $context['verification_mailbox_guard'] = [
+                'account_id' => $verificationMailbox['account_id'],
                 'email' => $verificationMailbox['email'],
-                'promoted_from' => $verificationMailbox['promoted_from'],
+                'person_id' => $verificationMailbox['person_id'],
                 'checked_at' => now()->toIso8601String(),
             ];
         }
@@ -3417,7 +3419,6 @@ class WorkflowExecutionService
 
         $this->releaseClientReservation($run);
         $this->closeWorkflowTaskProcesses($run, 'Workflow-Lauf wurde abgeschlossen; zugehoerige Browser-Prozesse wurden geschlossen.');
-        $this->forgetRotatedVerificationMailboxProfile($this->rotateConsumedVerificationMailbox($run));
         $this->cleanupSuccessfulWorkflowRunLogs($run);
         $this->notifyCopilotRunFinished($run);
     }
@@ -3452,10 +3453,7 @@ class WorkflowExecutionService
         $finishedAt = now();
         $durationMs = $this->workflowRunDurationMs($run, $finishedAt);
         $normalizedWorkflow = $this->resultNormalizer->summarizeRun($this->loadRun($run->id));
-        // Erst wechseln, dann speichern: Die Meldung nennt so die abgelehnte Adresse
-        // und welche Adresse ab dem naechsten Lauf gilt.
-        $mailboxRotation = $this->rotateConsumedVerificationMailbox($run);
-        $message = $this->messageWithVerificationMailboxOutcome($message, $mailboxRotation);
+        $message = $this->messageWithVerificationMailboxOutcome($message, $this->verificationMailboxOutcome($run));
 
         $run->forceFill([
             'status' => 'failed',
@@ -3484,7 +3482,6 @@ class WorkflowExecutionService
         $this->releaseClientReservation($run);
 
         $this->closeWorkflowTaskProcesses($run, 'Workflow-Lauf wurde beendet; zugehoerige Browser-Prozesse wurden geschlossen.');
-        $this->forgetRotatedVerificationMailboxProfile($mailboxRotation);
         $this->notifyCopilotRunFinished($run);
     }
 
@@ -4801,59 +4798,36 @@ class WorkflowExecutionService
             && strtolower(trim((string) ($result['routeOutcome'] ?? ''))) === 'success';
     }
 
-    /**
-     * Ein Lauf, der vor einem Postfachwechsel gestartet wurde, speichert sonst
-     * die Sitzung des alten Postfachs in das neue.
-     */
-    protected function verificationMailboxChangedSinceRunStart(WorkflowRun $run): bool
-    {
-        $changedAt = trim((string) data_get($this->mailRegistration->settings(), 'verification_mailbox.identity_changed_at', ''));
-        $startedAt = $run->started_at ?? $run->created_at;
-
-        if ($changedAt === '' || $startedAt === null) {
-            return false;
-        }
-
-        try {
-            return \Illuminate\Support\Carbon::parse($changedAt)->greaterThan($startedAt);
-        } catch (\Throwable) {
-            return false;
-        }
-    }
-
     protected function markVerificationMailboxConsumed(WorkflowRun $run, string $reason, ?string $email = null): void
     {
-        // Gemeint ist die Adresse, mit der dieser Lauf gestartet wurde, nicht die
-        // gerade aktive: Ein paralleler Lauf kann inzwischen gewechselt haben, und
-        // dann wuerde sonst eine unbenutzte Reserve-Adresse verbrannt. Listen, die
-        // nach einem Wechsel starten wuerden, haelt executeStep vorher an.
-        $stamped = trim((string) data_get(WorkflowRun::query()->find($run->id)?->context_json, 'verification_mailbox_guard.email', ''));
-        $runEmail = $stamped ?: trim((string) ($this->mailRegistration->settings()['verification_mailbox']['email'] ?? ''));
+        // Gemeint ist das Konto, das diesem Lauf fest zugeordnet ist (bei Laeufen
+        // ohne Zuordnung das Konto, mit dem er gelesen hat).
+        $freshRun = WorkflowRun::query()->find($run->id) ?? $run;
+        $account = app(VerificationAccountPool::class)->forRun($freshRun);
+        $accountEmail = trim((string) $account?->email);
 
-        if ($runEmail === '' || ($email !== null && strtolower(trim($email)) !== strtolower($runEmail))) {
+        if (! $account || $accountEmail === '' || ($email !== null && strtolower(trim($email)) !== strtolower($accountEmail))) {
             return;
         }
 
-        // Sofort vermerken: Auch ein danach gestoppter oder abgebrochener Lauf
-        // hinterlaesst die Adresse in der Verbraucht-Liste, und die Startsperre kennt
-        // sie. In einer offenen Transaktion erst nach dem Commit, weil die Postfach-
-        // Sperre sonst vor dem Commit endet. Gewechselt wird erst am Laufende.
-        $record = function () use ($runEmail, $reason, $run): void {
+        // Sofort am Konto vermerken: Auch ein danach gestoppter Lauf hinterlaesst
+        // den Verbrauch, und kein weiterer Lauf bekommt das Postfach zugeordnet.
+        $record = function () use ($account, $reason, $run): void {
             try {
-                $this->mailRegistration->recordConsumedVerificationMailbox($runEmail, $reason, (int) $run->id);
+                app(VerificationAccountPool::class)->recordConsumption((int) $account->id, $reason, (int) $run->id);
             } catch (\Throwable $exception) {
                 report($exception);
             }
         };
         VerificationMailboxStartGuard::insideApplicationTransaction() ? DB::afterCommit($record) : $record();
 
-        // Den Kontext erst jetzt frisch lesen: Das Vermerken kann auf die Sperre
-        // warten, und eine inzwischen gespeicherte Kontext-Aenderung (z. B. eine
-        // Pause-Anforderung) darf nicht ueberschrieben werden.
+        // Den Kontext erst jetzt frisch lesen, damit eine inzwischen gespeicherte
+        // Aenderung (z. B. eine Pause-Anforderung) nicht ueberschrieben wird.
         $run->refresh();
         $context = is_array($run->context_json) ? $run->context_json : [];
         $context['verification_mailbox_consumed'] = [
-            'email' => $runEmail,
+            'account_id' => (int) $account->id,
+            'email' => $accountEmail,
             'reason' => $reason,
             'at' => now()->toIso8601String(),
         ];
@@ -4861,99 +4835,56 @@ class WorkflowExecutionService
     }
 
     /**
-     * Wechselt am Laufende das aktive Postfach, wenn der Lauf es verbraucht hat.
-     * Liefert das Ergebnis fuer die Meldung; die Profilbereinigung folgt erst,
-     * wenn die Browser-Prozesse des Laufs geschlossen sind.
+     * Was die Fehlermeldung ueber das verbrauchte Postfach sagen soll.
      *
-     * @return array{rotated: bool, consumed: string, active: string, reserve_left: int, was_active: bool, reason: string}|null
+     * @return array{consumed: string, reason: string, available: int}|null
      */
-    protected function rotateConsumedVerificationMailbox(WorkflowRun $run): ?array
+    protected function verificationMailboxOutcome(WorkflowRun $run): ?array
     {
         try {
-            $consumed = data_get(WorkflowRun::query()->find($run->id)?->context_json, 'verification_mailbox_consumed');
-            $email = trim((string) data_get($consumed, 'email', ''));
+            $context = WorkflowRun::query()->find($run->id)?->context_json;
+            $email = trim((string) data_get($context, 'verification_mailbox_consumed.email', ''));
 
             if ($email === '') {
                 return null;
             }
 
-            $reason = (string) data_get($consumed, 'reason', '');
-            $otherConsumers = app(VerificationMailboxStartGuard::class)->pendingConsumerRunIds($email, (int) $run->id);
-
-            // Ein anderer, noch laufender Lauf hat die Adresse verbraucht und braucht
-            // das Postfach noch fuer seine weiteren Listen; gewechselt wird an dessen
-            // Ende (oder beim naechsten Start, wenn er dann beendet ist).
-            if ($otherConsumers !== []) {
-                $this->mailRegistration->recordConsumedVerificationMailbox($email, $reason, (int) $run->id);
-
-                return [
-                    'rotated' => false,
-                    'consumed' => $email,
-                    'active' => (string) ($this->mailRegistration->settings()['verification_mailbox']['email'] ?? ''),
-                    'reserve_left' => count($this->mailRegistration->settings()['verification_mailbox_reserve'] ?? []),
-                    'was_active' => true,
-                    'deferred_for' => $otherConsumers,
-                    'reason' => $reason,
-                ];
-            }
-
-            $rotation = $this->mailRegistration->consumeVerificationMailbox($email, $reason, (int) $run->id);
-
-            return $rotation !== null ? [...$rotation, 'reason' => $reason] : null;
+            return [
+                'consumed' => $email,
+                'reason' => (string) data_get($context, 'verification_mailbox_consumed.reason', ''),
+                'available' => app(VerificationAccountPool::class)->availableCount((int) data_get($context, 'person_id', 0) ?: null),
+            ];
         } catch (\Throwable $exception) {
-            // Der Postfachwechsel darf den Abschluss des Laufs nie verhindern.
             report($exception);
 
             return null;
         }
     }
 
-    protected function forgetRotatedVerificationMailboxProfile(?array $rotation): void
-    {
-        if (! ($rotation['rotated'] ?? false)) {
-            return;
-        }
-
-        try {
-            $this->workflowTasks->forgetVerificationMailboxBrowserProfile();
-        } catch (\Throwable $exception) {
-            report($exception);
-        }
-    }
-
     /**
-     * Stellt der Fehlermeldung einen kurzen Satz voran: welche Adresse verbraucht
-     * ist und welche ab dem naechsten Lauf gilt. Die Studio-Leiste kuerzt nach
-     * etwa 220 Zeichen, deshalb kommt das Wichtigste zuerst.
+     * Ergaenzt die Fehlermeldung um einen kurzen Satz: welches Postfach verbraucht
+     * ist und ob fuer den naechsten Lauf noch ein freies bereitsteht. Die Studio-
+     * Leiste kuerzt nach etwa 220 Zeichen, deshalb kommt bei einer Ablehnung das
+     * Wichtigste zuerst.
      */
-    protected function messageWithVerificationMailboxOutcome(string $message, ?array $rotation): string
+    protected function messageWithVerificationMailboxOutcome(string $message, ?array $outcome): string
     {
-        $email = trim((string) ($rotation['consumed'] ?? ''));
+        $email = trim((string) ($outcome['consumed'] ?? ''));
 
         if ($email === '') {
             return $message;
         }
 
-        $lead = ($rotation['reason'] ?? '') === 'registered'
-            ? 'Die Verifizierungs-Adresse '.$email.' ist jetzt an das neue Konto gebunden.'
-            : 'Proton hat die Verifizierungs-Adresse '.$email.' abgelehnt (bereits verwendet).';
+        $lead = ($outcome['reason'] ?? '') === 'registered'
+            ? 'Das Verifizierungs-Postfach '.$email.' ist jetzt an das neue Konto gebunden.'
+            : 'Proton hat das Verifizierungs-Postfach '.$email.' abgelehnt (bereits verwendet); es ist jetzt als verbraucht vermerkt.';
+        $available = (int) ($outcome['available'] ?? 0);
+        $next = $available > 0
+            ? 'Der naechste Lauf nutzt automatisch ein anderes freies Postfach ('.$available.' verfuegbar).'
+            : 'Kein weiteres freies Postfach: bitte bei einer anderen Person ein weiteres GMX-Konto anlegen.';
+        $sentence = $lead.' '.$next;
 
-        if (($rotation['deferred_for'] ?? []) !== []) {
-            $outcome = 'Gewechselt wird nach Ende von Lauf #'.implode(', #', $rotation['deferred_for']).'.';
-        } elseif ($rotation['rotated'] ?? false) {
-            $outcome = 'Ab dem naechsten Lauf ist '.$rotation['active'].' aktiv.';
-        } elseif (($rotation['was_active'] ?? false) || trim((string) ($rotation['active'] ?? '')) === '') {
-            $outcome = 'Keine unverbrauchte Reserve-Adresse hinterlegt: bitte unter Einstellungen > Mail-Registrierung eine neue GMX-Adresse eintragen.';
-        } else {
-            $outcome = 'Aktiv ist bereits '.$rotation['active'].'.';
-        }
-
-        $sentence = $lead.' '.$outcome;
-
-        // Bei einer Ablehnung ist die Adresse die Ursache und steht vorn. Hat der Lauf
-        // erfolgreich registriert und scheitert spaeter, bleibt die eigentliche
-        // Ursache vorn; die Studio-Leiste kuerzt nach etwa 220 Zeichen.
-        return ($rotation['reason'] ?? '') === 'registered'
+        return ($outcome['reason'] ?? '') === 'registered'
             ? trim($message.' '.$sentence)
             : trim($sentence.' '.$message);
     }
@@ -5050,11 +4981,11 @@ class WorkflowExecutionService
             return;
         }
 
-        if ($this->verificationMailboxChangedSinceRunStart($run)) {
-            return;
-        }
+        $account = app(VerificationAccountPool::class)->forRun($run, $person?->id);
 
-        app(PersistWebmailSessionTask::class)->handleVerificationMailbox($result);
+        if ($account) {
+            app(PersistWebmailSessionTask::class)->handleVerificationAccount($account, $result);
+        }
     }
 
     protected function applyBrowserSessionResult(WorkflowRun $run, array $result): void
@@ -5072,11 +5003,11 @@ class WorkflowExecutionService
             return;
         }
 
-        if ($this->verificationMailboxChangedSinceRunStart($run)) {
-            return;
-        }
+        $account = app(VerificationAccountPool::class)->forRun($run);
 
-        app(PersistBrowserSessionTask::class)->handleVerificationMailbox($result);
+        if ($account) {
+            app(PersistBrowserSessionTask::class)->handleVerificationAccount($account, $result);
+        }
     }
 
     protected function applyBrowserSessionDeletionResult(WorkflowRun $run, array $result): void
@@ -5089,7 +5020,11 @@ class WorkflowExecutionService
             return;
         }
 
-        app(PersistBrowserSessionTask::class)->deleteVerificationMailbox($result);
+        $account = app(VerificationAccountPool::class)->forRun($run);
+
+        if ($account) {
+            app(PersistBrowserSessionTask::class)->deleteVerificationAccount($account, $result);
+        }
     }
 
     protected function finalizeWorkflowWebmailSessionResult(array $result, bool $deleteSource = true): array
@@ -5303,7 +5238,14 @@ class WorkflowExecutionService
     {
         $person = $this->personForRun($run, $step);
         $settings = $this->mailRegistration->settings();
-        $verificationMailbox = $this->workflowVerificationMailbox($settings['verification_mailbox'] ?? []);
+        // Das Verifizierungs-Postfach ist das E-Mail-Konto einer anderen Person, das
+        // diesem Lauf fest zugeordnet ist (sonst ein passendes Konto zum Lesen).
+        $verificationAccount = app(VerificationAccountPool::class)->forRun($run, $person?->id);
+        $verificationMailbox = [
+            ...$this->workflowVerificationMailbox(app(VerificationAccountPool::class)->mailboxData($verificationAccount)),
+            'id' => $verificationAccount?->id,
+            'personId' => $verificationAccount?->person_id,
+        ];
         $canonicalEmailAccount = $person
             ? ($person->emailAccounts()->where('is_primary', true)->first() ?? $person->emailAccounts()->first())
             : null;

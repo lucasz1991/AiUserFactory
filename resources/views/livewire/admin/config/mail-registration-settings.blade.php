@@ -62,225 +62,75 @@
         </div>
     </div>
 
-    <div class="rounded-lg border border-gray-200 bg-white p-5">
-        <div class="flex flex-wrap items-start justify-between gap-3">
-            <div>
-                <h3 class="text-sm font-semibold text-gray-900">Register Email Account</h3>
-                <p class="mt-1 text-sm text-gray-500">Webmail-Postfach fuer Registrierungs- und Verifikationsmails.</p>
-            </div>
-            <label class="inline-flex items-center gap-2 text-sm font-medium text-gray-700">
-                <input type="checkbox" wire:model.defer="verificationMailboxEnabled" class="rounded border-gray-300 text-slate-900 shadow-sm focus:ring-slate-900">
-                Als Verifikations-Postfach nutzen
-            </label>
-            <button type="button" wire:click="buildVerificationMailboxWebmailSession" wire:loading.attr="disabled" class="rounded-md border border-emerald-200 bg-white px-4 py-2 text-sm font-semibold text-emerald-700 shadow-sm hover:bg-emerald-50 disabled:cursor-wait disabled:opacity-60">
-                Webmail-Session speichern
-            </button>
-        </div>
-
-        @if($activeMailboxConsumption !== [])
-            <div role="alert" data-verification-mailbox-consumed-warning data-consumed-email="{{ strtolower($activeMailboxConsumption['email']) }}" class="mt-5 rounded-lg border border-red-300 bg-red-50 p-4 text-sm text-red-900">
-                <p class="font-semibold">Aktives Verifizierungs-Postfach ist bereits verbraucht</p>
-                <p class="mt-1">
-                    {{ $activeMailboxConsumption['email'] }} ist bei Proton schon vergeben ("Email address already used").
-                    Registrierungen mit dieser Adresse werden nicht mehr gestartet.
-                </p>
-                <ul class="mt-2 list-disc pl-5">
-                    @foreach($activeMailboxConsumption['events'] as $event)
-                        <li data-consumed-run="{{ $event['workflowRunId'] }}">
-                            {{ $event['workflowRunId'] ? 'Lauf #'.$event['workflowRunId'] : 'ohne Laufnummer' }}
-                            · {{ $event['reasonLabel'] }}
-                            @if($event['consumedAtLabel']) · {{ $event['consumedAtLabel'] }} @endif
-                        </li>
-                    @endforeach
-                </ul>
-                @if($nextReserveMailboxEmail)
-                    <button type="button" wire:click="activateNextReserveMailbox" wire:loading.attr="disabled" data-activate-next-reserve class="mt-3 rounded-md bg-red-700 px-3 py-2 text-xs font-semibold text-white hover:bg-red-800 disabled:opacity-60">
-                        Naechste Reserve-Adresse jetzt aktivieren ({{ $nextReserveMailboxEmail }})
-                    </button>
-                @else
-                    <p data-verification-mailbox-consumed-no-reserve class="mt-3 font-semibold">
-                        Keine Reserve-Adresse hinterlegt: Bitte oben eine neue GMX-Adresse mit Passwort eintragen und speichern
-                        oder unten eine Reserve-Adresse hinzufuegen (sie wird sofort aktiv, sobald kein Lauf das Postfach mehr nutzt).
-                    </p>
-                @endif
-                <p class="mt-2 text-xs">Nimmt Proton die Adresse nachweislich wieder an, kann sie unten unter "Verbrauchte Adressen" freigegeben werden.</p>
-            </div>
-        @endif
-
-        <div class="mt-5 grid gap-6 md:grid-cols-2 xl:grid-cols-3">
-            <div>
-                <label for="verification-mailbox-email" class="block text-sm font-medium text-gray-700">
-                    E-Mail-Adresse
-                    @if($activeMailboxConsumption !== [])
-                        <span data-verification-mailbox-email-consumed class="ml-2 rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700">verbraucht</span>
-                    @endif
-                </label>
-                <input id="verification-mailbox-email" type="email" wire:model.defer="verificationMailboxEmail" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
-                @error('verificationMailboxEmail') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
-            </div>
-
-            <div>
-                <label for="verification-mailbox-provider" class="block text-sm font-medium text-gray-700">Provider</label>
-                <select id="verification-mailbox-provider" wire:model.live="verificationMailboxProvider" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
-                    <option value="proton">Proton</option>
-                    <option value="gmx">GMX</option>
-                </select>
-                @error('verificationMailboxProvider') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
-            </div>
-
-            <div>
-                <label for="verification-mailbox-username" class="block text-sm font-medium text-gray-700">Login / Benutzername</label>
-                <input id="verification-mailbox-username" type="text" wire:model.defer="verificationMailboxUsername" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
-                @error('verificationMailboxUsername') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
-            </div>
-
-            <div>
-                <label for="verification-mailbox-password" class="block text-sm font-medium text-gray-700">Passwort</label>
-                <input id="verification-mailbox-password" type="password" wire:model.defer="verificationMailboxPassword" autocomplete="new-password" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
-                <div class="mt-2 flex items-center justify-between gap-3 text-xs text-gray-500">
-                    <span>
-                        @if($hasStoredVerificationMailboxPassword)
-                            Passwort ist gespeichert. Leeres Feld behaelt das vorhandene Passwort.
-                        @else
-                            Noch kein Passwort gespeichert.
-                        @endif
-                    </span>
-                    @if($hasStoredVerificationMailboxPassword)
-                        <button type="button" wire:click="clearVerificationMailboxPassword" wire:confirm="Gespeichertes Passwort des Verifikations-Postfachs wirklich loeschen?" class="font-semibold text-red-600 hover:text-red-700">
-                            Passwort loeschen
-                        </button>
-                    @endif
-                </div>
-                @error('verificationMailboxPassword') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
-            </div>
-
-            <div>
-                <label for="verification-mailbox-webmail-url" class="block text-sm font-medium text-gray-700">Webmail URL</label>
-                <input id="verification-mailbox-webmail-url" type="url" wire:model.defer="verificationMailboxWebmailUrl" placeholder="https://mail.example.com" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
-                @error('verificationMailboxWebmailUrl') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
-            </div>
+    <div class="rounded-lg border border-gray-200 bg-white p-5" data-verification-account-pool>
+        <div>
+            <h3 class="text-sm font-semibold text-gray-900">Verifizierungs-Postfaecher</h3>
+            <p class="mt-1 text-sm text-gray-500">
+                Registrierungen (z. B. bei Proton) nutzen als Verifizierungs-Adresse die E-Mail-Konten der Personen, und zwar nur Anbieter,
+                fuer die ein Workflow zum Auslesen des Codes bereitliegt ({{ strtoupper(implode(', ', $supportedProviders)) }}).
+                Jeder Lauf bekommt ein freies Konto einer anderen Person fest zugeordnet. Bindet der Anbieter die Adresse an das neue Konto
+                oder lehnt er sie als bereits verwendet ab, wird das am Konto vermerkt. Konten legst du bei der jeweiligen Person unter E-Mail-Konten an.
+            </p>
         </div>
 
         @if($mailboxNotice !== '')
-            <p data-mailbox-notice="{{ $mailboxNoticeType }}" role="status" class="mt-5 rounded-md border px-3 py-2 text-sm {{ $mailboxNoticeType === 'success' ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : ($mailboxNoticeType === 'error' ? 'border-red-300 bg-red-50 text-red-900' : 'border-amber-200 bg-amber-50 text-amber-900') }}">
+            <p data-mailbox-notice="{{ $mailboxNoticeType }}" role="status" class="mt-4 rounded-md border px-3 py-2 text-sm {{ $mailboxNoticeType === 'success' ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-amber-200 bg-amber-50 text-amber-900' }}">
                 {{ $mailboxNotice }}
             </p>
         @endif
 
-        <div class="mt-6 border-t border-gray-100 pt-5" data-verification-mailbox-reserve>
-            <h4 class="text-sm font-semibold text-gray-900">Weitere GMX-Adressen (Reserve)</h4>
-            <p class="mt-1 text-sm text-gray-500">
-                Proton bindet die Verifizierungsadresse an das neue Konto. Ist sie verbraucht (Registrierung erfolgreich oder von Proton abgelehnt),
-                wird am Ende des Laufs automatisch die erste Reserve-Adresse zum aktiven Verifizierungs-Postfach. Ist das aktive Postfach schon verbraucht,
-                wird eine neu hinzugefuegte Reserve-Adresse sofort aktiv.
+        @if($availableVerificationAccounts === 0)
+            <p data-verification-account-pool-empty class="mt-4 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm font-semibold text-red-900">
+                Kein freies Verifizierungs-Postfach: Registrierungen werden nicht gestartet, bis bei einer Person ein weiteres
+                {{ strtoupper(implode('/', $supportedProviders)) }}-Konto mit Passwort angelegt ist.
             </p>
+        @endif
 
-            @if($reserveMailboxes === [])
-                @if($activeMailboxConsumption !== [])
-                    <p data-verification-mailbox-reserve-empty="blocking" class="mt-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm font-semibold text-red-900">
-                        Keine Reserve-Adresse hinterlegt und das aktive Postfach ist verbraucht: Ohne neue Adresse startet keine Registrierung.
-                    </p>
-                @else
-                    <p data-verification-mailbox-reserve-empty="hint" class="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                        Keine Reserve-Adresse hinterlegt. Ist das aktive Postfach verbraucht, startet keine Registrierung mehr, bis eine neue Adresse eingetragen ist.
-                    </p>
-                @endif
-            @else
-                <ul class="mt-3 divide-y divide-gray-100 rounded-md border border-gray-200">
-                    @foreach($reserveMailboxes as $index => $mailbox)
-                        <li class="flex flex-wrap items-center justify-between gap-3 px-3 py-2 text-sm" wire:key="reserve-mailbox-{{ $mailbox['email'] }}">
-                            <div class="min-w-0">
-                                <span class="font-medium text-gray-900">{{ $index + 1 }}. {{ $mailbox['email'] }}</span>
-                                @if($mailbox['username'] !== '' && strcasecmp($mailbox['username'], $mailbox['email']) !== 0)
-                                    <span class="text-gray-500">· Login {{ $mailbox['username'] }}</span>
-                                @endif
-                                <span class="ml-2 text-xs {{ $mailbox['hasPassword'] ? 'text-emerald-700' : 'text-red-600' }}">
-                                    {{ $mailbox['hasPassword'] ? 'Passwort gespeichert' : 'Kein Passwort' }}
-                                </span>
-                                @if($mailbox['consumed'] ?? false)
-                                    <span data-reserve-mailbox-consumed class="ml-2 text-xs font-semibold text-red-600">verbraucht - wird uebersprungen</span>
-                                @endif
-                            </div>
-                            <button type="button" wire:click="removeReserveMailbox(@js($mailbox['email']))" wire:confirm="Reserve-Adresse {{ $mailbox['email'] }} entfernen?" class="text-xs font-semibold text-red-600 hover:text-red-700">
-                                Entfernen
+        @if($verificationAccounts->isEmpty())
+            <p class="mt-4 text-sm text-gray-500">Noch kein passendes E-Mail-Konto bei einer Person hinterlegt.</p>
+        @else
+            <ul class="mt-4 divide-y divide-gray-100 rounded-md border border-gray-200">
+                @foreach($verificationAccounts as $account)
+                    <li wire:key="verification-account-{{ $account['id'] }}" data-verification-account="{{ $account['id'] }}"
+                        data-verification-account-state="{{ $account['consumed'] ? 'consumed' : (! $account['has_password'] ? 'no-password' : ($account['pinned'] ? 'in-use' : 'free')) }}"
+                        class="flex flex-wrap items-start justify-between gap-3 px-3 py-2 text-sm">
+                        <div class="min-w-0">
+                            <span class="font-medium text-gray-900">{{ $account['email'] }}</span>
+                            <a href="{{ route('persons.show', ['profileId' => $account['person_key']]) }}" class="ml-2 text-xs text-slate-600 underline hover:text-slate-900">{{ $account['person_name'] }}</a>
+                            @if($account['consumed'])
+                                <span class="ml-2 rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700">verbraucht</span>
+                            @elseif(! $account['has_password'])
+                                <span class="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">kein Passwort</span>
+                            @elseif($account['pinned'])
+                                <span class="ml-2 rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold text-sky-800">in Benutzung</span>
+                            @else
+                                <span class="ml-2 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-800">frei</span>
+                            @endif
+                            @if($account['events'] !== [])
+                                <ul class="mt-1 text-xs text-gray-500">
+                                    @foreach($account['events'] as $event)
+                                        <li>
+                                            {{ ['registered' => 'Konto registriert', 'rejected' => 'von Proton abgelehnt'][$event['reason'] ?? ''] ?? (($event['reason'] ?? '') ?: 'verbraucht') }}
+                                            @if($event['workflow_run_id'] ?? null) · Lauf #{{ $event['workflow_run_id'] }} @endif
+                                            @if($event['consumed_at_label'] ?? null) · {{ $event['consumed_at_label'] }} @endif
+                                        </li>
+                                    @endforeach
+                                </ul>
+                            @endif
+                        </div>
+                        @if($account['consumed'])
+                            <button type="button" data-release-verification-account
+                                wire:click="releaseVerificationAccount({{ $account['id'] }})"
+                                wire:confirm="{{ collect($account['events'])->contains('reason', 'registered')
+                                    ? 'Mit '.$account['email'].' wurde bereits ein Proton-Konto registriert; Proton nimmt die Adresse in der Regel nicht erneut an. Trotzdem freigeben?'
+                                    : $account['email'].' wieder freigeben? Nur freigeben, wenn sicher ist, dass Proton die Adresse wieder annimmt.' }}"
+                                class="text-xs font-semibold text-slate-700 hover:text-slate-900">
+                                Freigeben
                             </button>
-                        </li>
-                    @endforeach
-                </ul>
-            @endif
-
-            <div class="mt-4 grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto] md:items-end">
-                <div>
-                    <label for="reserve-mailbox-email" class="block text-sm font-medium text-gray-700">GMX-Adresse</label>
-                    <input id="reserve-mailbox-email" type="email" wire:model.defer="newReserveMailboxEmail" placeholder="name@gmx.de" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
-                    @error('newReserveMailboxEmail') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
-                </div>
-                <div>
-                    <label for="reserve-mailbox-username" class="block text-sm font-medium text-gray-700">Login (optional)</label>
-                    <input id="reserve-mailbox-username" type="text" wire:model.defer="newReserveMailboxUsername" placeholder="sonst die Adresse" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
-                    @error('newReserveMailboxUsername') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
-                </div>
-                <div>
-                    <label for="reserve-mailbox-password" class="block text-sm font-medium text-gray-700">Passwort</label>
-                    <input id="reserve-mailbox-password" type="password" wire:model.defer="newReserveMailboxPassword" autocomplete="new-password" class="mt-1 block w-full rounded-md border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500">
-                    @error('newReserveMailboxPassword') <p class="mt-2 text-sm text-red-600">{{ $message }}</p> @enderror
-                </div>
-                <button type="button" wire:click="addReserveMailbox" wire:loading.attr="disabled" class="rounded-md bg-slate-900 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 disabled:opacity-60">
-                    Hinzufuegen
-                </button>
-            </div>
-
-            @if($consumedMailboxes !== [])
-                <details data-verification-mailbox-consumed-list="{{ $activeMailboxConsumption !== [] ? 'open' : 'closed' }}" class="mt-4 text-sm"
-                    x-data="{ open: @js($activeMailboxConsumption !== []) }" x-bind:open="open" x-on:toggle="open = $el.open"
-                    @if($activeMailboxConsumption !== []) open @endif>
-                    <summary class="cursor-pointer font-medium text-gray-700">Verbrauchte Adressen ({{ count($consumedMailboxes) }})</summary>
-                    <ul class="mt-2 space-y-2 text-gray-600">
-                        @foreach($consumedMailboxes as $group)
-                            <li wire:key="consumed-mailbox-{{ strtolower($group['email']) }}" data-consumed-mailbox="{{ strtolower($group['email']) }}" @if($group['isActive']) data-consumed-mailbox-active @endif class="flex flex-wrap items-start justify-between gap-3">
-                                <div class="min-w-0">
-                                    <span class="font-medium text-gray-800">{{ $group['email'] }}</span>
-                                    @if($group['isActive'])
-                                        <span class="ml-2 rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700">aktives Postfach</span>
-                                    @endif
-                                    <ul class="mt-1 text-xs text-gray-500">
-                                        @foreach($group['events'] as $event)
-                                            <li>
-                                                {{ $event['reasonLabel'] }}
-                                                @if($event['workflowRunId']) · Lauf #{{ $event['workflowRunId'] }} @endif
-                                                @if($event['consumedAtLabel']) · {{ $event['consumedAtLabel'] }} @endif
-                                            </li>
-                                        @endforeach
-                                    </ul>
-                                </div>
-                                <button type="button"
-                                    data-release-consumed-mailbox
-                                    wire:click="releaseConsumedMailbox(@js($group['email']))"
-                                    wire:confirm="{{ collect($group['events'])->contains('reason', 'registered')
-                                        ? 'Mit '.$group['email'].' wurde bereits ein Proton-Konto registriert; Proton nimmt die Adresse in der Regel nicht erneut an. Trotzdem freigeben?'
-                                        : $group['email'].' wieder freigeben? Nur freigeben, wenn sicher ist, dass Proton die Adresse wieder annimmt.' }}"
-                                    class="text-xs font-semibold text-slate-700 hover:text-slate-900">
-                                    Freigeben
-                                </button>
-                            </li>
-                        @endforeach
-                    </ul>
-                </details>
-            @endif
-        </div>
-
-        @if($verificationMailboxSessionResult !== [])
-            <div class="mt-5 rounded-lg border p-4 text-sm {{ data_get($verificationMailboxSessionResult, 'ok') ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-amber-200 bg-amber-50 text-amber-950' }}">
-                <p class="font-semibold">{{ data_get($verificationMailboxSessionResult, 'statusMessage', 'Webmail-Sessionlauf abgeschlossen.') }}</p>
-                <p class="mt-1 text-xs">Cookies: {{ data_get($verificationMailboxSessionResult, 'cookieCount', data_get($verificationMailboxSessionResult, 'sessionSummary.cookieCount', 0)) }}</p>
-                @if(!empty($verificationMailboxSessionResult['warnings']))
-                    <ul class="mt-2 list-disc space-y-1 pl-5 text-xs">
-                        @foreach($verificationMailboxSessionResult['warnings'] as $warning)
-                            <li>{{ $warning }}</li>
-                        @endforeach
-                    </ul>
-                @endif
-            </div>
+                        @endif
+                    </li>
+                @endforeach
+            </ul>
         @endif
     </div>
 
@@ -405,148 +255,6 @@
     @if(!$showRegistrationRunModal && $registrationRunId)
         <div class="hidden" wire:poll.{{ $backgroundPollSeconds }}s="refreshRegistrationRun"></div>
     @endif
-    @if(!$showVerificationMailboxSessionModal && $verificationMailboxSessionRunId)
-        <div class="hidden" wire:poll.{{ $backgroundPollSeconds }}s="refreshVerificationMailboxSessionRun"></div>
-    @endif
-
-    <x-ui.dialog-modal wire:model="showVerificationMailboxSessionModal" maxWidth="6xl">
-        <x-slot name="title">
-            Webmail-Session beobachten
-        </x-slot>
-
-        <x-slot name="content">
-            @php
-                $webmailSessionPollSeconds = max(1, min(60, (int) data_get($verificationMailboxSessionResult, 'livePreviewPollIntervalSeconds', $livePreviewIntervalSeconds ?? 3)));
-            @endphp
-            <div
-                @if(data_get($verificationMailboxSessionResult, 'isRunning')) wire:poll.{{ $webmailSessionPollSeconds }}s="refreshVerificationMailboxSessionRun" @endif
-                class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(360px,460px)]"
-            >
-                <div class="overflow-hidden rounded-lg border border-slate-200 bg-slate-950">
-                    <div class="flex items-center justify-between gap-3 border-b border-slate-800 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-300">
-                        <div class="min-w-0">
-                            <div>Webmail</div>
-                            @include('livewire.admin.config.partials.browser-window-status', [
-                                'windowStatus' => data_get($verificationMailboxSessionResult, 'windowStatus'),
-                            ])
-                        </div>
-                        @if(data_get($verificationMailboxSessionResult, 'debugDomUrl'))
-                            <a href="{{ data_get($verificationMailboxSessionResult, 'debugDomUrl') }}" download="webmail-session-window-dom.json" class="rounded border border-slate-700 px-2 py-1 text-[10px] text-slate-200 hover:bg-slate-800">
-                                DOM
-                            </a>
-                        @endif
-                    </div>
-                    @if(data_get($verificationMailboxSessionResult, 'screenshotUrl'))
-                        <img src="{{ data_get($verificationMailboxSessionResult, 'screenshotUrl') }}" alt="Webmail Live Screenshot" class="aspect-video w-full object-contain">
-                    @else
-                        <div class="flex aspect-video items-center justify-center text-sm font-semibold text-slate-300">
-                            Noch kein Screenshot verfuegbar.
-                        </div>
-                    @endif
-                </div>
-
-                <div class="space-y-4">
-                    <div class="rounded-lg border border-slate-200 bg-white p-4">
-                        <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Status</div>
-                        <div class="mt-2 text-sm font-semibold text-slate-900">
-                            {{ data_get($verificationMailboxSessionResult, 'statusMessage', data_get($verificationMailboxSessionResult, 'message', 'Noch kein Webmail-Sessionlauf gestartet.')) }}
-                        </div>
-                        <div class="mt-2 text-xs text-slate-500">
-                            {{ data_get($verificationMailboxSessionResult, 'providerKey', $verificationMailboxProvider) }} · {{ data_get($verificationMailboxSessionResult, 'activeBrowserEngine', data_get($verificationMailboxSessionResult, 'requestedBrowserEngine', '-')) }}
-                        </div>
-                        <div class="mt-1 text-xs text-slate-500">
-                            Script: {{ data_get($verificationMailboxSessionResult, 'scriptName', 'webmail_session.cjs') }} v{{ data_get($verificationMailboxSessionResult, 'scriptVersion', 1) }}
-                        </div>
-                        <div class="mt-2 text-xs text-slate-500">
-                            Cookies: {{ data_get($verificationMailboxSessionResult, 'cookieCount', data_get($verificationMailboxSessionResult, 'sessionSummary.cookieCount', 0)) }}
-                        </div>
-                        @if(data_get($verificationMailboxSessionResult, 'stage'))
-                            <div class="mt-1 text-xs text-slate-500">
-                                Schritt: {{ data_get($verificationMailboxSessionResult, 'stage') }}
-                            </div>
-                        @endif
-                        <div class="mt-1 text-xs text-slate-500">
-                            Screenshots: {{ data_get($verificationMailboxSessionResult, 'livePreviewEnabled', true) ? 'aktiv' : 'inaktiv' }} · Intervall: {{ data_get($verificationMailboxSessionResult, 'livePreviewIntervalSeconds', $webmailSessionPollSeconds) }}s
-                        </div>
-                    </div>
-
-                    @if(data_get($verificationMailboxSessionResult, 'processHeartbeatStatus.statusText'))
-                        <div class="rounded-md {{ data_get($verificationMailboxSessionResult, 'processHeartbeatStatus.stale') ? 'bg-amber-50 text-amber-800' : 'bg-emerald-50 text-emerald-800' }} px-3 py-2 text-xs font-semibold">
-                            {{ data_get($verificationMailboxSessionResult, 'processHeartbeatStatus.statusText') }}
-                        </div>
-                    @endif
-
-                    @if(!empty($verificationMailboxSessionResult['events']))
-                        <div class="max-h-64 overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-4">
-                            <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Ablauf</div>
-                            <div class="mt-3 space-y-2">
-                                @foreach(array_reverse(data_get($verificationMailboxSessionResult, 'events', [])) as $event)
-                                    <div class="rounded-md bg-white p-3 text-xs shadow-sm">
-                                        <div class="font-semibold text-slate-900">{{ data_get($event, 'stage', '-') }}</div>
-                                        <div class="mt-1 text-slate-600">{{ data_get($event, 'message', '-') }}</div>
-                                        <div class="mt-1 text-slate-400">{{ data_get($event, 'at', '') }}</div>
-                                    </div>
-                                @endforeach
-                            </div>
-                        </div>
-                    @endif
-
-                    @php
-                        $webmailDebugDom = data_get($verificationMailboxSessionResult, 'debugDom');
-                        $webmailDebugDomText = is_array($webmailDebugDom)
-                            ? json_encode($webmailDebugDom, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
-                            : (string) $webmailDebugDom;
-                    @endphp
-                    @if($webmailDebugDomText !== '')
-                        <div x-data="{ open: false }" class="rounded-lg border border-slate-200 bg-white text-xs">
-                            <div class="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
-                                <button type="button" x-on:click="open = !open" class="font-semibold uppercase tracking-wide text-slate-600">
-                                    Aktueller DOM
-                                </button>
-                                @if(data_get($verificationMailboxSessionResult, 'debugDomUrl'))
-                                    <a href="{{ data_get($verificationMailboxSessionResult, 'debugDomUrl') }}" download="webmail-session-dom.json" class="rounded-md border border-slate-300 bg-white px-3 py-1.5 font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
-                                        DOM herunterladen
-                                    </a>
-                                @endif
-                            </div>
-                            <div x-show="open" x-cloak x-collapse.duration.300ms>
-                                <pre class="max-h-96 overflow-auto whitespace-pre-wrap break-words bg-slate-950 p-3 text-[11px] leading-relaxed text-slate-100">{{ $webmailDebugDomText }}</pre>
-                            </div>
-                        </div>
-                    @endif
-
-                    @if(!empty($verificationMailboxSessionResult['notes']))
-                        <div class="rounded-lg border border-slate-200 bg-slate-50 p-4 text-xs text-slate-700">
-                            <div class="font-semibold uppercase tracking-wide text-slate-500">Notizen</div>
-                            <ul class="mt-2 list-disc space-y-1 pl-5">
-                                @foreach($verificationMailboxSessionResult['notes'] as $note)
-                                    <li>{{ $note }}</li>
-                                @endforeach
-                            </ul>
-                        </div>
-                    @endif
-
-                    @if(!empty($verificationMailboxSessionResult['warnings']))
-                        <div class="rounded-lg border border-amber-200 bg-amber-50 p-4 text-xs text-amber-950">
-                            <div class="font-semibold uppercase tracking-wide text-amber-700">Hinweise</div>
-                            <ul class="mt-2 list-disc space-y-1 pl-5">
-                                @foreach($verificationMailboxSessionResult['warnings'] as $warning)
-                                    <li>{{ $warning }}</li>
-                                @endforeach
-                            </ul>
-                        </div>
-                    @endif
-                </div>
-            </div>
-        </x-slot>
-
-        <x-slot name="footer">
-            <button type="button" wire:click="closeVerificationMailboxSessionModal" class="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">
-                Schliessen
-            </button>
-        </x-slot>
-    </x-ui.dialog-modal>
-
     <x-ui.dialog-modal wire:model="showRegistrationRunModal" maxWidth="6xl">
         <x-slot name="title">
             Mail-Registrierung beobachten
