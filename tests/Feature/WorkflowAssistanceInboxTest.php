@@ -107,9 +107,30 @@ class WorkflowAssistanceInboxTest extends TestCase
             ->assertSeeHtml('role="tab"')
             ->assertSeeHtml('aria-selected="true"')
             ->assertSeeHtml('min-h-11')
-            ->assertSeeHtml('min-w-11')
             ->assertSeeHtml('min-h-12')
             ->assertSeeHtml('min-h-20');
+    }
+
+    public function test_claimed_task_shows_the_live_browser_without_a_manual_refresh_button(): void
+    {
+        $admin = $this->user('admin', 'Live Admin');
+        $request = $this->assistanceRequest();
+        $request->forceFill([
+            'status' => WorkflowAssistanceRequest::STATUS_CLAIMED,
+            'assigned_to_user_id' => $admin->id,
+            'claimed_at' => now(),
+        ])->save();
+
+        Livewire::actingAs($admin)
+            ->test(WorkflowAssistanceInbox::class, ['requestUuid' => $request->request_uuid])
+            ->assertSee('Live-Browser')
+            ->assertSee('CAPTCHA-Bypass')
+            ->assertDontSee('Bild aktualisieren')
+            // @js maskiert Schraegstriche als \/.
+            ->assertSeeHtml($request->request_uuid.'\/live\/frame')
+            ->assertSeeHtml($request->request_uuid.'\/live\/input')
+            ->assertSeeHtml('x-on:pointermove="pointerMove($event)"')
+            ->assertSeeHtml('min-w-11');
     }
 
     private function user(string $role, string $name): User

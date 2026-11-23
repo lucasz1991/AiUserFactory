@@ -284,7 +284,7 @@ class WorkflowAssistanceService
     {
         $this->assertOperator($operator);
 
-        return DB::transaction(function () use ($request, $operator): WorkflowAssistanceRequest {
+        $released = DB::transaction(function () use ($request, $operator): WorkflowAssistanceRequest {
             WorkflowRun::query()->lockForUpdate()->findOrFail($request->workflow_run_id);
             $locked = WorkflowAssistanceRequest::query()->lockForUpdate()->findOrFail($request->getKey());
             $this->assertAssignedOperator($locked, $operator);
@@ -297,6 +297,34 @@ class WorkflowAssistanceService
 
             return $locked->fresh();
         });
+        $this->stopLiveView($released);
+
+        return $released;
+    }
+
+    /**
+     * Protokolliert abgeschlossene Live-Eingaben (Klick, Loslassen nach dem
+     * Ziehen, Taste, Text) im Aktivitaetsverlauf, ohne Inhalte zu speichern.
+     */
+    public function recordLiveInteraction(WorkflowAssistanceRequest $request, ?User $operator, string $type): void
+    {
+        $message = match ($type) {
+            'up' => 'Live-Ansicht: Maustaste losgelassen (Klick oder Ziehen).',
+            'click' => 'Live-Ansicht: Klick im Browser.',
+            'key' => 'Live-Ansicht: Taste gesendet.',
+            'text' => 'Live-Ansicht: Text eingegeben.',
+            default => 'Live-Ansicht: Eingabe gesendet.',
+        };
+        $this->appendEvent($request, 'browser_interaction_started', $operator, $message, ['action' => 'live_'.$type]);
+    }
+
+    protected function stopLiveView(WorkflowAssistanceRequest $request): void
+    {
+        try {
+            app(WorkflowAssistanceLiveBrowser::class)->stop($request);
+        } catch (\Throwable) {
+            // Die Live-Ansicht beendet sich spaetestens nach ihrer Leerlaufzeit.
+        }
     }
 
     public function runBrowserProbe(
@@ -456,6 +484,10 @@ class WorkflowAssistanceService
             // Keep verification, state transition, queue dispatch and audit entry in
             // one transaction. A failed resume therefore restores the open request
             // and the guarded pause instead of leaving a resolved orphan behind.
+            // Live-Ansicht vor dem Fortsetzen trennen, damit nie zwei Steuerungen
+            // gleichzeitig auf denselben Browser zugreifen.
+            $this->stopLiveView($locked);
+
             $response = app(WorkflowExecutionService::class)->resumeManualPause($run->getKey());
             if (! ($response['ok'] ?? false)) {
                 throw new DomainException((string) ($response['message'] ?? 'Der Workflow konnte nicht fortgesetzt werden.'));

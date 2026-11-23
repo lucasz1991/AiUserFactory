@@ -19,6 +19,7 @@
     $browserBusy = $selected && $selected->workflowRun?->status !== 'paused';
     $canInteract = $selectedIsMine && $selectedIsOpen && ! $selectedExpired && ! $browserBusy;
     $previewAvailable = filled($snapshot['preview_path'] ?? null);
+    $canView = $selectedIsMine && $selectedIsOpen && ! $selectedExpired;
 @endphp
 
 <div class="min-h-[calc(100vh-7rem)] space-y-5" wire:poll.3s>
@@ -169,90 +170,219 @@
                     </section>
 
                     <section class="overflow-hidden rounded-[1.5rem] border border-slate-200 bg-slate-950 shadow-sm">
-                        <div class="border-b border-white/10 px-4 py-4 sm:px-5">
-                            <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                                <div class="min-w-0">
-                                    <div class="flex items-center gap-2">
-                                        <span class="h-2.5 w-2.5 rounded-full {{ $browserBusy ? 'animate-pulse bg-amber-400' : 'bg-emerald-400' }}"></span>
-                                        <h3 class="text-sm font-black text-white">Sicheres Browserbild</h3>
+                        @if($canView)
+                            <div
+                                wire:ignore
+                                wire:key="assistance-live-{{ $selected->id }}"
+                                x-data="{
+                                    frameUrl: @js(route('network.workflow-assistance.live.frame', ['assistance' => $selected])),
+                                    inputUrl: @js(route('network.workflow-assistance.live.input', ['assistance' => $selected])),
+                                    csrf: @js(csrf_token()),
+                                    active: true,
+                                    sequence: 0,
+                                    status: 'connecting',
+                                    message: 'Live-Ansicht wird verbunden …',
+                                    fps: 0,
+                                    frameTimes: [],
+                                    objectUrl: null,
+                                    pressed: false,
+                                    lastMove: null,
+                                    moveQueued: false,
+                                    chain: Promise.resolve(),
+                                    text: '',
+                                    init() {
+                                        this.loop();
+                                        this.onVisibility = () => { if (! document.hidden && this.status === 'paused') this.loop(); };
+                                        document.addEventListener('visibilitychange', this.onVisibility);
+                                    },
+                                    destroy() {
+                                        this.active = false;
+                                        document.removeEventListener('visibilitychange', this.onVisibility);
+                                        if (this.objectUrl) URL.revokeObjectURL(this.objectUrl);
+                                    },
+                                    sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); },
+                                    async loop() {
+                                        if (this.looping) return;
+                                        this.looping = true;
+                                        let failures = 0;
+                                        while (this.active) {
+                                            if (document.hidden) { this.status = 'paused'; this.message = 'Live-Ansicht pausiert, solange der Tab im Hintergrund ist.'; break; }
+                                            try {
+                                                const response = await fetch(this.frameUrl + '?after=' + this.sequence + '&wait=1500', { cache: 'no-store', credentials: 'same-origin', headers: { Accept: 'image/jpeg' } });
+                                                if (response.ok) {
+                                                    const sequence = Number(response.headers.get('X-Frame-Sequence') || 0);
+                                                    const blob = await response.blob();
+                                                    if (sequence !== this.sequence || ! this.objectUrl) {
+                                                        const previous = this.objectUrl;
+                                                        this.objectUrl = URL.createObjectURL(blob);
+                                                        this.$refs.frame.src = this.objectUrl;
+                                                        if (previous) setTimeout(() => URL.revokeObjectURL(previous), 1000);
+                                                        const now = performance.now();
+                                                        this.frameTimes = [...this.frameTimes.filter((time) => now - time < 2000), now];
+                                                        this.fps = Math.round(this.frameTimes.length / 2);
+                                                    }
+                                                    this.sequence = sequence;
+                                                    this.status = 'live';
+                                                    this.message = '';
+                                                    failures = 0;
+                                                } else {
+                                                    const payload = await response.json().catch(() => ({}));
+                                                    failures += 1;
+                                                    this.status = 'error';
+                                                    this.message = payload.message || 'Live-Ansicht ist gerade nicht erreichbar.';
+                                                    await this.sleep(Math.min(5000, 800 * failures));
+                                                }
+                                            } catch (error) {
+                                                failures += 1;
+                                                this.status = 'error';
+                                                this.message = 'Verbindung zur Live-Ansicht unterbrochen. Neuer Versuch …';
+                                                await this.sleep(Math.min(5000, 800 * failures));
+                                            }
+                                        }
+                                        this.looping = false;
+                                    },
+                                    point(event) {
+                                        const box = this.$refs.frame.getBoundingClientRect();
+                                        return {
+                                            x: Math.min(1, Math.max(0, (event.clientX - box.left) / box.width)),
+                                            y: Math.min(1, Math.max(0, (event.clientY - box.top) / box.height)),
+                                        };
+                                    },
+                                    send(command) {
+                                        // Strikt geordnete Uebertragung: down -> move ... -> up.
+                                        this.chain = this.chain.then(async () => {
+                                            const response = await fetch(this.inputUrl, {
+                                                method: 'POST',
+                                                credentials: 'same-origin',
+                                                headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-CSRF-TOKEN': this.csrf },
+                                                body: JSON.stringify(command),
+                                            });
+                                            if (! response.ok) {
+                                                const payload = await response.json().catch(() => ({}));
+                                                this.message = payload.message || 'Die Eingabe wurde nicht angenommen.';
+                                            } else if (this.status === 'live') {
+                                                this.message = '';
+                                            }
+                                        }).catch(() => { this.message = 'Die Eingabe konnte nicht gesendet werden.'; });
+                                        return this.chain;
+                                    },
+                                    pointerDown(event) {
+                                        if (event.button !== undefined && event.button !== 0) return;
+                                        event.currentTarget.setPointerCapture?.(event.pointerId);
+                                        this.pressed = true;
+                                        this.send({ type: 'down', ...this.point(event) });
+                                    },
+                                    pointerMove(event) {
+                                        if (! this.pressed) return;
+                                        this.lastMove = this.point(event);
+                                        if (this.moveQueued) return;
+                                        // Bewegungen werden zusammengefasst: immer nur die neueste Position wird gesendet.
+                                        this.moveQueued = true;
+                                        this.chain = this.chain.then(() => {
+                                            this.moveQueued = false;
+                                            return this.lastMove ? this.sendNow({ type: 'move', ...this.lastMove }) : null;
+                                        });
+                                    },
+                                    pointerUp(event) {
+                                        if (! this.pressed) return;
+                                        this.pressed = false;
+                                        this.send({ type: 'up', ...this.point(event) });
+                                    },
+                                    pointerCancel() {
+                                        if (! this.pressed) return;
+                                        this.pressed = false;
+                                        this.send({ type: 'up' });
+                                    },
+                                    wheel(event) {
+                                        this.send({ type: 'wheel', ...this.point(event), deltaY: Math.max(-2000, Math.min(2000, event.deltaY)), deltaX: Math.max(-2000, Math.min(2000, event.deltaX)) });
+                                    },
+                                    async sendNow(command) {
+                                        const response = await fetch(this.inputUrl, {
+                                            method: 'POST',
+                                            credentials: 'same-origin',
+                                            headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-CSRF-TOKEN': this.csrf },
+                                            body: JSON.stringify(command),
+                                        }).catch(() => null);
+                                        if (response && ! response.ok) {
+                                            const payload = await response.json().catch(() => ({}));
+                                            this.message = payload.message || 'Die Eingabe wurde nicht angenommen.';
+                                        }
+                                    },
+                                    sendKey(key) { this.send({ type: 'key', key }); },
+                                    sendText() {
+                                        const value = this.text.trim() === '' ? '' : this.text;
+                                        if (value === '') return;
+                                        this.text = '';
+                                        this.send({ type: 'text', text: value.slice(0, 500) });
+                                    },
+                                }"
+                            >
+                                <div class="border-b border-white/10 px-4 py-4 sm:px-5">
+                                    <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                                        <div class="min-w-0">
+                                            <div class="flex items-center gap-2">
+                                                <span class="h-2.5 w-2.5 rounded-full" x-bind:class="status === 'live' ? 'bg-emerald-400' : (status === 'error' ? 'bg-rose-400' : 'animate-pulse bg-amber-400')"></span>
+                                                <h3 class="text-sm font-black text-white">Live-Browser</h3>
+                                                <span class="rounded-full bg-white/10 px-2 py-0.5 font-mono text-[10px] font-bold text-slate-300" x-show="status === 'live'" x-text="fps + ' Bilder/s'"></span>
+                                            </div>
+                                            <p class="mt-1 text-[11px] text-slate-400" x-text="message || 'Klicken, mit gedrückter Maustaste ziehen oder scrollen – alles wird direkt an den Browser übertragen.'"></p>
+                                        </div>
+                                        <div class="flex flex-wrap gap-2">
+                                            <template x-for="key in ['Tab', 'Enter', 'Backspace', 'Escape']" :key="key">
+                                                <button type="button" x-on:click="sendKey(key)" class="inline-flex min-h-11 min-w-11 items-center justify-center rounded-xl border border-white/15 bg-white/10 px-3 text-xs font-bold text-white transition hover:bg-white/15" x-text="key === 'Backspace' ? '⌫' : (key === 'Escape' ? 'Esc' : key)"></button>
+                                            </template>
+                                        </div>
                                     </div>
-                                    <p class="mt-1 truncate font-mono text-[11px] text-slate-400">{{ $snapshot['url'] ?? $selected->current_url ?: 'Keine URL verfügbar' }}</p>
                                 </div>
-                                <div class="flex flex-wrap gap-2">
-                                    <button type="button" wire:click="refreshBrowser" @disabled(! $canInteract) class="inline-flex min-h-11 items-center justify-center rounded-xl border border-white/15 bg-white/10 px-3 text-xs font-bold text-white transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-40">Bild aktualisieren</button>
-                                    <button type="button" wire:click="sendBrowserKey('Tab')" @disabled(! $canInteract) class="inline-flex min-h-11 min-w-11 items-center justify-center rounded-xl border border-white/15 bg-white/10 px-3 text-xs font-bold text-white transition hover:bg-white/15 disabled:opacity-40">Tab</button>
-                                    <button type="button" wire:click="sendBrowserKey('Enter')" @disabled(! $canInteract) class="inline-flex min-h-11 min-w-11 items-center justify-center rounded-xl border border-white/15 bg-white/10 px-3 text-xs font-bold text-white transition hover:bg-white/15 disabled:opacity-40">Enter</button>
+
+                                <div class="relative min-h-64 bg-slate-900 p-2 sm:p-4">
+                                    <div
+                                        class="relative mx-auto w-fit max-w-full cursor-crosshair select-none overflow-hidden rounded-xl border border-white/10 bg-black shadow-2xl"
+                                        style="touch-action: none;"
+                                        x-on:pointerdown.prevent="pointerDown($event)"
+                                        x-on:pointermove="pointerMove($event)"
+                                        x-on:pointerup.prevent="pointerUp($event)"
+                                        x-on:pointercancel="pointerCancel()"
+                                        x-on:lostpointercapture="pointerCancel()"
+                                        x-on:wheel.prevent="wheel($event)"
+                                        x-on:contextmenu.prevent
+                                        role="application"
+                                        aria-label="Live-Browser: klicken, ziehen oder scrollen"
+                                    >
+                                        <img x-ref="frame" alt="Live-Bild des pausierten Workflow-Browsers" class="block h-auto max-h-[72vh] w-auto max-w-full" draggable="false" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">
+                                        <div x-show="status !== 'live' && ! objectUrl" class="absolute inset-0 grid min-h-72 min-w-[18rem] place-items-center p-8 text-center">
+                                            <p class="text-sm font-bold text-white" x-text="message"></p>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="border-t border-white/10 p-4 sm:p-5">
+                                    <form x-on:submit.prevent="sendText()" class="flex flex-col gap-2 sm:flex-row">
+                                        <label for="workflow-assistance-browser-text" class="sr-only">Text in das fokussierte Browserfeld eingeben</label>
+                                        <input id="workflow-assistance-browser-text" type="text" x-model="text" maxlength="500" placeholder="Text in das aktuell fokussierte Browserfeld senden" class="min-h-11 min-w-0 flex-1 rounded-xl border-white/15 bg-white/10 text-sm text-white placeholder:text-slate-500 focus:border-cyan-400 focus:ring-cyan-400">
+                                        <button type="submit" class="inline-flex min-h-11 items-center justify-center rounded-xl bg-cyan-400 px-4 text-sm font-black text-slate-950 transition hover:bg-cyan-300">Text senden</button>
+                                    </form>
+                                    <p class="mt-3 text-[11px] leading-5 text-slate-400">Das Bild wird fortlaufend live übertragen, solange du die Aufgabe bearbeitest. Automatisches Lösen, Token-Auslesen und CAPTCHA-Bypass sind ausgeschlossen.</p>
                                 </div>
                             </div>
-                        </div>
-
-                        <div class="relative min-h-64 bg-slate-900 p-2 sm:p-4">
-                            @if($previewAvailable)
-                                <button
-                                    type="button"
-                                    @disabled(! $canInteract)
-                                    x-data="{
-                                        busy: false,
-                                        start: null,
-                                        capturedAt: @js((string) ($snapshot['captured_at'] ?? '')),
-                                        ratio(event) {
-                                            const box = event.currentTarget.getBoundingClientRect();
-                                            return {
-                                                x: Math.min(1, Math.max(0, (event.clientX - box.left) / box.width)),
-                                                y: Math.min(1, Math.max(0, (event.clientY - box.top) / box.height)),
-                                                px: event.clientX,
-                                                py: event.clientY,
-                                            };
-                                        },
-                                        pointerDown(event) {
-                                            if (this.busy || @js(! $canInteract)) return;
-                                            this.start = this.ratio(event);
-                                            event.currentTarget.setPointerCapture?.(event.pointerId);
-                                        },
-                                        pointerUp(event) {
-                                            if (! this.start || this.busy || @js(! $canInteract)) { this.start = null; return; }
-                                            const end = this.ratio(event);
-                                            const from = this.start;
-                                            this.start = null;
-                                            this.busy = true;
-                                            // Ab 8 Bildschirmpixeln gilt die Geste als Ziehen (z. B. Puzzleteil), sonst als Klick.
-                                            const call = Math.hypot(end.px - from.px, end.py - from.py) >= 8
-                                                ? $wire.dragBrowser(from.x, from.y, end.x, end.y, this.capturedAt)
-                                                : $wire.clickBrowser(end.x, end.y, this.capturedAt);
-                                            call.finally(() => this.busy = false);
-                                        },
-                                    }"
-                                    x-on:pointerdown.prevent="pointerDown($event)"
-                                    x-on:pointerup.prevent="pointerUp($event)"
-                                    x-on:pointercancel="start = null"
-                                    style="touch-action: none;"
-                                    class="group relative mx-auto block max-w-full overflow-hidden rounded-xl border border-white/10 bg-black text-left shadow-2xl disabled:cursor-not-allowed"
-                                    aria-label="Im Browserbild klicken oder mit gedrückter Maustaste ziehen"
-                                >
-                                    <img src="{{ route('network.workflow-assistance.preview', ['assistance' => $selected, 'v' => $snapshot['captured_at'] ?? now()->timestamp]) }}" alt="Aktuelles Browserbild des pausierten Workflow-Laufs" class="block h-auto max-h-[68vh] w-auto max-w-full select-none" draggable="false">
-                                    @if($canInteract)
-                                        <span class="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-slate-950/85 px-3 py-1.5 text-[10px] font-bold text-white opacity-0 backdrop-blur transition group-hover:opacity-100">Tippen = Klick · Gedrückt ziehen = Ziehen (z. B. Puzzleteil)</span>
-                                    @endif
-                                </button>
-                            @else
-                                <div class="flex min-h-72 items-center justify-center rounded-xl border border-dashed border-white/15 p-8 text-center">
-                                    <div class="max-w-sm">
-                                        <p class="text-sm font-bold text-white">Noch kein Browserbild verfügbar</p>
-                                        <p class="mt-2 text-xs leading-5 text-slate-400">Übernimm die Aufgabe und aktualisiere das Bild. Der interne Browser-Endpunkt bleibt dabei serverseitig verborgen.</p>
-                                    </div>
+                        @else
+                            <div class="border-b border-white/10 px-4 py-4 sm:px-5">
+                                <div class="flex items-center gap-2">
+                                    <span class="h-2.5 w-2.5 rounded-full bg-slate-500"></span>
+                                    <h3 class="text-sm font-black text-white">Browserbild</h3>
                                 </div>
-                            @endif
-                        </div>
-
-                        <div class="border-t border-white/10 p-4 sm:p-5">
-                            <form wire:submit="typeBrowserText" class="flex flex-col gap-2 sm:flex-row">
-                                <label for="workflow-assistance-browser-text" class="sr-only">Text in das fokussierte Browserfeld eingeben</label>
-                                <input id="workflow-assistance-browser-text" type="text" wire:model="browserText" maxlength="500" @disabled(! $canInteract) placeholder="Text in das aktuell fokussierte Browserfeld senden" class="min-h-11 min-w-0 flex-1 rounded-xl border-white/15 bg-white/10 text-sm text-white placeholder:text-slate-500 focus:border-cyan-400 focus:ring-cyan-400 disabled:opacity-40">
-                                <button type="submit" @disabled(! $canInteract) class="inline-flex min-h-11 items-center justify-center rounded-xl bg-cyan-400 px-4 text-sm font-black text-slate-950 transition hover:bg-cyan-300 disabled:opacity-40">Text senden</button>
-                            </form>
-                            @error('browserText') <p class="mt-2 text-xs font-semibold text-rose-300">{{ $message }}</p> @enderror
-                            <p class="mt-3 text-[11px] leading-5 text-slate-400">Jede Interaktion wird einzeln an denselben pausierten Browser gesendet. Automatisches Lösen, Token-Auslesen und CAPTCHA-Bypass sind ausgeschlossen.</p>
-                        </div>
+                                <p class="mt-1 text-[11px] text-slate-400">Die Live-Ansicht mit Klick und Drag-and-drop startet, sobald du die offene Aufgabe übernimmst. Automatisches Lösen, Token-Auslesen und CAPTCHA-Bypass sind ausgeschlossen.</p>
+                            </div>
+                            <div class="relative min-h-64 bg-slate-900 p-2 sm:p-4">
+                                @if($previewAvailable)
+                                    <img src="{{ route('network.workflow-assistance.preview', ['assistance' => $selected, 'v' => $snapshot['captured_at'] ?? now()->timestamp]) }}" alt="Letztes Browserbild des pausierten Workflow-Laufs" class="mx-auto block h-auto max-h-[68vh] w-auto max-w-full rounded-xl border border-white/10 select-none" draggable="false">
+                                @else
+                                    <div class="flex min-h-72 items-center justify-center rounded-xl border border-dashed border-white/15 p-8 text-center">
+                                        <p class="text-sm font-bold text-white">Noch kein Browserbild verfügbar</p>
+                                    </div>
+                                @endif
+                            </div>
+                        @endif
                     </section>
 
                     <section class="grid gap-5 lg:grid-cols-[minmax(0,1fr)_22rem]">

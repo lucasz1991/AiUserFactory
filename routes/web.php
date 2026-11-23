@@ -8,6 +8,7 @@ use App\Http\Controllers\Ai\AssistantAudioInputTranscriptionController;
 use App\Http\Controllers\Ai\AssistantAudioOutputStreamController;
 use App\Http\Controllers\PushSubscriptionController;
 use App\Http\Controllers\PwaIconController;
+use App\Http\Controllers\Workflows\WorkflowAssistanceLiveController;
 use App\Http\Controllers\Workflows\WorkflowAssistancePreviewController;
 use App\Http\Controllers\Workflows\WorkflowRecordingController;
 use App\Http\Controllers\Workflows\WorkflowRunArtifactController;
@@ -83,6 +84,11 @@ Route::middleware(['auth:sanctum', config('jetstream.auth_session')])->group(fun
         Route::get('/netzwerk/aktionen', ActionsPage::class)->name('network.actions');
         Route::get('/netzwerk/workflow-aufgaben/{assistance}/browserbild', WorkflowAssistancePreviewController::class)
             ->name('network.workflow-assistance.preview');
+        Route::get('/netzwerk/workflow-aufgaben/{assistance}/live/frame', [WorkflowAssistanceLiveController::class, 'frame'])
+            ->name('network.workflow-assistance.live.frame');
+        Route::post('/netzwerk/workflow-aufgaben/{assistance}/live/input', [WorkflowAssistanceLiveController::class, 'input'])
+            ->middleware('throttle:3600,1')
+            ->name('network.workflow-assistance.live.input');
         Route::get('/netzwerk/workflow-aufgaben/{requestUuid?}', WorkflowAssistanceInbox::class)
             ->whereUuid('requestUuid')
             ->name('network.workflow-assistance');
